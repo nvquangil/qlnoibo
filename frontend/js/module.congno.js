@@ -815,7 +815,7 @@ window.ModuleCongNo = (function () {
 
   async function soChiTietQuy(loai, id) {
     const d = (await apiGet(`/api/congno/soquy/chitiet?loai=${encodeURIComponent(loai)}${id ? '&taiKhoanNHID=' + id : ''}`)).data;
-    openModal(`
+    const modal = openModal(`
       <h3>Sổ quỹ: ${escapeHtml(d.ten)}</h3>
       <div style="margin-bottom:8px;">Số dư đầu kỳ: <b>${fmtNumber(d.dauKy)}</b> đ &nbsp;·&nbsp; Số dư hiện tại:
         <b style="font-size:16px;color:${Number(d.soDu) < 0 ? '#c0392b' : '#137333'};">${fmtNumber(d.soDu)}</b> đ</div>
@@ -823,14 +823,21 @@ window.ModuleCongNo = (function () {
       <table><thead><tr><th>Ngày</th><th>Loại</th><th>Số phiếu</th><th>Đối tượng</th><th>Thu</th><th>Chi</th><th>Số dư</th><th>Diễn giải</th></tr></thead>
       <tbody><tr style="background:#f1f3f4;"><td colspan="6"><i>Số dư đầu kỳ</i></td><td style="text-align:right;"><b>${fmtNumber(d.dauKy)}</b></td><td></td></tr>
         ${(d.rows || []).map(r => `<tr>
-        <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.Loai)}</td><td>${escapeHtml(r.SoPhieu || '')}</td>
+        ${/* v6.79: số phiếu BẤM ĐƯỢC — dùng chung oSoPhieu() với sổ công nợ, để hai màn không có
+             hai kiểu hiển thị/mở phiếu khác nhau. */''}
+        <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.Loai)}</td><td>${oSoPhieu(r)}</td>
         <td>${escapeHtml(r.DoiTuong || '')}</td>
         <td style="text-align:right;color:#137333;">${Number(r.Thu) ? fmtNumber(r.Thu) : ''}</td>
         <td style="text-align:right;color:#c0392b;">${Number(r.Chi) ? fmtNumber(r.Chi) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.SoDu)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="8" class="empty-hint">Chưa có phiếu thu/chi nào cho quỹ này</td></tr>'}</tbody></table></div>
-      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`)
-      .querySelector('#btnDong').addEventListener('click', closeModal);
+      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
+    modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    /* v6.79: bấm số phiếu -> mở chi tiết phiếu thu/chi ĐÈ LÊN sổ quỹ. Đóng nó thì QUAY VỀ sổ quỹ,
+       không phải mở lại từ đầu — nhờ ngăn xếp modal của v5.97 (openModal không đóng cái trước nữa).
+       KHÔNG truyền `quayLai`: truyền vào là nó tự đóng rồi mở lại sổ quỹ, tức mất chỗ đang cuộn và
+       nháy màn hình một cái. Để ngăn xếp tự lo thì sổ quỹ vẫn nằm nguyên bên dưới. */
+    noiDaySoPhieu(modal);
   }
 
   return { render, getTabs };

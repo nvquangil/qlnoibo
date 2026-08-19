@@ -953,13 +953,18 @@ router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), r
     dk = coNH ? `HinhThuc = N'Chuyển khoản' AND TaiKhoanNHID IS NULL` : `HinhThuc = N'Chuyển khoản'`;
     ten = 'Chuyển khoản (chưa gán tài khoản)';
   }
+  /* v6.79: tra kem CtLoai + CtID de SO QUY bam duoc vao so phieu ra chi tiet phieu thu/chi.
+     Truoc day so quy chi in chuoi so phieu -> nhin thay ma khong mo duoc, phai sang tab Phieu thu
+     roi mo tay. Dung dung ten cot voi so cong no (oSoPhieu ben module.congno.js doc CtLoai/CtID). */
   const thu = (await pool.request().query(`
     SELECT NgayThu AS Ngay, SoPhieu, SoTien AS Thu, 0 AS Chi, N'Phiếu thu' AS Loai,
-           ISNULL(TenDoiTuong, N'') AS DoiTuong, DienGiai
+           ISNULL(TenDoiTuong, N'') AS DoiTuong, DienGiai,
+           N'PT' AS CtLoai, PhieuThuID AS CtID
     FROM PhieuThu WHERE ${dk}`)).recordset;
   const chi = (await pool.request().query(`
     SELECT NgayChi AS Ngay, SoPhieu, 0 AS Thu, SoTien AS Chi, N'Phiếu chi' AS Loai,
-           ISNULL(TenDoiTuong, N'') AS DoiTuong, DienGiai
+           ISNULL(TenDoiTuong, N'') AS DoiTuong, DienGiai,
+           N'PC' AS CtLoai, PhieuChiID AS CtID
     FROM PhieuChi WHERE ${dk}`)).recordset;
   const rows = [...thu, ...chi].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay) || String(a.SoPhieu).localeCompare(String(b.SoPhieu)));
   let luy = dauKy;
