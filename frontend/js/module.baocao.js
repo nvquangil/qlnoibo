@@ -259,19 +259,28 @@ window.ModuleBaoCao = (function () {
           ${oTien(r.DonGiaBQ)}${oTien(r.GiaTriTon)}</tr>`).join('')
           || '<tr><td colspan="11" class="empty-hint">Không có phát sinh trong kỳ</td></tr>'}</tbody></table>`;
     } else {
+      /* v6.91: THÊM 3 cột — Giá nhập (1 ĐVT) · Nguồn giá · Giá trị tồn (giá nhập).
+         Bảng từ 10 -> 13 cột: colspan dòng TỔNG và dòng rỗng phải đổi theo, không thì lệch cột. */
       bang = `<table><thead><tr>
           <th>Mã hàng</th><th>Tên hàng</th><th>Danh mục</th><th>ĐVT</th>
           <th>Tồn đầu kỳ</th><th>Nhập trong kỳ</th><th>Xuất trong kỳ</th><th>Tồn cuối kỳ</th>
-          <th>Giá bán (1 cái)</th><th>Giá trị tồn</th></tr></thead>
+          <th>Giá nhập<div style="font-weight:400;font-size:11px;">(1 ĐVT)</div></th>
+          <th>Nguồn giá nhập</th>
+          <th>Giá trị tồn<div style="font-weight:400;font-size:11px;">(theo giá nhập)</div></th>
+          <th>Giá bán (1 cái)</th><th>Giá trị tồn<div style="font-weight:400;font-size:11px;">(theo giá bán)</div></th></tr></thead>
         <tbody>${rows.length ? `<tr class="row-tong">
           <td colspan="4" style="text-align:right;">TỔNG</td>
-          ${oSo(t.TonDau)}${oSo(t.Nhap)}${oSo(t.Xuat)}${oSo(t.TonCuoi)}<td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
+          ${oSo(t.TonDau)}${oSo(t.Nhap)}${oSo(t.Xuat)}${oSo(t.TonCuoi)}
+          <td></td><td></td>${oTien(t.GiaTriTonNhap)}<td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
         ${rows.map(r => `<tr>
           <td><a href="javascript:void(0)" class="bc-ma" data-ma="${escapeHtml(r.MaHang)}" title="Xem chi tiết xuất nhập trong kỳ">${escapeHtml(r.MaHang)}</a></td><td>${escapeHtml(r.TenHang)}</td><td>${escapeHtml(r.TenDanhMuc)}</td>
           <td>${escapeHtml(r.DonVi)}</td>
           ${oSo(r.TonDau)}${oSo(r.Nhap)}${oSo(r.Xuat)}<td style="text-align:right;"><b>${fmtNumber(r.TonCuoi)}</b></td>
+          ${r.GiaNhap == null
+            ? '<td style="text-align:right;color:#b26a00;">chưa có</td><td style="color:#b26a00;font-size:11px;">—</td><td></td>'
+            : `${oTien(r.GiaNhap)}<td style="font-size:11px;color:#5f6368;">${escapeHtml(r.NguonGiaNhap || '')}</td>${oTien(r.GiaTriTonNhap)}`}
           ${oTien(r.GiaBan)}${oTien(r.GiaTriTon)}</tr>`).join('')
-          || '<tr><td colspan="10" class="empty-hint">Không có phát sinh trong kỳ</td></tr>'}</tbody></table>`;
+          || '<tr><td colspan="13" class="empty-hint">Không có phát sinh trong kỳ</td></tr>'}</tbody></table>`;
     }
 
     body.innerHTML = thanhKyHtml('')

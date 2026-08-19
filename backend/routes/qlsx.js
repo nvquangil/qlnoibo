@@ -2949,9 +2949,9 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
     // /giaonhagiacong*/log, /nhannhagiacong*/log nao ca (da XOA han cung ledger GiaoNhaGiaCongChiTiet/
     // NhanNhaGiaCongChiTiet, xem khoi NHAN NHA GIA CONG o duoi).
 
-    // Kho nhap: lay SL luy ke CU (truoc lan ghi nhan nay) theo tung mau - dung tinh DELTA sau khi luu xong
-    // ban ghi tien do moi (phai lay TRUOC khi INSERT ben duoi, neu khong se lay nham chinh ban ghi vua tao).
-    const oldQtyByColor = isKhoNhap ? await getStageActualQtyByColor(pool, order.DonHangID, stage.StageID) : {};
+    /* v6.91: BO `oldQtyByColor` — no chi phuc vu khoi cong DELTA vao NhapCai da go bo (xem ghi chu
+       "CONG DOAN KHO NHẬP KHONG CON GHI VAO TON KHO" o cuoi route nay). Giu lai la mot lenh truy van
+       thua chay moi lan ghi tien do Kho nhap. */
 
     // v5.7: chup lai (snapshot) TEN nha gia cong HIEN TAI cua don hang NGAY LUC ghi nhan tien do "May" -
     // yeu cau v5.7 "Lịch sử cập nhật tiến độ - May hiển thị tên nhà gia công". NhaGiaCongID/TenNhaGiaCong
@@ -3213,67 +3213,21 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       }
     }
 
-    // Cong doan "Kho nhập": cong don DELTA vao The kho hang hoa lien ket voi don hang nay (tu tao The kho +
-    // chi tiet mau neu chua co). Boc rieng try/catch - loi phan nay CHI log ra console, khong anh huong
-    // ket qua tra ve cho phan ghi nhan tien do chinh (da luu thanh cong o tren).
-    // v5.4: KHONG con tu dong tao The kho hang hoa tai day nua. Truoc day, lan dau ghi tien do "Kho nhap"
-    // se tu dong INSERT The kho + chi tiet mau; gio viec tao The kho la thao tac TUONG MINH cua nguoi dung
-    // qua Kho hang > "Tao the kho moi" (chi liet ke don hang da co tien do Kho nhap va CHUA co the kho -
-    // xem GET /khohang/donhang). O day CHI cong don delta neu The kho DA TON TAI tu truoc (giu nguyen logic
-    // delta cho cac don da duoc gan the kho) - khong mat du lieu neu chua co the kho, vi so lieu Kho nhap
-    // tung cong doan van luu du trong TienDoSanXuat, se duoc doc lai (getSoNhapTheoMau) khi tao the kho sau.
-    if (isKhoNhap && Array.isArray(chiTietMau) && chiTietMau.length) {
-      try {
-        const theKhoRow = (await pool.request().input('id', sql.Int, order.DonHangID)
-          .query('SELECT * FROM TheKhoHangHoa WHERE DonHangID=@id')).recordset[0];
+    /* ================================================================================================
+       ⚠️ v6.91 — CONG DOAN "KHO NHẬP" KHONG CON GHI VAO TON KHO NUA.
 
-        /* ⚠️ v6.89 — CHONG DEM HAI LAN VOI PHIEU NHAP KHO HANG HOA.
-           Tu v6.89 ton kho hang hoa co 2 nguon cong lai (migration_v682): NhapCai (khoi nay) va
-           PhieuNhapKhoHangChiTiet.SoLuongChinh. Neu lenh SX nay DA co phieu nhap kho loai "Tu san
-           xuat" thi kho da ghi nhan bang CHUNG TU roi; cong tiep vao NhapCai o day la ton GAP DOI
-           ma khong co canh bao nao (bao cao cung cong ca hai nen khong thay lech).
-           => Da co phieu thi BO QUA khoi cong ton nay. Chung tu la nguon uu tien. */
-        let daCoPhieuNK = false;
-        try {
-          daCoPhieuNK = !!(await pool.request().input('id', sql.Int, order.DonHangID).query(`
-            IF OBJECT_ID('PhieuNhapKhoHang', 'U') IS NULL SELECT NULL AS x
-            ELSE SELECT TOP 1 PhieuNKID AS x FROM PhieuNhapKhoHang
-                 WHERE DonHangID = @id AND TrangThai <> N'Đã hủy'`)).recordset[0]?.x;
-        } catch (e) { daCoPhieuNK = false; }
-        if (daCoPhieuNK) {
-          console.warn('[qlsx KhoNhap] Lenh SX %s da co PHIEU NHAP KHO HANG HOA -> BO QUA cong NhapCai (tranh dem 2 lan). Ton lay theo phieu.',
-            order.MaDH || order.DonHangID);
-        }
+       Truoc day khoi code o day cong DELTA vao TheKhoChiTietMau.NhapCai. Da GO BO HAN.
+       Ly do (nguoi dung chot): cong doan "Kho nhập" cua QLSX chi de KHEP LAI QUY TRINH SAN XUAT va
+       chuyen lenh SX sang trang thai Hoan thanh. MOI hang vao ton kho tu nay deu phai qua PHIEU NHAP
+       KHO HANG HOA (chung tu, co so phieu / ngay / nguoi lap / gia).
+       Duong ghi tam nay ra doi khi chua co phan he ban hang + cong no, chi de theo doi.
 
-        if (theKhoRow && !daCoPhieuNK) {
-          const loaiRi = Number(theKhoRow.LoaiRi) || 1;
-          for (const m of chiTietMau) {
-            const oldQty = Number(oldQtyByColor[m.mauSacId]) || 0;
-            const newQty = Number(m.soLuong) || 0;
-            let delta = newQty - oldQty;
-            // Cong thuc quy doi giu dung nhu khovai.js/khohang.js dang dung (donVi === don vi quy doi -> nhan LoaiRi),
-            // chi khac o cho so sanh voi nhan don vi quy doi thuc te cua The kho (co the khac 'Ri' neu doi ten danh muc).
-            if (m.donViDaChon && theKhoRow.DonViQuyDoi && m.donViDaChon === theKhoRow.DonViQuyDoi) {
-              delta = delta * loaiRi;
-            }
-            if (!delta) continue;
+       Giu ca hai duong la mo dung mot cua dem hai lan, va bat moi nguoi sua sau phai nho mot dieu kien
+       loai tru cheo giua qlsx.js va baocao.js — kieu rang buoc song mai cung se co ngay bi bo quen.
 
-            const ctRow = (await pool.request().input('mh', sql.Int, theKhoRow.MaHangID).input('ms', sql.Int, m.mauSacId)
-              .query('SELECT ID FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
-            if (ctRow) {
-              await pool.request().input('id', sql.Int, ctRow.ID).input('delta', sql.Int, delta)
-                .query('UPDATE TheKhoChiTietMau SET NhapCai = NhapCai + @delta WHERE ID=@id');
-            } else {
-              await pool.request()
-                .input('MaHangID', sql.Int, theKhoRow.MaHangID).input('MauSacID', sql.Int, m.mauSacId).input('delta', sql.Int, delta)
-                .query('INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, SoCatCai, NhapCai, XuatCai) VALUES (@MaHangID, @MauSacID, 0, @delta, 0)');
-            }
-          }
-        }
-      } catch (theKhoErr) {
-        console.error('Lỗi khi cập nhật Thẻ kho hàng hóa từ tiến độ "Kho nhập":', theKhoErr);
-      }
-    }
+       So lieu CU da cong vao NhapCai VAN GIU NGUYEN (khong xoa) - no nam trong "Ton dau ky" cua bao
+       cao ton kho. Tu nay NhapCai chi con thay doi khi nguoi dung tu go o man The kho.
+       ================================================================================================ */
 
     res.json({ success: true });
   } catch (err) {

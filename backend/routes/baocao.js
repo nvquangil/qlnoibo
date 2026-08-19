@@ -141,86 +141,18 @@ async function baoCaoTonHangHoa(pool, ky) {
     NhapKy: 0, XuatKy: 0, NhapSauKy: 0, XuatSauKy: 0
   }));
 
-  /* --- NHAP: cong doan "Kho nhập" (MaCongDoan = 'KN') ---
-     ⚠️ QUAN TRONG: TienDoChiTietMau.SoLuongLuyKe la LUY KE, KHONG phai phat sinh tung lan.
-     Nguoi dung ghi tien do Kho nhap lan 2 la "tong da nhap den gio", nen qlsx.js chi cong
-     DELTA = moi - cu vao NhapCai (xem qlsx.js ~dong 3180). Neu o day SUM tat ca ban ghi trong ky
-     thi so nhap se bi thoi len GAP NHIEU LAN.
-     Ngoai ra 1 lan "Gui" co the tao NHIEU ban ghi cung NhomTienDoID (nhieu so do) -> phai gop
-     ca nhom lai moi ra luy ke dung; va cong doan khac Cat chi lay BATCH GAN NHAT
-     (xem effectiveTienDoIds trong qlsx.js).
-     => Nhap trong ky = LuyKe(tai @den) - LuyKe(ngay truoc @tu).  Dung dung dinh nghia ke toan. */
-  const coNhom = await coCot(pool, 'TienDoSanXuat', 'NhomTienDoID');
-  const coDVDaChon = await coCot(pool, 'TienDoChiTietMau', 'DonViDaChon');
-  const batchCol = coNhom ? 'ISNULL(td.NhomTienDoID, td.TienDoID)' : 'td.TienDoID';
-  /* ⚠️ SoLuongLuyKe ghi theo ĐÚNG ĐƠN VỊ NGƯỜI DÙNG CHỌN lúc ghi tiến độ (cột DonViDaChon), KHÔNG
-     phải luôn là Cái. qlsx.js dòng ~3187 quy đổi: donViDaChon === TheKho.DonViQuyDoi thì × LoaiRi.
-     Phải sao y công thức đó, kẻo báo cáo lệch đúng LoaiRi lần so với số thực cộng vào NhapCai.
-     Đồng thời LOẠI MÀU PHỐI y như getStageActualQtyByColor (qlsx.js) — đường ghi NhapCai bỏ màu phối. */
-  const quyVeCai = coDVDaChon
-    ? `CASE WHEN ct.DonViDaChon IS NOT NULL AND ct.DonViDaChon = h.DonViQuyDoi
-            THEN ct.SoLuongLuyKe * ISNULL(h.LoaiRi,1) ELSE ct.SoLuongLuyKe END`
-    : 'ct.SoLuongLuyKe';
-  /* ⚠️ PHAI dung JOIN + GROUP BY, KHONG duoc dung subquery tuong quan o day.
-     Bieu thuc trong SUM() vua co cot bang TRONG (ct.*) vua co cot bang NGOAI (h.DonViQuyDoi, h.LoaiRi)
-     => SQL Server loi 8124 "Multiple columns are specified in an aggregated expression containing an
-     outer reference". Dua ca 2 bang vao cung 1 truy van GROUP BY thi khong con "outer reference". */
-  /* v6.89: LOAI cac lenh SX DA CO PHIEU NHAP KHO ra khoi duong "nhap tu cong doan KN".
-     qlsx.js tu v6.89 cung BO QUA cong NhapCai cho nhung lenh do (chung tu la nguon uu tien). Neu bao
-     cao van tinh KN cho ho thi Nhap trong ky bi cong hai lan trong khi ton hien tai chi tang mot lan
-     => Ton dau ky bi keo am. Hai ben PHAI cung mot dieu kien loai tru. */
-  const loaiLenhDaCoPhieu = (await coBang(pool, 'PhieuNhapKhoHang'))
-    ? `AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang pnk
-                       WHERE pnk.DonHangID = td.DonHangID AND pnk.TrangThai <> N'Đã hủy')`
-    : '';
-  const sqlLK = `
-    WITH kn AS (
-      SELECT h.MaHangID, td.TienDoID, td.NgayGhiNhan, ${batchCol} AS Batch,
-             ISNULL(SUM(${quyVeCai}), 0) AS LK
-      FROM TienDoSanXuat td
-      JOIN CongDoanSanXuat c ON c.StageID = td.StageID AND c.MaCongDoan = 'KN'
-      JOIN TheKhoHangHoa h ON h.DonHangID = td.DonHangID
-      ${loaiLenhDaCoPhieu}
-      LEFT JOIN TienDoChiTietMau ct ON ct.TienDoID = td.TienDoID
-           AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
-                                   WHERE DonHangID = td.DonHangID AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
-      GROUP BY h.MaHangID, td.TienDoID, td.NgayGhiNhan, ${batchCol}
-    ),
-    batch AS (
-      SELECT MaHangID, Batch, MAX(NgayGhiNhan) AS Ngay, MAX(TienDoID) AS MaxID, SUM(LK) AS LuyKe
-      FROM kn GROUP BY MaHangID, Batch
-    ),
-    moc AS (
-      SELECT h.MaHangID, h.DonViCoBan, h.LoaiRi,
-             ISNULL((SELECT b.LuyKe FROM batch b WHERE b.MaHangID = h.MaHangID
-                     AND b.MaxID = (SELECT MAX(b2.MaxID) FROM batch b2
-                                    WHERE b2.MaHangID = h.MaHangID AND b2.Ngay < @tu)), 0) AS LK_TruocKy,
-             ISNULL((SELECT b.LuyKe FROM batch b WHERE b.MaHangID = h.MaHangID
-                     AND b.MaxID = (SELECT MAX(b2.MaxID) FROM batch b2
-                                    WHERE b2.MaHangID = h.MaHangID AND b2.Ngay <= @den)), 0) AS LK_CuoiKy,
-             ISNULL((SELECT b.LuyKe FROM batch b WHERE b.MaHangID = h.MaHangID
-                     AND b.MaxID = (SELECT MAX(b2.MaxID) FROM batch b2
-                                    WHERE b2.MaHangID = h.MaHangID AND b2.Ngay <= @nay)), 0) AS LK_HienTai
-      FROM TheKhoHangHoa h WHERE h.DonHangID IS NOT NULL
-    )
-    /* ⚠️ KHONG chia them cho LoaiRi o day. qlsx.js (~dong 3187) cong THANG delta vao NhapCai sau khi
-       chi quy doi theo DonViDaChon, KHONG quy ve DonViCoBan. Bao cao phai bam DUNG con so that su
-       nam trong so cai (NhapCai - XuatCai), khong duoc "sua cho dung ly thuyet" — chia them se lam
-       Nhap trong ky nho di LoaiRi lan va day phan chenh sang Ton dau ky. */
-    SELECT MaHangID,
-           LK_CuoiKy - LK_TruocKy  AS NhapKy,
-           LK_HienTai - LK_CuoiKy  AS NhapSauKy
-    FROM moc`;
-  const lk = (await rqKy(pool, ky).query(sqlLK)).recordset;
-  const nhapKy = lk.map(r => ({ MaHangID: r.MaHangID, SL: r.NhapKy }));
-  const nhapSau = lk.map(r => ({ MaHangID: r.MaHangID, SL: r.NhapSauKy }));
+  /* --- NHAP: PHIEU NHAP KHO HANG HOA — NGUON DUY NHAT (v6.91) ---
+     ⚠️ DA GO HAN duong "cong doan Kho nhap (KN) cua lenh SX". Ly do (chinh nguoi dung chot):
+     MOI hang ton kho tu nay deu phai qua PHIEU NHAP KHO. Duong KN ra doi hoi chua co phan he ban
+     hang / cong no, chi de theo doi tam; giu ca hai nguon la mo duong dem hai lan va phai luon nho
+     dieu kien loai tru cheo giua baocao.js va qlsx.js.
+     => Nhap trong ky = SUM(SoLuongChinh) cua cac phieu chua huy co NgayNhap trong ky.
+     SoLuongChinh da theo DON VI CHINH cua ma hang -> cung don vi voi cot Ton, khong phai quy doi.
 
-  /* --- NHAP 2: PHIEU NHAP KHO HANG HOA (v6.89) ---
-     ⚠️ BAT BUOC co phan nay. Ton dau/cuoi ky duoc suy ra bang cach LUI tu ton hien tai theo chung tu
-     (TonCuoi = TonHienTai - NhapSauKy + XuatSauKy). Ton hien tai da gom nguon phieu nhap kho
-     (vw_TonTheoMau), nen neu Nhap trong ky KHONG gom phieu nhap thi toan bo phan nhap bang phieu se
-     bi day sang "Ton dau ky" - bao cao nhin nhu ky nao cung co san hang tu dau.
-     SoLuongChinh da theo DON VI CHINH cua ma hang, dung don vi voi cot Ton. */
+     ⚠️ Ton dau/cuoi ky duoc suy ra bang cach LUI tu ton hien tai theo chung tu:
+        TonCuoi = TonHienTai - NhapSauKy + XuatSauKy;  TonDau = TonCuoi - NhapKy + XuatKy.
+     Ton hien tai (vw_TonTheoMau) VAN gom ca phan NhapCai cu (go tay o the kho / KN truoc day). Phan
+     do khong co ngay nen se nam trong "Ton dau ky" — dung, va da ghi ro o `ghiChu` cuoi ham. */
   let nhapPhieuKy = [], nhapPhieuSau = [];
   if (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) {
     const sqlNhapPhieu = `
@@ -234,6 +166,49 @@ async function baoCaoTonHangHoa(pool, ky) {
     nhapPhieuSau = (await pool.request().input('a', sql.Date, ky.denNgay).input('b', sql.Date, ky.homNay)
       .query(sqlNhapPhieu.replace('BETWEEN @a AND @b', '> @a AND p.NgayNhap <= @b'))).recordset;
   }
+
+  /* --- GIA NHAP (v6.91) ---
+     A) HANG MUA NGOAI: BINH QUAN GIA QUYEN tren toan bo phieu nhap tu NCC (chua huy):
+          gia = SUM(ThanhTien) / SUM(SoLuongChinh)
+        Chia cho SoLuongChinh (KHONG phai SoLuong) de gia ra dung DON VI CHINH — cung don vi voi cot
+        Ton, nho vay Gia tri ton = Ton x Gia nhap moi khop.
+        Chi tinh dong CO tien (ThanhTien > 0): dong gia 0 keo binh quan tut xuong sai.
+     B) HANG NHA SAN XUAT: phieu loai 'SanXuat' luon co DonGia = 0 (nhapkho.js: khong sinh cong no ao),
+        nen KHONG the lay gia tu phieu. Phai lay GIA THANH cua lenh SX ma phieu do gan vao ->
+        bang GiaVonHangHoa (nut "Nạp từ lệnh SX" o Bao cao gia von tinh san va chot lai o day).
+        Uu tien A truoc: ma nao vua mua ngoai vua tu san xuat thi tien that da bo ra la o phieu NCC. */
+  let giaNhapRs = [];
+  if (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) {
+    const coGiaVon = await coBang(pool, 'GiaVonHangHoa');
+    giaNhapRs = (await pool.request().query(`
+      SELECT h.MaHangID,
+             bq.SoLuong AS SLMua, bq.SoTien AS TienMua,
+             ${coGiaVon ? 'gv.GiaVon, gv.NguonGia, gv.MaDHNguon' : 'NULL AS GiaVon, NULL AS NguonGia, NULL AS MaDHNguon'}
+      FROM TheKhoHangHoa h
+      OUTER APPLY (
+        SELECT ISNULL(SUM(ct.SoLuongChinh), 0) AS SoLuong, ISNULL(SUM(ct.ThanhTien), 0) AS SoTien
+        FROM PhieuNhapKhoHangChiTiet ct
+        JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+        WHERE ct.MaHangID = h.MaHangID AND p.TrangThai <> N'Đã hủy'
+          AND p.LoaiNhap = N'NhaCungCap' AND ISNULL(ct.ThanhTien, 0) > 0
+      ) bq
+      ${coGiaVon ? 'LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID' : ''}`)).recordset;
+  }
+  const giaNhapMap = new Map();
+  giaNhapRs.forEach(r => {
+    const slMua = so(r.SLMua), tienMua = so(r.TienMua);
+    if (slMua > 0 && tienMua > 0) {
+      giaNhapMap.set(r.MaHangID, { gia: tienMua / slMua, nguon: 'Phiếu nhập (BQGQ)' });
+    } else if (so(r.GiaVon) > 0) {
+      /* GiaVonHangHoa.GiaVon la gia 1 DON VI GOC (cung don vi voi GiaBan). Cot Ton theo DON VI CHINH;
+         ma nao co don vi chinh la don vi GOP thi phai nhan he so de ve cung don vi. */
+      giaNhapMap.set(r.MaHangID, {
+        gia: so(r.GiaVon),
+        goc: true,
+        nguon: r.NguonGia === 'Lệnh SX' ? (r.MaDHNguon ? 'Lệnh SX ' + r.MaDHNguon : 'Lệnh SX') : (r.NguonGia || 'Khai tay')
+      });
+    }
+  });
 
   /* --- XUAT 1: phieu ban hang (duong tru ton duy nhat tu v6.23) --- */
   const sqlXuatBH = `
@@ -284,36 +259,38 @@ async function baoCaoTonHangHoa(pool, ky) {
   }
 
   const khoa = r => r.MaHangID;
-  gomVao(map, nhapKy, khoa, 'NhapKy');
-  gomVao(map, nhapSau, khoa, 'NhapSauKy');
-  gomVao(map, nhapPhieuKy, khoa, 'NhapKy');        // v6.89: phieu nhap kho hang hoa
+  gomVao(map, nhapPhieuKy, khoa, 'NhapKy');        // v6.91: PHIEU NHAP KHO la nguon nhap DUY NHAT
   gomVao(map, nhapPhieuSau, khoa, 'NhapSauKy');
   gomVao(map, xuatBHKy, khoa, 'XuatKy');
   gomVao(map, xuatBHSau, khoa, 'XuatSauKy');
   gomVao(map, xuatDonKy, khoa, 'XuatKy');
   gomVao(map, xuatDonSau, khoa, 'XuatSauKy');
 
-  /* Ma hang co DON VI CHINH = 'Ri': duong NHAP (qlsx Kho nhap) va duong XUAT (phieu ban hang) quy doi
-     KHAC nhau — qlsx cong so CAI vao so cai luu theo Ri, con banhang.js chia LoaiRi cho dung.
-     Day la lech co san cua he thong (khong phai do bao cao), nhung se lam Ton dau ky cua nhung ma nay
-     nhin sai, nen phai bao cho nguoi dung biet thay vi im lang. */
-  const maRiCoNhap = [...map.values()]
-    .filter(x => donViChinhLaGop(x) && (x.NhapKy || x.NhapSauKy))
-    .map(x => x.MaHang);
-
   const rows = [...map.values()].map(x => {
     // Ton cuoi ky = ton hien tai lui ve theo chung tu phat sinh SAU ky
     const tonCuoi = lam2(x.TonHienTai - x.NhapSauKy + x.XuatSauKy);
     const tonDau = lam2(tonCuoi - x.NhapKy + x.XuatKy);
+    const heSo = donViChinhLaGop(x) ? x.LoaiRi : 1;   // ton theo don vi GOP -> nhan he so ra don vi goc
+    /* Gia nhap ve DUNG DON VI CUA COT TON:
+         - nguon "Phieu nhap (BQGQ)" da la gia 1 don vi chinh  -> giu nguyen
+         - nguon GiaVonHangHoa la gia 1 don vi GOC             -> nhan he so neu don vi chinh la gop */
+    const gn = giaNhapMap.get(x.MaHangID);
+    const giaNhap = gn ? (gn.goc ? gn.gia * heSo : gn.gia) : null;
     return {
       MaHang: x.MaHang, TenHang: x.TenHang, TenDanhMuc: x.TenDanhMuc, DonVi: x.DonVi,
       TonDau: tonDau, Nhap: lam2(x.NhapKy), Xuat: lam2(x.XuatKy), TonCuoi: tonCuoi,
+      // v6.91: gia nhap + gia tri ton THEO GIA NHAP (day moi la tien that da bo ra)
+      GiaNhap: giaNhap == null ? null : tien(giaNhap),
+      NguonGiaNhap: gn ? gn.nguon : null,
+      GiaTriTonNhap: giaNhap == null ? null : tien(tonCuoi * giaNhap),
       GiaBan: tien(x.GiaBan),
       // Gia tri ton theo GIA BAN — chi de tham khao (gia von nam o bao cao ket qua kinh doanh).
       // Giá là giá 1 ĐƠN VỊ GỐC; tồn lưu theo đơn vị GỘP thì phải nhân tỷ lệ ra số đơn vị gốc.
-      GiaTriTon: tien(tonCuoi * (donViChinhLaGop(x) ? x.LoaiRi : 1) * x.GiaBan)
+      GiaTriTon: tien(tonCuoi * heSo * x.GiaBan)
     };
   }).filter(r => r.TonDau || r.Nhap || r.Xuat || r.TonCuoi);
+
+  const thieuGia = rows.filter(r => r.GiaNhap == null && r.TonCuoi).map(r => r.MaHang);
 
   return {
     rows,
@@ -322,13 +299,17 @@ async function baoCaoTonHangHoa(pool, ky) {
       Nhap: lam2(rows.reduce((s, r) => s + r.Nhap, 0)),
       Xuat: lam2(rows.reduce((s, r) => s + r.Xuat, 0)),
       TonCuoi: lam2(rows.reduce((s, r) => s + r.TonCuoi, 0)),
+      GiaTriTonNhap: tien(rows.reduce((s, r) => s + (r.GiaTriTonNhap || 0), 0)),
       GiaTriTon: tien(rows.reduce((s, r) => s + r.GiaTriTon, 0))
     },
-    canhBao: maRiCoNhap.length
-      ? `${maRiCoNhap.length} mã hàng có ĐVT chính là "Ri" và có nhập kho từ lệnh SX (${maRiCoNhap.slice(0, 8).join(', ')}${maRiCoNhap.length > 8 ? '…' : ''}). `
-        + 'Đường nhập (Kho nhập) và đường xuất (phiếu bán hàng) đang quy đổi Ri/Cái khác nhau nên tồn của các mã này cần đối chiếu lại bằng tay.'
+    canhBao: thieuGia.length
+      ? `${thieuGia.length} mã còn tồn nhưng CHƯA CÓ GIÁ NHẬP (${thieuGia.slice(0, 8).join(', ')}${thieuGia.length > 8 ? '…' : ''}) — cột "Giá trị tồn (giá nhập)" của các mã này đang bị bỏ trống. `
+        + 'Hàng mua ngoài: khai đơn giá trên phiếu nhập kho. Hàng tự sản xuất: vào Báo cáo → Giá vốn, bấm "Nạp từ lệnh SX".'
       : null,
-    ghiChu: 'Số lượng theo ĐƠN VỊ CHÍNH của từng mã hàng (cột ĐVT). Nhập trong kỳ lấy từ công đoạn "Kho nhập" của lệnh SX; xuất lấy từ phiếu bán hàng. Phần nhập/sửa tay trực tiếp trên thẻ kho không có ngày nên nằm trong "Tồn đầu kỳ".'
+    ghiChu: 'Số lượng theo ĐƠN VỊ CHÍNH của từng mã hàng (cột ĐVT). '
+      + 'Nhập trong kỳ lấy TỪ PHIẾU NHẬP KHO (từ v6.91 đây là nguồn nhập duy nhất); xuất lấy từ phiếu bán hàng. '
+      + 'Giá nhập: hàng mua ngoài = bình quân gia quyền các phiếu nhập từ NCC; hàng tự sản xuất = giá thành lệnh SX (Báo cáo → Giá vốn). '
+      + 'Số nhập tay trực tiếp trên thẻ kho và số ghi qua công đoạn "Kho nhập" trước đây không có chứng từ nên nằm trong "Tồn đầu kỳ".'
   };
 }
 
@@ -759,28 +740,21 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   const rq = () => pool.request().input('id', sql.Int, h.MaHangID)
     .input('tu', sql.Date, ky.tuNgay).input('den', sql.Date, ky.denNgay);
 
-  // --- NHAP: tung lan ghi tien do "Kho nhập" (lay HIEU luy ke giua 2 lan lien tiep) ---
-  const coNhom = await coCot(pool, 'TienDoSanXuat', 'NhomTienDoID');
-  const coDV = await coCot(pool, 'TienDoChiTietMau', 'DonViDaChon');
-  const batchCol = coNhom ? 'ISNULL(td.NhomTienDoID, td.TienDoID)' : 'td.TienDoID';
-  const quyCai = coDV
-    ? `CASE WHEN ct.DonViDaChon IS NOT NULL AND ct.DonViDaChon = h.DonViQuyDoi
-            THEN ct.SoLuongLuyKe * ISNULL(h.LoaiRi,1) ELSE ct.SoLuongLuyKe END`
-    : 'ct.SoLuongLuyKe';
-  const nhap = h.DonHangID ? (await rq().query(`
-    WITH kn AS (
-      SELECT td.TienDoID, td.NgayGhiNhan, ${batchCol} AS Batch, ISNULL(SUM(${quyCai}), 0) AS LK
-      FROM TienDoSanXuat td
-      JOIN CongDoanSanXuat c ON c.StageID = td.StageID AND c.MaCongDoan = 'KN'
-      JOIN TheKhoHangHoa h ON h.MaHangID = @id AND h.DonHangID = td.DonHangID
-      LEFT JOIN TienDoChiTietMau ct ON ct.TienDoID = td.TienDoID
-           AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
-                                   WHERE DonHangID = td.DonHangID AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
-      GROUP BY td.TienDoID, td.NgayGhiNhan, ${batchCol}
-    ),
-    batch AS (SELECT Batch, MAX(NgayGhiNhan) AS Ngay, MAX(TienDoID) AS MaxID, SUM(LK) AS LuyKe FROM kn GROUP BY Batch)
-    SELECT Ngay, MaxID, LuyKe, LuyKe - ISNULL(LAG(LuyKe) OVER (ORDER BY MaxID), 0) AS PhatSinh
-    FROM batch ORDER BY MaxID`)).recordset : [];
+  /* --- NHAP: PHIEU NHAP KHO HANG HOA (v6.91) ---
+     Da bo duong "tung lan ghi tien do Kho nhap" cho khop voi bang tong hop: tu v6.91 nguon nhap duy
+     nhat la phieu nhap kho. Neu hai man hinh lay hai nguon khac nhau thi bam vao mot ma se thay chi
+     tiet khong cong ra dung cot "Nhap trong ky" - dung kieu lech tung lam mat long tin vao bao cao. */
+  const nhap = (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) ? (await rq().query(`
+    SELECT p.NgayNhap AS Ngay, p.SoPhieu, p.LoaiNhap,
+           ISNULL(ncc.TenNCC, ISNULL(d.MaDH, N'')) AS DoiTuong,
+           ISNULL(SUM(ct.SoLuongChinh), 0) AS PhatSinh
+    FROM PhieuNhapKhoHangChiTiet ct
+    JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+    LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
+    LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
+    WHERE ct.MaHangID = @id AND p.TrangThai <> N'Đã hủy' AND p.NgayNhap BETWEEN @tu AND @den
+    GROUP BY p.NgayNhap, p.SoPhieu, p.LoaiNhap, ncc.TenNCC, d.MaDH, p.PhieuNKID
+    ORDER BY p.NgayNhap, p.SoPhieu`)).recordset : [];
 
   // --- XUAT 1: phieu ban hang ---
   const xuatBH = (await rq().query(`
@@ -810,8 +784,9 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   const heSo = Number(h.LoaiRi) || 1;
   const rows = [];
   nhap.forEach(r => { if (so(r.PhatSinh)) rows.push({
-    Ngay: r.Ngay, Loai: 'Nhập kho (lệnh SX)', SoPhieu: 'Tiến độ #' + r.MaxID,
-    DoiTuong: '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
+    Ngay: r.Ngay,
+    Loai: r.LoaiNhap === 'SanXuat' ? 'Nhập kho (từ sản xuất)' : 'Nhập kho (từ NCC)',
+    SoPhieu: r.SoPhieu, DoiTuong: r.DoiTuong || '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
   xuatBH.forEach(r => rows.push({
     Ngay: r.Ngay, Loai: 'Phiếu bán hàng', SoPhieu: r.SoPhieu, DoiTuong: r.TenKhach || '',
     TenMau: r.TenMau || '', Nhap: 0,
@@ -1073,12 +1048,31 @@ router.post('/giavon/naptulenhsx', requireAuth, requirePermission('BAOCAO', 'edi
     return res.status(500).json({ success: false, message: 'Không gọi được hàm tính giá thành của phân hệ QLSX.' });
   }
   const ep = req.body && req.body.ep === true;   // true = ghi đè cả những mã đã khai tay
+  /* v6.91: HAI đường lần ra lệnh SX của một mã hàng — phải gộp cả hai:
+       (A) TheKhoHangHoa.DonHangID   — thẻ kho tạo tay có chọn lệnh SX (dữ liệu cũ)
+       (B) PhieuNhapKhoHang.DonHangID — phiếu nhập kho loại "Từ sản xuất" (đường CHUẨN từ v6.89)
+     Mã hàng do PHIẾU tự sinh ra KHÔNG có TheKhoHangHoa.DonHangID, nên nếu chỉ đi đường (A) thì đúng
+     những mã mới nhất lại là những mã không bao giờ nạp được giá vốn. */
+  const coPhieuNK = await coBang(pool, 'PhieuNhapKhoHang');
   const ds = (await pool.request().query(`
-    SELECT h.MaHangID, h.MaHang, d.MaDH, gv.NguonGia
-    FROM TheKhoHangHoa h
-    JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
-    LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID
-    ORDER BY h.MaHang`)).recordset;
+    SELECT MaHangID, MaHang, MaDH, NguonGia FROM (
+      SELECT h.MaHangID, h.MaHang, d.MaDH, gv.NguonGia, 1 AS ThuTuUuTien
+      FROM TheKhoHangHoa h
+      JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
+      LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID
+      ${coPhieuNK ? `
+      UNION ALL
+      SELECT h.MaHangID, h.MaHang, d.MaDH, gv.NguonGia, 2 AS ThuTuUuTien
+      FROM PhieuNhapKhoHangChiTiet ct
+      JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID AND p.TrangThai <> N'Đã hủy'
+                             AND p.LoaiNhap = N'SanXuat' AND p.DonHangID IS NOT NULL
+      JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
+      JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+      LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID` : ''}
+    ) u
+    -- Một mã có thể ra từ cả 2 đường / nhiều dòng phiếu -> chỉ giữ MỘT dòng cho mỗi mã.
+    GROUP BY MaHangID, MaHang, MaDH, NguonGia
+    ORDER BY MaHang`)).recordset;
 
   /* ⚠️ KHONG dung thang gt.giaThanh1SP! Do la tongCong / slDungTinh, ma slDungTinh = SUM(SoLuongLuyKe)
      THO — theo don vi nguoi dung chon luc ghi Kho nhap (co the la RI). Neu ghi theo Ri thi
@@ -1110,6 +1104,26 @@ router.post('/giavon/naptulenhsx', requireAuth, requirePermission('BAOCAO', 'edi
     WHERE b.MaxID = (SELECT MAX(b2.MaxID) FROM batch b2 WHERE b2.MaHangID = b.MaHangID)`)).recordset
     .forEach(r => slCaiTheoMa.set(r.MaHangID, so(r.SLCai)));
 
+  /* v6.91: SL nhập kho lấy TỪ PHIẾU NHẬP KHO — ĐÈ LÊN số luỹ kế Kho nhập ở trên.
+     Từ v6.91 công đoạn "Kho nhập" chỉ khép quy trình SX, không còn là chứng từ nhập kho; số thật để
+     chia giá thành là số trên phiếu.
+     SoLuongChinh theo ĐƠN VỊ CHÍNH -> phải × LoaiRi khi đơn vị chính là đơn vị GỘP, vì GiaVon lưu
+     theo 1 ĐƠN VỊ GỐC (cùng đơn vị với GiaBan). Quên bước này là giá vốn sai đúng LoaiRi lần. */
+  if (coPhieuNK) {
+    (await pool.request().query(`
+      SELECT ct.MaHangID,
+             SUM(ct.SoLuongChinh * CASE
+                   WHEN LOWER(LTRIM(RTRIM(h.DonViCoBan))) =
+                        LOWER(LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(h.DonViQuyDoi)), N''), N'ri'))))
+                        AND ISNULL(h.LoaiRi, 1) > 0
+                   THEN ISNULL(h.LoaiRi, 1) ELSE 1 END) AS SLCai
+      FROM PhieuNhapKhoHangChiTiet ct
+      JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID AND p.TrangThai <> N'Đã hủy'
+      JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+      GROUP BY ct.MaHangID`)).recordset
+      .forEach(r => { if (so(r.SLCai) > 0) slCaiTheoMa.set(r.MaHangID, so(r.SLCai)); });
+  }
+
   let capNhat = 0, boQua = 0, khongTinhDuoc = [];
   const giaThanhTheoDon = new Map();   // 1 lệnh SX ra nhiều mã thẻ kho -> chỉ tính giá thành 1 lần
   for (const r of ds) {
@@ -1124,7 +1138,7 @@ router.post('/giavon/naptulenhsx', requireAuth, requirePermission('BAOCAO', 'edi
       if (!gt) { khongTinhDuoc.push(r.MaHang + ' (không thấy lệnh SX ' + r.MaDH + ')'); continue; }
       const tongCong = so(gt.tong && gt.tong.tongCong);
       const slCai = so(slCaiTheoMa.get(r.MaHangID));
-      if (!(slCai > 0)) { khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa ghi tiến độ Kho nhập nên chưa chốt được giá vốn)'); continue; }
+      if (!(slCai > 0)) { khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa có phiếu nhập kho nào nên chưa chốt được giá vốn)'); continue; }
       const g = tongCong / slCai;
       if (!(so(g) > 0)) { khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa đủ số liệu giá thành)'); continue; }
       await pool.request()
@@ -1193,6 +1207,10 @@ router.get('/export', requireAuth, requirePermission('BAOCAO', 'view'), async (r
         { header: 'Nhập trong kỳ', key: 'Nhap', width: 13 },
         { header: 'Xuất trong kỳ', key: 'Xuat', width: 13 },
         { header: 'Tồn cuối kỳ', key: 'TonCuoi', width: 12 },
+        // v6.91: giá nhập + giá trị tồn theo giá nhập (tiền THẬT đã bỏ ra), đặt trước giá bán.
+        { header: 'Giá nhập (1 ĐVT)', key: 'GiaNhap', width: 15 },
+        { header: 'Nguồn giá nhập', key: 'NguonGiaNhap', width: 20 },
+        { header: 'Giá trị tồn (theo giá nhập)', key: 'GiaTriTonNhap', width: 24 },
         { header: 'Giá bán (1 cái)', key: 'GiaBan', width: 14 },
         { header: 'Giá trị tồn (theo giá bán)', key: 'GiaTriTon', width: 22 }
       ], kq.rows, { MaHang: 'TỔNG', ...kq.tong });
