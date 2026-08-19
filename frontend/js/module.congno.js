@@ -801,7 +801,11 @@ window.ModuleCongNo = (function () {
         </div>`).join('') || '<div class="empty-hint">Chưa có quỹ nào.</div>'}
       </div>
       <table><thead><tr><th>Quỹ</th><th>Số tài khoản</th><th>Đầu kỳ</th><th>Tổng thu</th><th>Tổng chi</th><th>Số dư hiện tại</th></tr></thead>
-      <tbody>${quy.map(q => `<tr>
+      ${/* v6.81: BẢNG DƯỚI cũng bấm được. Trước đây chỉ mấy THẺ ở trên có class .act-quy; bảng này
+           trông y hệt một danh sách bấm được nhưng lại trơ ra — người dùng bấm mãi không thấy gì.
+           Dùng ĐÚNG class .act-quy + data-loai/data-id như thẻ, nên phần gắn sự kiện bên dưới
+           (body.querySelectorAll('.act-quy')) tự nhận, không phải viết thêm đường xử lý thứ hai. */''}
+      <tbody>${quy.map(q => `<tr class="act-quy dong-bam-duoc" data-loai="${q.loai}" data-id="${q.taiKhoanNHID || ''}" title="Bấm để xem sổ quỹ chi tiết">
         <td>${bieuTuong(q)} ${escapeHtml(q.ten)}</td><td>${escapeHtml(q.soTaiKhoan || '')}</td>
         <td style="text-align:right;">${fmtNumber(q.dauKy)}</td>
         <td style="text-align:right;color:#137333;">${fmtNumber(q.thu)}</td>
