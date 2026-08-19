@@ -16,6 +16,7 @@ const banHangRoutes = require('./routes/banhang');   // v6.23: phiếu bán hàn
 const nhapLaiRoutes = require('./routes/nhaplai');   // v6.66: phiếu nhập lại (hàng khách trả) - hoàn tồn + giảm công nợ
 const dashboardRoutes = require('./routes/dashboard'); // v6.67: dashboard kinh doanh (trang chủ khi đăng nhập)
 const doiSoatRoutes = require('./routes/doisoat');   // v6.74: đối soát ngân hàng (khớp chuyển khoản -> phiếu thu)
+const nhapKhoRoutes = require('./routes/nhapkho');   // v6.78: phiếu nhập kho hàng hóa (NCC / sản xuất)
 const congNoRoutes = require('./routes/congno');     // v6.23: phiếu thu/chi + công nợ KH/NCC + danh mục tài khoản
 const baoCaoRoutes = require('./routes/baocao');     // v6.26: báo cáo tồn kho / tài chính / kết quả kinh doanh
 const taiLieuKyThuatRoutes = require('./routes/tailieukythuat');
@@ -150,6 +151,7 @@ app.use('/api/banhang', banHangRoutes);   // v6.23
 app.use('/api/nhaplai', nhapLaiRoutes);   // v6.66
 app.use('/api/dashboard', dashboardRoutes);   // v6.67
 app.use('/api/doisoat', doiSoatRoutes);   // v6.74
+app.use('/api/nhapkho', nhapKhoRoutes);   // v6.78
 app.use('/api/congno', congNoRoutes);     // v6.23
 app.use('/api/baocao', baoCaoRoutes);     // v6.26
 app.use('/api/tailieukythuat', taiLieuKyThuatRoutes);

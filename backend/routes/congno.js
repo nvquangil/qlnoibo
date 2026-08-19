@@ -744,6 +744,18 @@ async function congNoNCC(pool) {
            COUNT(DISTINCT p.PhieuID) AS SoPhieu
     FROM PhieuPhuKien p JOIN PhieuPhuKienChiTiet ct ON ct.PhieuID = p.PhieuID
     WHERE p.LoaiPhieu = N'Xuất' AND p.LaTraNCC = 1 AND p.NCC_ID IS NOT NULL GROUP BY p.NCC_ID`)).recordset : [];
+  /* v6.78: NHAP KHO HANG HOA tu NCC -> TANG no phai tra (giong nhap vai / nhap phu kien).
+     Bang PhieuNhapKhoHang do migration_v681 tao - do bang truoc, chua chay migration thi bo qua
+     phan nay chu KHONG lam vo ca man cong no. */
+  let coBangNKH = false;
+  try {
+    coBangNKH = (await pool.request().query(`SELECT OBJECT_ID('PhieuNhapKhoHang') AS c`)).recordset[0].c != null;
+  } catch (e) { coBangNKH = false; }
+  const nhapHH = coBangNKH ? (await pool.request().query(`
+    SELECT p.NCC_ID, SUM(ISNULL(p.TongTien, 0)) AS Tien, COUNT(*) AS SoPhieu
+    FROM PhieuNhapKhoHang p
+    WHERE p.LoaiNhap = N'NhaCungCap' AND p.NCC_ID IS NOT NULL AND p.TrangThai <> N'Đã hủy'
+    GROUP BY p.NCC_ID`)).recordset : [];
   const ncc = (await pool.request().query('SELECT NCC_ID, TenNCC FROM NhaCungCap ORDER BY TenNCC')).recordset;
 
   const g = (arr, id) => so((arr.find(x => x.NCC_ID === id) || {}).Tien);
@@ -751,15 +763,18 @@ async function congNoNCC(pool) {
   const rows = ncc.map(n => {
     const tienVai = g(vai, n.NCC_ID), tienPK = g(pk, n.NCC_ID), dieuChinh = g(dc, n.NCC_ID), daTra = g(chi, n.NCC_ID);
     const traLai = g(traVai, n.NCC_ID) + g(traPK, n.NCC_ID);
-    const phaiTra = tienVai + tienPK + dieuChinh - traLai;
+    const tienHH = g(nhapHH, n.NCC_ID);                  // v6.78: nhap kho hang hoa tu NCC
+    const phaiTra = tienVai + tienPK + tienHH + dieuChinh - traLai;
     return {
       NCC_ID: n.NCC_ID, TenNCC: n.TenNCC,
       TienVai: Math.round(tienVai * 100) / 100, TienPhuKien: Math.round(tienPK * 100) / 100,
+      TienHangHoa: Math.round(tienHH * 100) / 100,
       DieuChinh: Math.round(dieuChinh * 100) / 100, TraLai: Math.round(traLai * 100) / 100,
       PhaiTra: Math.round(phaiTra * 100) / 100, DaTra: Math.round(daTra * 100) / 100,
       ConNo: Math.round((phaiTra - daTra) * 100) / 100,
       SoPhieuNhapVai: gp(vai, n.NCC_ID), SoPhieuNhapPK: gp(pk, n.NCC_ID), SoPhieuChi: gp(chi, n.NCC_ID),
-      SoPhieuTraLai: gp(traVai, n.NCC_ID) + gp(traPK, n.NCC_ID)
+      SoPhieuTraLai: gp(traVai, n.NCC_ID) + gp(traPK, n.NCC_ID),
+      SoPhieuNhapHH: gp(nhapHH, n.NCC_ID)
     };
   });
   return { rows: rows.sort((a, b) => b.ConNo - a.ConNo), canhBao: (!coGiaVai || !coGiaPK) ? 'Thiếu cột đơn giá (VaiCay.DonGiaNhap / PhieuPhuKienChiTiet.DonGia) — phần đó tính bằng 0.' : null };
@@ -830,7 +845,20 @@ async function soChiTietNCC(pool, id) {
     FROM PhieuPhuKien p JOIN PhieuPhuKienChiTiet ct ON ct.PhieuID = p.PhieuID
     WHERE p.LoaiPhieu = N'Xuất' AND p.LaTraNCC = 1 AND p.NCC_ID = @id
     GROUP BY p.PhieuID, p.Ngay, p.GhiChu`)).recordset : [];
-  const rows = [...vai, ...pk, ...chi, ...dc, ...traVai, ...traPK].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
+  /* v6.78: dong NHAP KHO HANG HOA. Cong thuc phai KHOP congNoNCC() o tren - hai ban tinh song song
+     ma lech nhau thi bang tong va so chi tiet ra hai con so khac nhau. */
+  let coBangNKH2 = false;
+  try {
+    coBangNKH2 = (await pool.request().query(`SELECT OBJECT_ID('PhieuNhapKhoHang') AS c`)).recordset[0].c != null;
+  } catch (e) { coBangNKH2 = false; }
+  const nhapHH = coBangNKH2 ? (await rq().query(`
+    SELECT p.NgayNhap AS Ngay, p.SoPhieu, ISNULL(p.TongTien, 0) AS PhatSinh, 0 AS ThanhToan,
+           N'Nhập kho hàng hóa' AS Loai,
+           LTRIM(RTRIM(ISNULL(N'HĐ ' + p.SoHoaDon, '') + ISNULL(N' · ' + p.GhiChu, ''))) AS DienGiai,
+           N'PNKH' AS CtLoai, p.PhieuNKID AS CtID
+    FROM PhieuNhapKhoHang p
+    WHERE p.LoaiNhap = N'NhaCungCap' AND p.NCC_ID = @id AND p.TrangThai <> N'Đã hủy'`)).recordset : [];
+  const rows = [...vai, ...pk, ...chi, ...dc, ...traVai, ...traPK, ...nhapHH].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
   let luy = 0;
   rows.forEach(r => { luy += so(r.PhatSinh) - so(r.ThanhToan); r.LuyKe = Math.round(luy * 100) / 100; });
   const ten = (await rq().query('SELECT TenNCC FROM NhaCungCap WHERE NCC_ID=@id')).recordset[0] || {};

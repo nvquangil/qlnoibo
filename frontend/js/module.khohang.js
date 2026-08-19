@@ -49,6 +49,8 @@ window.ModuleKhoHang = (function () {
       { key: 'banhang', label: 'Phiếu bán hàng' },
     // v6.66: hàng khách TRẢ LẠI - hoàn tồn + giảm công nợ. Code nằm ở module.nhaplai.js cho gọn file này.
     { key: 'nhaplai', label: 'Phiếu nhập lại' },
+    // v6.78: phiếu nhập kho (từ NCC / từ sản xuất). Code ở module.nhapkho.js cho gọn file này.
+    { key: 'nhapkho', label: 'Phiếu nhập kho' },
       // v5.17 (muc 1.2): 1 tab duy nhat gom ca "Tạo báo giá" (muc 1.2.1) va "Danh sách báo giá"
       // (muc 1.2.2) - dung 1 chuc nang ChucNang('KHOHANG','baogiaaloha') duy nhat cho ca 2, giong
       // dung cach nguoi dung mo ta chung la 2 "chuc nang con" cua CUNG 1 chuc nang cha "Báo giá Aloha".
@@ -79,6 +81,14 @@ window.ModuleKhoHang = (function () {
     if (activeTab === 'banhang') return renderBanHang(perm);               // v6.23
     // v6.66: tab Phiếu nhập lại nằm ở file riêng (module.nhaplai.js) cho file này khỏi phình.
     // Quên nạp script thì báo rõ thay vì để trang trắng không hiểu vì sao.
+    if (activeTab === 'nhapkho') {
+      if (!window.ModuleNhapKho) {
+        document.getElementById('khBody').innerHTML =
+          '<div class="empty-hint">Chưa nạp module.nhapkho.js — copy file này lên rồi Ctrl+F5.</div>';
+        return;
+      }
+      return window.ModuleNhapKho.render(container, user, activeTab);
+    }
     if (activeTab === 'nhaplai') {
       if (!window.ModuleNhapLai) {
         document.getElementById('khBody').innerHTML =
