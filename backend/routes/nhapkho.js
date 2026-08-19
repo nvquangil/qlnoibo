@@ -549,21 +549,128 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
   }
 });
 
+/* ================================================================================================
+   v6.92 — CAC BANG DANG THAM CHIEU MOT MA HANG.
+
+   Dung de biet mot ma hang co con duoc dung o dau khong TRUOC KHI xoa. DO KHOA NGOAI LUC CHAY qua
+   sys.foreign_keys thay vi liet ke ten bang bang tay: hien co ~8 bang tro vao TheKhoHangHoa va moi
+   migration lai co the them bang moi. Liet ke tay la chac chan co ngay bo sot mot bang, va bo sot thi
+   khong phai "xoa duoc nhieu hon" ma la 547 (FK violation) hoac xoa mat du lieu nguoi dung.
+
+   BO QUA cac FK co ON DELETE CASCADE (delete_referential_action = 1): chung tu bien mat theo ma hang,
+   khong phai ly do de giu ma hang lai. Vd TheKhoChiTietMau, GiaVonHangHoa.
+   ================================================================================================ */
+let __fkMaHang = null;
+async function dsBangThamChieuMaHang(pool) {
+  if (__fkMaHang) return __fkMaHang;
+  __fkMaHang = (await pool.request().query(`
+    SELECT OBJECT_SCHEMA_NAME(fk.parent_object_id) AS Luoc,
+           OBJECT_NAME(fk.parent_object_id)        AS Bang,
+           COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS Cot
+    FROM sys.foreign_keys fk
+    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+    WHERE fk.referenced_object_id = OBJECT_ID('TheKhoHangHoa')
+      AND COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) = 'MaHangID'
+      AND fk.delete_referential_action = 0   -- 0 = NO ACTION (cascade thi khong can kiem)
+  `)).recordset.map(r => ({ bang: r.Luoc + '.' + r.Bang, cot: r.Cot }));
+  return __fkMaHang;
+}
+
+/* Ten hien thi cho nguoi dung — de cau bao loi doc duoc, khong phai ten bang ky thuat. */
+const TEN_BANG_VN = {
+  PhieuBanHangChiTiet: 'phiếu bán hàng',
+  DonKhachDatHang: 'đơn khách đặt hàng',
+  PhieuNhapLaiChiTiet: 'phiếu nhập lại (khách trả)',
+  PhieuNhapKhoHangChiTiet: 'phiếu nhập kho khác',
+  BaoGiaAlohaChiTiet: 'báo giá Aloha',
+  BaoGiaChiTiet: 'báo giá'
+};
+const tenVN = (bangDayDu) => {
+  const t = String(bangDayDu).split('.').pop();
+  return TEN_BANG_VN[t] || t;
+};
+
+/* ================================================================================================
+   XOA PHIEU NHAP KHO — XOA LUON MA HANG NEU CHUA XUAT BAN (v6.92)
+
+   Quy tac (nguoi dung chot):
+     - Ma hang CHUA co phieu xuat  -> xoa phieu VA xoa luon ma hang khoi danh muc.
+     - Ma hang DA co phieu xuat    -> KHONG cho xoa; phai huy phieu xuat truoc.
+
+   ⚠️ CHAN TRUOC, XOA SAU: kiem tra het roi moi mo transaction. Neu xoa phieu truoc roi moi phat hien
+   con phieu ban hang thi phai quay lui — ma quay lui giua chuoi DELETE nhieu bang la cho de sinh loi
+   nhat. Chan truoc thi truong hop that bai khong he dong vao du lieu.
+
+   ⚠️ Ma hang duoc GIU LAI (khong xoa) khi con bat ky rang buoc nao khac, ke ca phieu nhap kho KHAC:
+   xoa mot trong hai phieu nhap cua cung mot ma khong duoc keo mat ca ma hang.
+   ================================================================================================ */
 router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
-  const h = (await pool.request().input('id', sql.Int, req.params.id)
-    .query('SELECT TrangThai FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
+  const phieuId = parseInt(req.params.id, 10);
+  const h = (await pool.request().input('id', sql.Int, phieuId)
+    .query('SELECT PhieuNKID, SoPhieu, TrangThai FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
+
+  // Cac ma hang co tren phieu nay
+  const maTrenPhieu = (await pool.request().input('id', sql.Int, phieuId).query(`
+    SELECT DISTINCT ct.MaHangID, hh.MaHang, hh.TenHang
+    FROM PhieuNhapKhoHangChiTiet ct
+    JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
+    WHERE ct.PhieuNKID = @id`)).recordset;
+
+  /* ---- BUOC 1: CHAN neu ma hang da co PHIEU XUAT (phieu ban hang) chua huy ---- */
+  const vuongXuat = [];
+  for (const m of maTrenPhieu) {
+    const bh = (await pool.request().input('mh', sql.Int, m.MaHangID).query(`
+      SELECT DISTINCT p.SoPhieu
+      FROM PhieuBanHangChiTiet ct
+      JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+      WHERE ct.MaHangID = @mh AND p.TrangThai <> N'Đã hủy'`)).recordset.map(x => x.SoPhieu);
+    if (bh.length) vuongXuat.push({ ma: m.MaHang, phieu: bh });
+  }
+  if (vuongXuat.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'KHÔNG xóa được phiếu ' + h.SoPhieu + ' — hàng đã xuất bán. Phải HỦY phiếu bán hàng trước:\n'
+        + vuongXuat.map(v => '• ' + v.ma + ': ' + v.phieu.join(', ')).join('\n')
+    });
+  }
+
+  /* ---- BUOC 2: xoa phieu, roi xoa nhung ma hang khong con rang buoc nao ---- */
+  const fks = await dsBangThamChieuMaHang(pool);
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    await new sql.Request(tran).input('id', sql.Int, req.params.id)
+    await new sql.Request(tran).input('id', sql.Int, phieuId)
       .query('DELETE FROM PhieuNhapKhoHang WHERE PhieuNKID=@id');   // chi tiet xoa theo CASCADE
+
+    const daXoaMa = [], giuLaiMa = [];
+    for (const m of maTrenPhieu) {
+      const vuong = [];
+      for (const f of fks) {
+        const n = (await new sql.Request(tran).input('mh', sql.Int, m.MaHangID)
+          .query(`SELECT TOP 1 1 AS x FROM ${f.bang} WHERE ${f.cot} = @mh`)).recordset.length;
+        if (n) vuong.push(tenVN(f.bang));
+      }
+      if (vuong.length) {
+        giuLaiMa.push(m.MaHang + ' (còn: ' + [...new Set(vuong)].join(', ') + ')');
+        continue;
+      }
+      // Khong con gi tham chieu -> xoa ma hang. TheKhoChiTietMau / GiaVonHangHoa mat theo CASCADE.
+      await new sql.Request(tran).input('mh', sql.Int, m.MaHangID)
+        .query('DELETE FROM TheKhoHangHoa WHERE MaHangID = @mh');
+      daXoaMa.push(m.MaHang);
+    }
+
     await tran.commit();
-    res.json({ success: true, message: 'Đã xóa phiếu nhập kho.' });
+    let msg = 'Đã xóa phiếu nhập kho ' + h.SoPhieu + '.';
+    if (daXoaMa.length) msg += ' Đã xóa luôn ' + daXoaMa.length + ' mã hàng khỏi danh mục: ' + daXoaMa.join(', ') + '.';
+    if (giuLaiMa.length) msg += ' GIỮ LẠI ' + giuLaiMa.length + ' mã vì còn dữ liệu liên quan: ' + giuLaiMa.join('; ') + '.';
+    res.json({ success: true, data: { daXoaMa, giuLaiMa }, message: msg });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }
-    res.status(400).json({ success: false, message: 'Lỗi khi xóa phiếu (đã quay lui): ' + err.message });
+    console.error('[nhapkho DELETE /phieu/:id] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi xóa phiếu (đã quay lui, dữ liệu giữ nguyên): ' + err.message });
   }
 });
 
