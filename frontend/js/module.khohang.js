@@ -476,18 +476,30 @@ window.ModuleKhoHang = (function () {
               <option value="NhaSanXuat" ${loaiHangInit === 'NhaSanXuat' ? 'selected' : ''}>Hàng nhà sản xuất</option>
             </select>
           </div>
-          <div class="form-row" id="blockNhaSanXuat" style="${loaiHangInit === 'NhaSanXuat' ? '' : 'display:none;'}">
-            <label>Chọn đơn hàng sản xuất</label>
-            <select name="donHangId" id="selDonHang"><option value="">-- Đang tải... --</option></select>
+          ${/* v6.82: HÀNG NHÀ SẢN XUẤT KHÔNG CÒN GẮN LỆNH SX Ở ĐÂY NỮA.
+               Trước đây chọn "Hàng nhà sản xuất" là bắt chọn một lệnh SX, rồi tự điền mã/tên/màu từ
+               lệnh đó — tức thẻ kho phải sinh ra TỪ lệnh sản xuất. Nay hàng do xưởng làm ra vào kho
+               bằng PHIẾU NHẬP KHO (tab Phiếu nhập kho), và mã hàng mới cũng tạo ngay trên phiếu đó.
+               Ô chọn lệnh SX giữ lại nhưng ẨN HẲN, không gỡ khỏi HTML: dữ liệu cũ vẫn có DonHangID,
+               gỡ ô đi thì lúc Sửa thẻ kho cũ sẽ gửi thiếu và xóa mất liên kết đã lưu. */''}
+          <div class="form-row" id="blockNhaSanXuat" style="display:none;">
+            <label>Đơn hàng sản xuất (không dùng nữa)</label>
+            ${/* Ô ẩn PHẢI mang sẵn giá trị đang lưu và ĐANG ĐƯỢC CHỌN. Nếu chỉ để mỗi option rỗng thì
+                 mở form Sửa một mã hàng cũ rồi bấm Lưu là DonHangID bị ghi đè thành rỗng — mất liên
+                 kết lệnh SX của dữ liệu cũ mà không ai biết. */''}
+            <select name="donHangId" id="selDonHang">
+              <option value="">--</option>
+              ${row && row.DonHangID ? `<option value="${row.DonHangID}" selected>${escapeHtml(row.MaDH || ('Đơn #' + row.DonHangID))}</option>` : ''}
+            </select>
           </div>
-          <div class="form-row" id="blockDonViCoBan" style="${loaiHangInit === 'NhaSanXuat' ? 'display:none;' : ''}">
+          <div class="form-row" id="blockDonViCoBan">
             <label>Đơn vị tính chính</label>
             ${/* v6.31: lấy từ Danh mục → Đơn vị tính. optDonVi() LUÔN giữ giá trị đang lưu kể cả khi
                  nó không còn trong danh mục — nếu để mất, mở form sửa rồi bấm Lưu là đơn vị bị đổi
                  âm thầm, kéo theo tồn kho bị diễn giải lại sai gấp <tỷ lệ> lần. */''}
             <select name="donViCoBan">${optDonVi(dsDonViTinh, (row && row.DonViCoBan) || 'Cái')}</select>
           </div>
-          <div class="form-row" id="blockDonViQuyDoi" style="${loaiHangInit === 'NhaSanXuat' ? 'display:none;' : ''}">
+          <div class="form-row" id="blockDonViQuyDoi">
             <label>Đơn vị quy đổi</label>
             <select name="donViQuyDoi">${optDonVi(dsDonViTinh, (row && row.DonViQuyDoi) || 'Ri')}</select>
             <div class="empty-hint" style="margin-top:2px;">Đơn vị GỘP của mã hàng (1 &lt;ĐVT quy đổi&gt; = &lt;tỷ lệ&gt; &lt;ĐVT chính&gt;).
@@ -712,23 +724,18 @@ window.ModuleKhoHang = (function () {
 
     // v5.0 (muc 4a): hang "Nha san xuat" - CHI luc TAO MOI (isEdit=false) - khong cho bam "+ Them mau"
     // (mau bi khoa theo mau chinh cua don hang ra lenh san xuat, xem selDonHang change ben duoi).
+    /* v6.82: nút "+ Thêm màu" LUÔN dùng được.
+       Trước đây tạo mới mà chọn "Hàng nhà sản xuất" thì khóa nút này, vì màu được chép tự động từ
+       lệnh SX. Nay không còn gắn lệnh SX nên khóa lại là bít đường khai màu. */
     function toggleAddColorBtn() {
-      const val = modal.querySelector('#selLoaiHang').value;
-      const khoaThemMau = !isEdit && val === 'NhaSanXuat';
-      modal.querySelector('#btnAddColor').style.display = khoaThemMau ? 'none' : '';
+      modal.querySelector('#btnAddColor').style.display = '';
     }
 
-    function toggleLoaiHangBlocks() {
-      const val = modal.querySelector('#selLoaiHang').value;
-      const laNhaSanXuat = val === 'NhaSanXuat';
-      modal.querySelector('#blockNhaSanXuat').style.display = laNhaSanXuat ? '' : 'none';
-      modal.querySelector('#blockDonViCoBan').style.display = laNhaSanXuat ? 'none' : '';
-      modal.querySelector('#blockDonViQuyDoi').style.display = laNhaSanXuat ? 'none' : '';
-      if (laNhaSanXuat) ensureDonHangList();
-      toggleAddColorBtn();
-    }
+    /* Nguồn hàng giờ CHỈ còn là nhãn phân loại (Nhà SX / Đặt ngoài) — không đổi bố cục form nữa.
+       Đơn vị tính phải khai cho CẢ HAI loại: trước đây hàng nhà SX bị ẩn 2 ô ĐVT vì lấy theo lệnh SX,
+       nay không có lệnh SX thì không ẩn được, ẩn là lưu ra mã hàng không có đơn vị. */
+    function toggleLoaiHangBlocks() { toggleAddColorBtn(); }
     modal.querySelector('#selLoaiHang').addEventListener('change', toggleLoaiHangBlocks);
-    if (loaiHangInit === 'NhaSanXuat') ensureDonHangList();
     toggleAddColorBtn();
 
     // Goi y tu dong dien ten hang/ma hang/mau chinh khi chon 1 don hang san xuat - CHI ap dung luc
