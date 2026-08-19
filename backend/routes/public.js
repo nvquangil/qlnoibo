@@ -34,11 +34,11 @@ router.get('/catalogue', async (req, res) => {
     const pool = await getPool();
     // v5.4: them TenNhom (nhom san pham / "Loai hang" moi) de Catalogue loc duoc theo truong nay.
     const itemsResult = await pool.request().query(`
-      SELECT v.MaHangID, v.MaHang, v.TenHang, v.GiaBan, v.AnhDaiDien, v.TenTheKho, v.TongTon, v.TenNhom, h.CreatedAt,
+      SELECT v.MaHangID, v.MaHang, v.TenHang, v.GiaBan, v.AnhDaiDien, v.TenTheKho, v.TongTonThuc AS TongTon, v.TenNhom, h.CreatedAt,
              h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi   -- v6.31
       FROM vw_TonKhoHangHoa v
       JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
-      WHERE v.TongTon > 0${await dieuKienCongKhaiMH(pool, 'h')}
+      WHERE v.TongTonThuc > 0${await dieuKienCongKhaiMH(pool, 'h')}
       ORDER BY v.TenHang`);
     const items = itemsResult.recordset;
     if (!items.length) return res.json({ success: true, data: [] });
@@ -124,7 +124,7 @@ router.get('/danhmuc', async (req, res) => {
       SELECT d.Slug, ISNULL(NULLIF(LTRIM(RTRIM(d.TieuDeCongKhai)), N''), d.TenTheKho) AS TieuDe, d.MoTaCongKhai,
              (SELECT COUNT(*) FROM vw_TonKhoHangHoa v
                 JOIN TheKhoHangHoa hh ON hh.MaHangID = v.MaHangID
-                WHERE v.TheKhoDanhMucID = d.TheKhoDanhMucID AND v.TongTon > 0${await dieuKienCongKhaiMH(pool, 'hh')}) AS SoMatHang
+                WHERE v.TheKhoDanhMucID = d.TheKhoDanhMucID AND v.TongTonThuc > 0${await dieuKienCongKhaiMH(pool, 'hh')}) AS SoMatHang
       FROM TheKhoDanhMuc d
       WHERE d.CongKhai = 1 AND d.Slug IS NOT NULL AND LTRIM(RTRIM(d.Slug)) <> N''
       ORDER BY TieuDe`)).recordset;
@@ -153,7 +153,7 @@ router.get('/catalogue-danhmuc', async (req, res) => {
              h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi   -- v6.31
       FROM vw_TonKhoHangHoa v
       JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
-      WHERE v.TongTon > 0 AND v.TheKhoDanhMucID = @id${await dieuKienCongKhaiMH(pool, 'h')}
+      WHERE v.TongTonThuc > 0 AND v.TheKhoDanhMucID = @id${await dieuKienCongKhaiMH(pool, 'h')}
       ORDER BY v.TenHang`)).recordset;
 
     const thongTin = { tieuDe: dm.TieuDe, moTa: dm.MoTaCongKhai || '' };

@@ -226,7 +226,14 @@ window.ModuleKhoHang = (function () {
              vài MB cho 1 ô 40px -> danh sách vài trăm dòng là tải hàng trăm MB). Bấm phóng to vẫn ảnh GỐC
              qua data-src. */''}
         <td>${r.AnhDaiDien ? `<img class="thumb act-zoom-main" loading="lazy" decoding="async" data-src="${escapeHtml(r.AnhDaiDien)}" data-title="${escapeHtml(r.MaHang)}" src="${escapeHtml(anhNho(r.AnhDaiDien, 160))}" style="cursor:pointer;" title="Bấm để phóng to">` : ''}</td>
-        <td><a href="javascript:void(0)" class="act-open-hist" data-mahang="${escapeHtml(r.MaHang)}" title="Xem lịch sử &amp; chi tiết theo màu">${escapeHtml(r.MaHang)}</a></td>
+        ${/* v6.89: mã đã có hàng vào kho bằng PHIẾU NHẬP KHO nhưng CHƯA tạo thẻ kho -> mọi cột của
+             bảng này đều 0 (đúng: bảng này chỉ hiện số liệu của thẻ kho). Không nói rõ thì người dùng
+             tưởng mất hàng. Số của phiếu nằm ở Báo cáo tồn kho và ở màn Bán hàng. */''}
+        <td><a href="javascript:void(0)" class="act-open-hist" data-mahang="${escapeHtml(r.MaHang)}" title="Xem lịch sử &amp; chi tiết theo màu">${escapeHtml(r.MaHang)}</a>${
+          Number(r.TongNhapTuPhieu) && Number(r.TongTon) === 0
+            ? `<div style="font-size:11px;color:#8a6d3b;">⏳ chưa tạo thẻ kho · phiếu nhập ${fmtNumber(r.TongNhapTuPhieu)} ${escapeHtml(r.DonViCoBan || 'Cái')}</div>`
+            : (Number(r.TongNhapTuPhieu) ? `<div style="font-size:11px;color:#5f6368;">+ ${fmtNumber(r.TongNhapTuPhieu)} ${escapeHtml(r.DonViCoBan || 'Cái')} từ phiếu nhập</div>` : '')
+        }</td>
         <td>${escapeHtml(r.TenHang)}</td>
         <td>${r.LoaiHang === 'NhaSanXuat' ? `<span class="badge info">Nhà SX${r.MaDH ? ' · ' + escapeHtml(r.MaDH) : ''}</span>` : '<span class="badge warn">Đặt ngoài</span>'}</td>
         <td>${escapeHtml(r.TenNhom || '')}</td>
@@ -283,7 +290,11 @@ window.ModuleKhoHang = (function () {
     }));
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {
       const row = tongHop.find(r => String(r.MaHangID) === btn.dataset.id);
-      openItemForm(row, perm, chiTiet.filter(c => c.MaHangID === row.MaHangID)).catch(err => toast(err.message, 'error'));
+      /* v6.89: BỎ các dòng chỉ tồn tại trên PHIẾU NHẬP KHO (ID = null, chưa có trong thẻ kho).
+         Form Sửa mà nhận chúng thì bấm Lưu sẽ INSERT thành dòng màu thật của thẻ kho — tức là phiếu
+         nhập lại "chui" vào thẻ kho, đúng cái phải tránh. */
+      openItemForm(row, perm, chiTiet.filter(c => c.MaHangID === row.MaHangID && c.ID != null))
+        .catch(err => toast(err.message, 'error'));
     }));
     // v5.40: nút "+ Tạo thẻ kho mới" nằm ngay trong toolbar tab Thẻ kho / Tồn kho (đã bỏ tab tạo riêng).
     const btnAddNew = body.querySelector('#btnAddNew');
@@ -1843,7 +1854,9 @@ window.ModuleKhoHang = (function () {
   }
 
   async function openOrderForm(allItems, chiTiet, khachList) {
-    const items = allItems.filter(i => Number(i.TongTon) > 0);
+    /* v6.89: lọc theo TỒN THỰC (gồm phiếu nhập kho), KHÔNG theo TongTon (chỉ phần thẻ kho) — nếu
+       không thì hàng vừa nhập bằng phiếu sẽ không có trong danh sách chọn để đặt/bán. */
+    const items = allItems.filter(i => Number(i.TongTonThuc != null ? i.TongTonThuc : i.TongTon) > 0);
     let rowCount = 0;
     // v5.57: options CÓ chọn sẵn (để nút "+ Thêm màu" giữ nguyên mã hàng của dòng đang đứng).
     function optionsSel(list, valKey, textKey, sel) {
@@ -2887,7 +2900,7 @@ window.ModuleKhoHang = (function () {
         <td style="text-align:center;">${i + 1}</td>
         <td>${tuDon
           ? `<b>${escapeHtml(r.maHang)}</b><div style="font-size:11px;color:#137333;">${escapeHtml(r.slDonGoc || '')}</div>`
-          : `<select class="bh-mahang" style="width:100%;"><option value="">-- chọn mã hàng --</option>${items.map(it => `<option value="${it.MaHangID}" ${String(r.maHangId) === String(it.MaHangID) ? 'selected' : ''}>${escapeHtml(it.MaHang + ' · ' + it.TenHang)} (khả dụng ${fmtNumber(Number(it.TonKhaDung) + (buTon.get('mh' + it.MaHangID) || 0))} ${escapeHtml(it.DonViCoBan || 'Cái')})</option>`).join('')}</select>`}</td>
+          : `<select class="bh-mahang" style="width:100%;"><option value="">-- chọn mã hàng --</option>${items.map(it => `<option value="${it.MaHangID}" ${String(r.maHangId) === String(it.MaHangID) ? 'selected' : ''}>${escapeHtml(it.MaHang + ' · ' + it.TenHang)} (khả dụng ${fmtNumber(Number(it.TonKhaDungThuc != null ? it.TonKhaDungThuc : it.TonKhaDung) + (buTon.get('mh' + it.MaHangID) || 0))} ${escapeHtml(it.DonViCoBan || 'Cái')})</option>`).join('')}</select>`}</td>
         <td>${tuDon ? escapeHtml(r.tenMau || '') : `<select class="bh-mau" style="width:100%;"><option value="">-- màu --</option></select>`}</td>
         <td style="white-space:nowrap;"><input type="number" class="bh-sl" step="1" min="0" style="width:66px;" value="${r.soLuong != null ? r.soLuong : ''}">
           <span class="bh-dvt" style="font-size:11px;color:#5f6368;">${escapeHtml(dvGoc(r.donViCoBan, r.donViQuyDoi))}</span></td>

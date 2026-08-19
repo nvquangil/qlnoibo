@@ -61,6 +61,10 @@ SELECT k.MaHangID, k.MauSacID,
        ISNULL(pk.NhapTuPhieu, 0)   AS NhapTuPhieu,    -- nguon 2: phieu nhap kho
        ISNULL(ct.NhapCai, 0) + ISNULL(pk.NhapTuPhieu, 0) AS TongNhapCai,
        ISNULL(ct.XuatCai, 0)       AS XuatCai,
+       -- TonTheKho: CHI phan cua THE KHO. Man hinh "The kho hang hoa" hien cot nay - ma chua tao the
+       -- kho thi phai la 0/trong, khong duoc muon so cua phieu nhap de trong nhu da co the kho.
+       ISNULL(ct.NhapCai, 0) - ISNULL(ct.XuatCai, 0) AS TonTheKho,
+       -- TonCai: TON THAT (gom chung tu). Dung cho bao cao ton kho, ban hang, catalogue, don khach.
        ISNULL(ct.NhapCai, 0) + ISNULL(pk.NhapTuPhieu, 0) - ISNULL(ct.XuatCai, 0) AS TonCai,
        ct.ID AS ChiTietID, ct.LinkAnh, ct.GhiChu
 FROM (
@@ -115,29 +119,48 @@ GO
    Giu NGUYEN bo cot cua ban v642 (nhieu noi dang doc: khohang.js GET /items + export,
    public.js catalogue/danhmuc) va THEM TongNhapTuPhieu de man hinh phan biet duoc ton den tu dau.
    ⚠️ Khong doi ten cot TongNhap/TongXuat/TongTon - doi la vo cac route dang chay. */
+/* QUY TAC HIEN THI CUA MAN "THE KHO HANG HOA":
+     - Ma CHUA CO THE KHO (khong co dong nao trong TheKhoChiTietMau) -> TongNhap/TongTon = 0.
+       Luu phieu nhap kho khong duoc lam ma do "tu nhien co ton" o man the kho.
+     - Ma DA CO THE KHO -> hien TON THAT, gom ca so luong tu phieu nhap kho.
+   => Dung the: bam "Tao the kho" xong thi so moi hien ra o day.
+   Cac man khac (Bao cao ton kho, Ban hang, Catalogue, Don khach) LUON dung TongTonThuc.
+   ⚠️ Phai boc qua mot bang dan xuat: khong the vua tinh MAX(...) lam co "co the kho" vua dung no
+   trong CASE cua cung mot muc SELECT. */
 GO
 CREATE OR ALTER VIEW vw_TonKhoHangHoa AS
-SELECT
-    h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
-    h.TheKhoDanhMucID, tk.TenTheKho,
-    h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
-    h.GiaAloha, h.MaBarcode,
-    h.NhomSanPhamID, nsp.TenNhom,
-    ISNULL(SUM(t.SoCatCai), 0)     AS TongSoCat,
-    ISNULL(SUM(t.TongNhapCai), 0)  AS TongNhap,          -- da GOM ca 2 nguon
-    ISNULL(SUM(t.NhapTuPhieu), 0)  AS TongNhapTuPhieu,   -- rieng phan den tu phieu nhap kho
-    ISNULL(SUM(t.XuatCai), 0)      AS TongXuat,
-    ISNULL(SUM(t.TonCai), 0)       AS TongTon
-FROM TheKhoHangHoa h
-LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
-LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
-LEFT JOIN vw_TonTheoMau t ON t.MaHangID = h.MaHangID
-LEFT JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
-GROUP BY
-    h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
-    h.TheKhoDanhMucID, tk.TenTheKho,
-    h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
-    h.GiaAloha, h.MaBarcode, h.NhomSanPhamID, nsp.TenNhom;
+SELECT x.MaHangID, x.MaHang, x.TenHang, x.GiaBan, x.LoaiRi, x.AnhDaiDien,
+       x.TheKhoDanhMucID, x.TenTheKho,
+       x.LoaiHang, x.DonHangID, x.DonViCoBan, x.DonViQuyDoi, x.MaDH,
+       x.GiaAloha, x.MaBarcode, x.NhomSanPhamID, x.TenNhom,
+       x.TongSoCat, x.TongXuat, x.TongNhapTuPhieu, x.CoTheKho,
+       CASE WHEN x.CoTheKho = 1 THEN x.TongNhapThuc ELSE 0 END AS TongNhap,
+       CASE WHEN x.CoTheKho = 1 THEN x.TongTonThuc  ELSE 0 END AS TongTon,
+       x.TongNhapThuc, x.TongTonThuc
+FROM (
+  SELECT
+      h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
+      h.TheKhoDanhMucID, tk.TenTheKho,
+      h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
+      h.GiaAloha, h.MaBarcode,
+      h.NhomSanPhamID, nsp.TenNhom,
+      ISNULL(SUM(t.SoCatCai), 0)     AS TongSoCat,
+      ISNULL(SUM(t.XuatCai), 0)      AS TongXuat,
+      ISNULL(SUM(t.NhapTuPhieu), 0)  AS TongNhapTuPhieu,   -- phan den tu phieu nhap kho
+      ISNULL(SUM(t.TongNhapCai), 0)  AS TongNhapThuc,      -- the kho + phieu
+      ISNULL(SUM(t.TonCai), 0)       AS TongTonThuc,       -- ton THAT = the kho + phieu - xuat
+      MAX(CASE WHEN t.ChiTietID IS NOT NULL THEN 1 ELSE 0 END) AS CoTheKho
+  FROM TheKhoHangHoa h
+  LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
+  LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
+  LEFT JOIN vw_TonTheoMau t ON t.MaHangID = h.MaHangID
+  LEFT JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
+  GROUP BY
+      h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
+      h.TheKhoDanhMucID, tk.TenTheKho,
+      h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
+      h.GiaAloha, h.MaBarcode, h.NhomSanPhamID, nsp.TenNhom
+) x;
 GO
 PRINT '  + vw_TonKhoHangHoa (dung lai tren vw_TonTheoMau)';
 

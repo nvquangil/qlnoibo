@@ -285,16 +285,17 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
     JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
     ORDER BY CASE WHEN ISNULL(v.TongTon, 0) <= 0 THEN 1 ELSE 0 END,
              ${lanLuu} DESC, v.MaHang`);
-  /* v6.89: đọc từ vw_TonTheoMau, KHÔNG từ TheKhoChiTietMau. View gồm cả nguồn PHIẾU NHẬP KHO và có
-     cả những mã/màu chỉ tồn tại trên phiếu nhập (chưa tạo thẻ kho) — đọc thẳng bảng thì hàng vừa nhập
-     bằng phiếu sẽ không hiện dòng màu nào. Xem migration_v682.
-     ⚠️ `NhapCai` PHẢI là con số THÔ của thẻ kho (t.NhapCai), TUYỆT ĐỐI KHÔNG phải TongNhapCai.
-     Form Sửa thẻ kho điền ô "Nhập" từ chính trường này, và PUT /items/:id ghi ĐẶT TUYỆT ĐỐI —
-     nếu trả về số đã gộp nguồn phiếu thì chỉ cần mở form rồi bấm Lưu là phần của phiếu bị chép vào
-     NhapCai, và từ đó tồn ĐẾM HAI LẦN vĩnh viễn. `NhapTuPhieu` / `TonCai` trả riêng để chỉ hiển thị. */
+  /* v6.89 — MỘT ENDPOINT, HAI LOẠI SỐ. Đọc vw_TonTheoMau nên có cả các cặp mã/màu CHỈ tồn tại trên
+     phiếu nhập (chưa tạo thẻ kho, `ID` = null); màn Bán hàng cần chúng để bán được hàng vừa nhập.
+       - Màn THẺ KHO   dùng `TonTheKho` / `NhapCai` (chỉ phần thẻ kho) và BỎ QUA dòng có ID = null.
+       - Màn BÁN HÀNG  dùng `TonCai` (tồn thật, gồm chứng từ).
+     ⚠️ `NhapCai` PHẢI là con số THÔ của thẻ kho, TUYỆT ĐỐI KHÔNG gộp nguồn phiếu: form Sửa thẻ kho
+     điền ô "Nhập" từ chính trường này và PUT /items/:id ghi ĐẶT TUYỆT ĐỐI — trả về số đã gộp thì chỉ
+     cần mở form rồi bấm Lưu là phần của phiếu bị chép vào NhapCai, tồn ĐẾM HAI LẦN vĩnh viễn. */
   const chiTiet = await pool.request().query(`
     SELECT t.ChiTietID AS ID, t.MaHangID, t.MauSacID, t.LinkAnh, t.GhiChu,
-           t.SoCatCai, t.NhapCai, t.NhapTuPhieu, t.TongNhapCai, t.XuatCai, t.TonCai,
+           t.SoCatCai, t.NhapCai, t.NhapTuPhieu, t.TongNhapCai, t.XuatCai,
+           t.TonTheKho, t.TonCai,
            ms.TenMau, h.MaHang
     FROM vw_TonTheoMau t
     JOIN MauSac ms ON ms.MauSacID = t.MauSacID
@@ -305,7 +306,13 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
   const giu = await layHangDangGiu(pool);
   const tongHopRows = tongHop.recordset.map(r => {
     const dangGiu = giu.theoMaHang.get(r.MaHangID) || 0;
-    return { ...r, DangGiu: dangGiu, TonKhaDung: (Number(r.TongTon) || 0) - dangGiu };
+    return {
+      ...r, DangGiu: dangGiu,
+      // Khả dụng của MÀN THẺ KHO — chỉ phần thẻ kho (TongTon đã là số của thẻ kho).
+      TonKhaDung: (Number(r.TongTon) || 0) - dangGiu,
+      // Khả dụng THỰC (gồm phiếu nhập kho) — dùng cho Bán hàng / Đặt hàng nhanh / catalogue.
+      TonKhaDungThuc: (Number(r.TongTonThuc) || 0) - dangGiu
+    };
   });
   const chiTietRows = chiTiet.recordset.map(c => {
     const dangGiu = giu.theoMau.get(c.MaHangID + '|' + c.MauSacID) || 0;
