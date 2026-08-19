@@ -1,0 +1,520 @@
+:root {
+  --blue: #4a86e8;
+  --purple: #674ea7;
+  --green: #6aa84f;
+  --orange: #e69138;
+  --red: #cc4125;
+  --gray-bg: #f4f5f7;
+  --border: #dcdfe3;
+  --text: #202124;
+  --text-muted: #5f6368;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Segoe UI', Roboto, Arial, sans-serif; background: var(--gray-bg); color: var(--text); }
+a { color: var(--blue); text-decoration: none; }
+
+/* ---------- LOGIN ---------- */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--blue), var(--purple)); }
+.login-card { background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); width: 340px; }
+.login-card h1 { font-size: 20px; margin: 0 0 4px; }
+.login-card p.sub { color: var(--text-muted); margin: 0 0 24px; font-size: 13px; }
+.login-card input { width: 100%; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.login-card button { width: 100%; padding: 11px; background: var(--blue); color: #fff; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+.login-card button:hover { background: #3a70c9; }
+.login-error { color: var(--red); font-size: 13px; margin-bottom: 10px; min-height: 16px; }
+
+/* ---------- SHELL ----------
+   height:100vh (khong phai min-height) + overflow:hidden de KHOA chieu cao toan trang dung bang
+   man hinh - nho vay .sidebar nav (cuon rieng) va .content (cuon rieng) moi thuc su tach biet nhau,
+   thay vi ca trang cung cuon chung nhu truoc (khi noi dung dai hon 1 man hinh). */
+.shell { display: flex; height: 100vh; overflow: hidden; }
+.sidebar { width: 230px; background: #1f2430; color: #fff; flex-shrink: 0; display: flex; flex-direction: column; height: 100%; }
+.sidebar h2 { font-size: 15px; padding: 18px 16px; margin: 0; border-bottom: 1px solid rgba(255,255,255,.1); }
+.sidebar nav { flex: 1; padding: 10px 0; overflow-y: auto; }
+.sidebar nav a { display: block; padding: 11px 18px; color: #cfd3dc; font-size: 14px; cursor: pointer; border-left: 3px solid transparent; }
+.sidebar nav a:hover { background: rgba(255,255,255,.06); color: #fff; }
+.sidebar nav a.active { background: rgba(255,255,255,.1); color: #fff; border-left-color: var(--blue); }
+
+/* ---------- SIDEBAR: menu 2 cap kieu accordion (phan he -> so xuong danh sach chuc nang) ---------- */
+.nav-group { border-bottom: 1px solid rgba(255,255,255,.05); }
+.nav-mod { display: flex !important; align-items: center; justify-content: space-between; font-weight: 500; user-select: none; }
+.nav-mod .nav-arrow { font-size: 11px; opacity: .6; transition: transform .18s ease; }
+.nav-mod.expanded .nav-arrow { transform: rotate(90deg); }
+.nav-sub { max-height: 0; overflow: hidden; transition: max-height .2s ease; background: rgba(0,0,0,.14); }
+.nav-sub.open { max-height: 1000px; }
+.nav-sub a.nav-fn { padding: 9px 18px 9px 36px; font-size: 13px; color: #b6bac4; border-left: 3px solid transparent; }
+.nav-sub a.nav-fn:hover { background: rgba(255,255,255,.07); color: #fff; }
+.nav-sub a.nav-fn.active { background: rgba(74,134,232,.18); color: #fff; border-left-color: var(--blue); font-weight: 600; }
+.sidebar .userbox { padding: 14px 16px; border-top: 1px solid rgba(255,255,255,.1); font-size: 13px; }
+.sidebar .userbox button { margin-top: 8px; width: 100%; padding: 7px; background: rgba(255,255,255,.1); border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 12.5px; }
+.sidebar .userbox button.secondary { background: rgba(255,255,255,.04); color: #cfd3dc; }
+
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; }
+.topbar { background: #fff; border-bottom: 1px solid var(--border); padding: 14px 24px; font-size: 17px; font-weight: 600; flex-shrink: 0; }
+/* flex:1 + min-height:0 la bat buoc de overflow:auto thuc su hoat dong trong flex-column (mac dinh
+   flex item khong co min-height:0 se tu gian ra du dai bao nhieu, khong bao gio kich hoat scroll). */
+/* v5.61.3: BỎ đệm TRÊN của vùng cuộn. Lý do: khi vùng cuộn có padding-top, các thanh dính
+   (tab / thanh công cụ / tiêu đề bảng) bị ghim THẤP hơn mép trên đúng bằng khoảng đệm đó, tạo ra
+   một KHE HỞ và dòng dữ liệu chạy qua khe đó (đúng hiện tượng đang thấy). Khoảng trắng phía trên
+   chuyển sang ::before nên nhìn không khác gì trước, nhưng nó CUỘN ĐI thay vì tạo khe. */
+.content { flex: 1; min-height: 0; padding: 0 24px 22px; overflow: auto; }
+.content::before { content: ''; display: block; height: 22px; }
+
+/* ---------- COMMON WIDGETS ---------- */
+.card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 18px; }
+.stat-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+.stat-box { flex: 1; min-width: 140px; background: #fff; border-radius: 8px; padding: 14px 16px; border-left: 4px solid var(--blue); }
+.stat-box .num { font-size: 24px; font-weight: 700; }
+.stat-box .label { font-size: 12px; color: var(--text-muted); }
+.stat-box.green { border-color: var(--green); }
+.stat-box.orange { border-color: var(--orange); }
+.stat-box.red { border-color: var(--red); }
+.stat-box.purple { border-color: var(--purple); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; background: #fff; }
+table th, table td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
+table th { background: #f0f2f5; font-weight: 600; }
+table tr:hover td { background: #fafbfc; }
+
+/* ---------- v5.61: DÒNG TIÊU ĐỀ BẢNG ĐỨNG YÊN KHI CUỘN (áp cho MỌI bảng trong phần mềm) ----------
+   Cách hoạt động: position:sticky dính vào "khung cuộn" gần nhất — là .content (màn hình chính),
+   .modal (cửa sổ bật lên), hoặc div bọc bảng có overflow:auto. Nhờ vậy không cần sửa từng màn hình.
+   LƯU Ý KỸ THUẬT: bảng dùng border-collapse:collapse nên ĐƯỜNG VIỀN của ô tiêu đề bị cuộn mất khi
+   dính; vì thế vẽ lại viền bằng box-shadow inset (không dùng border) cho tiêu đề luôn có khung. */
+table thead th {
+  position: sticky;
+  /* v5.61.1: nếu vùng cuộn có THANH CÔNG CỤ dính ở trên (nút + bộ lọc) thì tiêu đề bảng phải nằm
+     NGAY DƯỚI thanh đó, không chui vào sau nó. --bar-h do common.js đo và gán cho vùng cuộn;
+     không có thanh nào thì = 0px (giữ nguyên như cũ). */
+  top: calc(var(--top0, 0px) + var(--tabs-h, 0px) + var(--bar-h, 0px));
+  z-index: 3;
+  background: #f0f2f5;                     /* PHẢI đục để dòng dữ liệu không lộ phía sau */
+  box-shadow: inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border), inset -1px 0 0 var(--border);
+}
+/* Bảng có 2 dòng tiêu đề (vd nhóm cột): dòng 2 dính ngay dưới dòng 1. Sửa --th-h nếu tiêu đề cao khác. */
+table thead tr:nth-child(2) th { top: calc(var(--top0, 0px) + var(--tabs-h, 0px) + var(--bar-h, 0px) + var(--th-h, 34px)); z-index: 2; }
+
+/* ---------- v5.61.1: THANH CÔNG CỤ (nút + bộ lọc) ĐỨNG YÊN khi cuộn ----------
+   Chỉ thanh Ở ĐẦU vùng cuộn mới được dính — common.js gắn class .sticky-bar cho đúng thanh đó
+   (tránh dính nhầm thanh nút nằm giữa form trong cửa sổ bật lên). */
+/* v5.82 — thêm `left: 0`: BẢNG RỘNG HƠN MÀN HÌNH thì vùng cuộn còn CUỘN NGANG. Thanh công cụ chỉ
+   rộng bằng khung nhìn nên khi kéo sang phải nó trượt hẳn ra ngoài, chừa một dải TRONG SUỐT ở trên
+   -> các dòng dữ liệu hiện lên trên dải đó và dòng tiêu đề bảng (đang dính cách đỉnh đúng bằng chiều
+   cao thanh) trông như NẰM GIỮA BẢNG. sticky dính được cả trục ngang, nên `left:0` giữ thanh luôn
+   phủ kín phần đang xem. */
+.toolbar.sticky-bar {
+  position: sticky;
+  top: calc(var(--top0, 0px) + var(--tabs-h, 0px));   /* nằm ngay dưới THANH TAB (nếu màn hình đó có tab) */
+  left: 0;
+  z-index: 6;                                  /* trên cả tiêu đề bảng (z-index 3) */
+  background: var(--gray-bg);                  /* nền màn hình chính */
+  padding: 10px 0;
+  margin-top: -10px;
+  box-shadow: 0 1px 0 var(--border);
+}
+.modal .toolbar.sticky-bar { background: #fff; }   /* trong cửa sổ bật lên nền trắng */
+
+/* v5.61.2: THANH TAB (Danh sách lệnh SX | Ra lệnh SX | ...) đứng yên trên cùng vùng cuộn.
+   Thứ tự chồng khi cuộn:  thanh tab  →  thanh công cụ  →  dòng tiêu đề bảng. */
+.tabs.sticky-tabs {
+  position: sticky;
+  top: var(--top0, 0px);                       /* trong modal: nằm dưới thanh tiêu đề của cửa sổ */
+  left: 0;                                     /* v5.82: xem giải thích ở .toolbar.sticky-bar */
+  z-index: 7;
+  background: var(--gray-bg);
+  padding-top: 10px;
+  margin-top: -10px;
+}
+.modal .tabs.sticky-tabs { background: #fff; }
+
+@media print {
+  .toolbar.sticky-bar, .tabs.sticky-tabs { position: static !important; box-shadow: none !important; }
+}
+
+/* ---------- v6.27: DÒNG TỔNG CỘNG NẰM ĐẦU BẢNG VÀ ĐỨNG YÊN KHI CUỘN ----------
+   Dùng ở phân hệ Báo cáo kinh doanh: bảng dài vài trăm dòng, kéo xuống giữa bảng vẫn thấy số tổng.
+   Đặt dòng tổng là <tr class="row-tong"> NGAY ĐẦU <tbody> (không phải cuối như bảng thường).
+   `top` do JS gán (= chiều cao thật của <thead>) vì có bảng 1 dòng tiêu đề, có bảng 2 dòng — đo thật
+   chắc hơn đoán bằng hằng số. Viền vẽ bằng box-shadow, cùng lý do với dòng tiêu đề dính (v5.61). */
+table tbody tr.row-tong > td {
+  position: sticky;
+  top: 0;                       /* JS ghi đè bằng chiều cao thead */
+  z-index: 2;
+  background: #e8f0fe;
+  font-weight: bold;
+  box-shadow: inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border), inset -1px 0 0 var(--border);
+}
+table tbody tr.row-tong:hover > td { background: #e8f0fe; }   /* không đổi màu khi rê chuột */
+
+/* Vùng cuộn riêng của bảng báo cáo: dòng tiêu đề phải dính vào ĐỈNH CỦA CHÍNH VÙNG NÀY.
+   Các biến --top0/--tabs-h/--bar-h được gán ở .content (màn hình chính) và sẽ THỪA KẾ xuống đây,
+   đẩy tiêu đề tụt xuống giữa bảng -> phải đặt lại về 0 cho vùng cuộn riêng. */
+.bang-cuon { overflow: auto; }
+.bang-cuon { --top0: 0px; --tabs-h: 0px; --bar-h: 0px; }
+
+@media print {
+  table tbody tr.row-tong > td { position: static !important; }
+  .bang-cuon { overflow: visible !important; max-height: none !important; }
+}
+
+/* ---------- v6.48.2: TÔ MÀU DÒNG THEO DEADLINE (danh sách lệnh sản xuất) ----------
+   Nền phải đặt ở <td>, KHÔNG phải <tr>: quy tắc rê chuột của bảng nhắm vào <td>, mà nền của <td>
+   nằm ĐÈ LÊN nền của <tr> — đặt ở <tr> thì rê chuột vào là màu cảnh báo biến mất đúng lúc đang nhìn.
+   Dòng :hover lặp lại đúng màu đó để rê chuột KHÔNG đổi màu (yêu cầu người dùng). */
+table tbody tr.dl-qua > td,
+table tbody tr.dl-qua:hover > td { background: #fdecea; }
+table tbody tr.dl-sap > td,
+table tbody tr.dl-sap:hover > td { background: #fff8e1; }
+
+/* Ô góc trên-trái cố định của các bảng có cột đầu dính (nếu sau này dùng .sticky-col) phải nằm trên cùng. */
+table thead th.sticky-col { z-index: 4; }
+table td.sticky-col, table th.sticky-col { position: sticky; left: 0; background: #fff; }
+table thead th.sticky-col { background: #f0f2f5; }
+
+/* Khi IN: bỏ dính để tiêu đề không đè lên nội dung; trình duyệt tự lặp lại thead ở mỗi trang. */
+@media print {
+  table thead th, table td.sticky-col, table th.sticky-col { position: static !important; box-shadow: none !important; }
+}
+
+.btn { display: inline-block; padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; background: var(--blue); color: #fff; }
+.btn:hover { opacity: .9; }
+.btn.secondary { background: #eef0f3; color: var(--text); }
+.btn.danger { background: var(--red); color: #fff; }
+.btn.small { padding: 4px 9px; font-size: 12px; }
+
+.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.toolbar input, .toolbar select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+
+.badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.badge.ok { background: #e6f4ea; color: #137333; }
+.badge.warn { background: #fef7e0; color: #b06000; }
+.badge.danger { background: #fce8e6; color: #a50e0e; }
+.badge.info { background: #e8f0fe; color: #1a56c4; }
+
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow: auto; z-index: 100; transition: background .15s; }
+/* v5.3 (muc 1): "to gap doi" (620px -> 1240px mac dinh) + keo/resize/thu nho - xem openModal() trong
+   common.js. .modal la vi tri THAT SU duoc keo (transform) va resize (thuoc tinh resize cua trinh
+   duyet), .modal-dragbar la thanh cam de keo, .modal-body boc noi dung goc cua tung man hinh. */
+.modal { position: relative; background: #fff; border-radius: 10px; padding: 22px; width: 100%; max-width: 1240px; min-width: 320px; min-height: 160px; max-height: 90vh; overflow: auto; resize: both; }
+.modal.dragging { user-select: none; }
+.modal h3 { margin-top: 0; }
+/* v5.61.3: thanh tiêu đề cửa sổ (kéo/thu nhỏ/đóng) DÍNH khi cuộn nội dung dài trong cửa sổ —
+   vừa luôn bấm được nút Đóng, vừa che kín khoảng đệm phía trên nên không có dòng nào lọt qua. */
+.modal-dragbar { display: flex; align-items: center; gap: 8px; margin: -22px -22px 14px; padding: 8px 10px 8px 14px; background: #f5f6f8; border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; cursor: move; user-select: none; position: sticky; top: -22px; z-index: 9; }
+@media print { .modal-dragbar { position: static !important; } }
+.modal-dragbar-grip { color: #9aa0a6; font-size: 13px; letter-spacing: 1px; }
+.modal-dragbar-spacer { flex: 1; }
+.modal-btn-min, .modal-btn-close { border: none; background: #e8eaed; width: 26px; height: 26px; border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1; color: #444; flex-shrink: 0; }
+.modal-btn-min:hover { background: #dadce0; }
+.modal-btn-close:hover { background: #fadbd8; color: #c0392b; }
+/* Thu nho: chi con thanh keo, dong o goc man hinh; backdrop "xuyen click" de thao tac tiep voi trang phia sau. */
+.modal.minimized { position: fixed !important; right: 24px; bottom: 24px; left: auto; top: auto; width: 260px !important; min-width: 0; height: auto !important; min-height: 0; max-height: none; resize: none; padding-bottom: 0; transform: none !important; box-shadow: 0 6px 20px rgba(0,0,0,.28); z-index: 101; }
+.modal.minimized .modal-body { display: none; }
+.modal.minimized .modal-dragbar { margin-bottom: 0; border-radius: 10px; cursor: pointer; }
+.modal-backdrop.passthrough { background: transparent; pointer-events: none; }
+.modal-backdrop.passthrough .modal { pointer-events: auto; }
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; font-size: 13px; margin-bottom: 5px; color: var(--text-muted); font-weight: 500; }
+.form-row input, .form-row select, .form-row textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; font-size: 13.5px; font-family: inherit; }
+.form-row input:focus, .form-row select:focus, .form-row textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(74,134,232,.15); }
+.form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 16px; align-items: start; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* Khoi dong dieu lap lai (nhieu dong nhap lieu giong nhau: dong vai/mau, dong cay vai...) - dung chung
+   de cac form nhap lieu can doi, khoang cach dong deu nhau, tach biet ro voi phan con lai cua form. */
+.row-repeater { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; background: #fafbfc; }
+.row-repeater + .row-repeater { margin-top: 8px; }
+.row-item { display: grid; gap: 8px 12px; align-items: end; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+.row-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.row-item .form-row { margin-bottom: 0; }
+.row-item label { font-size: 11.5px; }
+/* v5.80: BẢNG NHẬP NHIỀU DÒNG (Phiếu nhập / Phiếu xuất kho vải) — dùng <table> THẬT: 1 hàng tiêu đề
+   (cỡ chữ như bảng bình thường) + các dòng chỉ chứa ô nhập. Bề rộng cột do <colgroup> quy định nên
+   tiêu đề và ô nhập LUÔN thẳng cột, không phụ thuộc nội dung.
+   min-width + wrap overflow-x: trên điện thoại bảng cuộn ngang thay vì bị bóp méo. */
+/* v5.81 — SỬA LỖI "HÀNG ĐẦU BỊ CHE": dòng tiêu đề bảng dính (v5.61) tính `top` theo BIẾN CỦA VÙNG
+   CUỘN NGOÀI (--top0/--tabs-h/--bar-h: thanh tab + thanh công cụ của màn hình/cửa sổ). Khi bảng nằm
+   trong MỘT VÙNG CUỘN RIÊNG (div overflow:auto), sticky dính vào div đó nhưng `top` vẫn là con số
+   của trang → tiêu đề bị đẩy xuống ĐÈ LÊN 1–2 dòng đầu.
+   Cách chữa: ĐẶT LẠI 3 biến = 0 cho chính vùng cuộn của bảng. Dùng class .bang-cuon cho mọi div bọc
+   bảng có overflow (vd #bkGrid của Bảng kê BTP) — .lap-wrap đã gộp sẵn. */
+.lap-wrap, .bang-cuon { --top0: 0px; --tabs-h: 0px; --bar-h: 0px; }
+
+/* v5.81: HÀNG Ô LỌC ngay dưới dòng tiêu đề bảng (Đơn khách đặt hàng). Dính cùng tiêu đề khi cuộn —
+   quy tắc `thead tr:nth-child(2) th` ở trên đã lo phần `top`, đây chỉ chỉnh hình thức + cỡ ô. */
+tr.hang-loc th { padding: 4px 6px !important; background: #fff !important; font-weight: 400 !important; }
+tr.hang-loc input, tr.hang-loc select {
+  width: 100%; min-width: 70px; padding: 4px 6px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 5px; font-family: inherit; background: #fff;
+}
+/* v5.82: .bang-cuon phải CÓ GIỚI HẠN CHIỀU CAO. Lý do: overflow:auto mà chiều cao tự do thì vùng đó
+   không bao giờ cuộn dọc -> position:sticky của tiêu đề bảng KHÔNG có gì để dính (cả trang cuộn thay
+   vì vùng đó) -> tiêu đề trôi mất khi kéo xuống. Có max-height thì cuộn nằm trong bảng và tiêu đề
+   đứng yên đúng như bảng nhập liệu (.lap-wrap). */
+.bang-cuon { overflow: auto; max-height: 72vh; }
+/* v5.81: cuộn NGAY TRONG bảng nhập liệu (không kéo dài cả cửa sổ) — tiêu đề đứng yên khi cuộn dòng. */
+.lap-wrap { overflow: auto; max-height: 46vh; margin: 4px 0 8px; }
+.lap-table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.lap-table thead th { top: 0; }   /* chắc chắn dính sát đỉnh vùng cuộn của bảng */
+.lap-table th { font-size: 13px; font-weight: 600; color: var(--text); text-align: left;
+                padding: 8px 6px; background: #f7f8fa; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.lap-table td { padding: 4px 6px; border-bottom: 1px solid #eef0f2; vertical-align: middle; }
+.lap-table tr:last-child td { border-bottom: none; }
+.lap-table input, .lap-table select, .lap-table .ss-input {
+  width: 100%; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 13.5px; font-family: inherit; box-sizing: border-box;
+}
+.lap-table input:focus, .lap-table select:focus, .lap-table .ss-input:focus {
+  outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(74,134,232,.15);
+}
+.lap-table .col-so input { text-align: right; }          /* cột số: căn phải cho dễ đối chiếu */
+.lap-table td.col-nut { white-space: nowrap; text-align: center; }
+.lap-table td.col-nut .btn { padding: 5px 9px; }
+.sub-row-box { background: #eef3fb; border: 1px solid #d7e3f6; border-radius: 6px; padding: 8px; margin-top: 6px; }
+.sub-row-item { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.sub-row-item:last-child { margin-bottom: 0; }
+.sub-total { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.readonly-fact { background: #f4f5f7; padding: 7px 10px; border-radius: 6px; font-size: 13px; border: 1px dashed var(--border); }
+
+/* v5.2: the "ma cay" tu co gian theo do dai ky tu (khong bi cat/gian theo cot bang co dinh) - dung o
+   cong doan "Giao vai" va bang cay vai o cong doan Cat (QLSX). */
+.tag-macay { display: inline-block; white-space: nowrap; width: max-content; padding: 2px 8px; background: #eef2f7; border: 1px solid #d7e3f6; border-radius: 4px; font-family: 'Courier New', monospace; font-weight: 600; font-size: 12px; }
+
+/* v5.2: danh sach checkbox (vd chon nhan vien trai vai toi da 2 nguoi o cong doan Cat, QLSX). */
+.checkbox-list { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 6px; background: #fafbfc; }
+
+/* v5.14: "Tài liệu kỹ thuật" (QLSX) - thanh sub-nav 4 chức năng con + lưới nhập liệu Thông số đo/Mô tả
+   sản phẩm (ô dán/chọn ảnh). .tlkt-grid-input dùng cho input bên trong <td> (không nằm trong .form-row
+   nên không tự thừa kế style input chung). */
+.tlkt-subnav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.tlkt-grid-input { width: 100%; border: 1px solid var(--border); border-radius: 4px; padding: 5px 6px; font-size: 13px; font-family: inherit; }
+.tlkt-ocell { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; background: #fafbfc; text-align: center; outline: none; min-width: 160px; }
+.tlkt-ocell:focus-within, .tlkt-ocell:focus { border-color: var(--blue); background: #f3f7fe; }
+.tlkt-ocell img { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 4px; }
+.tlkt-ocell-placeholder { color: var(--text-muted); font-size: 12px; padding: 20px 4px; }
+.tlkt-ocell-actions { display: flex; gap: 6px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+.chk-item { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+/* v5.89 — SỬA "ô tích và tên người CHỒNG LÊN NHAU" ở mục Nhân viên trải vải (công đoạn Cắt).
+   Nguyên nhân: danh sách nằm trong .form-row, mà quy tắc chung `.form-row input { width:100%; padding:9px }`
+   biến ô tích thành 1 ô rộng bằng cả dòng, chữ tên đè lên trên. Trả ô tích về kích thước thật. */
+.chk-item input[type="checkbox"] {
+  width: 16px !important; height: 16px; min-width: 16px; flex: 0 0 auto;
+  padding: 0 !important; margin: 0; border-radius: 3px; box-shadow: none !important;
+}
+.checkbox-list .chk-item { padding: 2px 8px 2px 4px; border: 1px solid transparent; border-radius: 5px; }
+.checkbox-list .chk-item:hover { background: #eef3fc; border-color: #d7e3f6; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tabs button { padding: 9px 16px; border: none; background: none; cursor: pointer; font-size: 13px; color: var(--text-muted); border-bottom: 2px solid transparent; }
+.tabs button.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+
+.toast { position: fixed; top: 18px; right: 18px; background: #202124; color: #fff; padding: 11px 18px; border-radius: 6px; font-size: 13px; z-index: 200; opacity: 0; transform: translateY(-8px); transition: all .25s; max-width: 380px; white-space: pre-line; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.error { background: var(--red); }
+.toast.success { background: var(--green); }
+
+/* Popup thong bao (khac voi .toast) - day len khi dang nhap neu co thong bao chua doc, hoac khi co
+   thong bao moi phat sinh trong luc dang dung app (xem common.js showNotifPopup). */
+/* v5.3 (muc 4): popup thong bao doi tu "toast goc man hinh" thanh "hien to o GIUA man hinh" de de
+   thay hon, kem 1 lop nen mo phia sau (khong chan het thao tac, chi lam noi bat popup len). Van dung
+   chung 1 phan tu #__notifPopup + logic thay noi dung/reset timer trong showNotifPopup() (common.js) -
+   nen khi co thong bao MOI den trong luc popup cu con hien, noi dung duoc thay ngay lap tuc (khong
+   can cho / khong can F5) dung nhu yeu cau "tu dong day len khi co cai moi". */
+.notif-popup-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0); z-index: 299; pointer-events: none; transition: background .25s; }
+.notif-popup-backdrop.show { background: rgba(0,0,0,.25); pointer-events: auto; }
+.notif-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(.92); width: calc(100% - 40px); max-width: 440px; background: #fff; border-left: 6px solid var(--blue); border-radius: 12px; padding: 22px 26px; box-shadow: 0 20px 60px rgba(0,0,0,.35); z-index: 300; display: flex; align-items: center; gap: 16px; cursor: pointer; opacity: 0; transition: opacity .22s, transform .22s; pointer-events: none; }
+.notif-popup.show { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
+.notif-popup-icon { font-size: 32px; line-height: 1; flex-shrink: 0; }
+.notif-popup-text { font-size: 16px; line-height: 1.45; color: var(--text); font-weight: 600; }
+
+.empty-hint { color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; }
+img.thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+
+/* ---------- TOPBAR: hamburger + chuong thong bao ---------- */
+.topbar { display: flex; align-items: center; gap: 12px; }
+.topbar-title { flex: 1; font-size: 17px; font-weight: 600; }
+.hamburger { display: none; background: none; border: none; font-size: 22px; cursor: pointer; padding: 4px 8px; color: var(--text); }
+.mobile-overlay { display: none; }
+
+.notif-wrap { position: relative; }
+/* v5.3 (muc 4): chuong to hon (19px -> 28px) + badge to theo cho de thay tu xa hon (yeu cau cua xuong). */
+.notif-bell { position: relative; background: none; border: none; font-size: 28px; cursor: pointer; padding: 4px 8px; }
+.notif-badge { position: absolute; top: -6px; right: -8px; background: var(--red); color: #fff; font-size: 12px; font-weight: 700; border-radius: 12px; padding: 2px 6px; min-width: 20px; text-align: center; line-height: 1.5; }
+.notif-panel { position: absolute; right: 0; top: calc(100% + 8px); width: 320px; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); z-index: 150; }
+.notif-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: #fff; }
+.notif-list { padding: 4px 0; }
+.notif-item { padding: 10px 12px; border-bottom: 1px solid #f0f2f5; cursor: pointer; }
+.notif-item:hover { background: #f7f8fa; }
+.notif-item.unread { background: #eef4ff; }
+.notif-item.unread .notif-msg { font-weight: 600; }
+.notif-msg { font-size: 12.5px; line-height: 1.4; }
+.notif-time { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+/* ---------- COMBOBOX TIM KIEM (go ky tu bat ky) ---------- */
+/* v5.6: .ss-input truoc day KHONG co rule width nao rieng (chi ke thua width:100% tu ".form-row input"
+   khi nam trong .form-row) - o nhung noi searchableSelectHtml() duoc dung trong 1 <div> thuong (khong
+   phai .form-row), vd o Kho vai (Phieu xuat) va QLSX (Giao vai), o input van giu kich thuoc mac dinh
+   cua trinh duyet (~150-190px) DU cot luoi (grid-template-columns) da duoc noi rong gap doi tu v5.4 -
+   yeu cau v5.6 "o go tim kiem cho kich thuoc rong gap doi" thuc chat can rule nay de o input THAT SU
+   lap day cot luoi da rong san, khong chi rong "khoang trong" xung quanh no. */
+.ss-input { width: 100%; box-sizing: border-box; }
+.ss-input.ss-invalid { border-color: var(--red); background: #fdf1f0; }
+/* v5.8: dropdown goi y THAY THE <datalist> nguyen sinh - portal vao <body>, dinh vi bang JS (xem
+   __ssOpenDropdown trong common.js) nen KHONG bi modal (.modal{overflow:auto}) cat mat, va co the tuy
+   chinh CSS thoai mai (khac han <datalist> khong lam duoc dieu nay) - cho hien DAY DU thong tin thay vi
+   bi trinh duyet tu cat bot chu (yeu cau v5.8). */
+.ss-dropdown { position: fixed; background: #fff; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); max-height: 260px; overflow-y: auto; z-index: 500; font-size: 13.5px; }
+.ss-option { padding: 7px 10px; cursor: pointer; white-space: normal; word-break: break-word; border-bottom: 1px solid #f0f2f5; }
+.ss-option:last-child { border-bottom: none; }
+.ss-option:hover, .ss-option.ss-option-active { background: #eef3fc; }
+/* v5.88: dòng có ẢNH (danh sách phụ kiện/NPL) — ảnh nhỏ bên trái, tên bên phải. */
+.ss-option-coanh { display: flex; align-items: center; gap: 8px; }
+.ss-option-anh { width: 38px; height: 38px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); flex-shrink: 0; background: #fff; }
+
+/* ---------- IN TEM A6 (dung chung cho cua so in cua Kho vai) ---------- */
+.tem-a6-portrait { width: 105mm; height: 148mm; }
+.tem-a6-landscape { width: 148mm; height: 105mm; }
+
+/* =========================================================================
+   RESPONSIVE: MOBILE / TABLET
+   ========================================================================= */
+@media (max-width: 900px) {
+  .hamburger { display: inline-block; }
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 210; width: 250px;
+    transform: translateX(-100%); transition: transform .22s ease; box-shadow: 4px 0 18px rgba(0,0,0,.25);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .mobile-overlay.show { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; }
+  .main { width: 100%; }
+  .topbar { padding: 12px 14px; }
+  .content { padding: 0 14px 14px; overflow-x: auto; }   /* v5.61.3: không đệm TRÊN (tránh khe hở thanh dính) */
+  .content::before { height: 14px; }
+
+  .stat-row { gap: 10px; }
+  .stat-box { min-width: 45%; }
+
+  .form-grid, .row-item { grid-template-columns: 1fr !important; }
+  .modal { max-width: 96vw; padding: 16px; resize: none; }
+  .modal-dragbar { margin: -16px -16px 12px; top: -16px; }   /* v5.82: khớp padding 16px (trước lệch 6px -> hở khe) */
+  .modal-backdrop { padding: 10px; align-items: flex-start; }
+
+  table { min-width: 640px; }
+
+  .tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .tabs button { flex-shrink: 0; }
+
+  /* v5.82: thanh công cụ trên điện thoại — NÚT xếp cạnh nhau và tự xuống dòng (trước đây mỗi nút
+     chiếm 1 dòng full-width nên thanh cao 150–250px, che gần hết bảng). Ô nhập/ô lọc vẫn full width
+     cho dễ bấm. */
+  .toolbar { flex-direction: row; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+  .toolbar input, .toolbar select { width: 100%; }
+  .toolbar .btn { flex: 1 1 auto; min-width: 44%; }
+
+  /* ---------- v5.82: CỐ ĐỊNH & CUỘN TRÊN ĐIỆN THOẠI / MÁY TÍNH BẢNG ----------
+     Trên màn hình hẹp, vùng cuộn .content còn CUỘN NGANG (bảng rộng hơn màn hình). Thanh tab và
+     thanh công cụ chỉ rộng bằng màn hình nên khi cuộn ngang chúng trượt khỏi khung, để lại khoảng
+     trong suốt -> dòng dữ liệu lộ lên trên và tiêu đề bảng trông như nằm GIỮA bảng.
+     Cách chữa: điện thoại KHÔNG dính 2 thanh đó (cuộn đi bình thường), chỉ dính DÒNG TIÊU ĐỀ BẢNG
+     — nó rộng bằng bảng nên cuộn ngang vẫn khít, không hở. common.js cũng đặt --tabs-h/--bar-h = 0
+     ở chế độ này; 2 dòng dưới là lớp bảo hiểm nếu JS chưa kịp đo. */
+  .tabs.sticky-tabs, .toolbar.sticky-bar { position: static; }
+  table thead th { top: 0; }
+  table thead tr:nth-child(2) th { top: var(--th-h, 34px); }
+
+  /* Bảng NHẬP dữ liệu (phiếu nhập/xuất...) cuộn trong chính nó: điện thoại cho cao hơn để thấy
+     được nhiều dòng hơn. */
+  .lap-wrap { max-height: 62vh; }
+  .bang-cuon { max-height: 68vh; }
+
+  .notif-panel { position: fixed; right: 8px; left: 8px; width: auto; top: 56px; }
+}
+
+@media (max-width: 520px) {
+  .stat-box { min-width: 100%; }
+  .login-card { width: 90vw; padding: 28px 22px; }
+  .btn, .btn.small { min-height: 34px; }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions .btn { flex: 1; }
+}
+
+/* Bam thoai mai bang tay tren man hinh cham */
+@media (pointer: coarse) {
+  .btn { min-height: 38px; }
+  .sidebar nav a { padding: 13px 18px; }
+  input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; }
+}
+
+/* ================================================================================================
+   v6.66.1: BANG BIEU CHO PHIEU  - dung chung cho MOI loai phieu (nhap lai, ban hang, thu/chi...).
+   Yeu cau: "khi tao 1 phieu nao do thi ke bang" -> dau phieu la BANG KE 2 cot nhan/gia tri, dong
+   hang la bang co vien ro, khoi tong cung ke bang. Dat o day de phieu moi chi viec dung lop, khong
+   ai phai che lai style inline (che lai la moi phieu mot kieu).
+   ================================================================================================ */
+.phieu-form { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.phieu-form th, .phieu-form td { border: 1px solid #cfd8dc; padding: 6px 8px; vertical-align: middle; }
+.phieu-form th {
+  background: #f4f6f8; text-align: left; font-weight: 600; white-space: nowrap;
+  width: 1%; font-size: 13px; color: #37474f;
+}
+.phieu-form td { background: #fff; }
+.phieu-form input, .phieu-form select, .phieu-form textarea { margin: 0; }
+.phieu-form .bat-buoc { color: #c62828; }
+/* Man XEM (khong co o nhap) thi cho chu thoang hon, khong bi cao nhu o input */
+.phieu-xem td { padding: 5px 8px; }
+
+/* Thanh tieu de nhom giua cac bang - "Chon ma hang can nhap lai" */
+.phieu-thanh-muc {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 12px 0 6px; padding: 6px 8px; background: #eceff1;
+  border: 1px solid #cfd8dc; border-radius: 4px;
+}
+
+/* Bang dong hang cua phieu: vien day du de doc theo hang, khong bi troi mat */
+table.phieu-ke { width: 100%; border-collapse: collapse; }
+table.phieu-ke th, table.phieu-ke td { border: 1px solid #cfd8dc; padding: 5px 7px; }
+table.phieu-ke thead th { background: #eceff1; text-align: center; font-size: 13px; }
+table.phieu-ke td.num, table.phieu-ke th.num { text-align: right; }
+
+/* Khoi tong cuoi phieu - can phai, ke bang, dong cuoi dam */
+.phieu-tong { margin-left: auto; margin-top: 10px; border-collapse: collapse; min-width: 320px; }
+.phieu-tong th, .phieu-tong td { border: 1px solid #cfd8dc; padding: 5px 10px; }
+.phieu-tong th { background: #f4f6f8; text-align: left; font-weight: 600; }
+.phieu-tong td.num { text-align: right; min-width: 130px; }
+.phieu-tong .dong-tong th, .phieu-tong .dong-tong td {
+  background: #e3f2fd; font-weight: 700; font-size: 15px;
+}
+
+/* Man hep: bang 4 cot cua dau phieu doi thanh 2 cot cho khoi tran ngang */
+@media (max-width: 760px) {
+  .phieu-form th, .phieu-form td { display: block; width: auto; }
+  .phieu-form th { border-bottom: none; }
+  .phieu-form td { border-top: none; }
+}
+
+/* v6.66.1: dong phieu bam duoc de mo chi tiet (xem/in). Doi con tro + sang mau khi ro chuot de
+   nguoi dung biet la bam duoc - khong co dau hieu gi thi khong ai biet ma bam. */
+tr.dong-bam-duoc { cursor: pointer; }
+tr.dong-bam-duoc:hover > td { background: #e8f4fd; }
+
+/* v6.66.1: ô ĐƠN GIÁ ở phiếu nhập kho vải rộng gấp ~2.5 lần các cột số khác.
+   Các ô số khác (KG, mét, khổ, GSM) chỉ 2-3 chữ số, còn đơn giá là tiền 6-7 chữ số + phần thập phân
+   nên bề rộng chung làm số bị cắt, phải rê chuột mới đọc hết. Đặt trên <td> vì input đang width:100%. */
+.lap-table td.col-gia { min-width: 155px; }
+
+/* v6.71.2: Ô NHẬP TRÊN PHIẾU dùng ĐÚNG kích thước của .form-row (phiếu bán hàng, phiếu thu/chi...).
+   v6.71.1 từng nâng lên 50px theo yêu cầu "cao thêm 1,5" nhưng nhìn thực tế quá cao và LỆCH HẲN so
+   với các phiếu khác — thà đồng bộ toàn hệ thống còn hơn mỗi phiếu một cỡ.
+   Cần đổi cỡ ô nhập về sau thì đổi Ở ĐÂY và ở .form-row (dòng ~219) cho khớp nhau. */
+.phieu-form input, .phieu-form select, .phieu-form textarea,
+table.phieu-ke input, table.phieu-ke select {
+  padding: 9px 11px;
+  font-size: 13.5px;
+  box-sizing: border-box;
+}
+/* Ô tích thì KHÔNG phóng to theo — kéo cao ô checkbox chỉ làm nó lệch khỏi dòng chữ bên cạnh. */
+.phieu-form input[type="checkbox"], .phieu-form input[type="radio"],
+table.phieu-ke input[type="checkbox"], table.phieu-ke input[type="radio"] {
+  min-height: 0; padding: 0; width: 18px; height: 18px;
+}

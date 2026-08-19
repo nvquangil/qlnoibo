@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hệ thống Quản lý Nội bộ MOYN</title>
+<link rel="stylesheet" href="/css/style.css?v=6.71.2">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1f2430">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+</head>
+<body>
+  <div class="shell">
+    <div class="mobile-overlay" id="mobileOverlay"></div>
+    <aside class="sidebar" id="sidebar">
+      <h2>🏭 Quản lý Nội bộ MOYN</h2>
+      <nav id="navMenu"></nav>
+      <div class="userbox">
+        <div id="userInfo"></div>
+        <button id="btnChangePassword" class="secondary">Đổi mật khẩu</button>
+        <button id="btnLogout">Đăng xuất</button>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <button class="hamburger" id="btnHamburger" aria-label="Menu" type="button">☰</button>
+        <div class="topbar-title" id="pageTitle">Trang chủ</div>
+        <div class="notif-wrap">
+          <button class="notif-bell" id="btnNotifBell" type="button" aria-label="Thông báo">
+            🔔<span class="notif-badge" id="notifBadge" style="display:none;">0</span>
+          </button>
+          <div class="notif-panel" id="notifPanel" style="display:none;">
+            <div class="notif-panel-head">
+              <b>Thông báo</b>
+              <button type="button" id="btnNotifReadAll" class="btn small secondary">Đánh dấu đã đọc hết</button>
+            </div>
+            <!-- v5.67: bật/tắt thông báo đẩy trên CHÍNH thiết bị này (Web Push) -->
+            <div class="notif-panel-head" id="pushBox" style="display:none;gap:6px;">
+              <span id="pushTrangThai" style="font-size:12px;color:#5f6368;flex:1;"></span>
+              <button type="button" id="btnBatPush" class="btn small">🔔 Bật trên máy này</button>
+              <button type="button" id="btnThuPush" class="btn small secondary" style="display:none;">Gửi thử</button>
+            </div>
+            <div id="notifList" class="notif-list"><div class="empty-hint">Đang tải...</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="content" id="content"><div class="empty-hint">Đang tải...</div></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <!-- v5.56: THÊM ?v=<phiên bản> để trình duyệt KHÔNG dùng lại file JS cũ trong cache.
+       MỖI LẦN CẬP NHẬT CODE: đổi số v ở TẤT CẢ các dòng dưới (vd 5.56 -> 5.57) rồi Ctrl+F5.
+       Trước đây không có tham số này nên nhiều lần "đã sửa mà vẫn lỗi như cũ" thực chất là chạy file cũ. -->
+  <script src="/js/common.js?v=6.73.2"></script>
+  <script src="/js/module.danhmuc.js?v=6.38"></script>
+  <script src="/js/module.users.js?v=6.38"></script>
+  <script src="/js/module.qlsx.js?v=6.66.1"></script>
+  <script src="/js/module.tailieukythuat.js?v=6.38"></script>
+  <script src="/js/module.bangkebtp.js?v=6.38"></script>
+  <script src="/js/module.khovai.js?v=6.67"></script>
+  <script src="/js/module.khohang.js?v=6.76"></script>
+  <script src="/js/module.nhaplai.js?v=6.66.2"></script>
+  <script src="/js/module.phukien.js?v=6.66.3"></script>
+  <script src="/js/module.congno.js?v=6.69"></script>
+  <script src="/js/module.baocao.js?v=6.38"></script>
+  <script src="/js/module.dashboard.js?v=6.70.1"></script>
+  <script src="/js/module.hrm.js?v=6.38"></script>
+  <script src="/js/module.payroll.js?v=6.38"></script>
+  <script src="/js/module.mypay.js?v=6.38"></script>
+  <script src="/js/app.js?v=6.67"></script>
+</body>
+</html>

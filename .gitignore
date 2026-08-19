@@ -1,0 +1,50 @@
+# ================================================================================================
+#  KHONG DUA LEN GITHUB
+#  Cac muc duoi day hoac chua BI MAT, hoac la du lieu that cua xuong, hoac tai lai duoc.
+#  Dua nham .env len la lo mat khau SQL Server va SESSION_SECRET - ai co 2 thu do la vao duoc
+#  he thong. Git con nho MAI trong lich su, xoa file di van con - nen phai chan tu dau.
+# ================================================================================================
+
+# --- BI MAT: tuyet doi khong commit ---
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+backend/certs/
+*.pfx
+*.key
+*.pem
+
+# --- Tai lai duoc bang npm install ---
+node_modules/
+backend/node_modules/
+package-lock.json.bak
+
+# --- Du lieu that cua xuong, khong phai ma nguon ---
+backend/uploads/
+backend/backup/
+backend/pm2/
+backend/node/
+database/import/
+*.bak
+*.trn
+
+# --- Rac ---
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+~$*
+New Text Document.txt
+
+# --- File rac / anh chup man hinh lan o thu muc goc (khong phai ma nguon) ---
+/*.png
+/*.jpg
+/*.jpeg
+/nen anh.txt
+
+# --- Du lieu CA NHAN that: khong dua len kho ma nguon ---
+/danh sach nhan vien.xlsx

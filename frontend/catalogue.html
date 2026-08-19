@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalogue sản phẩm - MOYN</title>
+<meta name="theme-color" content="#1f2430">
+<link rel="icon" href="/icons/icon-192.png">
+<!-- v5.66.2: kèm ?v= vì trang này đi qua CDN Cloudflare — không có nó thì sửa CSS xong khách vẫn thấy bản cũ. -->
+<link rel="stylesheet" href="/css/style.css?v=5.66">
+<style>
+  /* Trang cong khai, khong dang nhap - khong dung .shell/.sidebar cua app chinh */
+  body { background: #fff; }
+  .cat-header { background: linear-gradient(135deg, var(--blue), var(--purple)); color: #fff; padding: 22px 18px; text-align: center; }
+  .cat-header h1 { margin: 0 0 6px; font-size: 20px; }
+  .cat-header p { margin: 0; opacity: .9; font-size: 13px; }
+  .cat-wrap { max-width: 1100px; margin: 0 auto; padding: 18px; }
+  .cat-search { margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .cat-search input { flex: 2; min-width: 220px; padding: 11px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+  .cat-search select { flex: 1; min-width: 160px; padding: 11px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: #fff; }
+  .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+  .cat-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+  /* v5.65.1: object-fit CONTAIN (trước là cover -> CẮT mất phần trên/dưới sản phẩm).
+     Nền xám nhạt để ảnh không đúng tỉ lệ vẫn nhìn gọn gàng. */
+  .cat-card img.cat-main-img { width: 100%; height: 250px; object-fit: contain; background: #f7f8fa; display: block; cursor: pointer; }
+  .cat-card div.cat-main-img { width: 100%; height: 250px; background: #f0f2f5; }
+  .cat-card .cat-body { padding: 12px; }
+  .cat-card h3 { margin: 0 0 4px; font-size: 15px; }
+  .cat-price { color: var(--red); font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+  .cat-colors { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cat-color-chip { display: flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px 3px 3px; font-size: 11.5px; }
+  .cat-color-chip img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+  .cat-color-chip .dot { width: 22px; height: 22px; border-radius: 50%; background: #ddd; }
+  .cat-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+  /* v5.4 (muc 1): anh bam de phong to + lightbox tu than (trang nay khong dung common.js/openModal) */
+  .cat-main-img.act-cat-zoom, .cat-color-chip img.act-cat-zoom { cursor: pointer; }
+  .cat-lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+  .cat-lightbox-box { position: relative; max-width: 92vw; max-height: 90vh; }
+  .cat-lightbox-box img { max-width: 92vw; max-height: 90vh; display: block; border-radius: 8px; }
+  .cat-lightbox-close { position: absolute; top: -14px; right: -14px; width: 34px; height: 34px; border-radius: 50%; border: none; background: #fff; color: #222; font-size: 16px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+  /* v5.44: nút chuyển ảnh trong lightbox + badge "Hàng mới" */
+  .cat-lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.9); color: #222; font-size: 24px; line-height: 1; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+  .cat-lightbox-prev { left: -18px; } .cat-lightbox-next { right: -18px; }
+  .cat-lightbox-cap { position: absolute; bottom: -30px; left: 0; right: 0; text-align: center; color: #fff; font-size: 13px; }
+  .cat-card { position: relative; }
+  .cat-new-badge { position: absolute; top: 8px; left: 8px; background: #e53935; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px; z-index: 2; }
+
+  /* v5.63: thanh tài khoản khách + ô đặt hàng + hộp thoại (trang này độc lập, không dùng style của app) */
+  .cat-khach-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff; border: 1px solid #dcdfe3; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
+  .cat-khach-bar button { padding: 7px 14px; border: none; border-radius: 6px; background: #4a86e8; color: #fff; cursor: pointer; font-size: 13px; }
+  .cat-khach-bar button:hover { opacity: .9; }
+  .cat-order-box { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  .cat-order-box select, .cat-order-box input { padding: 6px 8px; border: 1px solid #dcdfe3; border-radius: 6px; font-size: 13px; }
+  .cat-order-box .cat-sl { width: 70px; }
+  .cat-order-box .cat-add { padding: 6px 12px; border: none; border-radius: 6px; background: #6aa84f; color: #fff; cursor: pointer; font-size: 13px; }
+  .cat-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 500; }
+  .cat-modal { background: #fff; border-radius: 10px; padding: 20px 22px; width: 100%; max-width: 420px; max-height: 88vh; overflow: auto; }
+  .cat-modal h3 { margin: 0 0 12px; }
+  .cat-modal input, .cat-modal textarea { width: 100%; padding: 9px 11px; margin-bottom: 10px; border: 1px solid #dcdfe3; border-radius: 6px; font-size: 14px; font-family: inherit; }
+  .cat-modal table th, .cat-modal table td { border-bottom: 1px solid #eee; padding: 6px 4px; }
+  .cat-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .cat-modal-actions button { padding: 8px 16px; border: none; border-radius: 6px; background: #eef0f3; cursor: pointer; font-size: 13px; }
+  .cat-modal-actions button.primary { background: #4a86e8; color: #fff; }
+  .gio-xoa { border: none; background: #cc4125; color: #fff; border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 12px; }
+
+  /* v5.65.1: DẢI ẢNH NHỎ dưới ảnh lớn — hiện ĐỦ ảnh đại diện + ảnh từng màu, bấm để đổi ảnh lớn */
+  .cat-img-wrap { position: relative; }
+  .cat-img-count { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.62); color: #fff;
+                   font-size: 11px; padding: 2px 8px; border-radius: 10px; pointer-events: none; }
+  .cat-thumbs { display: flex; gap: 6px; padding: 6px 8px 0; overflow-x: auto; }
+  .cat-thumbs::-webkit-scrollbar { height: 5px; }
+  .cat-thumbs::-webkit-scrollbar-thumb { background: #cfd4da; border-radius: 3px; }
+  .cat-thumb { width: 46px; height: 46px; flex: 0 0 auto; object-fit: cover; border-radius: 6px;
+               border: 2px solid transparent; background: #f0f2f5; cursor: pointer; }
+  .cat-thumb.active { border-color: #4a86e8; }
+
+  /* v5.65: mỗi MÀU một ô số lượng -> chọn nhiều màu rồi bấm "+ Chọn" một lần */
+  .cat-mau-list { display: flex; flex-direction: column; gap: 4px; width: 100%; max-height: 170px; overflow: auto; }
+  .cat-mau-row { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .cat-mau-ten { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat-order-box .cat-sl-mau { width: 64px; padding: 4px 6px; text-align: right; }
+  .cat-order-foot { display: flex; gap: 6px; width: 100%; margin-top: 8px; }
+  .cat-order-foot .cat-add { flex: 1; }
+
+  /* v5.65: CỐ ĐỊNH từ ô lọc tên hàng TRỞ LÊN (tiêu đề + thanh khách + ô tìm kiếm) khi cuộn.
+     Trang này cuộn ở chính body nên position:sticky trên khối con trực tiếp của body là đủ.
+     Khi cuộn quá 40px thì thu gọn tiêu đề lại để không chiếm chỗ (nhất là trên điện thoại). */
+  .cat-sticky { position: sticky; top: 0; z-index: 40; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.10); }
+  .cat-wrap-head { padding: 12px 18px 0; }
+  .cat-wrap-head .cat-search { margin-bottom: 12px; }
+  .cat-sticky .cat-header { transition: padding .15s ease; }
+  .cat-sticky.cat-compact .cat-header { padding: 8px 18px; }
+  .cat-sticky.cat-compact .cat-header h1 { font-size: 15px; margin: 0; }
+  .cat-sticky.cat-compact .cat-header p { display: none; }
+  .cat-sticky.cat-compact .cat-khach-bar { padding: 6px 12px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <!-- v5.65: khối CỐ ĐỊNH khi cuộn (tiêu đề + thanh khách + ô lọc). Lưới sản phẩm nằm NGOÀI khối này. -->
+  <div class="cat-sticky" id="catSticky">
+    <div class="cat-header">
+      <h1 id="catTitle"> <link rel="icon" href="/icons/icon-192.png">🏭 Catalogue sản phẩm - Công ty TNHH thời trang MOYN </h1>
+      <p id="catSubtitle">Danh sách hàng còn trong kho — cập nhật trực tiếp từ hệ thống</p>
+    </div>
+    <div class="cat-wrap cat-wrap-head">
+      <!-- v5.63: thanh tài khoản khách (đăng nhập / giỏ hàng / đơn của tôi) -->
+      <div id="catKhachBar" class="cat-khach-bar"></div>
+      <div class="cat-search">
+        <input type="text" id="catSearch" placeholder="Tìm theo tên hàng, mã hàng...">
+        <select id="catFilterLoaiHang"><option value="">-- Tất cả loại hàng --</option></select>
+      </div>
+    </div>
+  </div>
+  <div class="cat-wrap">
+    <div id="catGrid" class="cat-grid"><div class="cat-empty">Đang tải...</div></div>
+  </div>
+  <!-- v5.65.3: LƯỚI AN TOÀN — không để trang đứng im ở chữ "Đang tải...".
+       Đặt TRƯỚC thẻ <script> của catalogue.js để bắt được cả lỗi cú pháp của chính file đó. -->
+  <script>
+    (function () {
+      function baoLoi(noiDung) {
+        var g = document.getElementById('catGrid');
+        if (g && /Đang tải/.test(g.textContent || '')) g.innerHTML = '<div class="cat-empty">' + noiDung + '</div>';
+      }
+      window.addEventListener('error', function (e) {
+        baoLoi('Trang bị lỗi khi tải: <b>' + ((e && e.message) || 'không rõ') + '</b><br>' +
+               'Hãy tải lại bằng Ctrl+F5. Nếu vẫn lỗi, báo bộ phận kỹ thuật.');
+      });
+      setTimeout(function () {
+        baoLoi('Máy chủ không phản hồi.<br>Vui lòng thử lại sau ít phút.' +
+               '<br><span style="font-size:12px;">(Kỹ thuật: kiểm tra <code>pm2 logs qlnoibo</code> và kết nối SQL Server)</span>');
+      }, 25000);
+    })();
+  </script>
+  <script src="/js/catalogue.js?v=6.31"></script>
+</body>
+</html>

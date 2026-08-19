@@ -1,0 +1,33 @@
+{
+  "_ghiChu": [
+    "DANH SACH GOP TEN KHACH - dua ve dang chuan \"NPP <Tinh> - <Ten>\"  (v6.74.5).",
+    "Vi sao dung JSON chu khong phai .bat: cmd.exe doc file .bat theo bang ma CU truoc khi chcp 65001",
+    "kip co tac dung, nen moi ten tieng Viet trong .bat deu vo -> 'HIEN' is not recognized...",
+    "Node doc JSON bang UTF-8 that su nen khong dinh van de do.",
+    "",
+    "CACH DUNG (mo cmd trong thu muc backend):",
+    "   node utils/gop_ten_khach.js --tu-file=utils/gop_npp.json          <- CHAY THU",
+    "   node utils/gop_ten_khach.js --tu-file=utils/gop_npp.json --ghi    <- GHI THAT",
+    "",
+    "Them nhom moi: chi viec them mot object { tu: [...], thanh: \"...\" } vao mang duoi.",
+    "\"thanh\" la ten GIU LAI - go gi cung duoc, khong bi ep theo ban nhieu dong nhat."
+  ],
+  "nhom": [
+    { "tu": ["NPP Lương - Hưng Yên", "NPP Hưng Yên - Lương"], "thanh": "NPP Hưng Yên - Lương" },
+    { "tu": ["NPP Thu Phương - Phú Thọ", "NPP Phú Thọ - Thu Phương"], "thanh": "NPP Phú Thọ - Thu Phương" },
+    { "tu": ["C Dung - NPP Bắc Ninh", "NPP Bắc Ninh - C Dung"], "thanh": "NPP Bắc Ninh - C Dung" },
+    { "tu": ["C Thanh - NPP Ninh Bình", "NPP Ninh Bình - C Thanh"], "thanh": "NPP Ninh Bình - C Thanh" },
+    { "tu": ["NPP Tú - Bắc Giang", "NPP Bắc Giang - Tú"], "thanh": "NPP Bắc Giang - Tú" },
+    { "tu": ["C Dung - NPP Thái Bình", "NPP Thái Bình - C Dung"], "thanh": "NPP Thái Bình - C Dung" },
+    { "tu": ["C Thúy Dương - NPP Nam Định", "NPP Nam Định - C Thúy Dương"], "thanh": "NPP Nam Định - C Thúy Dương" },
+    { "tu": ["NPP Hiền Mạnh - Yên Bái", "NPP Yên Bái - Hiền Mạnh"], "thanh": "NPP Yên Bái - Hiền Mạnh" },
+    { "tu": ["NPP Đức - Hải Dương", "NPP Hải Dương - Đức"], "thanh": "NPP Hải Dương - Đức" },
+    { "tu": ["NPP Hưng - Quảng Ninh", "NPP Quảng Ninh - Hưng"], "thanh": "NPP Quảng Ninh - Hưng" },
+
+    { "_": "Nguoi dung XAC NHAN cung mot chi Huong (Chuong My thuoc Ha Tay cu). Hai ten KHAC TAP TU nen khong cong cu nao tu bat duoc.",
+      "tu": ["C Hương - NPP Chương Mỹ", "NPP Hà Tây - C Hương Chương Mỹ"], "thanh": "NPP Hà Tây - C Hương Chương Mỹ" },
+
+    { "_": "Khong co ten tinh - chi bo bot dau cach thua giua CTV va Cuong.",
+      "tu": ["CTV  Cường Giang", "CTV Cường Giang"], "thanh": "CTV Cường Giang" }
+  ]
+}
