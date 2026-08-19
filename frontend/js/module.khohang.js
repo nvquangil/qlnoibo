@@ -757,10 +757,10 @@ window.ModuleKhoHang = (function () {
     /* Điền các ô của form theo MỘT DÒNG hàng của phiếu nhập. CHỈ điền mã/tên/ĐVT — KHÔNG điền số
        lượng: phiếu nhập lưu xong là đã cộng tồn, điền vào đây nữa là tồn đếm hai lần. */
     async function dienTheoDongPhieu(d2, soPhieu) {
-      /* v6.87: từ nay phiếu nhập KHÔNG tạo mã hàng nữa, nên mã của dòng "⏳ chờ tạo thẻ kho" là mã
-         CHƯA CÓ — điền vào form tạo mới là đúng, và lưu xong hệ thống tự cộng tồn cho phiếu.
-         Vẫn giữ nước dò của v6.86 cho dữ liệu CŨ: các mã do bản v6.78–v6.86 tự tạo thì đã tồn tại
-         sẵn, mở form tạo mới sẽ luôn báo trùng ⇒ chuyển thẳng sang form Sửa. */
+      /* Mã trên phiếu nhập LUÔN đã tồn tại — lưu phiếu là đã sinh mã (nhapkho.js timHoacTaoMaHang).
+         Nên mặc định phải mở form SỬA mã đó, không phải form tạo mới; mở tạo mới thì bấm Lưu chỉ
+         nhận "Mã hàng đã tồn tại, dùng chức năng Sửa" (đúng lỗi v6.84).
+         Vẫn giữ nhánh điền-vào-form-tạo-mới cho trường hợp mã đã bị xóa khỏi danh mục sau đó. */
       const chuan = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
       if (!isEdit && dsMaDaCo.has(chuan(d2.MaHang))) {
         closeModal();
@@ -775,11 +775,7 @@ window.ModuleKhoHang = (function () {
       const oDvqd = modal.querySelector('[name="donViQuyDoi"]');
       if (oDvqd && d2.DonViQuyDoi) oDvqd.value = d2.DonViQuyDoi;
       dat('#inpLoaiRi', d2.LoaiRi);
-      /* KHÔNG điền số lượng vào ô Nhập của thẻ kho: tồn của dòng phiếu này sẽ được backend cộng tự
-         động ngay sau khi lưu (route /api/nhapkho/gan-mahang). Điền tay vào đây nữa là đếm hai lần. */
-      toast(Number(d2.ChoTaoTheKho)
-        ? `Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Khai đủ ĐVT + tỷ lệ quy đổi rồi bấm Lưu — hệ thống sẽ tự cộng tồn của phiếu này.`
-        : `Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Số lượng KHÔNG điền — phiếu nhập đã cộng tồn rồi.`, 'success');
+      toast(`Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Số lượng KHÔNG điền — phiếu nhập đã cộng tồn rồi.`, 'success');
     }
 
     /* TẠO MỚI: nạp danh sách phiếu nhập loại SẢN XUẤT, chọn phiếu -> hiện các mã hàng trong phiếu
@@ -789,14 +785,13 @@ window.ModuleKhoHang = (function () {
       const o = modal.querySelector('#dsPhieuNhap');
       if (!sel || !o) return;
       try {
-        /* v6.87: liệt kê phiếu CÒN DÒNG CHỜ TẠO THẺ KHO — không lọc theo loại nhập nữa. Mã mới có thể
-           đến từ nhà cung cấp chứ không riêng gì hàng xưởng làm ra; lọc loaiNhap=SanXuat như bản
-           trước là bỏ sót hẳn nhóm hàng mua ngoài. */
+        /* v6.88: KHÔNG lọc theo loại nhập nữa. Mã hàng mới có thể đến từ nhà cung cấp chứ không riêng
+           gì hàng xưởng làm ra; lọc loaiNhap=SanXuat như bản trước là bỏ sót hẳn nhóm hàng mua ngoài. */
         const ds = (await apiGet('/api/nhapkho/phieu')).data || [];
-        const con = ds.filter(p => p.TrangThai !== 'Đã hủy' && Number(p.SoDongCho) > 0);
+        const con = ds.filter(p => p.TrangThai !== 'Đã hủy');
         if (!con.length) {
-          sel.innerHTML = '<option value="">-- Không có phiếu nào chờ tạo thẻ kho --</option>';
-          o.innerHTML = 'Không có phiếu nhập kho nào đang chờ tạo thẻ kho. Lập phiếu ở <b>tab Phiếu nhập kho</b> trước — mã hàng chưa có trong danh mục sẽ hiện ở đây.';
+          sel.innerHTML = '<option value="">-- Chưa có phiếu nhập kho nào --</option>';
+          o.innerHTML = 'Chưa có phiếu nhập kho nào. Lập ở <b>tab Phiếu nhập kho</b> trước — mã hàng mới sinh ra ở đó rồi quay lại đây bổ sung ảnh / giá bán / màu.';
           return;
         }
         sel.innerHTML = '<option value="">-- Chọn phiếu nhập kho --</option>'
@@ -816,11 +811,11 @@ window.ModuleKhoHang = (function () {
                 <th>Mã hàng</th><th>Tên hàng</th><th class="num">SL</th><th>ĐVT</th><th style="width:120px;"></th>
               </tr></thead><tbody>
                 ${dong.map((d2, i) => `<tr>
-                  <td><b>${escapeHtml(d2.MaHang || '')}</b>${Number(d2.ChoTaoTheKho) ? ' <span style="font-size:11px;color:#8a6d3b;">⏳ chờ</span>' : ' <span style="font-size:11px;color:#2e7d32;">✔ đã có</span>'}</td>
+                  <td><b>${escapeHtml(d2.MaHang || '')}</b></td>
                   <td>${escapeHtml(d2.TenHang || '')}</td>
                   <td class="num">${fmtNumber(d2.SoLuong)}</td>
                   <td>${escapeHtml(d2.DonVi || '')}</td>
-                  <td><button type="button" class="btn small ${Number(d2.ChoTaoTheKho) ? '' : 'secondary'} pn-dung" data-i="${i}">${Number(d2.ChoTaoTheKho) ? 'Tạo thẻ kho' : 'Mở thẻ kho'}</button></td>
+                  <td><button type="button" class="btn small pn-dung" data-i="${i}">Mở thẻ kho</button></td>
                 </tr>`).join('')}
               </tbody></table></div>`;
             o.querySelectorAll('.pn-dung').forEach(b2 => b2.onclick = () =>
@@ -970,23 +965,7 @@ window.ModuleKhoHang = (function () {
         if (isEdit) await apiPut('/api/khohang/items/' + row.MaHangID, body);
         else await apiPost('/api/khohang/items', body);
 
-        /* v6.87: VỪA TẠO MÃ MỚI -> hoàn tất các dòng phiếu nhập kho đang "chờ tạo thẻ kho" của mã này
-           (gắn mã vào dòng + CỘNG TỒN đúng lúc này).
-           Gọi cho MỌI lần tạo mới, không chỉ khi mở form từ phiếu nhập: người dùng có thể lập phiếu
-           nhập trước rồi vài ngày sau tự vào tab Thẻ kho tạo mã bằng tay — không quét thì phiếu đó
-           treo vĩnh viễn, hàng đã về mà tồn vẫn 0.
-           KHÔNG chặn luồng nếu lỗi: thẻ kho đã lưu xong rồi, chỉ báo để người dùng biết còn phải
-           bấm "Tạo thẻ kho" lại ở phiếu. */
-        let tinNhan = 'Đã lưu thẻ kho.';
-        if (!isEdit) {
-          try {
-            const g = await apiPost('/api/nhapkho/gan-mahang', { maHang: fd.get('maHang') });
-            if (g && g.data && g.data.soDong) tinNhan += ' ' + g.message;
-          } catch (err) {
-            toast('Đã lưu thẻ kho, nhưng chưa cộng được tồn từ phiếu nhập: ' + err.message, 'error');
-          }
-        }
-        closeModal(); toast(tinNhan, 'success');
+        closeModal(); toast('Đã lưu thẻ kho.', 'success');
         // Tao moi tu tab "Tao the kho moi" (v5.3) -> chuyen sang tab danh sach de thay ngay ket qua.
         if (!isEdit) activeTab = 'items';
         render(container, currentUser);
@@ -3140,11 +3119,11 @@ window.ModuleKhoHang = (function () {
   /* ================================================================================================
      v6.86: MỞ THẺ KHO CỦA MÃ HÀNG TỪ MỘT PHIẾU NHẬP KHO.
      ⚠️ SỬA LỖI v6.84 "Mã hàng đã tồn tại, dùng chức năng Sửa":
-     v6.87: PHIẾU NHẬP KHÔNG CÒN TẠO MÃ HÀNG (xem migration_v682 + backend/routes/nhapkho.js).
-     Dòng phiếu mang mã chưa có trong danh mục ở trạng thái "⏳ chờ tạo thẻ kho": chưa cộng tồn,
-     chưa có gì trong danh mục. Nút này mở form TẠO MỚI cho đúng mã đó; lưu xong backend tự gắn mã
-     vào dòng phiếu và CỘNG TỒN lúc ấy (POST /api/nhapkho/gan-mahang).
-     Vẫn giữ nước dò "mã đã có → mở form Sửa" cho dữ liệu cũ do bản v6.78–v6.86 tự tạo ra.
+     Phiếu nhập kho lưu xong LÀ ĐÃ SINH mã hàng trong danh mục (nhapkho.js timHoacTaoMaHang) — hàng
+     xuất/bán được ngay. Nút "Tạo thẻ kho" của v6.84 lại mở form TẠO MỚI ⇒ lần nào cũng trùng mã,
+     không bao giờ lưu được.
+     Nay tự dò: mã ĐÃ CÓ thì mở form SỬA đúng mã đó (để bổ sung ảnh / giá bán / màu / danh mục — đúng
+     việc còn lại ở thẻ kho); CHƯA CÓ (mã đã bị xóa sau đó) thì mới mở form tạo mới.
      Phiếu nhiều mã hàng thì hỏi chọn mã nào, không tự đoán.
 
      Không nhận `perm` từ bên gọi: quyền phải lấy theo CHÍNH người đang đăng nhập, tin theo tham số
@@ -3185,29 +3164,21 @@ window.ModuleKhoHang = (function () {
     } catch (err) { toast('Không đọc được phiếu nhập: ' + err.message, 'error'); return; }
     if (!dong.length) { toast('Phiếu nhập này không có dòng hàng nào.', 'error'); return; }
 
-    /* v6.87: CHỈ quan tâm các dòng "⏳ chờ tạo thẻ kho". Dòng đã có mã hàng thì tồn đã cộng từ lúc lưu
-       phiếu, không có việc gì phải làm ở đây — đưa vào danh sách chọn chỉ làm người dùng bấm nhầm rồi
-       nhận thông báo "mã đã tồn tại". Nếu phiếu không còn dòng nào chờ thì nói thẳng như vậy. */
-    const dongCho = dong.filter(d => Number(d.ChoTaoTheKho));
-    if (!dongCho.length) {
-      toast('Phiếu này không còn mã nào chờ tạo thẻ kho — mọi mã đã có thẻ kho và đã cộng tồn.', 'info');
-      return;
-    }
     // Gộp theo mã hàng: một mã nhập nhiều dòng (nhiều đợt) thì chỉ hỏi một lần.
-    const ma = [...new Set(dongCho.map(d => d.MaHang).filter(Boolean))];
+    const ma = [...new Set(dong.map(d => d.MaHang).filter(Boolean))];
     if (ma.length === 1) { await moTheKhoTheoMa(ma[0], phieuNKID); return; }
 
     const modal = openModal(`
-      <div class="modal-head"><h3>Phiếu này có ${ma.length} mã chờ tạo thẻ kho — làm lần lượt từng mã</h3></div>
+      <div class="modal-head"><h3>Phiếu này có ${ma.length} mã hàng — chọn mã cần mở thẻ kho</h3></div>
       <div class="modal-body">
         <div class="table-wrap" style="max-height:320px;overflow:auto;">
         <table class="data-table phieu-ke"><thead><tr>
           <th style="width:50px;">STT</th><th>Mã hàng</th><th>Tên hàng</th><th style="width:130px;"></th>
         </tr></thead><tbody>
           ${ma.map((m, i) => {
-            const d = dongCho.find(x => x.MaHang === m) || {};
+            const d = dong.find(x => x.MaHang === m) || {};
             return `<tr><td>${i + 1}</td><td><b>${escapeHtml(m)}</b></td><td>${escapeHtml(d.TenHang || '')}</td>
-              <td><button type="button" class="btn small tk-chon" data-ma="${escapeHtml(m)}">Tạo thẻ kho</button></td></tr>`;
+              <td><button type="button" class="btn small tk-chon" data-ma="${escapeHtml(m)}">Mở thẻ kho</button></td></tr>`;
           }).join('')}
         </tbody></table></div>
       </div>
