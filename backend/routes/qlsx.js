@@ -493,15 +493,48 @@ async function getCatMauList(pool, donHangId, stageId) {
             FROM TienDoChiTietMau ct
             LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
             WHERE ct.TienDoID IN (${ids.join(',')})
-              /* v5.36: chỉ màu CHÍNH (bỏ màu Phối).
-                 v6.12 — SỬA "Tổng SL cắt ở công đoạn May = 0 nhưng vẫn hiện 6 bàn cắt": điều kiện cũ là
-                 MauSacID **IN** danh sách màu Chính của Cấu trúc vải. Từ v5.13 màu ở Ra lệnh SX GÕ TỰ DO
-                 nên DonHangChiTietVai.MauSacID thường NULL ⇒ danh sách rỗng ⇒ lọc sạch mọi màu ⇒ SL = 0
-                 (số bàn cắt vẫn hiện vì chỗ đó không lọc theo màu). Nay đảo lại: **LOẠI TRỪ** đúng những
-                 màu được khai là Phối (có MauSacID thật) — cùng kết quả khi dữ liệu đầy đủ, nhưng không
-                 bao giờ xoá sạch khi Cấu trúc vải chưa gắn được MauSacID. */
-              AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
-                                      WHERE DonHangID=@id AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
+              /* ================================================================================
+                 CHI MAU CHINH - dung DUNG nguon cua Bang ke ban thanh pham (routes/bangke.js).
+                 Nguoi dung xac nhan cach BTP loc la dung, nen hai cho phai cung mot luat; hai luat
+                 khac nhau thi "Tong SL ban cat" va bang ke BTP ra hai con so, khong ai doi chieu noi.
+
+                 NGUON CHAC CHAN = KieuVai cua DONG PHIEU XUAT KHO VAI, va phai la phieu xuat cua
+                 CHINH don nay. Cau truc vai KHONG dung lam nguon chinh: tu v6.43 mau o Ra lenh SX go
+                 tu do (MauSacID = NULL) nen khong khop duoc.
+
+                 Lich su: v5.36 loc theo danh sach mau Chinh -> trang bang khi thieu MauSacID.
+                 v6.12 dao thanh loai tru mau Phoi theo MauSacID -> nhung dong Phoi cung NULL nen
+                 khong loai duoc gi, mau phoi van bi cong (dung loi dang sua).
+
+                 LUOI AN TOAN: don nao CHUA co phieu xuat kho vai nao khai KieuVai thi GIU NGUYEN moi
+                 mau. Khong co luoi nay thi hang cap vai khong qua phieu xuat se ra SL = 0 - dung kieu
+                 hong cua v5.36.
+
+                 KHONG so khop mau theo TEN. Da can nhac va bo o bangke.js v6.60.1: noi mo theo chu,
+                 trung ten la loai nham mau chinh ma khong ai biet.
+                 KHONG go dau backtick trong khoi nay - no nam trong chuoi template JS, mot dau
+                 backtick la dut chuoi va sap ca file (su co v6.61).
+                 ================================================================================ */
+              AND (
+                NOT EXISTS (SELECT 1 FROM PhieuXuatVai p0
+                            JOIN PhieuXuatVaiChiTiet px0 ON px0.PhieuXuatID = p0.PhieuXuatID
+                            WHERE p0.DonHangID = @id AND px0.KieuVai IS NOT NULL)
+                OR EXISTS (
+                  SELECT 1
+                  FROM TienDoCatChiTietCay cc
+                  JOIN TienDoSanXuat td2 ON td2.TienDoID = cc.TienDoID
+                  JOIN VaiCay vc ON vc.CayID = cc.CayID
+                  JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+                  WHERE td2.DonHangID = @id AND dv.MauSacID = ct.MauSacID
+                    AND EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                                JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                                WHERE px.CayID = cc.CayID AND px.KieuVai = N'Chính'
+                                  AND p.DonHangID = @id))
+              )
+              /* Lop chan phu, y nhu bangke.js: gat mau duoc khai RO la Phoi trong Cau truc vai. */
+              AND NOT EXISTS (SELECT 1 FROM DonHangChiTietVai cv
+                              WHERE cv.DonHangID = @id AND cv.Kieu = N'Phối'
+                                AND cv.MauSacID IS NOT NULL AND cv.MauSacID = ct.MauSacID)
             GROUP BY ct.MauSacID, ms.TenMau
             ORDER BY ms.TenMau`);
   return result.recordset.map(r => ({ MauSacID: r.MauSacID, TenMau: r.TenMau || '', SoLuong: Number(r.SoLuong) || 0 }));
