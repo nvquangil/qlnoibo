@@ -1927,14 +1927,14 @@ window.ModuleQLSX = (function () {
             ${o.Size ? `<tr><td style="background:#f5f6f8;"><b>Size</b></td><td>${escapeHtml(o.Size)}</td></tr>` : ''}
             <tr><td style="background:#f5f6f8;"><b>Mã rập</b></td><td>${escapeHtml(o.MaRap || '')}</td></tr>
             <tr><td style="background:#f5f6f8;"><b>Tổng SL chỉ định</b></td><td>${o.TongSoLuong != null ? fmtQuyDoi(o.TongSoLuong, o.HeSoQuyDoi, o.PhepTinhQuyDoi, o.DonViTinhLenh || 'Cái', o.TenDonViQuyDoi) : ''}</td></tr>
-            <tr><td style="background:#f5f6f8;"><b>SL dùng để tính</b></td><td><b>${fmtNumber(d.slDungTinh)} ${escapeHtml(o.DonViTinhLenh || 'Cái')}</b> (${escapeHtml(d.nguonSL || '')})</td></tr>
+            <tr><td style="background:#f5f6f8;"><b>SL dùng để tính</b></td><td><b>${fmtNumber(d.slDungTinh)} ${escapeHtml(d.donViSLDungTinh || o.DonViTinhLenh || 'Cái')}</b> (${escapeHtml(d.nguonSL || '')})</td></tr>
           </table>
         </td>${o.AnhSanPham ? `<td style="width:130px;vertical-align:top;padding-left:10px;text-align:center;">
           <img src="${escapeHtml(o.AnhSanPham)}" style="max-width:125px;max-height:150px;object-fit:contain;border:1px solid #ccc;"></td>` : ''}
       </tr></table>` : `
       <div class="empty-hint" style="padding:0 0 6px;">
         ${escapeHtml(o.TenSanPham || '')}${o.MaSanPham ? ' · Mã hàng ' + escapeHtml(o.MaSanPham) : ''}${o.MaRap ? ' · Mã rập ' + escapeHtml(o.MaRap) : ''}<br>
-        SL dùng để tính: <b>${fmtNumber(d.slDungTinh)} ${escapeHtml(o.DonViTinhLenh || 'Cái')}</b> (${escapeHtml(d.nguonSL || '')})
+        SL dùng để tính: <b>${fmtNumber(d.slDungTinh)} ${escapeHtml(d.donViSLDungTinh || o.DonViTinhLenh || 'Cái')}</b> (${escapeHtml(d.nguonSL || '')})
         ${Number(d.slNhapKho) > 0 ? '' : ' — <span style="color:#b06000;">chưa nhập kho nên đang lấy SL cắt</span>'}
       </div>`;
 

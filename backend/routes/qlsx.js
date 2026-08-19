@@ -2102,14 +2102,43 @@ async function tinhGiaThanh(pool, order) {
   const tongChung = tong(chiPhiChung, 'SoTien');
   const tongCong = lam2(tongVai + tongPK + tongGC + tongMay + tongIn + tongCat + tongChung);
 
-  // SL hoàn thành: ưu tiên SL NHẬP KHO thực tế; chưa nhập kho thì lấy SL cắt (báo rõ đang lấy nguồn nào).
+  /* SL hoàn thành: ưu tiên SL NHẬP KHO thực tế; chưa nhập kho thì lấy SL cắt (báo rõ đang lấy nguồn nào).
+
+     ⚠️ v6.91.1 — SL NHẬP KHO LẤY TỪ PHIẾU NHẬP KHO HÀNG HÓA, KHÔNG từ công đoạn "Kho nhập".
+     Từ v6.91 mọi hàng vào kho đều phải qua phiếu; công đoạn KN chỉ khép quy trình SX. Nếu ở đây vẫn
+     chia theo luỹ kế KN thì "Giá thành 1 sản phẩm" trên màn giá thành và "Giá nhập" trên báo cáo tồn
+     kho ra hai con số khác nhau cho cùng một lệnh — không ai đối chiếu được.
+     Quy về CÁI (× hệ số khi đơn vị chính của mã hàng là đơn vị GỘP) để giaThanh1SP luôn là GIÁ 1 CÁI,
+     cùng đơn vị với GiaBan và GiaVonHangHoa.GiaVon. */
   const stages = (await pool.request().query("SELECT StageID, MaCongDoan FROM CongDoanSanXuat WHERE MaCongDoan IN ('KN','CAT')")).recordset;
   const knStage = stages.find(s => s.MaCongDoan === 'KN');
   const catStage = stages.find(s => s.MaCongDoan === 'CAT');
-  const slNhapKho = knStage ? await getStageActualQty(pool, donHangId, knStage.StageID) : 0;
+  let slNhapKho = 0, nguonNhap = '';
+  try {
+    const r = (await pool.request().input('id', sql.Int, donHangId).query(`
+      IF OBJECT_ID('PhieuNhapKhoHangChiTiet', 'U') IS NULL SELECT CAST(0 AS DECIMAL(18,4)) AS SL
+      ELSE
+        SELECT ISNULL(SUM(ct.SoLuongChinh * CASE
+                 WHEN LOWER(LTRIM(RTRIM(h.DonViCoBan))) =
+                      LOWER(LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(h.DonViQuyDoi)), N''), N'ri'))))
+                      AND ISNULL(h.LoaiRi, 1) > 0
+                 THEN ISNULL(h.LoaiRi, 1) ELSE 1 END), 0) AS SL
+        FROM PhieuNhapKhoHangChiTiet ct
+        JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+        JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+        WHERE p.DonHangID = @id AND p.TrangThai <> N'Đã hủy'`)).recordset[0];
+    slNhapKho = Number(r && r.SL) || 0;
+    if (slNhapKho > 0) nguonNhap = 'SL nhập kho thực tế (phiếu nhập kho)';
+  } catch (e) { slNhapKho = 0; }
+  /* Lệnh CŨ chưa có phiếu nhập kho thì lui về luỹ kế công đoạn KN — không thì mọi lệnh trước v6.89
+     đột nhiên mất giá thành. */
+  if (slNhapKho <= 0 && knStage) {
+    slNhapKho = await getStageActualQty(pool, donHangId, knStage.StageID);
+    if (slNhapKho > 0) nguonNhap = 'SL công đoạn Kho nhập (lệnh cũ, chưa có phiếu nhập kho)';
+  }
   const slCat = catStage ? await getTongSLCatForOrder(pool, donHangId) : 0;
   const slDungTinh = slNhapKho > 0 ? slNhapKho : slCat;
-  const nguonSL = slNhapKho > 0 ? 'SL nhập kho thực tế' : (slCat > 0 ? 'SL cắt (chưa nhập kho)' : 'chưa có số liệu');
+  const nguonSL = slNhapKho > 0 ? nguonNhap : (slCat > 0 ? 'SL cắt (chưa nhập kho)' : 'chưa có số liệu');
 
   return {
     order: {
@@ -2121,6 +2150,9 @@ async function tinhGiaThanh(pool, order) {
     vai, phuKien, giaCong, mayNhaLam, inThe, boPhanCat, chiPhiChung, donGiaCat,
     tong: { vai: tongVai, phuKien: tongPK, giaCong: tongGC, mayNhaLam: tongMay, inThe: tongIn, boPhanCat: tongCat, chiPhiChung: tongChung, tongCong },
     slNhapKho, slCat, slDungTinh, nguonSL,
+    /* v6.91.1: SL nhập kho từ phiếu ĐÃ quy về CÁI, nên nhãn đơn vị phải là "Cái" chứ không phải ĐVT
+       của lệnh SX — để trống chỗ này là người đọc tưởng giá thành tính trên Ri. */
+    donViSLDungTinh: (slNhapKho > 0 && nguonNhap.indexOf('phiếu') >= 0) ? 'Cái' : null,
     giaThanh1SP: slDungTinh > 0 ? Math.round((tongCong / slDungTinh) * 100) / 100 : null
   };
 }

@@ -1074,56 +1074,22 @@ router.post('/giavon/naptulenhsx', requireAuth, requirePermission('BAOCAO', 'edi
     GROUP BY MaHangID, MaHang, MaDH, NguonGia
     ORDER BY MaHang`)).recordset;
 
-  /* ⚠️ KHONG dung thang gt.giaThanh1SP! Do la tongCong / slDungTinh, ma slDungTinh = SUM(SoLuongLuyKe)
-     THO — theo don vi nguoi dung chon luc ghi Kho nhap (co the la RI). Neu ghi theo Ri thi
-     giaThanh1SP la gia thanh 1 RI; nhan voi SoLuongCai (so CAI) khi tinh lai/lo se thoi gia von
-     len gap LoaiRi lan => bao LO AO. Phai chia cho SO CAI thuc nhap kho.
-     slCaiTheoMa: luy ke Kho nhap cua batch moi nhat, DA quy ve CAI + da loai mau Phoi. */
-  const slCaiTheoMa = new Map();
-  const coNhomTD = await coCot(pool, 'TienDoSanXuat', 'NhomTienDoID');
-  const coDVChon = await coCot(pool, 'TienDoChiTietMau', 'DonViDaChon');
-  const batchC = coNhomTD ? 'ISNULL(td.NhomTienDoID, td.TienDoID)' : 'td.TienDoID';
-  const quyCai = coDVChon
-    ? `CASE WHEN ct.DonViDaChon IS NOT NULL AND ct.DonViDaChon = h.DonViQuyDoi
-            THEN ct.SoLuongLuyKe * ISNULL(h.LoaiRi,1) ELSE ct.SoLuongLuyKe END`
-    : 'ct.SoLuongLuyKe';
-  // Cung ly do nhu tren: JOIN + GROUP BY, khong dung subquery tuong quan (SQL Server loi 8124).
-  (await pool.request().query(`
-    WITH kn AS (
-      SELECT h.MaHangID, td.TienDoID, ${batchC} AS Batch, ISNULL(SUM(${quyCai}), 0) AS LK
-      FROM TienDoSanXuat td
-      JOIN CongDoanSanXuat c ON c.StageID = td.StageID AND c.MaCongDoan = 'KN'
-      JOIN TheKhoHangHoa h ON h.DonHangID = td.DonHangID
-      LEFT JOIN TienDoChiTietMau ct ON ct.TienDoID = td.TienDoID
-           AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
-                                   WHERE DonHangID = td.DonHangID AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
-      GROUP BY h.MaHangID, td.TienDoID, ${batchC}
-    ),
-    batch AS (SELECT MaHangID, Batch, MAX(TienDoID) AS MaxID, SUM(LK) AS LuyKe FROM kn GROUP BY MaHangID, Batch)
-    SELECT b.MaHangID, b.LuyKe AS SLCai FROM batch b
-    WHERE b.MaxID = (SELECT MAX(b2.MaxID) FROM batch b2 WHERE b2.MaHangID = b.MaHangID)`)).recordset
-    .forEach(r => slCaiTheoMa.set(r.MaHangID, so(r.SLCai)));
+  /* ================================================================================================
+     v6.91.1 — LAY DUNG "GIA THANH 1 SAN PHAM" (gt.giaThanh1SP), KHONG tu chia lai.
 
-  /* v6.91: SL nhập kho lấy TỪ PHIẾU NHẬP KHO — ĐÈ LÊN số luỹ kế Kho nhập ở trên.
-     Từ v6.91 công đoạn "Kho nhập" chỉ khép quy trình SX, không còn là chứng từ nhập kho; số thật để
-     chia giá thành là số trên phiếu.
-     SoLuongChinh theo ĐƠN VỊ CHÍNH -> phải × LoaiRi khi đơn vị chính là đơn vị GỘP, vì GiaVon lưu
-     theo 1 ĐƠN VỊ GỐC (cùng đơn vị với GiaBan). Quên bước này là giá vốn sai đúng LoaiRi lần. */
-  if (coPhieuNK) {
-    (await pool.request().query(`
-      SELECT ct.MaHangID,
-             SUM(ct.SoLuongChinh * CASE
-                   WHEN LOWER(LTRIM(RTRIM(h.DonViCoBan))) =
-                        LOWER(LTRIM(RTRIM(ISNULL(NULLIF(LTRIM(RTRIM(h.DonViQuyDoi)), N''), N'ri'))))
-                        AND ISNULL(h.LoaiRi, 1) > 0
-                   THEN ISNULL(h.LoaiRi, 1) ELSE 1 END) AS SLCai
-      FROM PhieuNhapKhoHangChiTiet ct
-      JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID AND p.TrangThai <> N'Đã hủy'
-      JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
-      GROUP BY ct.MaHangID`)).recordset
-      .forEach(r => { if (so(r.SLCai) > 0) slCaiTheoMa.set(r.MaHangID, so(r.SLCai)); });
-  }
+     ⚠️ TRUOC DAY o day tu tinh `tongCong / slCai` voi mot mau so RIENG (luy ke cong doan Kho nhap).
+     Hai hau qua:
+       - Man "Gia thanh san pham" (QLSX) hien mot so, bao cao ton kho hien MOT SO KHAC cho cung mot
+         lenh SX — khong ai doi chieu duoc, va nguoi dung doc ra thanh "bao cao dang lay Tong chi phi".
+       - Mau so chia sai (vd = 1) la gia von thanh dung TONG CHI PHI ca lenh, sai hang tram lan.
 
+     Ly do cu de KHONG dung giaThanh1SP la: slDungTinh co the theo don vi RI nen giaThanh1SP la gia 1
+     RI. Ly do do DA HET HIEU LUC tu v6.91.1: tinhGiaThanh() nay lay SL nhap kho TU PHIEU NHAP KHO va
+     DA QUY VE CAI (xem qlsx.js, khoi "SL hoan thanh"). Nen giaThanh1SP la GIA 1 CAI - dung don vi voi
+     GiaBan va GiaVonHangHoa.GiaVon.
+
+     => Mot so duy nhat, hien o ca hai man hinh. KHONG them lai phep chia nao o day.
+     ================================================================================================ */
   let capNhat = 0, boQua = 0, khongTinhDuoc = [];
   const giaThanhTheoDon = new Map();   // 1 lệnh SX ra nhiều mã thẻ kho -> chỉ tính giá thành 1 lần
   for (const r of ds) {
@@ -1136,11 +1102,12 @@ router.post('/giavon/naptulenhsx', requireAuth, requirePermission('BAOCAO', 'edi
         giaThanhTheoDon.set(r.MaDH, gt);
       }
       if (!gt) { khongTinhDuoc.push(r.MaHang + ' (không thấy lệnh SX ' + r.MaDH + ')'); continue; }
-      const tongCong = so(gt.tong && gt.tong.tongCong);
-      const slCai = so(slCaiTheoMa.get(r.MaHangID));
-      if (!(slCai > 0)) { khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa có phiếu nhập kho nào nên chưa chốt được giá vốn)'); continue; }
-      const g = tongCong / slCai;
-      if (!(so(g) > 0)) { khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa đủ số liệu giá thành)'); continue; }
+      const g = so(gt.giaThanh1SP);
+      if (!(g > 0)) {
+        khongTinhDuoc.push(r.MaHang + ' (' + r.MaDH + ': chưa có "Giá thành 1 sản phẩm"'
+          + (gt.slDungTinh > 0 ? ' — chưa đủ số liệu chi phí' : ' — chưa có SL hoàn thành, cần lập phiếu nhập kho cho lệnh này') + ')');
+        continue;
+      }
       await pool.request()
         .input('mh', sql.Int, r.MaHangID).input('gv', sql.Decimal(18, 2), so(g))
         .input('madh', sql.NVarChar, r.MaDH)
