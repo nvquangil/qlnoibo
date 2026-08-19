@@ -1,4 +1,4 @@
-# QLNoiBo — Cài đặt từ đầu trên máy mới
+﻿# QLNoiBo — Cài đặt từ đầu trên máy mới
 
 Tài liệu này chỉ nói **cách dựng hệ thống lên từ con số không**. Lịch sử sửa lỗi và ghi chú từng
 phiên bản nằm ở `HUONG_DAN_CAI_DAT.md` (hơn 5.000 dòng) — không cần đọc khi cài máy mới.
@@ -69,24 +69,49 @@ SESSION_SECRET=<chuỗi ngẫu nhiên dài, tự đặt>
 
 ---
 
-## 5. Dựng toàn bộ bảng — MỘT LỆNH
+## 5. Dựng toàn bộ bảng
+
+### Cách 1 — chạy MỘT FILE SQL trong SSMS (dùng khi cài máy mới)
+
+Mở `database\CAI_DAT_DAY_DU.sql` trong SQL Server Management Studio, **chọn đúng database
+`QLNoiBo`** ở ô chọn database trên thanh công cụ, bấm **Execute (F5)**.
+
+Một file duy nhất (~363 KB), đã gộp sẵn `schema.sql` + toàn bộ 80 migration theo đúng thứ tự.
+Không cần Node, không phải mở 80 file. Tab **Messages** in ra từng bước:
+
+```
+>>> [1/81] schema.sql
+>>> [2/81] migration_v2.sql
+...
+>>> [81/81] migration_v680.sql
+=== CAI DAT XONG ===
+```
+
+Đứt ở đâu thì dòng `>>>` cuối cùng cho biết file nào lỗi.
+
+> File gộp **sinh tự động, không sửa tay** — sửa vào đó thì lần sinh sau mất sạch.
+> Thêm migration mới (vd `migration_v681.sql`) thì sinh lại:
+> ```cmd
+> cd D:\QLSX\database
+> node tao_file_cai_dat.js
+> ```
+
+### Cách 2 — chạy bằng Node (khi muốn theo dõi từng file)
 
 ```cmd
 cd D:\QLSX\database
 node chay_migration.js --schema
 ```
 
-Lệnh này chạy `schema.sql` rồi **80 file migration theo đúng thứ tự**, và ghi lại từng file đã chạy
-vào bảng `MigrationDaChay`.
+Chạy `schema.sql` rồi 80 migration theo thứ tự, và **ghi lại từng file đã chạy** vào bảng
+`MigrationDaChay`. Đứt giữa chừng: sửa lỗi rồi chạy lại `node chay_migration.js` — nó **tiếp từ
+chỗ dang dở**, không chạy lại từ đầu.
 
 Xem trước thứ tự mà không đụng vào CSDL:
 
 ```cmd
 node chay_migration.js --danh-sach
 ```
-
-Nếu đứt giữa chừng: sửa lỗi rồi chạy lại `node chay_migration.js` — nó **tiếp từ chỗ dang dở**,
-không chạy lại từ đầu.
 
 ### Nâng cấp máy đang chạy (không phải cài mới)
 
@@ -96,6 +121,11 @@ node chay_migration.js
 ```
 
 Chỉ chạy những migration chưa chạy.
+
+> ⚠️ **Máy đang chạy thì TUYỆT ĐỐI KHÔNG dùng `CAI_DAT_DAY_DU.sql`.** File đó để dựng CSDL trống.
+> Nâng cấp phải đi đường `chay_migration.js` để chỉ chạy đúng phần còn thiếu.
+>
+> Tóm lại: **file gộp = cài mới**, **file riêng = nâng cấp**.
 
 > ⚠️ **Máy đang chạy thật (D:\QLSX) trước giờ chạy migration bằng tay**, nên bảng `MigrationDaChay`
 > chưa có gì. Lần **đầu tiên** dùng công cụ này trên máy đó phải chạy:
@@ -175,3 +205,4 @@ Chạy trong `D:\QLSX\backend`. Tất cả đều **chạy thử trước**, th�
 | Bấm nút không thấy gì xảy ra | Handler async văng giữa chừng — mở **F12 → Console** xem lỗi |
 | Không nối được SQL | Chưa bật TCP/IP, hoặc chưa bật SQL Server Authentication, hoặc sai tên instance trong `DB_SERVER` |
 | Vòng lặp chuyển hướng HTTPS | Đang chạy sau Cloudflare — xem `TRUST_PROXY` và `HTTPS_HOSTS` trong `.env` |
+
