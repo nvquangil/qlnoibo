@@ -457,10 +457,14 @@ window.ModuleKhoHang = (function () {
   // Loai hang: NhaSanXuat (lien ket 1 don hang san xuat, goi y ma hang/ten hang/mau chinh) hoac
   // DatNgoai (khai bao tay don vi tinh). Moi lan mo form deu dung bien LOCAL (khong global) nen
   // khong bao gio sot du lieu/dong mau cua lan mo truoc - xem ghi chu o cho goi openItemForm().
-  async function openItemForm(row, perm, colors) {
+  async function openItemForm(row, perm, colors, tuPhieuNhap) {
+    /* v6.84: `tuPhieuNhap` = { PhieuNKID, SoPhieu, dong: [...] } — mở form TẠO MỚI với mã hàng lấy
+       từ một phiếu nhập kho. Dùng cho nút "Tạo thẻ kho" ở tab Phiếu nhập kho và cho ô chọn phiếu
+       nhập ngay trong form này. */
     await taiDonViTinh();   // v6.31: 2 ô đơn vị lấy từ Danh mục → Đơn vị tính
     const isEdit = !!row;
-    const loaiHangInit = isEdit && row.LoaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai';
+    const loaiHangInit = (isEdit && row.LoaiHang === 'NhaSanXuat') || (!isEdit && tuPhieuNhap)
+      ? 'NhaSanXuat' : 'DatNgoai';
     // v6.24.2: hệ số quy đổi của CHÍNH mã đang mở -> các ô nhập theo Ri dùng chung hệ số này.
     heSoRiHienTai = isEdit ? (Number(row.LoaiRi) || 1) : 1;
     dvChinhHienTai = (isEdit && row.DonViCoBan) ? row.DonViCoBan : 'Cái';
@@ -488,7 +492,8 @@ window.ModuleKhoHang = (function () {
                Thực tế dùng: lập phiếu nhập kho trước (mã hàng sinh ra ở đó), vào thẻ kho sau chỉ để
                bổ sung giá bán / ảnh / danh mục. */''}
           <div class="form-row" id="blockPhieuNhap" style="${loaiHangInit === 'NhaSanXuat' ? '' : 'display:none;'}">
-            <label>Phiếu nhập kho của mã hàng này</label>
+            <label>${isEdit ? 'Phiếu nhập kho của mã hàng này' : 'Tạo từ phiếu nhập kho'}</label>
+            ${isEdit ? '' : `<select id="selPhieuNhap" style="margin-bottom:6px;"><option value="">-- Đang tải danh sách phiếu nhập... --</option></select>`}
             <div id="dsPhieuNhap" class="empty-hint">—</div>
           </div>
           <div class="form-row" id="blockNhaSanXuat" style="display:none;">
@@ -746,11 +751,81 @@ window.ModuleKhoHang = (function () {
     /* Nạp danh sách phiếu nhập kho của mã hàng đang sửa. Tạo mới thì chưa có mã hàng nên chưa có gì
        để tra — hiện dòng nhắc thay vì để trống khó hiểu. */
     let daNapPhieuNhap = false;
+
+    /* Điền các ô của form theo MỘT DÒNG hàng của phiếu nhập. CHỈ điền mã/tên/ĐVT — KHÔNG điền số
+       lượng: phiếu nhập lưu xong là đã cộng tồn, điền vào đây nữa là tồn đếm hai lần. */
+    function dienTheoDongPhieu(d2, soPhieu) {
+      const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
+      dat('#inpMaHang', d2.MaHang);
+      dat('#inpTenHang', d2.TenHang);
+      const oDvcb = modal.querySelector('[name="donViCoBan"]');
+      if (oDvcb && d2.DonViCoBan) oDvcb.value = d2.DonViCoBan;
+      const oDvqd = modal.querySelector('[name="donViQuyDoi"]');
+      if (oDvqd && d2.DonViQuyDoi) oDvqd.value = d2.DonViQuyDoi;
+      dat('#inpLoaiRi', d2.LoaiRi);
+      toast(`Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Số lượng KHÔNG điền — phiếu nhập đã cộng tồn rồi.`, 'success');
+    }
+
+    /* TẠO MỚI: nạp danh sách phiếu nhập loại SẢN XUẤT, chọn phiếu -> hiện các mã hàng trong phiếu
+       để bấm "Dùng mã này". */
+    async function napChonPhieuNhap() {
+      const sel = modal.querySelector('#selPhieuNhap');
+      const o = modal.querySelector('#dsPhieuNhap');
+      if (!sel || !o) return;
+      try {
+        const ds = (await apiGet('/api/nhapkho/phieu?loaiNhap=SanXuat')).data || [];
+        const con = ds.filter(p => p.TrangThai !== 'Đã hủy');
+        if (!con.length) {
+          sel.innerHTML = '<option value="">-- Chưa có phiếu nhập từ sản xuất --</option>';
+          o.innerHTML = 'Chưa có phiếu nhập kho nào từ sản xuất. Lập ở <b>tab Phiếu nhập kho</b> trước.';
+          return;
+        }
+        sel.innerHTML = '<option value="">-- Chọn phiếu nhập kho --</option>'
+          + con.map(p => `<option value="${p.PhieuNKID}">${escapeHtml(p.SoPhieu)} — ${fmtDate(p.NgayNhap)}${p.MaDH ? ' — ' + escapeHtml(p.MaDH) : ''} (${p.SoDong} dòng)</option>`).join('');
+        o.innerHTML = 'Chọn một phiếu nhập ở trên để lấy mã hàng.';
+        sel.onchange = async () => {
+          if (!sel.value) { o.innerHTML = 'Chọn một phiếu nhập ở trên để lấy mã hàng.'; return; }
+          o.textContent = 'Đang tải...';
+          try {
+            const kq = await apiGet('/api/nhapkho/phieu/' + sel.value);
+            const dong = (kq.data && kq.data.chiTiet) || [];
+            const sp = (kq.data && kq.data.header && kq.data.header.SoPhieu) || '';
+            if (!dong.length) { o.innerHTML = 'Phiếu này không có dòng hàng nào.'; return; }
+            o.classList.remove('empty-hint');
+            o.innerHTML = `<div class="table-wrap" style="max-height:180px;overflow:auto;">
+              <table class="data-table phieu-ke"><thead><tr>
+                <th>Mã hàng</th><th>Tên hàng</th><th class="num">SL</th><th>ĐVT</th><th style="width:120px;"></th>
+              </tr></thead><tbody>
+                ${dong.map((d2, i) => `<tr>
+                  <td><b>${escapeHtml(d2.MaHang || '')}</b></td>
+                  <td>${escapeHtml(d2.TenHang || '')}</td>
+                  <td class="num">${fmtNumber(d2.SoLuong)}</td>
+                  <td>${escapeHtml(d2.DonVi || '')}</td>
+                  <td><button type="button" class="btn small pn-dung" data-i="${i}">Dùng mã này</button></td>
+                </tr>`).join('')}
+              </tbody></table></div>`;
+            o.querySelectorAll('.pn-dung').forEach(b2 => b2.onclick = () =>
+              dienTheoDongPhieu(dong[Number(b2.dataset.i)], sp));
+            // Chỉ 1 dòng thì điền luôn, khỏi bắt bấm thêm một nút vô nghĩa.
+            if (dong.length === 1) dienTheoDongPhieu(dong[0], sp);
+          } catch (err) { o.innerHTML = 'Không tải được phiếu: ' + escapeHtml(err.message); }
+        };
+        // Mở form từ nút "Tạo thẻ kho" ở tab Phiếu nhập kho -> chọn sẵn đúng phiếu đó.
+        if (tuPhieuNhap && tuPhieuNhap.PhieuNKID) {
+          sel.value = String(tuPhieuNhap.PhieuNKID);
+          await sel.onchange();
+        }
+      } catch (err) {
+        o.innerHTML = 'Không tải được danh sách phiếu nhập: ' + escapeHtml(err.message);
+      }
+    }
+
     async function napPhieuNhap() {
       const o = modal.querySelector('#dsPhieuNhap');
       if (!o || daNapPhieuNhap) return;
-      if (!isEdit || !row || !row.MaHangID) {
-        o.innerHTML = 'Mã hàng mới chưa có phiếu nhập nào. Hàng nhà sản xuất vào kho bằng <b>tab Phiếu nhập kho</b> — mã hàng mới cũng tạo ngay trên phiếu đó.';
+      if (!isEdit) { daNapPhieuNhap = true; await napChonPhieuNhap(); return; }
+      if (!row || !row.MaHangID) {
+        o.innerHTML = 'Mã hàng mới chưa có phiếu nhập nào.';
         daNapPhieuNhap = true;
         return;
       }
@@ -3018,5 +3093,17 @@ window.ModuleKhoHang = (function () {
     });
   }
 
-  return { render, getTabs };
+  /* v6.84: cho tab Phiếu nhập kho gọi sang — mở form TẠO THẺ KHO với phiếu nhập chọn sẵn.
+     Không truyền `perm` từ bên ngoài: quyền phải lấy theo CHÍNH người đang đăng nhập ở màn thẻ kho,
+     tin theo tham số bên gọi là mở đường lách quyền. */
+  async function taoTheKhoTuPhieu(phieuNKID) {
+    const rawPerm = currentUser && currentUser.isAdmin
+      ? { canView: true, canCreate: true, canEdit: true, canDelete: true }
+      : ((currentUser && currentUser.permissions && currentUser.permissions.KHOHANG) || {});
+    const p = effectivePerm(currentUser, 'KHOHANG', 'items', rawPerm);
+    if (!p.canCreate) { toast('Bạn không có quyền tạo thẻ kho.', 'error'); return; }
+    await openItemForm(null, p, null, { PhieuNKID: phieuNKID });
+  }
+
+  return { render, getTabs, taoTheKhoTuPhieu };
 })();

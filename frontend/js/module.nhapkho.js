@@ -106,6 +106,9 @@
               <button class="btn small secondary act-view" data-id="${r.PhieuNKID}">Xem</button>
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-sua" data-id="${r.PhieuNKID}">Sửa</button>` : ''}
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small warn nk-huy" data-id="${r.PhieuNKID}">Hủy</button>` : ''}
+              ${/* v6.84: sang tab Thẻ kho, mở form tạo thẻ kho với PHIẾU NÀY chọn sẵn. Chỉ hiện cho
+                   phiếu TỪ SẢN XUẤT — hàng mua ngoài thì mã hàng vốn đã có trong danh mục. */''}
+              ${r.LoaiNhap === 'SanXuat' && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-tao-the" data-id="${r.PhieuNKID}">Tạo thẻ kho</button>` : ''}
               ${perm.canDelete ? `<button class="btn small danger nk-xoa" data-id="${r.PhieuNKID}">Xóa</button>` : ''}
             </td>
           </tr>`).join('')}
@@ -131,6 +134,7 @@
       toast(kq.message || 'Đã xóa.', kq.success ? 'success' : 'error');
       if (kq.success) taiBang();
     });
+    hop.querySelectorAll('.nk-tao-the').forEach(b => b.onclick = () => sangTaoTheKho(b.dataset.id));
     // v6.66.1: bấm cả dòng cũng mở chi tiết (dùng chung hàm ở common.js)
     if (typeof ganBamDongXemChiTiet === 'function') ganBamDongXemChiTiet(hop);
   }
@@ -362,6 +366,24 @@
   }
 
   /* ================================================================================================
+     v6.84: SANG TAB THẺ KHO ĐỂ TẠO THẺ KHO TỪ PHIẾU NÀY.
+     Phải ĐỔI TAB TRƯỚC rồi mới mở form: form thẻ kho gắn vào #khBody của tab Thẻ kho — mở khi đang
+     ở tab Phiếu nhập kho thì đóng form ra là thấy màn hình sai, và các ô của form không tìm thấy
+     phần tử cha để bám.
+     switchModule là hàm toàn cục của app.js; dò trước rồi mới gọi để nếu app.js đổi cách làm thì
+     báo lỗi rõ ràng chứ không im lặng không có gì xảy ra.
+     ================================================================================================ */
+  async function sangTaoTheKho(phieuNKID) {
+    if (typeof switchModule !== 'function' || !window.ModuleKhoHang || !window.ModuleKhoHang.taoTheKhoTuPhieu) {
+      toast('Chưa nạp đủ module — copy module.khohang.js rồi Ctrl+F5.', 'error');
+      return;
+    }
+    closeAllModals();                       // đang mở popup xem phiếu thì đóng hết trước khi đổi tab
+    await switchModule('KHOHANG', 'items');
+    await window.ModuleKhoHang.taoTheKhoTuPhieu(phieuNKID);
+  }
+
+  /* ================================================================================================
      XEM CHI TIẾT + IN — kẻ bảng, dùng CHUNG một hàm cho cả màn xem và bản in
      ================================================================================================ */
   function dauPhieuHtml(h) {
@@ -430,6 +452,7 @@
       <div class="modal-foot">
         <button class="btn secondary" id="nkvDong">Đóng</button>
         ${perm.canEdit && h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvSua">Sửa</button>' : ''}
+        ${h.LoaiNhap === 'SanXuat' && h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvTaoThe">Tạo thẻ kho</button>' : ''}
         <button class="btn secondary" id="nkvXls">Xuất Excel</button>
         <button class="btn" id="nkvIn">In phiếu</button>
       </div>`, { rong: true });
@@ -438,6 +461,8 @@
     modal.querySelector('#nkvIn').onclick = () => inPhieu(h, ct);
     const bSua = modal.querySelector('#nkvSua');
     if (bSua) bSua.onclick = () => { closeModal(); openForm(id); };
+    const bThe = modal.querySelector('#nkvTaoThe');
+    if (bThe) bThe.onclick = () => sangTaoTheKho(id);
   }
 
   function inPhieu(h, ct) {
