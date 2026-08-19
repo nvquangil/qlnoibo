@@ -179,6 +179,8 @@ window.ModuleKhoHang = (function () {
     const body = document.getElementById('khBody');
     const res = await apiGet('/api/khohang/items');
     const { tongHop, chiTiet } = res.data;
+    // v6.86: nhớ danh sách mã đã có, để form biết mã lấy từ phiếu nhập là mã MỚI hay mã ĐÃ TỒN TẠI.
+    dsMaDaCo = new Set((tongHop || []).map(r => String(r.MaHang || '').normalize('NFC').trim().toUpperCase()));
     if (res.data.tyLeCK) tyLeCK = res.data.tyLeCK;   // v6.21: tỷ lệ CK dùng chung
     // v5.4 (muc 1): "Loai hang" (NhaSanXuat/DatNgoai) doi ten hien thi thanh "Nguon hang" de nhuong lai
     // nhan "Loai hang" cho truong nhom san pham MOI (TenNhom, vd Quan be trai/gai) - xem migration_v54.sql.
@@ -754,7 +756,16 @@ window.ModuleKhoHang = (function () {
 
     /* Điền các ô của form theo MỘT DÒNG hàng của phiếu nhập. CHỈ điền mã/tên/ĐVT — KHÔNG điền số
        lượng: phiếu nhập lưu xong là đã cộng tồn, điền vào đây nữa là tồn đếm hai lần. */
-    function dienTheoDongPhieu(d2, soPhieu) {
+    async function dienTheoDongPhieu(d2, soPhieu) {
+      /* v6.86: mã lấy từ phiếu nhập THƯỜNG ĐÃ TỒN TẠI — phiếu nhập kho lưu xong là đã tạo mã hàng.
+         Cứ điền vào form TẠO MỚI rồi để người dùng bấm Lưu thì luôn nhận "Mã hàng đã tồn tại, dùng
+         chức năng Sửa" (đúng lỗi v6.84). Nên dò trước: đã có thì chuyển thẳng sang form SỬA mã đó. */
+      const chuan = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
+      if (!isEdit && dsMaDaCo.has(chuan(d2.MaHang))) {
+        closeModal();
+        await moTheKhoTheoMa(d2.MaHang, null);
+        return;
+      }
       const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
       dat('#inpMaHang', d2.MaHang);
       dat('#inpTenHang', d2.TenHang);
@@ -805,15 +816,23 @@ window.ModuleKhoHang = (function () {
                 </tr>`).join('')}
               </tbody></table></div>`;
             o.querySelectorAll('.pn-dung').forEach(b2 => b2.onclick = () =>
-              dienTheoDongPhieu(dong[Number(b2.dataset.i)], sp));
+              dienTheoDongPhieu(dong[Number(b2.dataset.i)], sp).catch(err => toast(err.message, 'error')));
             // Chỉ 1 dòng thì điền luôn, khỏi bắt bấm thêm một nút vô nghĩa.
-            if (dong.length === 1) dienTheoDongPhieu(dong[0], sp);
+            if (dong.length === 1) await dienTheoDongPhieu(dong[0], sp);
           } catch (err) { o.innerHTML = 'Không tải được phiếu: ' + escapeHtml(err.message); }
         };
         // Mở form từ nút "Tạo thẻ kho" ở tab Phiếu nhập kho -> chọn sẵn đúng phiếu đó.
         if (tuPhieuNhap && tuPhieuNhap.PhieuNKID) {
           sel.value = String(tuPhieuNhap.PhieuNKID);
           await sel.onchange();
+          /* Phiếu nhiều mã mà bên gọi đã chỉ rõ mã nào thì điền đúng mã đó, khỏi bắt bấm lại. */
+          if (tuPhieuNhap.maHang) {
+            const nut = [...o.querySelectorAll('.pn-dung')].find((b2, i2) => {
+              const tr = b2.closest('tr');
+              return tr && tr.querySelector('b') && tr.querySelector('b').textContent.trim() === String(tuPhieuNhap.maHang).trim();
+            });
+            if (nut) nut.click();
+          }
         }
       } catch (err) {
         o.innerHTML = 'Không tải được danh sách phiếu nhập: ' + escapeHtml(err.message);
@@ -3093,16 +3112,77 @@ window.ModuleKhoHang = (function () {
     });
   }
 
-  /* v6.84: cho tab Phiếu nhập kho gọi sang — mở form TẠO THẺ KHO với phiếu nhập chọn sẵn.
-     Không truyền `perm` từ bên ngoài: quyền phải lấy theo CHÍNH người đang đăng nhập ở màn thẻ kho,
-     tin theo tham số bên gọi là mở đường lách quyền. */
-  async function taoTheKhoTuPhieu(phieuNKID) {
+  /* ================================================================================================
+     v6.86: MỞ THẺ KHO CỦA MÃ HÀNG TỪ MỘT PHIẾU NHẬP KHO.
+     ⚠️ SỬA LỖI v6.84 "Mã hàng đã tồn tại, dùng chức năng Sửa":
+     Phiếu nhập kho lưu xong LÀ ĐÃ TẠO mã hàng trong danh mục (nhapkho.js timHoacTaoMaHang). Nút
+     "Tạo thẻ kho" của v6.84 lại mở form TẠO MỚI ⇒ lần nào cũng trùng mã, không bao giờ lưu được.
+     Nay tự dò: mã ĐÃ CÓ thì mở form SỬA đúng mã đó (để bổ sung giá bán / ảnh / danh mục — đúng
+     việc người dùng cần làm ở thẻ kho); CHƯA CÓ thì mới mở form tạo mới.
+     Phiếu nhiều mã hàng thì hỏi chọn mã nào, không tự đoán.
+
+     Không nhận `perm` từ bên gọi: quyền phải lấy theo CHÍNH người đang đăng nhập, tin theo tham số
+     bên ngoài truyền vào là mở đường lách quyền.
+     ================================================================================================ */
+  let dsMaDaCo = new Set();   // v6.86: mã hàng đã có trong thẻ kho (chữ in, đã bỏ khoảng trắng)
+
+  function quyenTheKho() {
     const rawPerm = currentUser && currentUser.isAdmin
       ? { canView: true, canCreate: true, canEdit: true, canDelete: true }
       : ((currentUser && currentUser.permissions && currentUser.permissions.KHOHANG) || {});
-    const p = effectivePerm(currentUser, 'KHOHANG', 'items', rawPerm);
+    return effectivePerm(currentUser, 'KHOHANG', 'items', rawPerm);
+  }
+
+  async function moTheKhoTheoMa(maHang, phieuNKID) {
+    const p = quyenTheKho();
+    const res = await apiGet('/api/khohang/items');
+    const { tongHop, chiTiet } = res.data || {};
+    if (res.data && res.data.tyLeCK) tyLeCK = res.data.tyLeCK;
+    const chuan = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
+    dsMaDaCo = new Set((tongHop || []).map(r => String(r.MaHang || '').normalize('NFC').trim().toUpperCase()));
+    const row = (tongHop || []).find(r => chuan(r.MaHang) === chuan(maHang));
+    if (row) {
+      if (!p.canEdit) { toast(`Mã ${maHang} đã có thẻ kho, nhưng bạn không có quyền sửa.`, 'error'); return; }
+      toast(`Mã ${maHang} đã có thẻ kho — mở để bổ sung giá bán / ảnh / danh mục.`, 'info');
+      await openItemForm(row, p, (chiTiet || []).filter(c => c.MaHangID === row.MaHangID));
+      return;
+    }
     if (!p.canCreate) { toast('Bạn không có quyền tạo thẻ kho.', 'error'); return; }
-    await openItemForm(null, p, null, { PhieuNKID: phieuNKID });
+    await openItemForm(null, p, null, { PhieuNKID: phieuNKID, maHang });
+  }
+
+  async function taoTheKhoTuPhieu(phieuNKID) {
+    let dong = [];
+    try {
+      const kq = await apiGet('/api/nhapkho/phieu/' + phieuNKID);
+      dong = (kq.data && kq.data.chiTiet) || [];
+    } catch (err) { toast('Không đọc được phiếu nhập: ' + err.message, 'error'); return; }
+    if (!dong.length) { toast('Phiếu nhập này không có dòng hàng nào.', 'error'); return; }
+
+    // Gộp theo mã hàng: một mã nhập nhiều dòng (nhiều đợt) thì chỉ hỏi một lần.
+    const ma = [...new Set(dong.map(d => d.MaHang).filter(Boolean))];
+    if (ma.length === 1) { await moTheKhoTheoMa(ma[0], phieuNKID); return; }
+
+    const modal = openModal(`
+      <div class="modal-head"><h3>Phiếu này có ${ma.length} mã hàng — chọn mã cần mở thẻ kho</h3></div>
+      <div class="modal-body">
+        <div class="table-wrap" style="max-height:320px;overflow:auto;">
+        <table class="data-table phieu-ke"><thead><tr>
+          <th>Mã hàng</th><th>Tên hàng</th><th style="width:130px;"></th>
+        </tr></thead><tbody>
+          ${ma.map(m => {
+            const d = dong.find(x => x.MaHang === m) || {};
+            return `<tr><td><b>${escapeHtml(m)}</b></td><td>${escapeHtml(d.TenHang || '')}</td>
+              <td><button type="button" class="btn small tk-chon" data-ma="${escapeHtml(m)}">Mở thẻ kho</button></td></tr>`;
+          }).join('')}
+        </tbody></table></div>
+      </div>
+      <div class="modal-foot"><button class="btn secondary" id="tkcDong">Đóng</button></div>`, { rong: true });
+    modal.querySelector('#tkcDong').onclick = () => closeModal();
+    modal.querySelectorAll('.tk-chon').forEach(b => b.onclick = async () => {
+      closeModal();
+      await moTheKhoTheoMa(b.dataset.ma, phieuNKID);
+    });
   }
 
   return { render, getTabs, taoTheKhoTuPhieu };
