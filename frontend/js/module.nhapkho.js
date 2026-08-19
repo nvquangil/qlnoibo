@@ -6,8 +6,12 @@
      - Từ NHÀ CUNG CẤP : hàng mua ngoài, có đơn giá → TĂNG công nợ phải trả cho NCC.
      - Từ SẢN XUẤT     : hàng xưởng mình làm ra, gắn lệnh SX, KHÔNG sinh công nợ.
 
-   MÃ HÀNG CHƯA CÓ thì tích ô "Tạo mã mới" ngay tại dòng — khai tên hàng + ĐVT là xong, không phải
-   bỏ dở phiếu để sang màn Danh mục rồi quay lại.
+   ⚠️ v6.87 — PHIẾU NHẬP CHỈ LÀ PHIẾU NHẬP, KHÔNG TẠO MÃ HÀNG.
+   Mã hàng chưa có trong danh mục thì cứ gõ vào + khai Tên hàng: dòng đó lưu ở trạng thái
+   "⏳ chờ tạo thẻ kho" — CHƯA cộng tồn, CHƯA tạo gì trong danh mục. Khi nào thực sự tạo thẻ kho cho
+   mã đó (nút "Tạo thẻ kho") thì hệ thống mới gắn mã vào dòng và cộng tồn lúc ấy.
+   Bản trước (v6.78–v6.86) tự tạo mã hàng ngay khi lưu phiếu, nên nút "Tạo thẻ kho" luôn báo
+   "Mã hàng đã tồn tại" — hai chức năng đá nhau.
 
    Form và bản in đều KẺ BẢNG theo bộ lớp .phieu-form / .phieu-ke / .phieu-tong (style.css) — cùng
    một kiểu với phiếu nhập lại, để mọi phiếu trong hệ thống nhìn như nhau.
@@ -98,7 +102,7 @@
             <td>${nhanLoai(r.LoaiNhap)}</td>
             <td>${escapeHtml(r.LoaiNhap === 'SanXuat' ? (r.MaDH || '') : (r.TenNCC || ''))}</td>
             <td>${escapeHtml(r.SoHoaDon || '')}</td>
-            <td class="num">${fmtNumber(r.SoDong)}</td>
+            <td class="num">${fmtNumber(r.SoDong)}${Number(r.SoDongCho) ? ` <span class="badge" style="background:#fff3cd;color:#8a6d3b;">⏳ ${r.SoDongCho} chờ thẻ kho</span>` : ''}</td>
             <td class="num">${fmtNumber(r.TongSLCai)}</td>
             <td class="num">${r.LoaiNhap === 'SanXuat' ? '' : fmtTien(r.TongTien)}</td>
             <td>${r.TrangThai === 'Đã hủy' ? '<span class="badge red">Đã hủy</span>' : '<span class="badge green">Hoàn thành</span>'}</td>
@@ -106,9 +110,10 @@
               <button class="btn small secondary act-view" data-id="${r.PhieuNKID}">Xem</button>
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-sua" data-id="${r.PhieuNKID}">Sửa</button>` : ''}
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small warn nk-huy" data-id="${r.PhieuNKID}">Hủy</button>` : ''}
-              ${/* v6.84: sang tab Thẻ kho, mở form tạo thẻ kho với PHIẾU NÀY chọn sẵn. Chỉ hiện cho
-                   phiếu TỪ SẢN XUẤT — hàng mua ngoài thì mã hàng vốn đã có trong danh mục. */''}
-              ${r.LoaiNhap === 'SanXuat' && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-tao-the" data-id="${r.PhieuNKID}">Tạo thẻ kho</button>` : ''}
+              ${/* v6.87: nút này chỉ hiện khi phiếu CÒN dòng chờ tạo thẻ kho — tức là đúng lúc cần
+                   làm việc gì. Trước đây hiện cho mọi phiếu từ sản xuất nên bấm vào thường chỉ nhận
+                   thông báo "mã đã tồn tại". Mã đã có thẻ kho rồi thì sửa ở tab Thẻ kho. */''}
+              ${Number(r.SoDongCho) && r.TrangThai !== 'Đã hủy' ? `<button class="btn small warn nk-tao-the" data-id="${r.PhieuNKID}">Tạo thẻ kho (${r.SoDongCho})</button>` : ''}
               ${perm.canDelete ? `<button class="btn small danger nk-xoa" data-id="${r.PhieuNKID}">Xóa</button>` : ''}
             </td>
           </tr>`).join('')}
@@ -191,7 +196,10 @@
           <button type="button" class="btn small secondary" id="nkfThemDong">+ Thêm dòng</button>
         </div>
         <div class="empty-hint" style="margin:0 0 6px;">
-          Mã hàng chưa có trong danh mục thì tích <b>Tạo mã mới</b> ở dòng đó rồi khai Tên hàng + ĐVT.
+          Mã đã có trong danh mục → cộng tồn ngay khi lưu phiếu.
+          Mã <b>chưa có</b> → cứ gõ vào và khai Tên hàng, dòng đó lưu ở trạng thái
+          <b style="color:#8a6d3b;">⏳ chờ tạo thẻ kho</b>: phiếu vẫn lưu bình thường nhưng
+          <b>chưa cộng tồn</b>. Bấm <b>Tạo thẻ kho</b> ở danh sách phiếu để tạo mã và cộng tồn.
         </div>
         <div id="nkfBang" class="table-wrap" style="max-height:340px;overflow:auto;"></div>
         <div id="nkfTong" style="margin-top:10px;text-align:right;font-weight:700;"></div>
@@ -251,16 +259,23 @@
     }
 
     function dongHtml(d, i, sx) {
-      const dsDV = [d.donViCoBan || 'Cái', d.donViQuyDoi || 'Ri'].filter((x, k, a) => x && a.indexOf(x) === k);
+      /* v6.87: dòng CHƯA có mã hàng trong danh mục = dòng chờ tạo thẻ kho.
+         ĐVT của mã đã có thì chỉ được chọn trong 2 đơn vị của CHÍNH mã đó (gõ đơn vị lạ là tồn kho
+         quy đổi sai). Mã chưa có thì chưa biết 2 đơn vị đó là gì -> cho chọn cả danh mục ĐVT. */
+      const cho = !d.maHangId;
+      const dsDV = cho
+        ? ((dm.donVi || []).map(x => x.TenDonVi).filter(Boolean).length
+            ? dm.donVi.map(x => x.TenDonVi).filter(Boolean) : ['Cái', 'Ri'])
+        : [d.donViCoBan || 'Cái', d.donViQuyDoi || 'Ri'].filter((x, k, a) => x && a.indexOf(x) === k);
       return `<tr data-idx="${d.idx}">
         <td>${i + 1}</td>
         <td>
           <input type="text" class="nk-ma" list="nkDlMaHang" value="${escapeHtml(d.maHang || '')}" placeholder="Gõ hoặc chọn" style="width:100%;">
-          <label style="display:flex;gap:4px;align-items:center;font-size:11px;margin-top:2px;white-space:nowrap;">
-            <input type="checkbox" class="nk-moi" ${d.taoMoi ? 'checked' : ''}> Tạo mã mới
-          </label>
+          ${d.maHang && cho
+            ? '<div style="font-size:11px;color:#8a6d3b;margin-top:2px;">⏳ chưa có trong danh mục — chờ tạo thẻ kho</div>'
+            : (d.maHangId ? '<div style="font-size:11px;color:#2e7d32;margin-top:2px;">✔ đã có thẻ kho</div>' : '')}
         </td>
-        <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="tự điền khi chọn mã" style="width:100%;"></td>
+        <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="${cho ? 'BẮT BUỘC khai cho mã mới' : 'tự điền khi chọn mã'}" style="width:100%;"></td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
         <td><select class="nk-dv" style="width:100%;">${dsDV.map(x => `<option${d.donVi === x ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}</select></td>
         ${sx ? '' : `<td><input type="number" class="nk-gia" min="0" step="1" value="${d.donGia != null ? d.donGia : ''}" style="width:100%;"></td>
@@ -283,13 +298,13 @@
           if (mh) {
             d.maHangId = mh.MaHangID; d.tenHang = mh.TenHang; d.loaiRi = mh.LoaiRi;
             d.donViCoBan = mh.DonViCoBan; d.donViQuyDoi = mh.DonViQuyDoi;
-            d.taoMoi = false;
           } else {
-            d.maHangId = null;
+            /* Không dò ra: để dòng ở trạng thái chờ tạo thẻ kho. KHÔNG xóa tên hàng người dùng đã gõ,
+               và KHÔNG tự tạo mã — mã hàng mới chỉ sinh ra ở màn Thẻ kho. */
+            d.maHangId = null; d.donViCoBan = null; d.donViQuyDoi = null;
           }
           veDong();
         };
-        tr.querySelector('.nk-moi').onchange = (e) => { d.taoMoi = e.target.checked; };
         tr.querySelector('.nk-ten').oninput = (e) => { d.tenHang = e.target.value; };
         tr.querySelector('.nk-sl').oninput = (e) => { d.soLuong = e.target.value; capNhatDong(tr, d, sx); };
         tr.querySelector('.nk-dv').onchange = (e) => { d.donVi = e.target.value; };
@@ -329,7 +344,7 @@
     $('#nkfLuu').onclick = async () => {
       const sx = $('#nkfLoai').value === 'SanXuat';
       const dong = dongForm.filter(d => Number(d.soLuong) > 0).map(d => ({
-        maHangId: d.maHangId || null, maHang: d.maHang, taoMoi: !!d.taoMoi, tenHang: d.tenHang,
+        maHangId: d.maHangId || null, maHang: d.maHang, tenHang: d.tenHang,
         mauSacId: d.mauSacId || null, tenMau: d.tenMau || null,   // v6.80: không còn ô nhập màu; để trống -> backend dùng màu mặc định
         soLuong: d.soLuong, donVi: d.donVi, donGia: sx ? 0 : d.donGia,
         loaiRi: d.loaiRi, donViCoBan: d.donViCoBan, donViQuyDoi: d.donViQuyDoi, ghiChu: d.ghiChu
@@ -418,7 +433,9 @@
       <tbody>
         ${ct.map((r, i) => `<tr>
           <td style="${G}">${i + 1}</td>
-          <td>${escapeHtml(r.MaHang || '')}</td>
+          ${/* v6.87: dòng chưa có mã hàng trong danh mục — CHƯA cộng tồn. Ghi rõ cả trên bản in để
+               thủ kho đối chiếu biết hàng đã về nhưng chưa vào sổ kho. */''}
+          <td>${escapeHtml(r.MaHang || '')}${Number(r.ChoTaoTheKho) ? '<br><span style="font-size:10px;color:#8a6d3b;">⏳ chưa tạo thẻ kho</span>' : ''}</td>
           <td>${escapeHtml(r.TenHang || '')}</td>
           <td>${escapeHtml(r.TenMau || '')}</td>
           <td style="${P}">${fmtNumber(r.SoLuong)}</td>
@@ -452,7 +469,7 @@
       <div class="modal-foot">
         <button class="btn secondary" id="nkvDong">Đóng</button>
         ${perm.canEdit && h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvSua">Sửa</button>' : ''}
-        ${h.LoaiNhap === 'SanXuat' && h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvTaoThe">Tạo thẻ kho</button>' : ''}
+        ${ct.some(r => Number(r.ChoTaoTheKho)) && h.TrangThai !== 'Đã hủy' ? '<button class="btn warn" id="nkvTaoThe">Tạo thẻ kho</button>' : ''}
         <button class="btn secondary" id="nkvXls">Xuất Excel</button>
         <button class="btn" id="nkvIn">In phiếu</button>
       </div>`, { rong: true });
@@ -479,5 +496,5 @@
       </table>`);
   }
 
-  window.ModuleNhapKho = { getTabs, render, xemPhieu };
+  window.ModuleNhapKho = { getTabs, render, xemPhieu, taiBang };
 })();
