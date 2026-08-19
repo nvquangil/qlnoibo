@@ -50,10 +50,10 @@ router.get('/catalogue', async (req, res) => {
     const giu = await layHangDangGiu(pool);
     const idList = items.map(i => i.MaHangID).join(',');
     const colorsResult = await pool.request().query(`
-      SELECT ct.MaHangID, ct.MauSacID, ms.TenMau, ct.LinkAnh, (ct.NhapCai - ct.XuatCai) AS TonCai
-      FROM TheKhoChiTietMau ct
+      SELECT ct.MaHangID, ct.MauSacID, ms.TenMau, ct.LinkAnh, ct.TonCai
+      FROM vw_TonTheoMau ct        -- v6.89: gồm cả nguồn phiếu nhập kho (migration_v682)
       JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-      WHERE ct.MaHangID IN (${idList}) AND (ct.NhapCai - ct.XuatCai) > 0
+      WHERE ct.MaHangID IN (${idList}) AND ct.TonCai > 0
       ORDER BY ms.TenMau`);
     const colorsByItem = {};
     const khaDungTheoMaHang = {};
@@ -163,10 +163,10 @@ router.get('/catalogue-danhmuc', async (req, res) => {
     const rq = pool.request();
     const thamSo = items.map((it, i) => { rq.input('id' + i, sql.Int, it.MaHangID); return '@id' + i; }).join(',');
     const colors = (await rq.query(`
-      SELECT ct.MaHangID, ct.MauSacID, ms.TenMau, ct.LinkAnh, (ct.NhapCai - ct.XuatCai) AS TonCai
-      FROM TheKhoChiTietMau ct
+      SELECT ct.MaHangID, ct.MauSacID, ms.TenMau, ct.LinkAnh, ct.TonCai
+      FROM vw_TonTheoMau ct        -- v6.89: gồm cả nguồn phiếu nhập kho (migration_v682)
       JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-      WHERE ct.MaHangID IN (${thamSo}) AND (ct.NhapCai - ct.XuatCai) > 0
+      WHERE ct.MaHangID IN (${thamSo}) AND ct.TonCai > 0
       ORDER BY ms.TenMau`)).recordset;
     // v6.23: bỏ màu đã có người đặt hết (tồn khả dụng <= 0) — xem ghi chú ở GET /catalogue.
     const giu = await layHangDangGiu(pool);
@@ -388,7 +388,7 @@ router.post('/khach/datdon', requireKhach, async (req, res) => {
       const row = (await rq.query(`
         SELECT TOP 1 h.MaHangID, ct.MauSacID, h.TenHang, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
         FROM TheKhoHangHoa h
-        JOIN TheKhoChiTietMau ct ON ct.MaHangID = h.MaHangID
+        JOIN vw_TonTheoMau ct ON ct.MaHangID = h.MaHangID   -- v6.89: có cả màu chỉ tồn tại trên phiếu nhập
         JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
         JOIN TheKhoDanhMuc d ON d.TheKhoDanhMucID = h.TheKhoDanhMucID
         WHERE h.MaHang = @mh AND ms.TenMau = @mau AND d.CongKhai = 1${await dieuKienCongKhaiMH(pool, 'h')}
@@ -432,7 +432,7 @@ router.post('/khach/datdon', requireKhach, async (req, res) => {
     for (const [key, c] of nhom.entries()) {
       const [mh, ms] = key.split(':');
       const ct = (await pool.request().input('mh', sql.Int, mh).input('ms', sql.Int, ms)
-        .query('SELECT (NhapCai - XuatCai) AS TonCon FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
+        .query('SELECT TonCai AS TonCon FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
       const ton = (ct ? Number(ct.TonCon) : 0) - (giu.theoMau.get(mh + '|' + ms) || 0);
       if (c.slChinh > ton) {
         /* v5.65.2 (yêu cầu của người dùng): thay vì chỉ báo "hết hàng", trả về SỐ TỐI ĐA còn đặt được
@@ -566,7 +566,7 @@ router.put('/khach/donhang/:id', requireKhach, async (req, res) => {
        `if (daTru)`, nên đơn mới (DaTruTon=0) khách sửa 1 → 999999 vẫn lưu và khóa hết tồn của
        khách khác (vì đơn đang chờ được tính là "đang giữ"). */
     const ct = (await pool.request().input('mh', sql.Int, don.MaHangID).input('ms', sql.Int, don.MauSacID)
-      .query('SELECT (NhapCai - XuatCai) AS TonCon FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
+      .query('SELECT TonCai AS TonCon FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
     const tonKho = ct ? Number(ct.TonCon) : 0;
     if (daTru) {
       const conLai = tonKho + cuChinh;      // đơn cũ: hoàn số cũ rồi mới trừ số mới

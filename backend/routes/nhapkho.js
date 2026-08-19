@@ -1,27 +1,28 @@
 /* ================================================================================================
-   PHIEU NHAP KHO HANG HOA  (v6.78)  - module KHOHANG, chuc nang 'nhapkho', migration_v681.
+   PHIEU NHAP KHO HANG HOA  (v6.89)  - module KHOHANG, chuc nang 'nhapkho', migration_v681 + v682.
 
    HAI LOAI NHAP:
      - NhaCungCap : hang mua ngoai, CO don gia -> TANG CONG NO PHAI TRA cho NCC.
      - SanXuat    : hang xuong minh lam ra, gan LENH SX, KHONG sinh cong no.
 
-   TON KHO: NhapCai += SoLuongChinh (theo DON VI CHINH cua ma hang, khong phai Cai).
-   Huy/xoa phieu thi tru lai dung so do.
+   LUU PHIEU LAM DUNG 3 VIEC — khong hon:
+     1. Tao MA HANG trong danh muc neu chua co (de xuat/ban duoc ngay).
+     2. Cong CONG NO phai tra NCC (chi loai NhaCungCap).
+     3. Len BAO CAO TON KHO hang hoa.
+   Phieu KHONG ghi vao o "Nhap" cua the kho. THE KHO chi duoc tao khi nguoi dung bam "Tao the kho".
 
-   ⚠️ TRUOC DAY co 2 duong lam tang NhapCai ma khong co chung tu (go tay o the kho, ghi nhan cong
-   doan cuoi o QLSX). File nay THEM duong thu 3 nhung CO chung tu - khong go bo 2 duong cu vi chung
-   dang chay that; nguoi dung tu chon dung duong nao.
+   TON KHO co HAI NGUON RỜI NHAU (migration_v682, view vw_TonTheoMau):
+     Nguon 1 - THE KHO  : TheKhoChiTietMau.NhapCai (khai tay o the kho / QLSX cong doan KN)
+     Nguon 2 - CHUNG TU : PhieuNhapKhoHangChiTiet.SoLuongChinh cua phieu chua huy  <- file nay
+   TON = Nguon1 + Nguon2 - XuatCai. Hai nguon khong the dem hai lan vi phieu KHONG ghi vao NhapCai.
 
-   MA HANG CHUA CO -> SINH MA LUON khi luu phieu (v6.88). Hang da nhap ve la phai xuat/ban duoc ngay,
-   ma phieu xuat/ban hang chi chon duoc ma DA CO trong danh muc.
-     - Ban v6.87 tung thu huong "cho tao the kho" (khong sinh ma, cho den luc bam Tao the kho) —
-       DA BO, vi nhu vay khong xuat duoc hang cho den khi ai do nho vao tao the kho.
-     - Nhung KHONG con mac dinh ngam ĐVT/'Ri'/LoaiRi=1 nhu v6.78: ma quan kho theo Ri ma bi gan
-       LoaiRi=1 thi moi phep quy doi ton kho ve sau sai gap LoaiRi lan, khong co gi bao loi.
-       Nay dong phieu phai khai ro Ten hang + 2 DVT + ty le, thieu la bao loi.
+   MA HANG CHUA CO -> SINH MA LUON, nhung PHAI khai du Ten hang + 2 DVT + ty le quy doi. Ban v6.78
+   mac dinh ngam 'Cái'/'Ri'/1 — ma quan kho theo Ri ma bi gan LoaiRi=1 thi moi phep quy doi ton ve
+   sau sai gap LoaiRi lan va khong co gi bao loi.
 
-   ⚠️ Loi that o v6.78-v6.86 KHONG phai viec sinh ma, ma la nut "Tao the kho" o phieu nhap: no mo form
-   TAO MOI trong khi ma da duoc sinh ⇒ luon bao "ma da ton tai". Nut do nay la "MO THE KHO" -> form SUA.
+   ⚠️ Lich su de khong lap lai: v6.78-v6.86 phieu vua sinh ma vua ghi NhapCai, con nut "Tao the kho"
+   lai mo form TAO MOI ⇒ luon bao "ma da ton tai". v6.87 thu bo han viec sinh ma ⇒ khong xuat duoc
+   hang. v6.89 tach dung ranh: phieu lo ma hang + cong no + ton; the kho lo mau/anh/gia ban.
    ================================================================================================ */
 const express = require('express');
 const ExcelJS = require('exceljs');
@@ -48,31 +49,21 @@ function veDonViChinh(soLuong, donVi, mh) {
   return Math.round(donViChinhLaGop(mh) ? cai / he : cai);
 }
 
-/* ---------- TANG / TRU TON: ham DUY NHAT duoc phep dong vao NhapCai tu phan he nay ----------
-   sl > 0 = nhap them;  sl < 0 = tru lai (huy/xoa phieu).
-   Khi TRU co dieu kien NhapCai >= sl: huy phieu ma hang da ban het roi thi phai bao loi, khong
-   duoc de NhapCai am -> ton kho am ngam. */
-async function ghiNhapKho(pool, tran, maHangId, mauSacId, sl, nhan) {
-  const rq = () => (tran ? new sql.Request(tran) : pool.request());
-  if (sl > 0) {
-    const kq = await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId).input('sl', sql.Int, sl)
-      .query(`UPDATE TheKhoChiTietMau SET NhapCai = NhapCai + @sl WHERE MaHangID=@mh AND MauSacID=@ms`);
-    if (!kq.rowsAffected[0]) {
-      // Chua co dong mau nay trong the kho -> tao. Khac voi luc TRU ton (ben banhang.js) la
-      // khong duoc tao dong moi; o day tao la dung, vi nhap kho chinh la luc dong mau ra doi.
-      await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId).input('sl', sql.Int, sl)
-        .query(`INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, SoCatCai, NhapCai, XuatCai)
-                VALUES (@mh, @ms, 0, @sl, 0)`);
-    }
-    return;
-  }
-  const kq = await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId).input('sl', sql.Int, -sl)
-    .query(`UPDATE TheKhoChiTietMau SET NhapCai = NhapCai - @sl
-            WHERE MaHangID=@mh AND MauSacID=@ms AND (NhapCai - @sl) >= XuatCai`);
-  if (!kq.rowsAffected[0]) {
-    throw new Error(`Không trừ lại được tồn${nhan ? ' (' + nhan + ')' : ''} — hàng đã xuất đi mất rồi. Phải hủy các phiếu bán/xuất liên quan trước.`);
-  }
-}
+/* ================================================================================================
+   ⚠️ v6.89 — PHAN HE NAY KHONG CON GHI VAO TheKhoChiTietMau.NhapCai.
+
+   Ham ghiNhapKho() da bi GO BO. Ton kho hang hoa nay co HAI NGUON RỜI NHAU (migration_v682):
+     Nguon 1 - THE KHO  : TheKhoChiTietMau.NhapCai  (nguoi dung khai tay o the kho, hoac QLSX cong doan KN)
+     Nguon 2 - CHUNG TU : PhieuNhapKhoHangChiTiet.SoLuongChinh cua phieu CHUA HUY  <- chinh la file nay
+   View vw_TonTheoMau / vw_TonKhoHangHoa cong hai nguon lai. Vi phieu nhap KHONG BAO GIO ghi vao
+   NhapCai, hai nguon khong the dem hai lan — bat bien nay do CAU TRUC bao dam, khong phai do co/flag.
+
+   HE QUA phai nho:
+     - Huy / xoa / sua phieu thi ton TU DONG dung theo, KHONG con phai tru NhapCai bang tay.
+     - Cung vi the KHONG con the "chan huy phieu khi hang da ban het": truoc day phep tru NhapCai
+       lam viec do. Nay huy phieu co the lam ton am — dung utils/kiem_ton_am.js de soi.
+   ⚠️ KHONG them lai duong ghi NhapCai o day. Them lai la dem hai lan ngay lap tuc.
+   ================================================================================================ */
 
 /* ================================================================================================
    DANH MUC PHUC VU FORM
@@ -83,9 +74,18 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
   const [ncc, donHang, theKho, nhom, mauSac, donVi] = await Promise.all([
     q('SELECT NCC_ID, TenNCC FROM NhaCungCap ORDER BY TenNCC'),
     /* v6.80: CHI lay lenh SX DA HOAN THANH. Lenh dang san xuat ma cho nhap kho thanh pham thi so
-       "da hoan thanh" cua lenh do va ton kho se lech nhau, khong ai doi chieu duoc. */
-    q(`SELECT TOP 300 DonHangID, MaDH, TenSanPham FROM DonHangSanXuat
-       WHERE TrangThai = N'Hoàn thành' ORDER BY DonHangID DESC`),
+       "da hoan thanh" cua lenh do va ton kho se lech nhau, khong ai doi chieu duoc.
+       v6.89: BO cac lenh DA GAN vao mot phieu nhap khac (phieu chua huy) — mot lenh SX chi nhap kho
+       mot lan, de lai trong danh sach la mo duong nhap trung ca lenh.
+       ⚠️ Phai GIU LAI lenh cua CHINH phieu dang sua (?phieuNKID=), khong thi mo form Sua se thay o
+       lenh SX rong roi bam Luu la mat lien ket - dung kieu loi am tham. */
+    q(`SELECT TOP 300 d.DonHangID, d.MaDH, d.TenSanPham FROM DonHangSanXuat d
+       WHERE d.TrangThai = N'Hoàn thành'
+         AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang p
+                         WHERE p.DonHangID = d.DonHangID
+                           AND p.TrangThai <> N'Đã hủy'
+                           AND (${req.query.phieuNKID ? 'p.PhieuNKID <> ' + (parseInt(req.query.phieuNKID, 10) || 0) : '1=1'}))
+       ORDER BY d.DonHangID DESC`),
     q('SELECT TheKhoDanhMucID, TenTheKho FROM TheKhoDanhMuc ORDER BY TenTheKho'),
     q('SELECT NhomSanPhamID, TenNhom FROM NhomSanPham ORDER BY TenNhom').catch(() => []),
     q('SELECT MauSacID, TenMau FROM MauSac ORDER BY TenMau'),
@@ -389,8 +389,7 @@ async function chuanDong(pool, tran, d, loai) {
 
 /* INSERT mot dong + cong ton. Dung CHUNG cho POST va PUT — hai ban sao khac nhau la duong chac chan
    de ton kho lech (da tung xay ra o repo nay).
-   ⚠️ KHONG dung cac cot *Cho cua migration_v682 nua (huong "cho tao the kho" cua v6.87 da bo). Giu
-   INSERT dung bo cot goc de file nay chay duoc du CSDL da hay chua chay migration_v682. */
+   v6.89: CHI insert dong phieu. Ton kho khong ghi o day nua — view doc thang tu bang nay. */
 async function ghiDong(pool, tran, phieuId, d) {
   await new sql.Request(tran)
     .input('P', sql.Int, phieuId).input('MH', sql.Int, d.maHangId).input('MS', sql.Int, d.mauSacId)
@@ -400,7 +399,6 @@ async function ghiDong(pool, tran, phieuId, d) {
     .query(`INSERT INTO PhieuNhapKhoHangChiTiet (PhieuNKID, MaHangID, MauSacID, SoLuong, DonVi,
               SoLuongChinh, DonGia, ThanhTien, GhiChu)
             VALUES (@P, @MH, @MS, @SL, @DV, @SLC, @DG, @TT, @GC)`);
-  await ghiNhapKho(pool, tran, d.maHangId, d.mauSacId, d.slChinh, d.maHang);
 }
 
 /* ================================================================================================
@@ -487,8 +485,8 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    // 1. GO: tru lai ton cua ban cu roi xoa dong cu
-    await truLaiTon(pool, tran, req.params.id);
+    /* 1. GO ban cu: chi can XOA dong cu. v6.89 khong con phai tru NhapCai — ton doc thang tu bang
+       nay nen xoa dong la ton tu giam dung phan cua ban cu. */
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query('DELETE FROM PhieuNhapKhoHangChiTiet WHERE PhieuNKID=@id');
 
@@ -526,16 +524,11 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   }
 });
 
-/* ---------- HUY / XOA: tru lai ton da nhap ---------- */
-async function truLaiTon(pool, tran, id) {
-  const ct = (await new sql.Request(tran).input('id', sql.Int, id).query(`
-    SELECT ct.MaHangID, ct.MauSacID, ct.SoLuongChinh, h.MaHang
-    FROM PhieuNhapKhoHangChiTiet ct JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
-    WHERE ct.PhieuNKID = @id`)).recordset;
-  for (const d of ct) {
-    if (so(d.SoLuongChinh) > 0) await ghiNhapKho(pool, tran, d.MaHangID, d.MauSacID, -so(d.SoLuongChinh), d.MaHang);
-  }
-}
+/* ---------- HUY / XOA ----------
+   v6.89: KHONG con ham truLaiTon(). Doi TrangThai sang 'Đã hủy' la view vw_NhapKhoTuPhieu tu loai
+   phieu do ra khoi ton (dieu kien TrangThai <> N'Đã hủy'); xoa phieu thi chi tiet mat theo CASCADE.
+   ⚠️ Doi lai: khong con chan duoc "huy phieu khi hang da ban het" (truoc day phep tru NhapCai lam
+   viec do). Huy phieu ma hang da xuat di co the lam ton am — chay utils/kiem_ton_am.js de soi. */
 
 router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
@@ -546,7 +539,6 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    await truLaiTon(pool, tran, req.params.id);
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query(`UPDATE PhieuNhapKhoHang SET TrangThai = N'Đã hủy' WHERE PhieuNKID=@id`);
     await tran.commit();
@@ -565,8 +557,6 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    // Phieu da huy thi ton da tru roi - tru them lan nua se am kho.
-    if (h.TrangThai !== 'Đã hủy') await truLaiTon(pool, tran, req.params.id);
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query('DELETE FROM PhieuNhapKhoHang WHERE PhieuNKID=@id');   // chi tiet xoa theo CASCADE
     await tran.commit();

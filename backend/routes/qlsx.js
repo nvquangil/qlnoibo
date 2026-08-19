@@ -3227,7 +3227,25 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
         const theKhoRow = (await pool.request().input('id', sql.Int, order.DonHangID)
           .query('SELECT * FROM TheKhoHangHoa WHERE DonHangID=@id')).recordset[0];
 
-        if (theKhoRow) {
+        /* ⚠️ v6.89 — CHONG DEM HAI LAN VOI PHIEU NHAP KHO HANG HOA.
+           Tu v6.89 ton kho hang hoa co 2 nguon cong lai (migration_v682): NhapCai (khoi nay) va
+           PhieuNhapKhoHangChiTiet.SoLuongChinh. Neu lenh SX nay DA co phieu nhap kho loai "Tu san
+           xuat" thi kho da ghi nhan bang CHUNG TU roi; cong tiep vao NhapCai o day la ton GAP DOI
+           ma khong co canh bao nao (bao cao cung cong ca hai nen khong thay lech).
+           => Da co phieu thi BO QUA khoi cong ton nay. Chung tu la nguon uu tien. */
+        let daCoPhieuNK = false;
+        try {
+          daCoPhieuNK = !!(await pool.request().input('id', sql.Int, order.DonHangID).query(`
+            IF OBJECT_ID('PhieuNhapKhoHang', 'U') IS NULL SELECT NULL AS x
+            ELSE SELECT TOP 1 PhieuNKID AS x FROM PhieuNhapKhoHang
+                 WHERE DonHangID = @id AND TrangThai <> N'Đã hủy'`)).recordset[0]?.x;
+        } catch (e) { daCoPhieuNK = false; }
+        if (daCoPhieuNK) {
+          console.warn('[qlsx KhoNhap] Lenh SX %s da co PHIEU NHAP KHO HANG HOA -> BO QUA cong NhapCai (tranh dem 2 lan). Ton lay theo phieu.',
+            order.MaDH || order.DonHangID);
+        }
+
+        if (theKhoRow && !daCoPhieuNK) {
           const loaiRi = Number(theKhoRow.LoaiRi) || 1;
           for (const m of chiTietMau) {
             const oldQty = Number(oldQtyByColor[m.mauSacId]) || 0;
@@ -3403,8 +3421,10 @@ router.get('/orders/:maDH/print', requireAuth, requirePermission('QLSX', 'view')
   let slNhapKhoThucTe;
   let slNhapKhoQuyDoi = false;
   if (theKhoRow) {
+    /* v6.89: cong ca 2 nguon nhap (migration_v682) — NhapCai cua the kho VA so luong tu phieu nhap
+       kho hang hoa. Chi doc NhapCai thi don nao nhap bang phieu se hien "SL nhap kho thuc te" = 0. */
     const sumRow = (await pool.request().input('mh', sql.Int, theKhoRow.MaHangID)
-      .query('SELECT ISNULL(SUM(NhapCai),0) AS Tong FROM TheKhoChiTietMau WHERE MaHangID=@mh')).recordset[0];
+      .query(`SELECT ISNULL(SUM(t.TongNhapCai), 0) AS Tong FROM vw_TonTheoMau t WHERE t.MaHangID=@mh`)).recordset[0];
     slNhapKhoThucTe = Number(sumRow.Tong) || 0;
     slNhapKhoQuyDoi = true;
   } else {

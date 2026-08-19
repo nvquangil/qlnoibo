@@ -122,9 +122,12 @@ async function baoCaoTonHangHoa(pool, ky) {
   const tonNay = (await pool.request().query(`
     SELECT h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan,
            dm.TenTheKho AS TenDanhMuc,
-           ISNULL(SUM(ct.NhapCai - ct.XuatCai), 0) AS Ton
+           ISNULL(SUM(t.TonCai), 0) AS Ton
     FROM TheKhoHangHoa h
-    LEFT JOIN TheKhoChiTietMau ct ON ct.MaHangID = h.MaHangID
+    -- v6.89: vw_TonTheoMau = NhapCai (khai o the kho) + NhapTuPhieu (PHIEU NHAP KHO) - XuatCai.
+    -- Truoc day cong thang tu TheKhoChiTietMau nen hang nhap bang phieu nhap kho KHONG hien tren
+    -- bao cao ton. Xem migration_v682.
+    LEFT JOIN vw_TonTheoMau t ON t.MaHangID = h.MaHangID
     LEFT JOIN TheKhoDanhMuc dm ON dm.TheKhoDanhMucID = h.TheKhoDanhMucID
     GROUP BY h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan, dm.TenTheKho
     ORDER BY h.MaHang`)).recordset;
@@ -162,6 +165,14 @@ async function baoCaoTonHangHoa(pool, ky) {
      Bieu thuc trong SUM() vua co cot bang TRONG (ct.*) vua co cot bang NGOAI (h.DonViQuyDoi, h.LoaiRi)
      => SQL Server loi 8124 "Multiple columns are specified in an aggregated expression containing an
      outer reference". Dua ca 2 bang vao cung 1 truy van GROUP BY thi khong con "outer reference". */
+  /* v6.89: LOAI cac lenh SX DA CO PHIEU NHAP KHO ra khoi duong "nhap tu cong doan KN".
+     qlsx.js tu v6.89 cung BO QUA cong NhapCai cho nhung lenh do (chung tu la nguon uu tien). Neu bao
+     cao van tinh KN cho ho thi Nhap trong ky bi cong hai lan trong khi ton hien tai chi tang mot lan
+     => Ton dau ky bi keo am. Hai ben PHAI cung mot dieu kien loai tru. */
+  const loaiLenhDaCoPhieu = (await coBang(pool, 'PhieuNhapKhoHang'))
+    ? `AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang pnk
+                       WHERE pnk.DonHangID = td.DonHangID AND pnk.TrangThai <> N'Đã hủy')`
+    : '';
   const sqlLK = `
     WITH kn AS (
       SELECT h.MaHangID, td.TienDoID, td.NgayGhiNhan, ${batchCol} AS Batch,
@@ -169,6 +180,7 @@ async function baoCaoTonHangHoa(pool, ky) {
       FROM TienDoSanXuat td
       JOIN CongDoanSanXuat c ON c.StageID = td.StageID AND c.MaCongDoan = 'KN'
       JOIN TheKhoHangHoa h ON h.DonHangID = td.DonHangID
+      ${loaiLenhDaCoPhieu}
       LEFT JOIN TienDoChiTietMau ct ON ct.TienDoID = td.TienDoID
            AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
                                    WHERE DonHangID = td.DonHangID AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
@@ -202,6 +214,26 @@ async function baoCaoTonHangHoa(pool, ky) {
   const lk = (await rqKy(pool, ky).query(sqlLK)).recordset;
   const nhapKy = lk.map(r => ({ MaHangID: r.MaHangID, SL: r.NhapKy }));
   const nhapSau = lk.map(r => ({ MaHangID: r.MaHangID, SL: r.NhapSauKy }));
+
+  /* --- NHAP 2: PHIEU NHAP KHO HANG HOA (v6.89) ---
+     ⚠️ BAT BUOC co phan nay. Ton dau/cuoi ky duoc suy ra bang cach LUI tu ton hien tai theo chung tu
+     (TonCuoi = TonHienTai - NhapSauKy + XuatSauKy). Ton hien tai da gom nguon phieu nhap kho
+     (vw_TonTheoMau), nen neu Nhap trong ky KHONG gom phieu nhap thi toan bo phan nhap bang phieu se
+     bi day sang "Ton dau ky" - bao cao nhin nhu ky nao cung co san hang tu dau.
+     SoLuongChinh da theo DON VI CHINH cua ma hang, dung don vi voi cot Ton. */
+  let nhapPhieuKy = [], nhapPhieuSau = [];
+  if (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) {
+    const sqlNhapPhieu = `
+      SELECT ct.MaHangID, ISNULL(SUM(ct.SoLuongChinh), 0) AS SL
+      FROM PhieuNhapKhoHangChiTiet ct
+      JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+      WHERE p.TrangThai <> N'Đã hủy' AND p.NgayNhap BETWEEN @a AND @b
+      GROUP BY ct.MaHangID`;
+    nhapPhieuKy = (await pool.request().input('a', sql.Date, ky.tuNgay).input('b', sql.Date, ky.denNgay)
+      .query(sqlNhapPhieu)).recordset;
+    nhapPhieuSau = (await pool.request().input('a', sql.Date, ky.denNgay).input('b', sql.Date, ky.homNay)
+      .query(sqlNhapPhieu.replace('BETWEEN @a AND @b', '> @a AND p.NgayNhap <= @b'))).recordset;
+  }
 
   /* --- XUAT 1: phieu ban hang (duong tru ton duy nhat tu v6.23) --- */
   const sqlXuatBH = `
@@ -254,6 +286,8 @@ async function baoCaoTonHangHoa(pool, ky) {
   const khoa = r => r.MaHangID;
   gomVao(map, nhapKy, khoa, 'NhapKy');
   gomVao(map, nhapSau, khoa, 'NhapSauKy');
+  gomVao(map, nhapPhieuKy, khoa, 'NhapKy');        // v6.89: phieu nhap kho hang hoa
+  gomVao(map, nhapPhieuSau, khoa, 'NhapSauKy');
   gomVao(map, xuatBHKy, khoa, 'XuatKy');
   gomVao(map, xuatBHSau, khoa, 'XuatSauKy');
   gomVao(map, xuatDonKy, khoa, 'XuatKy');

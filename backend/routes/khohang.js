@@ -285,10 +285,20 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
     JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
     ORDER BY CASE WHEN ISNULL(v.TongTon, 0) <= 0 THEN 1 ELSE 0 END,
              ${lanLuu} DESC, v.MaHang`);
+  /* v6.89: đọc từ vw_TonTheoMau, KHÔNG từ TheKhoChiTietMau. View gồm cả nguồn PHIẾU NHẬP KHO và có
+     cả những mã/màu chỉ tồn tại trên phiếu nhập (chưa tạo thẻ kho) — đọc thẳng bảng thì hàng vừa nhập
+     bằng phiếu sẽ không hiện dòng màu nào. Xem migration_v682.
+     ⚠️ `NhapCai` PHẢI là con số THÔ của thẻ kho (t.NhapCai), TUYỆT ĐỐI KHÔNG phải TongNhapCai.
+     Form Sửa thẻ kho điền ô "Nhập" từ chính trường này, và PUT /items/:id ghi ĐẶT TUYỆT ĐỐI —
+     nếu trả về số đã gộp nguồn phiếu thì chỉ cần mở form rồi bấm Lưu là phần của phiếu bị chép vào
+     NhapCai, và từ đó tồn ĐẾM HAI LẦN vĩnh viễn. `NhapTuPhieu` / `TonCai` trả riêng để chỉ hiển thị. */
   const chiTiet = await pool.request().query(`
-    SELECT ct.*, ms.TenMau, h.MaHang FROM TheKhoChiTietMau ct
-    JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-    JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID`);
+    SELECT t.ChiTietID AS ID, t.MaHangID, t.MauSacID, t.LinkAnh, t.GhiChu,
+           t.SoCatCai, t.NhapCai, t.NhapTuPhieu, t.TongNhapCai, t.XuatCai, t.TonCai,
+           ms.TenMau, h.MaHang
+    FROM vw_TonTheoMau t
+    JOIN MauSac ms ON ms.MauSacID = t.MauSacID
+    JOIN TheKhoHangHoa h ON h.MaHangID = t.MaHangID`);
   /* v6.21: tỷ lệ CK dùng chung để frontend tính 2 cột giá (KHÔNG lưu giá trong CSDL).
      v6.23: kèm SL ĐANG GIỮ cho đơn khách đặt (Chờ xác nhận/Chờ xử lý) để bảng hiện thêm cột
      "Khả dụng" = tồn − đang giữ, đúng yêu cầu "ghi chú thẻ kho còn bao nhiêu đã trừ các đơn chờ xử lý". */
@@ -368,6 +378,82 @@ async function resolveMauSacId(pool, c) {
   return ins.recordset[0].MauSacID;
 }
 
+/* ================================================================================================
+   v6.89 — BO SUNG THE KHO CHO MA DA CO SAN TU PHIEU NHAP KHO.
+
+   Goi tu POST /items khi body co `tuPhieuNKID` va ma hang DA TON TAI (phieu nhap kho da sinh ma).
+   Chi cap nhat cac truong "phan the kho" + THEM cac dong mau con thieu.
+
+   ⚠️ CHI THEM MAU, KHONG XOA, KHONG DAT LAI NhapCai cua mau da co:
+     - Xoa mau la mat luon NhapCai/XuatCai cua mau do (lich su ban hang di theo).
+     - Dat lai NhapCai tu form nay la nguy hiem: form duoc mo o che do TAO MOI nen o "Nhap" thuong
+       de trong/0. Ghi de 0 len mot mau dang co ton la lam bien ton ma khong ai biet.
+   Muon SUA con so thi dung dung chuc nang Sua the kho (PUT /items/:id).
+   ================================================================================================ */
+async function capNhatTheKhoTuPhieu(req, res, pool, maHangId) {
+  const b = req.body || {};
+  const coCongKhai = await coCotCongKhaiTheKho(pool);
+  /* ISNULL o MOI truong: form co the khong gui het (vd khong doi anh, khong khai lai DVT). Khong boc
+     ISNULL la gui thieu mot truong = xoa trang truong do — dung loi da tung co o PUT /items/:id. */
+  await pool.request()
+    .input('id', sql.Int, maHangId)
+    .input('TenHang', sql.NVarChar, b.tenHang || null)
+    .input('GiaBan', sql.Decimal(14, 2), b.giaBan === undefined || b.giaBan === null || b.giaBan === '' ? null : b.giaBan)
+    .input('LoaiRi', sql.Int, b.loaiRi || null)
+    .input('TheKhoDanhMucID', sql.Int, b.theKhoDanhMucId || null)
+    .input('AnhDaiDien', sql.NVarChar, b.anhDaiDien || null)
+    .input('GhiChu', sql.NVarChar, b.ghiChu || null)
+    .input('DonViCoBan', sql.NVarChar, b.donViCoBan || null)
+    .input('DonViQuyDoi', sql.NVarChar, b.donViQuyDoi || null)
+    .input('NhomSanPhamID', sql.Int, b.nhomSanPhamId || null)
+    .input('MaBarcode', sql.NVarChar, b.maBarcode || null)
+    .input('CongKhai', sql.Bit, b.congKhai === undefined || b.congKhai === null ? null : (b.congKhai ? 1 : 0))
+    .query(`UPDATE TheKhoHangHoa SET
+              TenHang         = ISNULL(@TenHang, TenHang),
+              GiaBan          = ISNULL(@GiaBan, GiaBan),
+              LoaiRi          = ISNULL(@LoaiRi, LoaiRi),
+              TheKhoDanhMucID = ISNULL(@TheKhoDanhMucID, TheKhoDanhMucID),
+              AnhDaiDien      = ISNULL(@AnhDaiDien, AnhDaiDien),
+              GhiChu          = ISNULL(@GhiChu, GhiChu),
+              DonViCoBan      = ISNULL(@DonViCoBan, DonViCoBan),
+              DonViQuyDoi     = ISNULL(@DonViQuyDoi, DonViQuyDoi),
+              NhomSanPhamID   = ISNULL(@NhomSanPhamID, NhomSanPhamID),
+              MaBarcode       = ISNULL(@MaBarcode, MaBarcode)
+              ${coCongKhai ? ', CongKhai = ISNULL(@CongKhai, CongKhai)' : ''}
+            WHERE MaHangID = @id`);
+
+  let themMau = 0;
+  if (Array.isArray(b.colors)) {
+    for (const c of b.colors) {
+      const mid = await resolveMauSacId(pool, c);
+      if (!mid) continue;
+      /* ⚠️ NhapCai LUON = 0 tren duong nay, KHONG nhan c.nhap tu form.
+         So luong cua phieu nhap kho DA nam trong ton qua nguon chung tu (vw_TonTheoMau). Neu form gui
+         so len (nguoi dung go vao o "Nhap") va o day ghi vao NhapCai thi ton DEM HAI LAN. Frontend co
+         khoa o do lai, nhung khong tin frontend — chan o backend moi chac. */
+      const kq = await pool.request()
+        .input('MaHangID', sql.Int, maHangId).input('MauSacID', sql.Int, mid)
+        .input('LinkAnh', sql.NVarChar, c.linkAnh || null)
+        .input('SoCatCai', sql.Int, Number(c.soCat || 0))
+        .input('NhapCai', sql.Int, 0)
+        .input('GhiChu', sql.NVarChar, c.ghiChu || null)
+        .query(`IF NOT EXISTS (SELECT 1 FROM TheKhoChiTietMau WHERE MaHangID=@MaHangID AND MauSacID=@MauSacID)
+                  INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, LinkAnh, SoCatCai, NhapCai, XuatCai, GhiChu)
+                  VALUES (@MaHangID, @MauSacID, @LinkAnh, @SoCatCai, @NhapCai, 0, @GhiChu)
+                ELSE
+                  UPDATE TheKhoChiTietMau
+                     SET LinkAnh = ISNULL(@LinkAnh, LinkAnh), GhiChu = ISNULL(@GhiChu, GhiChu)
+                   WHERE MaHangID=@MaHangID AND MauSacID=@MauSacID`);
+      themMau += kq.rowsAffected[0] || 0;
+    }
+  }
+  return res.json({
+    success: true,
+    data: { maHangId, maHang: String(b.maHang || '').trim().toUpperCase(), boSung: true },
+    message: `Mã ${String(b.maHang || '').trim().toUpperCase()} đã có sẵn từ phiếu nhập kho — đã bổ sung thẻ kho (${themMau} dòng màu). Tồn kho không thay đổi.`
+  });
+}
+
 router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
   try {
     const {
@@ -376,21 +462,37 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
       // v5.17 (muc 1.1): 2 truong moi phuc vu chuc nang "Báo giá Aloha" - xem migration_v517.sql.
       giaAloha, maBarcode,
       // v6.71: cong tac HIEN ma hang nay tren catalogue cong khai. Khong gui = HIEN (giu thoi quen cu).
-      congKhai
+      congKhai,
+      /* v6.89: co "toi den tu PHIEU NHAP KHO so ...". Phieu nhap kho SINH SAN ma hang trong danh muc
+         (de xuat/ban duoc ngay) nhung KHONG tao the kho. Nguoi dung bam "Tao the kho" o phieu ⇒ mo
+         form TAO MOI, va luc luu thi ma DA CO ⇒ check trung ben duoi se chan. Co nay noi ro y dinh:
+         "bo sung the kho cho ma da co san tu phieu nhap", khac han voi go trung ma do vo y. */
+      tuPhieuNKID
       // v6.21: KHONG con nhan % CK theo tung ma hang (v6.20) - ty le CK nay dung chung, o CauHinhHeThong.
     } = req.body;
     if (!maHang || !tenHang) return res.status(400).json({ success: false, message: 'Thiếu mã hàng hoặc tên hàng.' });
     const pool = await getPool();
 
-    const exists = await pool.request().input('m', sql.NVarChar, maHang).query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang=@m');
-    if (exists.recordset.length) return res.status(400).json({ success: false, message: 'Mã hàng đã tồn tại, dùng chức năng Sửa.' });
+    /* ⚠️ So sanh PHAI chuan hoa giong luc INSERT (.trim().toUpperCase()). Ban cu so chuoi nguyen ban
+       nen go khac hoa/thuong la lot qua check JS roi vo o UNIQUE cua SQL Server, ra cau loi kho hieu. */
+    const maChuan = String(maHang).trim().toUpperCase();
+    const exists = await pool.request().input('m', sql.NVarChar, maChuan)
+      .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang=@m');
+    if (exists.recordset.length) {
+      if (!tuPhieuNKID) {
+        return res.status(400).json({ success: false, message: 'Mã hàng đã tồn tại, dùng chức năng Sửa.' });
+      }
+      /* Den tu phieu nhap kho: KHONG tao ma moi, chi BO SUNG the kho (mau/anh/gia ban/danh muc) cho
+         ma da co. Chuyen sang duong cap nhat de nguoi dung khong phai tu di tim nut Sua. */
+      return capNhatTheKhoTuPhieu(req, res, pool, exists.recordset[0].MaHangID);
+    }
 
     // LoaiHang chi nhan 2 gia tri hop le; DonHangID chi luu khi la Nha san xuat (theo dung schema v4.0)
     const loaiHangVal = loaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai';
     const coCongKhai = await coCotCongKhaiTheKho(pool);   // v6.71
 
     const result = await pool.request()
-      .input('MaHang', sql.NVarChar, maHang.trim().toUpperCase())
+      .input('MaHang', sql.NVarChar, maChuan)
       .input('TenHang', sql.NVarChar, tenHang)
       .input('GiaBan', sql.Decimal(14, 2), giaBan || 0)
       .input('LoaiRi', sql.Int, loaiRi || 1)
@@ -647,9 +749,10 @@ router.post('/orders', requireAuth, requirePermission('KHOHANG', 'create'), requ
     const thieu = [];
     for (const [key, slCan] of need.entries()) {
       const [maHangId, mauSacId] = key.split(':');
+      // v6.89: vw_TonTheoMau đã gồm nguồn PHIẾU NHẬP KHO (migration_v682).
       const tonResult = await pool.request().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId)
-        .query('SELECT NhapCai, XuatCai FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms');
-      const tonKho = tonResult.recordset.length ? Number(tonResult.recordset[0].NhapCai) - Number(tonResult.recordset[0].XuatCai) : 0;
+        .query('SELECT TonCai FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms');
+      const tonKho = tonResult.recordset.length ? Number(tonResult.recordset[0].TonCai) : 0;
       const ton = tonKho - (giu.theoMau.get(maHangId + '|' + mauSacId) || 0);
       if (slCan > ton) {
         const line = lineInfo.find(l => String(l.item.maHangId) === maHangId && String(l.item.mauSacId) === mauSacId);
@@ -894,9 +997,11 @@ router.put('/orders/:id/xacnhan', requireAuth, requirePermission('KHOHANG', 'edi
       .query('SELECT MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0] || {};
     const slChinh = orderQtyToBase(row.SoLuongDat, row.DonVi, h.DonViCoBan, h.LoaiRi, h.DonViQuyDoi);
 
+    // v6.89: đọc tồn từ vw_TonTheoMau (gồm nguồn phiếu nhập kho). ChiTietID có thể NULL nếu mã/màu
+    // này chỉ có trên phiếu nhập, chưa tạo thẻ kho — vẫn hợp lệ để bán, nên KHÔNG chặn vì thiếu ID.
     const ct = (await pool.request().input('mh', sql.Int, row.MaHangID).input('ms', sql.Int, row.MauSacID)
-      .query('SELECT ID, (NhapCai - XuatCai) AS TonCon FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
-    if (!ct) return res.status(400).json({ success: false, message: 'Mã hàng/màu này không còn trong thẻ kho.' });
+      .query('SELECT ChiTietID AS ID, TonCai AS TonCon FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
+    if (!ct) return res.status(400).json({ success: false, message: 'Mã hàng/màu này chưa có tồn kho (không có thẻ kho, cũng không có phiếu nhập nào).' });
     // Hàng đang giữ cho các đơn KHÁC (trừ chính đơn này ra, vì nó cũng đang nằm trong danh sách giữ).
     const giu = await layHangDangGiu(pool);
     const giuKhac = (giu.theoMau.get(row.MaHangID + '|' + row.MauSacID) || 0) - slChinh;
@@ -1052,9 +1157,10 @@ router.put('/orders/:id', requireAuth, requirePermission('KHOHANG', 'edit'), req
     if (!deducting && cur.TrangThai !== 'Đã hủy') {
       // Đơn chỉ đang GIỮ hàng: kiểm tồn khả dụng, trừ phần chính đơn này đang giữ ra.
       const giu = await layHangDangGiu(pool);
+      // v6.89: vw_TonTheoMau — gồm nguồn phiếu nhập kho (migration_v682).
       const rowNew = (await pool.request().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId)
-        .query('SELECT NhapCai, XuatCai FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
-      const tonNew = rowNew ? Number(rowNew.NhapCai) - Number(rowNew.XuatCai) : 0;
+        .query('SELECT TonCai FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
+      const tonNew = rowNew ? Number(rowNew.TonCai) : 0;
       const oldItem = (await pool.request().input('id', sql.Int, cur.MaHangID).query('SELECT LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0] || {};
       const oldChinh = orderQtyToBase(cur.SoLuongDat, cur.DonVi, oldItem.DonViCoBan, oldItem.LoaiRi, oldItem.DonViQuyDoi);
       const sameMau = String(cur.MaHangID) === String(maHangId) && String(cur.MauSacID) === String(mauSacId);
@@ -1070,8 +1176,8 @@ router.put('/orders/:id', requireAuth, requirePermission('KHOHANG', 'edit'), req
       const oldChinh = orderQtyToBase(cur.SoLuongDat, cur.DonVi, oldItem.DonViCoBan, oldItem.LoaiRi, oldItem.DonViQuyDoi);
       const sameMau = String(cur.MaHangID) === String(maHangId) && String(cur.MauSacID) === String(mauSacId);
       const rowNew = (await pool.request().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId)
-        .query('SELECT NhapCai, XuatCai FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
-      const tonNew = rowNew ? Number(rowNew.NhapCai) - Number(rowNew.XuatCai) : 0;
+        .query('SELECT TonCai FROM vw_TonTheoMau WHERE MaHangID=@mh AND MauSacID=@ms')).recordset[0];
+      const tonNew = rowNew ? Number(rowNew.TonCai) : 0;
       const available = tonNew + (sameMau ? oldChinh : 0);   // nếu cùng màu: hoàn số cũ sẽ trả lại phần này
       if (newChinh > available) return res.status(400).json({ success: false, message: `Không đủ tồn kho cho mã/màu mới: cần ${newChinh}, còn ${available} (đơn vị chính).` });
       // Hoàn số cũ rồi trừ số mới (đã validate ở trên nên không cần rollback).
@@ -1106,8 +1212,12 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
     // v5.0: bo sung MauSacID (de goi "Dat hang nhanh" dung dung mau) + LinkAnh (de hien cot Anh theo
       // tung mau, xem yeu cau muc 4b) - truoc day query nay khong lay 2 cot nay.
     const colorDetailResult = await pool.request().input('mh', sql.NVarChar, maHang).query(`
-      SELECT ct.MauSacID, ms.TenMau, ct.LinkAnh, ct.GhiChu, ct.NhapCai, ct.XuatCai, (ct.NhapCai - ct.XuatCai) AS TonCai
-      FROM TheKhoChiTietMau ct
+      SELECT ct.MauSacID, ms.TenMau, ct.LinkAnh, ct.GhiChu,
+             -- ⚠️ KHONG alias TongNhapCai thanh 'NhapCai': GET /items tra 'NhapCai' la SO THO cua the
+             -- kho va form Sua dien o "Nhap" tu truong ten do. Hai endpoint dung cung mot ten cho hai
+             -- y nghia khac nhau la bay dem-hai-lan cho nguoi sua sau.
+             ct.NhapCai, ct.TongNhapCai, ct.NhapTuPhieu, ct.XuatCai, ct.TonCai
+      FROM vw_TonTheoMau ct        -- v6.89: gồm cả nguồn phiếu nhập kho (migration_v682)
       JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       WHERE h.MaHang = @mh ORDER BY ms.TenMau`);

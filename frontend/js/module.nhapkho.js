@@ -113,7 +113,7 @@
               ${/* v6.88: ĐỔI TÊN "Tạo thẻ kho" -> "MỞ thẻ kho". Lưu phiếu là mã đã sinh ra rồi, nên
                    việc còn lại là MỞ thẻ kho của mã đó để bổ sung ảnh / giá bán / màu / danh mục.
                    Tên cũ khiến người dùng tưởng phải bấm mới có mã, rồi nhận "mã đã tồn tại". */''}
-              ${r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-tao-the" data-id="${r.PhieuNKID}">Mở thẻ kho</button>` : ''}
+              ${r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-tao-the" data-id="${r.PhieuNKID}">Tạo thẻ kho</button>` : ''}
               ${perm.canDelete ? `<button class="btn small danger nk-xoa" data-id="${r.PhieuNKID}">Xóa</button>` : ''}
             </td>
           </tr>`).join('')}
@@ -151,6 +151,12 @@
 
   async function openForm(id) {
     const sua = id ? (await apiGet('/api/nhapkho/phieu/' + id)).data : null;
+    /* v6.89: danh sách lệnh SX đã BỎ các lệnh đã gán vào phiếu khác. Mở form SỬA thì phải nạp lại
+       kèm ?phieuNKID để lệnh của CHÍNH phiếu này còn trong danh sách — không thì ô lệnh SX rỗng, bấm
+       Lưu là mất liên kết mà không báo gì. */
+    /* Nạp lại CẢ KHI tạo mới: nếu chỉ nạp khi Sửa thì mở Sửa rồi bấm Hủy sẽ để lại danh sách đã lọc
+       theo phiếu đó, và lần "+ Lập phiếu" tiếp theo lại thấy lệnh SX đã gán = gán trùng được. */
+    dm = (await apiGet('/api/nhapkho/danhmuc' + (id ? '?phieuNKID=' + id : ''))).data;
     const h = sua ? sua.header : null;
     const soPhieu = h ? h.SoPhieu : ((await apiGet('/api/nhapkho/next-sophieu')).data || '');
     const homNay = new Date().toISOString().slice(0, 10);
@@ -510,7 +516,7 @@
       <div class="modal-foot">
         <button class="btn secondary" id="nkvDong">Đóng</button>
         ${perm.canEdit && h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvSua">Sửa</button>' : ''}
-        ${h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvTaoThe">Mở thẻ kho</button>' : ''}
+        ${h.TrangThai !== 'Đã hủy' ? '<button class="btn secondary" id="nkvTaoThe">Tạo thẻ kho</button>' : ''}
         <button class="btn secondary" id="nkvXls">Xuất Excel</button>
         <button class="btn" id="nkvIn">In phiếu</button>
       </div>`, { rong: true });

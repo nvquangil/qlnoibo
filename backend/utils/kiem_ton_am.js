@@ -85,9 +85,13 @@ const soDep = n => (Number(n) || 0).toLocaleString('vi-VN');
     let loc = '';
     if (argMa) { rq.input('ma', sql.NVarChar, argMa); loc = 'AND h.MaHang = @ma'; }
     const dong = (await rq.query(`
+      -- v6.89: PHAI doc vw_TonTheoMau (migration_v682). Ton kho co 2 nguon: NhapCai cua the kho VA
+      -- so luong tu PHIEU NHAP KHO. Doc thang TheKhoChiTietMau la thieu nguon 2 => bao AM GIA, va
+      -- neu bam --ghi thi cong cu nay se "nan" XuatCai theo con so sai = pha du lieu that.
       SELECT h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi,
-             ct.MauSacID, ms.TenMau, ct.NhapCai, ct.XuatCai, (ct.NhapCai - ct.XuatCai) AS Ton
-      FROM TheKhoChiTietMau ct
+             ct.MauSacID, ms.TenMau, ct.TongNhapCai AS NhapCai, ct.NhapTuPhieu,
+             ct.XuatCai, ct.TonCai AS Ton
+      FROM vw_TonTheoMau ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
       WHERE 1=1 ${loc}

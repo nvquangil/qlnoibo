@@ -68,9 +68,19 @@ async function sinhSoPhieu(nguon, bang, cot, tienTo, tienToCu, soChuSo) {
 async function ghiXuatKho(pool, tran, maHangId, mauSacId, sl, nhanLoi, nhan) {
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
   if (sl > 0) {
+    /* v6.89: ton = NhapCai (khai o the kho) + NhapTuPhieu (phieu nhap kho) - XuatCai, xem
+       vw_TonTheoMau (migration_v682). PHAI so voi TON TONG, khong phai (NhapCai - XuatCai):
+       hang vao kho bang PHIEU NHAP thi NhapCai = 0, so theo cong thuc cu se bao "khong du ton" du
+       kho co hang thuc. */
+    await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId)
+      .query(`IF NOT EXISTS (SELECT 1 FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms)
+                INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, SoCatCai, NhapCai, XuatCai)
+                VALUES (@mh, @ms, 0, 0, 0)`);
     const kq = await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId).input('sl', sql.Int, sl)
-      .query(`UPDATE TheKhoChiTietMau SET XuatCai = XuatCai + @sl
-              WHERE MaHangID=@mh AND MauSacID=@ms AND (NhapCai - XuatCai) >= @sl`);
+      .query(`UPDATE ct SET ct.XuatCai = ct.XuatCai + @sl
+              FROM TheKhoChiTietMau ct
+              JOIN vw_TonTheoMau t ON t.MaHangID = ct.MaHangID AND t.MauSacID = ct.MauSacID
+              WHERE ct.MaHangID=@mh AND ct.MauSacID=@ms AND t.TonCai >= @sl`);
     if (!kq.rowsAffected[0]) {
       throw new Error(`Không đủ tồn kho để xuất${nhanLoi ? ' (' + nhanLoi + ')' : ''} — có người vừa bán/xuất mã này. Mở lại phiếu và kiểm tra tồn.`);
     }

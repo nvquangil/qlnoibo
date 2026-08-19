@@ -179,8 +179,6 @@ window.ModuleKhoHang = (function () {
     const body = document.getElementById('khBody');
     const res = await apiGet('/api/khohang/items');
     const { tongHop, chiTiet } = res.data;
-    // v6.86: nhớ danh sách mã đã có, để form biết mã lấy từ phiếu nhập là mã MỚI hay mã ĐÃ TỒN TẠI.
-    dsMaDaCo = new Set((tongHop || []).map(r => String(r.MaHang || '').normalize('NFC').trim().toUpperCase()));
     if (res.data.tyLeCK) tyLeCK = res.data.tyLeCK;   // v6.21: tỷ lệ CK dùng chung
     // v5.4 (muc 1): "Loai hang" (NhaSanXuat/DatNgoai) doi ten hien thi thanh "Nguon hang" de nhuong lai
     // nhan "Loai hang" cho truong nhom san pham MOI (TenNhom, vd Quan be trai/gai) - xem migration_v54.sql.
@@ -573,6 +571,12 @@ window.ModuleKhoHang = (function () {
             </select>
             <span class="empty-hint" style="padding:0;margin-left:6px;">Kho luôn lưu theo <b>${escapeHtml((row && row.DonViCoBan) || 'Cái')}</b> — dòng dưới mỗi ô hiện số đã quy đổi.</span>
           </div>
+          ${/* v6.89: mở từ phiếu nhập kho -> nhắc ĐỪNG gõ số lượng vào ô Nhập. Số của phiếu đã nằm
+               trong tồn kho qua nguồn chứng từ (vw_TonTheoMau); gõ lại đây là tồn ĐẾM HAI LẦN. */''}
+          ${!isEdit && tuPhieuNhap ? `<div class="empty-hint" style="margin:2px 0 8px;border-left:3px solid #f0ad4e;padding-left:8px;">
+            Mã này vào kho bằng <b>phiếu nhập kho</b> — số lượng đã tính vào tồn.
+            Để ô <b>Nhập</b> = 0, chỉ khai <b>màu / ảnh / giá bán</b>. Gõ số lượng vào đây là tồn bị đếm hai lần.
+          </div>` : ''}
           <div id="cRows">${(colors && colors.length ? colors.map(colorRowTemplate) : [colorRowTemplate(null)]).join('')}</div>
           <button type="button" class="btn small secondary" id="btnAddColor">+ Thêm màu</button>
           <datalist id="dlMauSac">${dm.mauSac.map(m => `<option value="${escapeHtml(m.TenMau)}"></option>`).join('')}</datalist>
@@ -757,16 +761,11 @@ window.ModuleKhoHang = (function () {
     /* Điền các ô của form theo MỘT DÒNG hàng của phiếu nhập. CHỈ điền mã/tên/ĐVT — KHÔNG điền số
        lượng: phiếu nhập lưu xong là đã cộng tồn, điền vào đây nữa là tồn đếm hai lần. */
     async function dienTheoDongPhieu(d2, soPhieu) {
-      /* Mã trên phiếu nhập LUÔN đã tồn tại — lưu phiếu là đã sinh mã (nhapkho.js timHoacTaoMaHang).
-         Nên mặc định phải mở form SỬA mã đó, không phải form tạo mới; mở tạo mới thì bấm Lưu chỉ
-         nhận "Mã hàng đã tồn tại, dùng chức năng Sửa" (đúng lỗi v6.84).
-         Vẫn giữ nhánh điền-vào-form-tạo-mới cho trường hợp mã đã bị xóa khỏi danh mục sau đó. */
-      const chuan = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
-      if (!isEdit && dsMaDaCo.has(chuan(d2.MaHang))) {
-        closeModal();
-        await moTheKhoTheoMa(d2.MaHang, null);
-        return;
-      }
+      /* v6.89: điền mã/tên/ĐVT từ dòng phiếu vào form TẠO MỚI. Mã đã có trong danh mục là bình thường
+         (phiếu nhập sinh ra), backend nhận cờ tuPhieuNKID nên lưu được — không còn tự nhảy sang form
+         Sửa như v6.86-v6.88.
+         KHÔNG điền số lượng: tồn của dòng phiếu này đã nằm trong tồn kho qua nguồn phiếu
+         (vw_TonTheoMau, migration_v682). Điền vào ô "Nhập" nữa là ĐẾM HAI LẦN. */
       const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
       dat('#inpMaHang', d2.MaHang);
       dat('#inpTenHang', d2.TenHang);
@@ -775,7 +774,7 @@ window.ModuleKhoHang = (function () {
       const oDvqd = modal.querySelector('[name="donViQuyDoi"]');
       if (oDvqd && d2.DonViQuyDoi) oDvqd.value = d2.DonViQuyDoi;
       dat('#inpLoaiRi', d2.LoaiRi);
-      toast(`Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Số lượng KHÔNG điền — phiếu nhập đã cộng tồn rồi.`, 'success');
+      toast(`Đã điền mã ${d2.MaHang} từ phiếu ${soPhieu}. Khai màu / ảnh / giá bán rồi bấm Lưu. Ô "Nhập" để 0 — số lượng của phiếu đã nằm trong tồn kho.`, 'success');
     }
 
     /* TẠO MỚI: nạp danh sách phiếu nhập loại SẢN XUẤT, chọn phiếu -> hiện các mã hàng trong phiếu
@@ -960,12 +959,17 @@ window.ModuleKhoHang = (function () {
           nhomSanPhamId: fd.get('nhomSanPhamId') || null,
           // v6.61: không gửi giaAloha nữa — backend ISNULL nên giá trị cũ trong CSDL giữ nguyên.
           maBarcode: fd.get('maBarcode') || null,
-          congKhai: !!modal.querySelector('#tkCongKhai').checked   // v6.71
+          congKhai: !!modal.querySelector('#tkCongKhai').checked,  // v6.71
+          /* v6.89: nói rõ form này mở từ một PHIẾU NHẬP KHO. Mã hàng đã được phiếu sinh ra trước đó,
+             không có cờ này thì backend chặn "Mã hàng đã tồn tại, dùng chức năng Sửa". */
+          tuPhieuNKID: (!isEdit && tuPhieuNhap && tuPhieuNhap.PhieuNKID) ? tuPhieuNhap.PhieuNKID : null
         };
+        let kq = null;
         if (isEdit) await apiPut('/api/khohang/items/' + row.MaHangID, body);
-        else await apiPost('/api/khohang/items', body);
+        else kq = await apiPost('/api/khohang/items', body);
 
-        closeModal(); toast('Đã lưu thẻ kho.', 'success');
+        closeModal();
+        toast((kq && kq.message) ? kq.message : 'Đã lưu thẻ kho.', 'success');
         // Tao moi tu tab "Tao the kho moi" (v5.3) -> chuyen sang tab danh sach de thay ngay ket qua.
         if (!isEdit) activeTab = 'items';
         render(container, currentUser);
@@ -1146,7 +1150,9 @@ window.ModuleKhoHang = (function () {
         <td>${c.LinkAnh ? `<img class="thumb hist-thumb" data-idx="${idx}" loading="lazy" decoding="async" src="${escapeHtml(anhNho(c.LinkAnh, 80))}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;">` : ''}</td>
         <td style="white-space:pre-wrap;">${escapeHtml(c.GhiChu || '')}</td>
         <td>${escapeHtml(c.TenMau)}</td>
-        <td>${fmtDualUnit(c.NhapCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
+        ${/* v6.89: cột "Nhập" của lịch sử phải là TỔNG cả 2 nguồn (thẻ kho + phiếu nhập kho), khác
+             với ô Nhập của form Sửa (chỉ phần thẻ kho). Endpoint trả cả 2 trường riêng. */''}
+        <td>${fmtDualUnit(c.TongNhapCai != null ? c.TongNhapCai : c.NhapCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
         <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
         <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
@@ -2972,7 +2978,10 @@ window.ModuleKhoHang = (function () {
           const nap = () => {
             const ds = chiTietMau.filter(c => String(c.MaHangID) === String(r.maHangId));
             selMau.innerHTML = '<option value="">-- màu --</option>' + ds.map(c => {
-              const ton = Number(c.NhapCai) - Number(c.XuatCai) - (Number(c.DangGiu) || 0)
+              /* v6.89: PHẢI dùng c.TonCai (đã gồm nguồn PHIẾU NHẬP KHO và đã trừ XuatCai), KHÔNG
+                 dùng (NhapCai − XuatCai): NhapCai là số THÔ của thẻ kho, hàng vào kho bằng phiếu
+                 nhập có NhapCai = 0 nên dropdown màu sẽ hiện "khả dụng 0" cho hàng thực có. */
+              const ton = Number(c.TonCai || 0) - (Number(c.DangGiu) || 0)
                 + (buTon.get(c.MaHangID + '|' + c.MauSacID) || 0);
               return `<option value="${c.MauSacID}" ${String(r.mauSacId) === String(c.MauSacID) ? 'selected' : ''}>${escapeHtml(c.TenMau)} (khả dụng ${fmtNumber(ton)})</option>`;
             }).join('');
@@ -3129,8 +3138,6 @@ window.ModuleKhoHang = (function () {
      Không nhận `perm` từ bên gọi: quyền phải lấy theo CHÍNH người đang đăng nhập, tin theo tham số
      bên ngoài truyền vào là mở đường lách quyền.
      ================================================================================================ */
-  let dsMaDaCo = new Set();   // v6.86: mã hàng đã có trong thẻ kho (chữ in, đã bỏ khoảng trắng)
-
   function quyenTheKho() {
     const rawPerm = currentUser && currentUser.isAdmin
       ? { canView: true, canCreate: true, canEdit: true, canDelete: true }
@@ -3140,19 +3147,14 @@ window.ModuleKhoHang = (function () {
 
   async function moTheKhoTheoMa(maHang, phieuNKID) {
     const p = quyenTheKho();
-    const res = await apiGet('/api/khohang/items');
-    const { tongHop, chiTiet } = res.data || {};
-    if (res.data && res.data.tyLeCK) tyLeCK = res.data.tyLeCK;
-    const chuan = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
-    dsMaDaCo = new Set((tongHop || []).map(r => String(r.MaHang || '').normalize('NFC').trim().toUpperCase()));
-    const row = (tongHop || []).find(r => chuan(r.MaHang) === chuan(maHang));
-    if (row) {
-      if (!p.canEdit) { toast(`Mã ${maHang} đã có thẻ kho, nhưng bạn không có quyền sửa.`, 'error'); return; }
-      toast(`Mã ${maHang} đã có thẻ kho — mở để bổ sung giá bán / ảnh / danh mục.`, 'info');
-      await openItemForm(row, p, (chiTiet || []).filter(c => c.MaHangID === row.MaHangID));
-      return;
-    }
     if (!p.canCreate) { toast('Bạn không có quyền tạo thẻ kho.', 'error'); return; }
+    const res = await apiGet('/api/khohang/items');
+    if (res.data && res.data.tyLeCK) tyLeCK = res.data.tyLeCK;
+    /* v6.89: LUÔN mở form TẠO THẺ KHO MỚI. Mã hàng đã có sẵn trong danh mục (phiếu nhập sinh ra) là
+       chuyện bình thường — backend nhận cờ `tuPhieuNKID` nên không báo "Mã hàng đã tồn tại" mà bổ
+       sung màu/ảnh/giá bán vào mã đó.
+       ⚠️ KHÔNG tự chuyển sang form Sửa như v6.86-v6.88: người dùng bấm "Tạo thẻ kho" là muốn khai
+       thẻ kho mới, bị đẩy sang form Sửa với dữ liệu lạ thì không hiểu đang ở đâu. */
     await openItemForm(null, p, null, { PhieuNKID: phieuNKID, maHang });
   }
 

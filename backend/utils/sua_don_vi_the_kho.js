@@ -136,10 +136,12 @@ function chuanDonVi(v) {
   try {
     const rows = (await pool.request().query(`
       SELECT h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi,
-             ISNULL(SUM(ct.NhapCai), 0) AS TongNhap, ISNULL(SUM(ct.XuatCai), 0) AS TongXuat,
-             ISNULL(SUM(ct.NhapCai - ct.XuatCai), 0) AS Ton, COUNT(ct.ID) AS SoMau
+             -- v6.89: TongNhap/Ton gom ca nguon PHIEU NHAP KHO (vw_TonTheoMau, migration_v682) de con
+             -- so in ra khop voi ton that su nguoi dung dang thay tren man hinh.
+             ISNULL(SUM(ct.TongNhapCai), 0) AS TongNhap, ISNULL(SUM(ct.XuatCai), 0) AS TongXuat,
+             ISNULL(SUM(ct.TonCai), 0) AS Ton, COUNT(ct.ChiTietID) AS SoMau
       FROM TheKhoHangHoa h
-      LEFT JOIN TheKhoChiTietMau ct ON ct.MaHangID = h.MaHangID
+      LEFT JOIN vw_TonTheoMau ct ON ct.MaHangID = h.MaHangID
       GROUP BY h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi
       ORDER BY h.MaHang`)).recordset;
 
@@ -515,7 +517,33 @@ function chuanDonVi(v) {
       cacCot = cot === 'tatca' ? ['SoCatCai', 'NhapCai', 'XuatCai'] : [{ nhap: 'NhapCai', xuat: 'XuatCai', socat: 'SoCatCai' }[cot]];
       nhan = NHAN;
     }
+    /* ⚠️ v6.89 — CHAN khi ma hang co PHIEU NHAP KHO HANG HOA.
+       Tu v6.89 ton kho co 2 nguon (migration_v682): TheKhoChiTietMau.NhapCai VA
+       PhieuNhapKhoHangChiTiet.SoLuongChinh. Cong cu nay chi nhan/chia he so tren cot cua THE KHO,
+       KHONG dung den so luong tren phieu => quy doi xong ton se lech dung <he so> lan o phan den tu
+       phieu, va lech nay am tham (khong bao loi, khong ai doi chieu duoc).
+       Quy doi lai so luong tren phieu la SUA CHUNG TU DA PHAT HANH - khong duoc lam bang mot script
+       doi don vi. Cach dung: sua tung phieu nhap kho o giao dien (Sua phieu -> doi DVT + so luong). */
     if (cacCot.length) {
+      let soDongPhieu = 0;
+      try {
+        soDongPhieu = (await pool.request().input('id', sql.Int, r.MaHangID).query(`
+          IF OBJECT_ID('PhieuNhapKhoHangChiTiet', 'U') IS NULL SELECT 0 AS n
+          ELSE SELECT COUNT(*) AS n
+               FROM PhieuNhapKhoHangChiTiet ct
+               JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+               WHERE ct.MaHangID = @id AND p.TrangThai <> N'Đã hủy'`)).recordset[0].n;
+      } catch (e) { soDongPhieu = 0; }
+      if (soDongPhieu > 0) {
+        console.error('');
+        console.error(`DUNG: ma ${r.MaHang} co ${soDongPhieu} dong tren PHIEU NHAP KHO HANG HOA (phieu chua huy).`);
+        console.error('Tu v6.89 ton kho gom ca so luong tren phieu; lenh nay chi quy doi cot cua the kho,');
+        console.error(`khong dung den phieu => ton se lech ${he} lan o phan den tu phieu ma khong bao loi.`);
+        console.error('');
+        console.error('=> Hay sua TUNG PHIEU NHAP KHO o giao dien (Kho hang > Phieu nhap kho > Sua):');
+        console.error('   doi DVT cua dong hang + so luong cho dung, phieu se tu tinh lai ton.');
+        process.exit(1);
+      }
       const loi = [];
       chiTiet.forEach(c => cacCot.forEach(k => {
         const v = Number(c[k]) || 0;

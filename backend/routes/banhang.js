@@ -111,16 +111,26 @@ async function layTyLeCK(pool) {
 /* ---------- TRU / HOAN TON: ham DUY NHAT duoc phep dong vao ton thanh pham ----------
    `sl` theo ĐƠN VỊ CHÍNH của mã hàng (xem ghi chú 2 đơn vị ở trên).
    sl > 0 = TRU ton;  sl < 0 = HOAN ton.
-   TRU: dùng UPDATE CÓ ĐIỀU KIỆN `(NhapCai - XuatCai) >= sl` rồi kiểm rowsAffected — nhờ vậy 2 người
+   TRU: dùng UPDATE CÓ ĐIỀU KIỆN vw_TonTheoMau.TonCai >= sl rồi kiểm rowsAffected — nhờ vậy 2 người
    lưu phiếu CÙNG LÚC không thể bán vượt tồn (kiểm tồn trước đó chỉ để báo lỗi sớm, không đủ an toàn).
    HOAN: chỉ UPDATE, KHÔNG tạo dòng mới — dòng màu có thể đã bị xóa khỏi thẻ kho, tạo mới sẽ sinh
    XuatCai âm = tồn ảo dương. */
 async function ghiXuatKho(pool, tran, maHangId, mauSacId, sl, nhanLoi) {
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
   if (sl > 0) {
+    /* v6.89: ĐIỀU KIỆN SO VỚI TỒN TỔNG (vw_TonTheoMau = NhapCai + NhapTuPhieu − XuatCai), không phải
+       (NhapCai − XuatCai). Hàng vào kho bằng PHIẾU NHẬP KHO thì NhapCai = 0 nên công thức cũ luôn báo
+       "không đủ tồn" dù kho có hàng thật. Xem migration_v682.
+       ⚠️ Đây là BẢN SAO của banHangCommon.ghiXuatKho — sửa một bên thì phải sửa cả bên kia. */
+    await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId)
+      .query(`IF NOT EXISTS (SELECT 1 FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms)
+                INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, SoCatCai, NhapCai, XuatCai)
+                VALUES (@mh, @ms, 0, 0, 0)`);
     const kq = await rq().input('mh', sql.Int, maHangId).input('ms', sql.Int, mauSacId).input('sl', sql.Int, sl)
-      .query(`UPDATE TheKhoChiTietMau SET XuatCai = XuatCai + @sl
-              WHERE MaHangID=@mh AND MauSacID=@ms AND (NhapCai - XuatCai) >= @sl`);
+      .query(`UPDATE ct SET ct.XuatCai = ct.XuatCai + @sl
+              FROM TheKhoChiTietMau ct
+              JOIN vw_TonTheoMau t ON t.MaHangID = ct.MaHangID AND t.MauSacID = ct.MauSacID
+              WHERE ct.MaHangID=@mh AND ct.MauSacID=@ms AND t.TonCai >= @sl`);
     if (!kq.rowsAffected[0]) {
       throw new Error(`Không đủ tồn kho để xuất${nhanLoi ? ' (' + nhanLoi + ')' : ''} — có người vừa bán/xuất mã này. Mở lại phiếu và kiểm tra tồn.`);
     }
@@ -562,8 +572,9 @@ async function chuanBiPhieu(pool, b, tonBu) {
     return { loi: (`Có ${thieuMau.length} dòng chưa chọn MÀU. Phải chọn màu để trừ đúng tồn kho.`) };
   }
   const hangMap = new Map(hangRs.map(h => [h.MaHangID, h]));
+  // v6.89: đọc từ vw_TonTheoMau — đã gồm cả nguồn PHIẾU NHẬP KHO (migration_v682).
   const tonRs = (await pool.request().query(`
-    SELECT MaHangID, MauSacID, (NhapCai - XuatCai) AS TonCai FROM TheKhoChiTietMau
+    SELECT MaHangID, MauSacID, TonCai FROM vw_TonTheoMau
     WHERE MaHangID IN (${ids.join(',')})`)).recordset;
   const tonMap = new Map(tonRs.map(r => [r.MaHangID + '|' + r.MauSacID, so(r.TonCai)]));
 
@@ -927,8 +938,8 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
   const rows = (await rq.query(`
     SELECT o.DonID, o.ThoiGian, o.TenKhach, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi, o.TrangThai,
            h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi, h.AnhDaiDien, ms.TenMau,
-           ISNULL((SELECT SUM(ct.NhapCai - ct.XuatCai) FROM TheKhoChiTietMau ct
-                   WHERE ct.MaHangID = o.MaHangID AND ct.MauSacID = o.MauSacID), 0) AS TonCai
+           ISNULL((SELECT SUM(t.TonCai) FROM vw_TonTheoMau t
+                   WHERE t.MaHangID = o.MaHangID AND t.MauSacID = o.MauSacID), 0) AS TonCai
     FROM DonKhachDatHang o
     JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = o.MauSacID
