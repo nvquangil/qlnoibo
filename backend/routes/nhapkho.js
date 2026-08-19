@@ -74,7 +74,10 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
   const q = (t) => pool.request().query(t).then(r => r.recordset);
   const [ncc, donHang, theKho, nhom, mauSac, donVi] = await Promise.all([
     q('SELECT NCC_ID, TenNCC FROM NhaCungCap ORDER BY TenNCC'),
-    q(`SELECT TOP 300 DonHangID, MaDH, TenSanPham FROM DonHangSanXuat ORDER BY DonHangID DESC`),
+    /* v6.80: CHI lay lenh SX DA HOAN THANH. Lenh dang san xuat ma cho nhap kho thanh pham thi so
+       "da hoan thanh" cua lenh do va ton kho se lech nhau, khong ai doi chieu duoc. */
+    q(`SELECT TOP 300 DonHangID, MaDH, TenSanPham FROM DonHangSanXuat
+       WHERE TrangThai = N'Hoàn thành' ORDER BY DonHangID DESC`),
     q('SELECT TheKhoDanhMucID, TenTheKho FROM TheKhoDanhMuc ORDER BY TenTheKho'),
     q('SELECT NhomSanPhamID, TenNhom FROM NhomSanPham ORDER BY TenNhom').catch(() => []),
     q('SELECT MauSacID, TenMau FROM MauSac ORDER BY TenMau'),
@@ -246,10 +249,15 @@ function slugMa(s) {
     .replace(new RegExp('đ', 'g'), 'd').replace(new RegExp('Đ', 'g'), 'D')
     .toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 30) || 'MAU';
 }
+/* v6.80: PHIEU NHAP KHO KHONG CHON MAU NUA (yeu cau nguoi dung).
+   Nhung TheKhoChiTietMau bat buoc co MauSacID (khoa duy nhat la MaHangID + MauSacID), nen khong
+   the de trong. Cach xu ly: dong nao khong khai mau thi don vao mot mau ky thuat dung chung
+   "(Không phân màu)". Nho vay ton kho van co cho de cong, ma nguoi dung khong phai go gi.
+   KHONG dung MauSacID = 0 hay NULL - se vo khoa ngoai va lam hong moi phep dem ton theo mau. */
+const MAU_MAC_DINH = '(Không phân màu)';
 async function timHoacTaoMau(pool, tran, d) {
   if (d.mauSacId) return Number(d.mauSacId);
-  const ten = String(d.tenMau || '').trim();
-  if (!ten) throw new Error('Dòng hàng chưa có màu.');
+  const ten = String(d.tenMau || '').trim() || MAU_MAC_DINH;
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
   const co = (await rq().input('t', sql.NVarChar, ten).query('SELECT MauSacID FROM MauSac WHERE TenMau=@t')).recordset[0];
   if (co) return co.MauSacID;

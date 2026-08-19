@@ -167,13 +167,10 @@
               <option value="NhaCungCap"${h && h.LoaiNhap === 'NhaCungCap' ? ' selected' : ''}>Từ nhà cung cấp (có công nợ)</option>
               <option value="SanXuat"${h && h.LoaiNhap === 'SanXuat' ? ' selected' : ''}>Từ sản xuất (không công nợ)</option>
             </select></td>
-            <th id="nkfNhanNguon">Nhà cung cấp <span class="bat-buoc">*</span></th>
-            <td>
-              <select id="nkfNcc" style="width:100%;"><option value="">-- Chọn nhà cung cấp --</option>
-                ${opt(dm.ncc, 'NCC_ID', 'TenNCC', h ? h.NCC_ID : '')}</select>
-              <select id="nkfDon" style="width:100%;display:none;"><option value="">-- Chọn lệnh SX --</option>
-                ${(dm.donHang || []).map(d => `<option value="${d.DonHangID}"${h && h.DonHangID === d.DonHangID ? ' selected' : ''}>${escapeHtml(d.MaDH)}${d.TenSanPham ? ' — ' + escapeHtml(d.TenSanPham) : ''}</option>`).join('')}</select>
-            </td>
+            ${/* v6.80: chỉ vẽ ĐÚNG MỘT ô nguồn. Bản trước nhét cả 2 select rồi ẩn bớt bằng display:none
+                 — ô ẩn vẫn chiếm chỗ trong luồng của ô cha nên nhìn như thừa một dòng trống. */''}
+            <th id="nkfNhanNguon"></th>
+            <td id="nkfONguon"></td>
           </tr>
           <tr>
             <th>Số hóa đơn</th><td><input type="text" id="nkfSoHD" value="${escapeHtml(h ? (h.SoHoaDon || '') : '')}" style="width:100%;"></td>
@@ -201,14 +198,28 @@
       </div>`, { rong: true });
 
     const $ = (s) => modal.querySelector(s);
+    // Nhớ lựa chọn nguồn để đổi qua đổi lại loại nhập không mất cái đã chọn.
+    let nhoNcc = h ? (h.NCC_ID || '') : '';
+    let nhoDon = h ? (h.DonHangID || '') : '';
 
     /* Đổi loại nhập thì đổi luôn ô nguồn. Ẩn/hiện chứ không xóa khỏi DOM — để sửa phiếu chọn nhầm
        loại rồi chọn lại vẫn còn nguyên lựa chọn cũ. */
     function apLoai() {
       const sx = $('#nkfLoai').value === 'SanXuat';
-      $('#nkfNhanNguon').innerHTML = sx ? 'Lệnh sản xuất' : 'Nhà cung cấp <span class="bat-buoc">*</span>';
-      $('#nkfNcc').style.display = sx ? 'none' : '';
-      $('#nkfDon').style.display = sx ? '' : 'none';
+      $('#nkfNhanNguon').innerHTML = sx
+        ? 'Lệnh sản xuất <span class="bat-buoc">*</span>'
+        : 'Nhà cung cấp <span class="bat-buoc">*</span>';
+      /* Dựng lại ô nguồn theo loại. Giữ lại lựa chọn cũ nếu người dùng đổi loại rồi đổi về:
+         `nhoNcc`/`nhoDon` nhớ giá trị trước đó. */
+      $('#nkfONguon').innerHTML = sx
+        ? `<select id="nkfDon" style="width:100%;"><option value="">-- Chọn lệnh SX đã hoàn thành --</option>
+             ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}</option>`).join('')}
+           </select>${(dm.donHang || []).length ? '' : '<div class="empty-hint" style="margin-top:2px;">Chưa có lệnh SX nào ở trạng thái Hoàn thành.</div>'}`
+        : `<select id="nkfNcc" style="width:100%;"><option value="">-- Chọn nhà cung cấp --</option>
+             ${opt(dm.ncc, 'NCC_ID', 'TenNCC', '')}</select>`;
+      const oN = $('#nkfNcc'), oD = $('#nkfDon');
+      if (oN) { oN.value = nhoNcc || ''; oN.onchange = () => { nhoNcc = oN.value; }; }
+      if (oD) { oD.value = nhoDon || ''; oD.onchange = () => { nhoDon = oD.value; }; }
       veDong();   // vẽ lại để ẩn/hiện cột Đơn giá
     }
     $('#nkfLoai').onchange = apLoai;
@@ -222,8 +233,10 @@
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `
         <table class="data-table phieu-ke"><thead><tr>
+          ${/* v6.80: BỎ cột Màu — phiếu nhập kho không phân màu. Backend dồn vào một màu kỹ thuật
+               "(Không phân màu)" vì thẻ kho bắt buộc có màu (khóa MaHangID + MauSacID). */''}
           <th style="width:46px;">STT</th><th style="width:150px;">Mã hàng</th><th>Tên hàng</th>
-          <th style="width:130px;">Màu</th><th style="width:100px;">Số lượng</th><th style="width:90px;">ĐVT</th>
+          <th style="width:100px;">Số lượng</th><th style="width:90px;">ĐVT</th>
           ${sx ? '' : '<th style="width:120px;">Đơn giá</th><th style="width:130px;" class="num">Thành tiền</th>'}
           <th style="width:150px;">Ghi chú</th><th style="width:44px;"></th>
         </tr></thead><tbody>
@@ -244,7 +257,6 @@
           </label>
         </td>
         <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="tự điền khi chọn mã" style="width:100%;"></td>
-        <td><input type="text" class="nk-mau" list="nkDlMau" value="${escapeHtml(d.tenMau || '')}" placeholder="Màu" style="width:100%;"></td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
         <td><select class="nk-dv" style="width:100%;">${dsDV.map(x => `<option${d.donVi === x ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}</select></td>
         ${sx ? '' : `<td><input type="number" class="nk-gia" min="0" step="1" value="${d.donGia != null ? d.donGia : ''}" style="width:100%;"></td>
@@ -275,7 +287,6 @@
         };
         tr.querySelector('.nk-moi').onchange = (e) => { d.taoMoi = e.target.checked; };
         tr.querySelector('.nk-ten').oninput = (e) => { d.tenHang = e.target.value; };
-        tr.querySelector('.nk-mau').oninput = (e) => { d.tenMau = e.target.value; d.mauSacId = null; };
         tr.querySelector('.nk-sl').oninput = (e) => { d.soLuong = e.target.value; capNhatDong(tr, d, sx); };
         tr.querySelector('.nk-dv').onchange = (e) => { d.donVi = e.target.value; };
         tr.querySelector('.nk-gc').oninput = (e) => { d.ghiChu = e.target.value; };
@@ -307,7 +318,7 @@
     // Danh sách gợi ý dùng chung cho mọi dòng
     modal.insertAdjacentHTML('beforeend', `
       <datalist id="nkDlMaHang">${(dm.hang || []).map(x => `<option value="${escapeHtml(x.MaHang)}">${escapeHtml(x.TenHang || '')}</option>`).join('')}</datalist>
-      <datalist id="nkDlMau">${(dm.mauSac || []).map(x => `<option value="${escapeHtml(x.TenMau)}"></option>`).join('')}</datalist>`);
+`);
 
     apLoai();
 
@@ -315,7 +326,7 @@
       const sx = $('#nkfLoai').value === 'SanXuat';
       const dong = dongForm.filter(d => Number(d.soLuong) > 0).map(d => ({
         maHangId: d.maHangId || null, maHang: d.maHang, taoMoi: !!d.taoMoi, tenHang: d.tenHang,
-        mauSacId: d.mauSacId || null, tenMau: d.tenMau,
+        mauSacId: d.mauSacId || null, tenMau: d.tenMau || null,   // v6.80: không còn ô nhập màu; để trống -> backend dùng màu mặc định
         soLuong: d.soLuong, donVi: d.donVi, donGia: sx ? 0 : d.donGia,
         loaiRi: d.loaiRi, donViCoBan: d.donViCoBan, donViQuyDoi: d.donViQuyDoi, ghiChu: d.ghiChu
       }));
@@ -328,15 +339,25 @@
         soHoaDon: $('#nkfSoHD').value || null, ngayHoaDon: $('#nkfNgayHD').value || null,
         ghiChu: $('#nkfGhiChu').value || null, dong
       };
+      /* ⚠️ BẮT BUỘC try/catch: apiFetch NÉM LỖI khi máy chủ trả 4xx/5xx chứ không trả {success:false}.
+         Bản trước thiếu chỗ này nên chỉ cần máy chủ báo lỗi là handler văng giữa chừng, dòng
+         `disabled = false` không bao giờ chạy -> nút Lưu kẹt cứng, bấm không thấy gì xảy ra và
+         cũng không có thông báo lỗi nào. Đây đúng là lỗi vừa gặp. */
       $('#nkfLuu').disabled = true;
-      const kq = id ? await apiPut('/api/nhapkho/phieu/' + id, body) : await apiPost('/api/nhapkho/phieu', body);
-      $('#nkfLuu').disabled = false;
-      if (!kq.success) return toast(kq.message || 'Lỗi khi lưu phiếu.', 'error');
-      toast(kq.message || 'Đã lưu phiếu.', 'success');
-      closeModal();
-      dm = (await apiGet('/api/nhapkho/danhmuc')).data;   // nạp lại: có thể vừa tạo mã hàng mới
-      await taiBang();
-      xemPhieu(id || kq.data.phieuNKID);
+      try {
+        const kq = id ? await apiPut('/api/nhapkho/phieu/' + id, body) : await apiPost('/api/nhapkho/phieu', body);
+        if (!kq.success) { toast(kq.message || 'Lỗi khi lưu phiếu.', 'error'); return; }
+        toast(kq.message || 'Đã lưu phiếu.', 'success');
+        closeModal();
+        dm = (await apiGet('/api/nhapkho/danhmuc')).data;   // nạp lại: có thể vừa tạo mã hàng mới
+        await taiBang();
+        xemPhieu(id || kq.data.phieuNKID);
+      } catch (err) {
+        toast(err.message || 'Lỗi khi lưu phiếu.', 'error');
+      } finally {
+        const b2 = $('#nkfLuu');
+        if (b2) b2.disabled = false;     // modal có thể đã đóng -> phải kiểm tra trước khi gán
+      }
     };
   }
 
