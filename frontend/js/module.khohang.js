@@ -482,6 +482,15 @@ window.ModuleKhoHang = (function () {
                bằng PHIẾU NHẬP KHO (tab Phiếu nhập kho), và mã hàng mới cũng tạo ngay trên phiếu đó.
                Ô chọn lệnh SX giữ lại nhưng ẨN HẲN, không gỡ khỏi HTML: dữ liệu cũ vẫn có DonHangID,
                gỡ ô đi thì lúc Sửa thẻ kho cũ sẽ gửi thiếu và xóa mất liên kết đã lưu. */''}
+          ${/* v6.83: CHỌN "Hàng nhà sản xuất" -> hiện DANH SÁCH PHIẾU NHẬP KHO của mã hàng này, bấm
+               sang xem được. CHỈ ĐỂ XEM, không điền ngược gì vào thẻ kho: phiếu nhập lưu xong LÀ ĐÃ
+               CỘNG TỒN, điền thêm số lượng vào đây nữa là tồn bị đếm hai lần.
+               Thực tế dùng: lập phiếu nhập kho trước (mã hàng sinh ra ở đó), vào thẻ kho sau chỉ để
+               bổ sung giá bán / ảnh / danh mục. */''}
+          <div class="form-row" id="blockPhieuNhap" style="${loaiHangInit === 'NhaSanXuat' ? '' : 'display:none;'}">
+            <label>Phiếu nhập kho của mã hàng này</label>
+            <div id="dsPhieuNhap" class="empty-hint">—</div>
+          </div>
           <div class="form-row" id="blockNhaSanXuat" style="display:none;">
             <label>Đơn hàng sản xuất (không dùng nữa)</label>
             ${/* Ô ẩn PHẢI mang sẵn giá trị đang lưu và ĐANG ĐƯỢC CHỌN. Nếu chỉ để mỗi option rỗng thì
@@ -734,8 +743,56 @@ window.ModuleKhoHang = (function () {
     /* Nguồn hàng giờ CHỈ còn là nhãn phân loại (Nhà SX / Đặt ngoài) — không đổi bố cục form nữa.
        Đơn vị tính phải khai cho CẢ HAI loại: trước đây hàng nhà SX bị ẩn 2 ô ĐVT vì lấy theo lệnh SX,
        nay không có lệnh SX thì không ẩn được, ẩn là lưu ra mã hàng không có đơn vị. */
-    function toggleLoaiHangBlocks() { toggleAddColorBtn(); }
+    /* Nạp danh sách phiếu nhập kho của mã hàng đang sửa. Tạo mới thì chưa có mã hàng nên chưa có gì
+       để tra — hiện dòng nhắc thay vì để trống khó hiểu. */
+    let daNapPhieuNhap = false;
+    async function napPhieuNhap() {
+      const o = modal.querySelector('#dsPhieuNhap');
+      if (!o || daNapPhieuNhap) return;
+      if (!isEdit || !row || !row.MaHangID) {
+        o.innerHTML = 'Mã hàng mới chưa có phiếu nhập nào. Hàng nhà sản xuất vào kho bằng <b>tab Phiếu nhập kho</b> — mã hàng mới cũng tạo ngay trên phiếu đó.';
+        daNapPhieuNhap = true;
+        return;
+      }
+      o.textContent = 'Đang tải...';
+      try {
+        const ds = (await apiGet('/api/nhapkho/theo-mahang/' + row.MaHangID)).data || [];
+        daNapPhieuNhap = true;
+        if (!ds.length) { o.innerHTML = 'Chưa có phiếu nhập kho nào cho mã hàng này.'; return; }
+        o.classList.remove('empty-hint');
+        o.innerHTML = `<div class="table-wrap" style="max-height:180px;overflow:auto;">
+          <table class="data-table phieu-ke"><thead><tr>
+            <th>Số phiếu</th><th>Ngày</th><th>Nguồn</th><th class="num">SL</th><th>ĐVT</th><th>Trạng thái</th>
+          </tr></thead><tbody>
+            ${ds.map(p => `<tr>
+              <td><a href="#" class="pn-xem" data-id="${p.PhieuNKID}"><b>${escapeHtml(p.SoPhieu)}</b></a></td>
+              <td>${fmtDate(p.NgayNhap)}</td>
+              <td>${escapeHtml(p.LoaiNhap === 'SanXuat' ? ('SX' + (p.MaDH ? ' · ' + p.MaDH : '')) : (p.TenNCC || 'NCC'))}</td>
+              <td class="num">${fmtNumber(p.SoLuong)}</td>
+              <td>${escapeHtml(p.DonVi || '')}</td>
+              <td>${p.TrangThai === 'Đã hủy' ? '<span class="badge red">Đã hủy</span>' : '<span class="badge green">Hoàn thành</span>'}</td>
+            </tr>`).join('')}
+          </tbody></table></div>`;
+        o.querySelectorAll('.pn-xem').forEach(a2 => a2.onclick = (e) => {
+          e.preventDefault();
+          /* Mở ĐÈ LÊN form thẻ kho (ngăn xếp modal v5.97) — đóng phiếu là quay lại đúng form đang
+             nhập dở, không mất dữ liệu người dùng đã gõ. */
+          if (window.ModuleNhapKho) window.ModuleNhapKho.xemPhieu(a2.dataset.id);
+          else toast('Chưa nạp module.nhapkho.js — copy file này rồi Ctrl+F5.', 'error');
+        });
+      } catch (err) {
+        o.innerHTML = 'Không tải được danh sách phiếu nhập: ' + escapeHtml(err.message);
+      }
+    }
+
+    function toggleLoaiHangBlocks() {
+      const laNhaSanXuat = modal.querySelector('#selLoaiHang').value === 'NhaSanXuat';
+      modal.querySelector('#blockPhieuNhap').style.display = laNhaSanXuat ? '' : 'none';
+      if (laNhaSanXuat) napPhieuNhap();
+      toggleAddColorBtn();
+    }
     modal.querySelector('#selLoaiHang').addEventListener('change', toggleLoaiHangBlocks);
+    if (loaiHangInit === 'NhaSanXuat') napPhieuNhap();
     toggleAddColorBtn();
 
     // Goi y tu dong dien ten hang/ma hang/mau chinh khi chon 1 don hang san xuat - CHI ap dung luc

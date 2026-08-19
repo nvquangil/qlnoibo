@@ -90,6 +90,30 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
 });
 
 /* ================================================================================================
+   v6.83: CAC PHIEU NHAP KHO CUA MOT MA HANG.
+   Dung o form The kho hang hoa: chon "Nguon hang = Nha san xuat" thi hien danh sach phieu nhap da
+   nhap ma hang do, bam sang xem duoc.
+   CHI DE XEM - khong dien nguoc gi vao the kho. Phieu nhap luu xong LA DA CONG TON roi; dien them
+   so luong vao the kho nua la ton bi dem hai lan.
+   ================================================================================================ */
+router.get('/theo-mahang/:maHangId', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
+  const pool = await getPool();
+  const rs = (await pool.request().input('mh', sql.Int, req.params.maHangId).query(`
+    SELECT p.PhieuNKID, p.SoPhieu, p.NgayNhap, p.LoaiNhap, p.TrangThai,
+           ncc.TenNCC, d.MaDH,
+           SUM(ct.SoLuong) AS SoLuong, MAX(ct.DonVi) AS DonVi,
+           SUM(ISNULL(ct.ThanhTien, 0)) AS ThanhTien
+    FROM PhieuNhapKhoHangChiTiet ct
+    JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+    LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
+    LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
+    WHERE ct.MaHangID = @mh
+    GROUP BY p.PhieuNKID, p.SoPhieu, p.NgayNhap, p.LoaiNhap, p.TrangThai, ncc.TenNCC, d.MaDH
+    ORDER BY p.NgayNhap DESC, p.PhieuNKID DESC`)).recordset;
+  res.json({ success: true, data: rs });
+});
+
+/* ================================================================================================
    DANH SACH PHIEU
    ================================================================================================ */
 async function danhSach(pool, q) {
