@@ -31,6 +31,7 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 const { damBaoDongMau, capNhatAnhDaiDien } = require('../utils/theKhoMau');
+const { capNhatMaHang } = require('../utils/maHangCapNhat');
 
 const router = express.Router();
 
@@ -262,7 +263,9 @@ async function docPhieu(pool, id) {
      phai hien ra (voi ma trong) chu khong duoc BIEN MAT khoi man xem va ban in — phieu in thieu hang
      ma khong ai biet la kieu loi te nhat. */
   const ct = (await pool.request().input('id', sql.Int, id).query(`
-    SELECT ct.*, hh.MaHang, hh.TenHang, hh.LoaiRi, hh.DonViCoBan, hh.DonViQuyDoi, ms.TenMau
+    SELECT ct.*, hh.MaHang, hh.TenHang, hh.LoaiRi, hh.DonViCoBan, hh.DonViQuyDoi, ms.TenMau,
+           -- v6.98: cac truong CAP MA HANG de form Sua phieu dien san dong khai (khoi sang man khac)
+           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode
     FROM PhieuNhapKhoHangChiTiet ct
     LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
@@ -281,17 +284,11 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
    ⚠️ v6.87: KHONG con tao ma hang o day. Ma chua co trong danh muc thi dong do luu dang
    "cho tao the kho" (xem ghi chu dau file).
    ================================================================================================ */
-function slugMa(s) {
-  const d = new RegExp('[\\u0300-\\u036f]', 'g');
-  return String(s || '').normalize('NFD').replace(d, '')
-    .replace(new RegExp('đ', 'g'), 'd').replace(new RegExp('Đ', 'g'), 'D')
-    .toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 30) || 'MAU';
-}
-/* v6.80: PHIEU NHAP KHO KHONG CHON MAU NUA (yeu cau nguoi dung).
-   Nhung TheKhoChiTietMau bat buoc co MauSacID (khoa duy nhat la MaHangID + MauSacID), nen khong
-   the de trong. Cach xu ly: dong nao khong khai mau thi don vao mot mau ky thuat dung chung
-   "(Không phân màu)". Nho vay ton kho van co cho de cong, ma nguoi dung khong phai go gi.
-   KHONG dung MauSacID = 0 hay NULL - se vo khoa ngoai va lam hong moi phep dem ton theo mau. */
+/* v6.98: MA MAU = CHINH TEN MAU (cat 30 ky tu cho khop NVARCHAR(30)).
+   ⚠️ Truoc day sinh ma bang cach bo dau + bo khoang trang + them so khi trung ("Đỏ đậm" -> "DODAM",
+   trung thi "DODAM2"). Nguoi dung khong bao gio go nhung ma do, chung chi lam ban danh muc mau.
+   Ten mau da UNIQUE tren TenMau o tang tra cuu ben duoi (tim theo ten truoc khi tao) nen dung ten lam
+   ma khong sinh xung dot moi. */
 const MAU_MAC_DINH = '(Không phân màu)';
 async function timHoacTaoMau(pool, tran, d) {
   if (d.mauSacId) return Number(d.mauSacId);
@@ -299,13 +296,17 @@ async function timHoacTaoMau(pool, tran, d) {
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
   const co = (await rq().input('t', sql.NVarChar, ten).query('SELECT MauSacID FROM MauSac WHERE TenMau=@t')).recordset[0];
   if (co) return co.MauSacID;
-  let base = slugMa(ten), ma = base, i = 1;
+  /* Chua co -> tao mau moi, MaMau = chinh ten (cat 30 ky tu). Neu ma nay da bi mot mau KHAC chiem
+     (ten khac nhung cat 30 ky tu ra giong nhau) thi moi phai them so — truong hop rat hiem, va co so
+     la co ly do that su chu khong phai sinh bua. */
+  let ma = ten.slice(0, 30), i = 1;
   while ((await rq().input('m', sql.NVarChar, ma).query('SELECT 1 AS x FROM MauSac WHERE MaMau=@m')).recordset[0]) {
-    i++; ma = (base + i).slice(0, 30);
+    i++; ma = (ten.slice(0, 28) + i).slice(0, 30);
   }
   return (await rq().input('MaMau', sql.NVarChar, ma).input('TenMau', sql.NVarChar, ten)
     .query('INSERT INTO MauSac (MaMau, TenMau) OUTPUT INSERTED.MauSacID VALUES (@MaMau, @TenMau)')).recordset[0].MauSacID;
 }
+
 /* ================================================================================================
    TIM MA HANG, CHUA CO THI TAO LUON (v6.88).
 
@@ -356,17 +357,30 @@ async function timHoacTaoMaHang(pool, tran, d) {
     .input('DonViCoBan', sql.NVarChar, dvChinh)
     .input('DonViQuyDoi', sql.NVarChar, dvQuyDoi)
     .input('LoaiHang', sql.NVarChar, d.loaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai')
+    .input('MaBarcode', sql.NVarChar, String(d.maBarcode || '').trim() || null)
     .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, GiaBan, LoaiRi, TheKhoDanhMucID, NhomSanPhamID,
-              DonViCoBan, DonViQuyDoi, LoaiHang)
+              DonViCoBan, DonViQuyDoi, LoaiHang, MaBarcode)
             OUTPUT INSERTED.MaHangID
             VALUES (@MaHang, @TenHang, @GiaBan, @LoaiRi, @TheKhoDanhMucID, @NhomSanPhamID,
-              @DonViCoBan, @DonViQuyDoi, @LoaiHang)`)).recordset[0].MaHangID;
+              @DonViCoBan, @DonViQuyDoi, @LoaiHang, @MaBarcode)`)).recordset[0].MaHangID;
   return { MaHangID: id, MaHang: ma, LoaiRi: heSo, DonViCoBan: dvChinh, DonViQuyDoi: dvQuyDoi, laMoi: true };
 }
 
 /* Chuan hoa 1 dong hang cua phieu -> ban ghi san sang INSERT. */
 async function chuanDong(pool, tran, d, loai) {
   const mh = await timHoacTaoMaHang(pool, tran, d);
+  /* v6.98: DONG KHAI (dong dau tien cua moi ma tren phieu) duoc sua luon thong tin cap ma hang —
+     Gia ban / Loai hang / Danh muc the kho / Barcode / 2 DVT / ty le — de khong phai sang man The kho
+     hay Danh muc sua. Chi lam khi ma DA CO san; ma vua tao thi INSERT o tren da ghi day du roi.
+     Dung CHUNG ham capNhatMaHang() voi PUT /danhmuc/hanghoa/:id — mot bo truong, mot duong ghi. */
+  if (d.laDongKhai && !mh.laMoi) {
+    const kq = await capNhatMaHang(pool, tran, mh.MaHangID, d);
+    if (kq.doiMa) mh.MaHang = kq.doiMa.den;
+    // Doc lai 2 DVT + ty le: cac phep quy doi ben duoi phai dung so VUA sua, khong phai so cu.
+    const moi = (await new sql.Request(tran).input('id', sql.Int, mh.MaHangID)
+      .query('SELECT LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0];
+    if (moi) { mh.LoaiRi = moi.LoaiRi; mh.DonViCoBan = moi.DonViCoBan; mh.DonViQuyDoi = moi.DonViQuyDoi; }
+  }
   const donGia = loai === 'NhaCungCap' ? so(d.donGia) : 0;
   const chung = {
     soLuong: so(d.soLuong), donGia, thanhTien: tien(donGia * so(d.soLuong)),

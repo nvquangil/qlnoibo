@@ -392,6 +392,7 @@ router.put('/cauhinh', requireAuth, requirePermission('DANHMUC', 'edit'), async 
    truong la ghi NULL. O day con phai chuan hoa MaHang, kiem trung, va chan xoa co giai thich.
    ================================================================================================ */
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
+const { capNhatMaHang } = require('../utils/maHangCapNhat');
 
 const chuanMaHang = (x) => String(x == null ? '' : x).trim().toUpperCase();
 
@@ -435,41 +436,25 @@ router.post('/hanghoa', requireAuth, requirePermission('DANHMUC', 'create'), asy
 router.put('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'edit'), async (req, res) => {
   const pool = await getPool();
   const b = req.body || {};
-  const id = parseInt(req.params.id, 10);
-  const cu = (await pool.request().input('id', sql.Int, id)
-    .query('SELECT MaHangID, MaHang FROM TheKhoHangHoa WHERE MaHangID = @id')).recordset[0];
-  if (!cu) return res.status(404).json({ success: false, message: 'Không tìm thấy mã hàng.' });
-
-  const ma = chuanMaHang(b.MaHang);
-  if (ma) {
-    const trung = (await pool.request().input('m', sql.NVarChar, ma).input('id', sql.Int, id)
-      .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang = @m AND MaHangID <> @id')).recordset[0];
-    if (trung) return res.status(400).json({ success: false, message: `Mã hàng "${ma}" đã có ở dòng khác.` });
+  /* v6.98: dung CHUNG capNhatMaHang() voi phieu nhap kho (dong khai) — mot bo truong, mot duong ghi.
+     Truoc day moi ben tu viet UPDATE rieng; hai ban sao la som muon lech (mot ben quen ISNULL la xoa
+     trang du lieu). Field name gui len theo kieu camelCase cua util. */
+  try {
+    const kq = await capNhatMaHang(pool, null, parseInt(req.params.id, 10), {
+      maHang: b.MaHang, tenHang: b.TenHang,
+      donViCoBan: b.DonViCoBan, donViQuyDoi: b.DonViQuyDoi, loaiRi: b.LoaiRi,
+      giaBan: b.GiaBan, nhomSanPhamId: b.NhomSanPhamID,
+      theKhoDanhMucId: b.TheKhoDanhMucID, maBarcode: b.MaBarcode
+    });
+    res.json({
+      success: true,
+      message: kq.doiMa
+        ? `Đã đổi mã ${kq.doiMa.tu} → ${kq.doiMa.den}. Mọi phiếu cũ vẫn liên kết đúng (các bảng lưu theo ID, không lưu chuỗi mã).`
+        : 'Đã lưu.'
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
   }
-  /* ISNULL o MOI truong: form chi gui nhung o no co. Khong boc ISNULL thi gui thieu mot truong la
-     xoa trang truong do — dung loi da tung co o PUT /khohang/items/:id. */
-  await pool.request()
-    .input('id', sql.Int, id)
-    .input('MaHang', sql.NVarChar, ma || null)
-    .input('TenHang', sql.NVarChar, String(b.TenHang || '').trim() || null)
-    .input('DonViCoBan', sql.NVarChar, String(b.DonViCoBan || '').trim() || null)
-    .input('DonViQuyDoi', sql.NVarChar, String(b.DonViQuyDoi || '').trim() || null)
-    .input('LoaiRi', sql.Int, b.LoaiRi === '' || b.LoaiRi == null ? null : Math.max(1, parseInt(b.LoaiRi, 10) || 1))
-    .input('GiaBan', sql.Decimal(14, 2), b.GiaBan === '' || b.GiaBan == null ? null : b.GiaBan)
-    .query(`UPDATE TheKhoHangHoa SET
-              MaHang      = ISNULL(@MaHang, MaHang),
-              TenHang     = ISNULL(@TenHang, TenHang),
-              DonViCoBan  = ISNULL(@DonViCoBan, DonViCoBan),
-              DonViQuyDoi = ISNULL(@DonViQuyDoi, DonViQuyDoi),
-              LoaiRi      = ISNULL(@LoaiRi, LoaiRi),
-              GiaBan      = ISNULL(@GiaBan, GiaBan)
-            WHERE MaHangID = @id`);
-  res.json({
-    success: true,
-    message: (ma && ma !== chuanMaHang(cu.MaHang))
-      ? `Đã đổi mã ${cu.MaHang} → ${ma}. Mọi phiếu cũ vẫn liên kết đúng (các bảng lưu theo ID, không lưu chuỗi mã).`
-      : 'Đã lưu.'
-  });
 });
 
 router.delete('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'delete'), async (req, res) => {
