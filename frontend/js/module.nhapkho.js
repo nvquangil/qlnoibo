@@ -274,7 +274,16 @@
     $('#nkfLoai').onchange = apLoai;
     $('#nkfHuy').onclick = () => closeModal();
     $('#nkfThemDong').onclick = () => {
-      dongForm.push({ idx: Math.max(0, ...dongForm.map(d => d.idx)) + 1 });
+      /* v6.97: dòng mới THỪA HƯỞNG mã hàng của dòng cuối — nhập nhiều màu của cùng một mã là việc hay
+         làm nhất ở đây, nên chỉ cần đổi Màu + Số lượng. KHÔNG copy màu / số lượng / ảnh màu: đó là
+         phần riêng của từng dòng, copy sang là dễ lưu trùng màu mà không để ý. */
+      const cuoi = dongForm[dongForm.length - 1] || {};
+      dongForm.push({
+        idx: Math.max(0, ...dongForm.map(d => d.idx)) + 1,
+        maHangId: cuoi.maHangId || null, maHang: cuoi.maHang || '', tenHang: cuoi.tenHang || '',
+        donViCoBan: cuoi.donViCoBan, donViQuyDoi: cuoi.donViQuyDoi, loaiRi: cuoi.loaiRi,
+        donVi: cuoi.donVi, anhDaiDien: cuoi.anhDaiDien || null
+      });
       veDong();
     };
 
@@ -288,7 +297,39 @@
       return dsDVAll.find(x => c(x) === c(ten)) || dsDVAll[0] || '';
     };
 
+    /* ================================================================================================
+       v6.97 — MÃ MỚI CHỈ KHAI MỘT LẦN.
+       Một mã hàng thường nhập NHIỀU MÀU = nhiều dòng. Khai lại Tên hàng / ĐVT / tỷ lệ / ảnh đại diện ở
+       từng dòng là làm cùng một việc nhiều lần, và tệ hơn: hai dòng khai lệch nhau thì dòng nào thắng
+       phụ thuộc thứ tự xử lý — tồn kho quy đổi sai mà không ai biết.
+       => Dòng ĐẦU TIÊN của mỗi mã mới là dòng khai; các dòng sau THỪA HƯỞNG y nguyên.
+       ================================================================================================ */
+    const chuanMa = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
+    /* Trả về idx của dòng khai (dòng đầu tiên mang mã mới đó); null nếu dòng này không phải mã mới. */
+    function dongKhaiCua(d) {
+      if (d.maHangId || !d.maHang) return null;
+      const dau = dongForm.find(x => !x.maHangId && chuanMa(x.maHang) === chuanMa(d.maHang));
+      return dau ? dau.idx : null;
+    }
+    /* Đồng bộ các trường CẤP MÃ HÀNG từ dòng khai sang mọi dòng cùng mã. Gọi TRƯỚC khi vẽ và TRƯỚC
+       khi gửi lưu — nhờ vậy payload của mọi dòng cùng mã luôn giống nhau, backend xử lý thứ tự nào
+       cũng ra một kết quả. */
+    function dongBoMaMoi() {
+      dongForm.forEach(d => {
+        const idxKhai = dongKhaiCua(d);
+        if (idxKhai == null || idxKhai === d.idx) return;
+        const g = dongForm.find(x => x.idx === idxKhai);
+        if (!g) return;
+        d.tenHang = g.tenHang;
+        d.donViCoBan = g.donViCoBan;
+        d.donViQuyDoi = g.donViQuyDoi;
+        d.loaiRi = g.loaiRi;
+        d.anhDaiDien = g.anhDaiDien;   // ảnh đại diện là của MÃ HÀNG, không phải của màu
+      });
+    }
+
     function veDong() {
+      dongBoMaMoi();
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `
         <table class="data-table phieu-ke"><thead><tr>
@@ -317,6 +358,10 @@
          ĐVT của mã ĐÃ CÓ chỉ được chọn trong 2 đơn vị của CHÍNH mã đó — chọn đơn vị lạ là tồn kho quy
          đổi sai. Mã mới thì chưa biết 2 đơn vị đó nên lấy cả danh mục ĐVT. */
       const moi = !d.maHangId;
+      /* v6.97: chỉ DÒNG KHAI (dòng đầu tiên của mã mới) mới mở dòng phụ; dòng sau thừa hưởng. */
+      const idxKhai = dongKhaiCua(d);
+      const laDongKhai = moi && idxKhai === d.idx;
+      const thuaHuong = moi && idxKhai != null && idxKhai !== d.idx;
       /* v6.93: MỌI ô ĐVT ở đây lấy từ DANH MỤC ĐƠN VỊ TÍNH (DanhMucDonViTinh) — không gõ cứng
          'Cái'/'Ri'. Nguyên tắc chung: trường nào đã có danh mục thì phải đọc từ danh mục, để thêm một
          đơn vị trong Danh mục là mọi form thấy ngay.
@@ -350,11 +395,15 @@
         <td>${i + 1}</td>
         <td>
           <input type="text" class="nk-ma" list="nkDlMaHang" value="${escapeHtml(d.maHang || '')}" placeholder="Gõ hoặc chọn" style="width:100%;">
-          ${d.maHang && moi
+          ${d.maHang && laDongKhai
             ? '<div style="font-size:11px;color:#8a6d3b;margin-top:2px;">✨ mã mới — sẽ sinh khi lưu</div>'
-            : (d.maHangId ? '<div style="font-size:11px;color:#2e7d32;margin-top:2px;">✔ đã có trong danh mục</div>' : '')}
+            : (thuaHuong
+                ? '<div style="font-size:11px;color:#5f6368;margin-top:2px;">↳ dùng mã mới đã khai ở dòng trên</div>'
+                : (d.maHangId ? '<div style="font-size:11px;color:#2e7d32;margin-top:2px;">✔ đã có trong danh mục</div>' : ''))}
         </td>
-        <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="${moi ? 'BẮT BUỘC khai cho mã mới' : 'tự điền khi chọn mã'}" style="width:100%;"></td>
+        <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}"
+          placeholder="${laDongKhai ? 'BẮT BUỘC khai cho mã mới' : 'tự điền khi chọn mã'}"
+          ${thuaHuong ? 'readonly title="Sửa ở dòng đầu tiên của mã này" style="width:100%;background:#f5f6f8;"' : 'style="width:100%;"'}></td>
         <td>
           <select class="nk-mau" style="width:100%;">
             <option value="">-- chọn màu --</option>
@@ -384,7 +433,7 @@
         <td><input type="text" class="nk-gc" value="${escapeHtml(d.ghiChu || '')}" style="width:100%;"></td>
         <td><button type="button" class="btn small danger nk-bo">✕</button></td>
       </tr>
-      ${d.maHang && moi ? `<tr data-idx="${d.idx}" class="nk-dong-moi" style="background:#fffdf5;">
+      ${d.maHang && laDongKhai ? `<tr data-idx="${d.idx}" class="nk-dong-moi" style="background:#fffdf5;">
         <td></td>
         <td colspan="${soCot - 1}" style="font-size:12px;">
           <span style="color:#8a6d3b;font-weight:600;">Khai cho mã mới:</span>
@@ -502,6 +551,10 @@
 
     $('#nkfLuu').onclick = async () => {
       const sx = $('#nkfLoai').value === 'SanXuat';
+      /* v6.97: đồng bộ lại TRƯỚC KHI GỬI. Người dùng có thể sửa ô ở dòng khai rồi bấm Lưu ngay mà
+         chưa có lần vẽ lại nào — không gọi ở đây thì các dòng sau vẫn mang giá trị cũ, và mã hàng sẽ
+         được tạo theo dòng nào xử lý trước. */
+      dongBoMaMoi();
       const dong = dongForm.filter(d => Number(d.soLuong) > 0).map(d => ({
         maHangId: d.maHangId || null, maHang: d.maHang, tenHang: d.tenHang,
         // v6.95: có cột Màu trở lại. tenMau = '(Không phân màu)' khi người dùng CHỌN mục đó.
@@ -514,9 +567,16 @@
       if (!dong.length) return toast('Chưa có dòng nào có số lượng > 0.', 'error');
       if (!sx && !$('#nkfNcc').value) return toast('Nhập từ nhà cung cấp thì phải chọn nhà cung cấp.', 'error');
       /* v6.88: chặn ngay ở đây cho mã MỚI thiếu thông tin — backend cũng chặn, nhưng báo tại form thì
-         người dùng thấy đúng dòng nào thiếu chứ không phải đọc một câu lỗi chung. */
-      const thieu = dong.filter(d => !d.maHangId).filter(d =>
-        !String(d.tenHang || '').trim() || !d.donViCoBan || !d.donViQuyDoi || !(parseInt(d.loaiRi, 10) >= 1));
+         người dùng thấy đúng dòng nào thiếu chứ không phải đọc một câu lỗi chung.
+         v6.97: chỉ soi MỘT LẦN cho mỗi mã mới (theo dòng khai) — các dòng sau đã thừa hưởng, kể tên
+         chúng ra nữa là báo lỗi trùng lặp cùng một mã. */
+      const maMoiDaSoi = new Set();
+      const thieu = dong.filter(d => !d.maHangId).filter(d => {
+        const k = chuanMa(d.maHang);
+        if (maMoiDaSoi.has(k)) return false;
+        maMoiDaSoi.add(k);
+        return !String(d.tenHang || '').trim() || !d.donViCoBan || !d.donViQuyDoi || !(parseInt(d.loaiRi, 10) >= 1);
+      });
       if (thieu.length) {
         return toast(`Mã mới ${thieu.map(d => d.maHang).join(', ')} còn thiếu Tên hàng / ĐVT / tỷ lệ quy đổi — khai đủ ở dòng phụ màu vàng.`, 'error');
       }
