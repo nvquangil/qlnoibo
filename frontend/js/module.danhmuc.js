@@ -22,6 +22,11 @@ window.ModuleDanhMuc = (function () {
     // "Nguon hang" (NhaSanXuat/DatNgoai) trong form The kho hang hoa. Xem migration_v54.sql.
     { key: 'nhomsanpham', label: 'Loại hàng', api: '/api/danhmuc/nhomsanpham', idCol: 'NhomSanPhamID',
       fields: [{ name: 'TenNhom', label: 'Tên loại hàng', required: true }] },
+    /* v6.94: DANH MỤC HÀNG HÓA — sửa được Mã hàng / Tên hàng, việc trước giờ không làm được ở đâu cả.
+       ⚠️ Đây là CHÍNH bảng TheKhoHangHoa, KHÔNG phải bảng mới: thẻ kho, phiếu nhập, phiếu bán hàng đều
+       trỏ vào nó. Tạo một bảng "danh mục hàng hóa" riêng là hai nguồn sự thật cho cùng một thứ.
+       Đổi mã hàng an toàn vì mọi bảng khác lưu MaHangID (khóa số), không lưu chuỗi mã. */
+    { key: 'hanghoa', label: 'Hàng hóa (mã hàng)', api: '/api/danhmuc/hanghoa', idCol: 'MaHangID', custom: 'hanghoa' },
     { key: 'congdoan', label: 'Công đoạn sản xuất', api: '/api/danhmuc/congdoan', idCol: 'StageID', custom: 'congdoan' },
     /* v6.31: đây là NGUỒN DUY NHẤT cho mọi ô chọn đơn vị trong phần mềm.
        "Là đơn vị gộp" = đơn vị gom nhiều đơn vị gốc (Ri, Tá, Thùng) — chỉ để gợi ý/cảnh báo trên
@@ -116,6 +121,20 @@ window.ModuleDanhMuc = (function () {
     if (tab.custom === 'congdoan') return renderCongDoan(body, tab, rows, perm);
     if (tab.custom === 'nhanvien') return renderNhanVien(body, tab, rows, perm);
     if (tab.custom === 'thekhodanhmuc') return renderTheKhoDanhMuc(body, tab, rows, perm);   // v5.62
+    /* v6.94: 2 ô ĐVT lấy từ DANH MỤC ĐƠN VỊ TÍNH — nguyên tắc: trường nào đã có danh mục thì đọc từ
+       danh mục, không gõ cứng. Phải tải danh mục ĐVT trước khi dựng form. */
+    if (tab.custom === 'hanghoa') {
+      const dsDV = await apiGet('/api/danhmuc/donvitinh').then(r => (r.data || []).map(x => x.TenDonVi).filter(Boolean)).catch(() => []);
+      const optDV = dsDV.map(v => ({ value: v, label: v }));
+      return renderSimpleWithSelect(body, tab, rows, perm, [
+        { name: 'MaHang', label: 'Mã hàng', type: 'text', required: true },
+        { name: 'TenHang', label: 'Tên hàng', type: 'text', required: true },
+        { name: 'DonViCoBan', label: 'ĐVT chính', options: optDV },
+        { name: 'DonViQuyDoi', label: 'ĐVT quy đổi', options: optDV },
+        { name: 'LoaiRi', label: 'Tỷ lệ (1 ĐVT quy đổi = ? ĐVT chính)', type: 'number' },
+        { name: 'GiaBan', label: 'Giá bán (1 ĐVT chính)', type: 'number' }
+      ]);
+    }
 
     renderGenericTable(body, tab, rows, perm);
   }

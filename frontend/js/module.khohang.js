@@ -472,13 +472,22 @@ window.ModuleKhoHang = (function () {
      đã tồn tại. Dựng ở đây (module-level) để CẢ HAI lối vào form đều dùng chung một dữ liệu, không
      mỗi nơi tự tải một kiểu. */
   let dsMaTrongDanhMuc = new Set();
+  let dsHangHoa = [];   // v6.94: danh mục hàng hóa đầy đủ (mã, tên, ĐVT, tỷ lệ) để form chọn + tự điền
   const chuanMa = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
   async function napDsMaHang() {
     try {
-      const res = await apiGet('/api/khohang/items');
-      dsMaTrongDanhMuc = new Set(((res.data || {}).tongHop || []).map(r => chuanMa(r.MaHang)));
-    } catch (e) { /* không chặn mở form chỉ vì không tải được danh sách để hỏi xác nhận */ }
+      /* Đọc từ DANH MỤC HÀNG HÓA (/api/danhmuc/hanghoa) — cùng một nguồn với tab Danh mục → Hàng hóa,
+         nên sửa mã/tên ở đó là form này thấy ngay. */
+      dsHangHoa = await apiGet('/api/danhmuc/hanghoa').then(r => r.data || []).catch(() => []);
+      if (!dsHangHoa.length) {
+        // Chưa cấp quyền DANHMUC hoặc lỗi mạng -> lui về danh sách của chính phân hệ thẻ kho.
+        const res = await apiGet('/api/khohang/items');
+        dsHangHoa = ((res.data || {}).tongHop || []);
+      }
+      dsMaTrongDanhMuc = new Set(dsHangHoa.map(r => chuanMa(r.MaHang)));
+    } catch (e) { /* không chặn mở form chỉ vì không tải được danh sách */ }
   }
+  const timMaHang = (ma) => dsHangHoa.find(r => chuanMa(r.MaHang) === chuanMa(ma));
 
   async function openItemForm(row, perm, colors, tuPhieuNhap) {
     if (!row) await napDsMaHang();   // chỉ cần khi TẠO MỚI (để biết mã có trùng không)
@@ -543,8 +552,31 @@ window.ModuleKhoHang = (function () {
             <div class="empty-hint" style="margin-top:2px;">Đơn vị GỘP của mã hàng (1 &lt;ĐVT quy đổi&gt; = &lt;tỷ lệ&gt; &lt;ĐVT chính&gt;).
               Hệ thống nhân/chia tỷ lệ theo <b>chính ô này</b>, không theo tên "Ri" nữa.</div>
           </div>
-          <div class="form-row"><label>Mã hàng *</label><input name="maHang" id="inpMaHang" value="${escapeHtml(row ? row.MaHang : '')}" required></div>
-          <div class="form-row"><label>Tên hàng *</label><input name="tenHang" id="inpTenHang" value="${escapeHtml(row ? row.TenHang : '')}" required></div>
+          ${/* v6.94: MÃ HÀNG CHỌN TỪ DANH MỤC HÀNG HÓA, không gõ tự do nữa.
+               Mã hàng sinh ra ở 2 chỗ: phiếu nhập kho, và Danh mục → Hàng hóa. Thẻ kho chỉ khai thêm
+               màu / ảnh / giá bán cho mã ĐÃ CÓ. Để gõ tự do ở đây là sinh mã trùng/sai chính tả mà
+               không sửa lại được — đúng việc người dùng vừa gặp.
+               Tên hàng + tỷ lệ chỉ HIỆN (readonly): sửa ở Danh mục → Hàng hóa để cả hệ thống thấy,
+               chứ không phải sửa 2 nơi rồi lệch nhau. */''}
+          <div class="form-row"><label>Mã hàng *</label>
+            ${isEdit
+              ? `<input name="maHang" id="inpMaHang" value="${escapeHtml(row.MaHang)}" readonly style="background:#f5f6f8;">`
+              : `<select name="maHang" id="inpMaHang" required>
+                   <option value="">-- Chọn mã hàng từ danh mục --</option>
+                   ${dsHangHoa.map(x => `<option value="${escapeHtml(x.MaHang)}">${escapeHtml(x.MaHang + ' · ' + (x.TenHang || ''))}</option>`).join('')}
+                 </select>`}
+            <div class="empty-hint" style="margin-top:2px;">
+              ${isEdit
+                ? 'Đổi mã hàng ở <b>Danh mục → Hàng hóa (mã hàng)</b>.'
+                : (dsHangHoa.length
+                    ? 'Chưa có mã cần dùng? Thêm ở <b>Danh mục → Hàng hóa (mã hàng)</b>, hoặc lập <b>Phiếu nhập kho</b> (mã tự sinh).'
+                    : '<span style="color:#c62828;">Danh mục hàng hóa đang trống — thêm mã ở <b>Danh mục → Hàng hóa (mã hàng)</b> trước.</span>')}
+            </div>
+          </div>
+          <div class="form-row"><label>Tên hàng *</label>
+            <input name="tenHang" id="inpTenHang" value="${escapeHtml(row ? row.TenHang : '')}" required readonly style="background:#f5f6f8;">
+            <div class="empty-hint" style="margin-top:2px;">Tự điền theo mã hàng. Sửa tên ở <b>Danh mục → Hàng hóa (mã hàng)</b>.</div>
+          </div>
           <div class="form-row"><label>Giá bán</label><input name="giaBan" id="inpGiaBan" type="number" value="${row ? row.GiaBan : 0}">
             ${/* v6.21: KHÔNG nhập % ở đây nữa (tỷ lệ đánh chung ở đầu tab Thẻ kho) — chỉ hiện giá tính ra. */''}
             <div class="empty-hint" id="ttGiaCK" style="margin-top:2px;"></div>
@@ -792,7 +824,18 @@ window.ModuleKhoHang = (function () {
          KHÔNG điền số lượng: tồn của dòng phiếu này đã nằm trong tồn kho qua nguồn phiếu
          (vw_TonTheoMau, migration_v682). Điền vào ô "Nhập" nữa là ĐẾM HAI LẦN. */
       const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
-      dat('#inpMaHang', d2.MaHang);
+      /* v6.94: #inpMaHang giờ là <select> (chọn từ danh mục hàng hóa). Gán value mà không có option
+         khớp thì trình duyệt IM LẶNG về rỗng — phải tự chèn option rồi mới gán, và bắn 'change' để
+         nhánh tự-điền tên/ĐVT/tỷ lệ chạy. */
+      const oMaHang = modal.querySelector('#inpMaHang');
+      if (oMaHang && d2.MaHang) {
+        if (oMaHang.tagName === 'SELECT'
+            && ![...oMaHang.options].some(o => o.value === String(d2.MaHang))) {
+          oMaHang.add(new Option(String(d2.MaHang) + ' · ' + (d2.TenHang || ''), String(d2.MaHang)));
+        }
+        oMaHang.value = String(d2.MaHang);
+        if (oMaHang.tagName === 'SELECT') oMaHang.dispatchEvent(new Event('change'));
+      }
       dat('#inpTenHang', d2.TenHang);
       const oDvcb = modal.querySelector('[name="donViCoBan"]');
       if (oDvcb && d2.DonViCoBan) oDvcb.value = d2.DonViCoBan;
@@ -912,6 +955,35 @@ window.ModuleKhoHang = (function () {
       if (laNhaSanXuat) napPhieuNhap();
       toggleAddColorBtn();
     }
+    /* v6.94: chọn mã hàng -> TỰ ĐIỀN tên / 2 ĐVT / tỷ lệ / giá bán theo DANH MỤC HÀNG HÓA.
+       Không tự điền thì người dùng phải khai lại bằng tay và chắc chắn có ngày lệch với danh mục —
+       mà tỷ lệ quy đổi lệch là tồn kho sai gấp <tỷ lệ> lần. */
+    const oMa = modal.querySelector('#inpMaHang');
+    if (!isEdit && oMa && oMa.tagName === 'SELECT') {
+      oMa.addEventListener('change', () => {
+        const mh = timMaHang(oMa.value);
+        if (!mh) return;
+        const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
+        dat('#inpTenHang', mh.TenHang);
+        const oCb = modal.querySelector('[name="donViCoBan"]');
+        const oQd = modal.querySelector('[name="donViQuyDoi"]');
+        /* ⚠️ Gán vào <select> mà giá trị không khớp option nào thì trình duyệt IM LẶNG về rỗng.
+           optDonVi() đã luôn chèn giá trị đang lưu, nhưng giá trị đến từ danh mục hàng hóa lại có thể
+           chưa có trong option -> tự chèn rồi mới gán. */
+        const ganSelect = (el, v) => {
+          if (!el || v == null || v === '') return;
+          if (![...el.options].some(o => o.value === String(v))) el.add(new Option(String(v), String(v)));
+          el.value = String(v);
+        };
+        ganSelect(oCb, mh.DonViCoBan);
+        ganSelect(oQd, mh.DonViQuyDoi);
+        dat('#inpLoaiRi', mh.LoaiRi);
+        if (mh.GiaBan != null) dat('#inpGiaBan', mh.GiaBan);
+        // Tỷ lệ vừa đổi -> các ô Số cắt/Nhập theo Ri phải tính lại theo hệ số mới.
+        if (inpLoaiRi) inpLoaiRi.dispatchEvent(new Event('change'));
+      });
+    }
+
     modal.querySelector('#selLoaiHang').addEventListener('change', toggleLoaiHangBlocks);
     if (loaiHangInit === 'NhaSanXuat') napPhieuNhap();
     toggleAddColorBtn();

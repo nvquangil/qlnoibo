@@ -29,6 +29,7 @@ const ExcelJS = require('exceljs');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
+const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 
 const router = express.Router();
 
@@ -549,46 +550,8 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
   }
 });
 
-/* ================================================================================================
-   v6.92 — CAC BANG DANG THAM CHIEU MOT MA HANG.
-
-   Dung de biet mot ma hang co con duoc dung o dau khong TRUOC KHI xoa. DO KHOA NGOAI LUC CHAY qua
-   sys.foreign_keys thay vi liet ke ten bang bang tay: hien co ~8 bang tro vao TheKhoHangHoa va moi
-   migration lai co the them bang moi. Liet ke tay la chac chan co ngay bo sot mot bang, va bo sot thi
-   khong phai "xoa duoc nhieu hon" ma la 547 (FK violation) hoac xoa mat du lieu nguoi dung.
-
-   BO QUA cac FK co ON DELETE CASCADE (delete_referential_action = 1): chung tu bien mat theo ma hang,
-   khong phai ly do de giu ma hang lai. Vd TheKhoChiTietMau, GiaVonHangHoa.
-   ================================================================================================ */
-let __fkMaHang = null;
-async function dsBangThamChieuMaHang(pool) {
-  if (__fkMaHang) return __fkMaHang;
-  __fkMaHang = (await pool.request().query(`
-    SELECT OBJECT_SCHEMA_NAME(fk.parent_object_id) AS Luoc,
-           OBJECT_NAME(fk.parent_object_id)        AS Bang,
-           COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS Cot
-    FROM sys.foreign_keys fk
-    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-    WHERE fk.referenced_object_id = OBJECT_ID('TheKhoHangHoa')
-      AND COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) = 'MaHangID'
-      AND fk.delete_referential_action = 0   -- 0 = NO ACTION (cascade thi khong can kiem)
-  `)).recordset.map(r => ({ bang: r.Luoc + '.' + r.Bang, cot: r.Cot }));
-  return __fkMaHang;
-}
-
-/* Ten hien thi cho nguoi dung — de cau bao loi doc duoc, khong phai ten bang ky thuat. */
-const TEN_BANG_VN = {
-  PhieuBanHangChiTiet: 'phiếu bán hàng',
-  DonKhachDatHang: 'đơn khách đặt hàng',
-  PhieuNhapLaiChiTiet: 'phiếu nhập lại (khách trả)',
-  PhieuNhapKhoHangChiTiet: 'phiếu nhập kho khác',
-  BaoGiaAlohaChiTiet: 'báo giá Aloha',
-  BaoGiaChiTiet: 'báo giá'
-};
-const tenVN = (bangDayDu) => {
-  const t = String(bangDayDu).split('.').pop();
-  return TEN_BANG_VN[t] || t;
-};
+/* v6.94: da chuyen phan "ma hang dang duoc dung o dau" sang backend/utils/maHangThamChieu.js —
+   dung CHUNG voi Danh muc hang hoa (routes/danhmuc.js). Mot ban duy nhat, khong sao chep. */
 
 /* ================================================================================================
    XOA PHIEU NHAP KHO — XOA LUON MA HANG NEU CHUA XUAT BAN (v6.92)
@@ -637,7 +600,6 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
   }
 
   /* ---- BUOC 2: xoa phieu, roi xoa nhung ma hang khong con rang buoc nao ---- */
-  const fks = await dsBangThamChieuMaHang(pool);
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
@@ -646,14 +608,9 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
 
     const daXoaMa = [], giuLaiMa = [];
     for (const m of maTrenPhieu) {
-      const vuong = [];
-      for (const f of fks) {
-        const n = (await new sql.Request(tran).input('mh', sql.Int, m.MaHangID)
-          .query(`SELECT TOP 1 1 AS x FROM ${f.bang} WHERE ${f.cot} = @mh`)).recordset.length;
-        if (n) vuong.push(tenVN(f.bang));
-      }
+      const vuong = await noiDangDungMaHang(pool, m.MaHangID, tran);
       if (vuong.length) {
-        giuLaiMa.push(m.MaHang + ' (còn: ' + [...new Set(vuong)].join(', ') + ')');
+        giuLaiMa.push(m.MaHang + ' (còn: ' + vuong.join(', ') + ')');
         continue;
       }
       // Khong con gi tham chieu -> xoa ma hang. TheKhoChiTietMau / GiaVonHangHoa mat theo CASCADE.

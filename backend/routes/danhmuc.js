@@ -374,4 +374,121 @@ router.put('/cauhinh', requireAuth, requirePermission('DANHMUC', 'edit'), async 
   res.json({ success: true });
 });
 
+/* ================================================================================================
+   DANH MUC HANG HOA (MA HANG)  — v6.94
+
+   ⚠️ KHONG tao bang moi. `TheKhoHangHoa` DA LA danh muc hang hoa; truoc day chi thieu MOT MAN HINH de
+   sua ma / ten, nen nguoi dung go sai la khong sua duoc. Tao bang `DanhMucHangHoa` rieng se thanh hai
+   nguon su that cho cung mot thu — chac chan lech nhau.
+
+   Man hinh nay chi quan cac truong CAP MA HANG: MaHang, TenHang, 2 DVT, ty le quy doi, gia ban.
+   Mau / anh / danh muc the kho / cong khai van thuoc form The kho hang hoa.
+
+   ⚠️ DOI MA HANG AN TOAN: moi bang khac tro vao ma hang bang MaHangID (khoa so), khong luu chuoi
+   MaHang. Doi MaHang khong lam dut lien ket nao. (Khac han voi ten khach — cho do la ban sao chuoi
+   dong bang tren tung phieu, doi phai cascade tay; xem utils/gop_ten_khach.js.)
+
+   ⚠️ KHONG dung buildCrudRouter: PUT cua factory ghi TAT CA cot duoc liet ke theo req.body, thieu
+   truong la ghi NULL. O day con phai chuan hoa MaHang, kiem trung, va chan xoa co giai thich.
+   ================================================================================================ */
+const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
+
+const chuanMaHang = (x) => String(x == null ? '' : x).trim().toUpperCase();
+
+router.get('/hanghoa', requireAuth, requirePermission('DANHMUC', 'view'), async (req, res) => {
+  const pool = await getPool();
+  const rows = (await pool.request().query(`
+    SELECT h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan,
+           nsp.TenNhom, tk.TenTheKho,
+           -- de man hinh biet ma nao dang duoc dung (khong xoa duoc) ma khong phai bam thu
+           (SELECT COUNT(*) FROM PhieuNhapKhoHangChiTiet ct WHERE ct.MaHangID = h.MaHangID) AS SoDongNhapKho
+    FROM TheKhoHangHoa h
+    LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
+    LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
+    ORDER BY h.MaHang`)).recordset;
+  res.json({ success: true, data: rows });
+});
+
+router.post('/hanghoa', requireAuth, requirePermission('DANHMUC', 'create'), async (req, res) => {
+  const pool = await getPool();
+  const b = req.body || {};
+  const ma = chuanMaHang(b.MaHang);
+  const ten = String(b.TenHang || '').trim();
+  if (!ma || !ten) return res.status(400).json({ success: false, message: 'Phải có Mã hàng và Tên hàng.' });
+  const trung = (await pool.request().input('m', sql.NVarChar, ma)
+    .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang = @m')).recordset[0];
+  if (trung) return res.status(400).json({ success: false, message: `Mã hàng "${ma}" đã có trong danh mục.` });
+  const he = Math.max(1, parseInt(b.LoaiRi, 10) || 1);
+  const r = await pool.request()
+    .input('MaHang', sql.NVarChar, ma)
+    .input('TenHang', sql.NVarChar, ten)
+    .input('DonViCoBan', sql.NVarChar, String(b.DonViCoBan || '').trim() || null)
+    .input('DonViQuyDoi', sql.NVarChar, String(b.DonViQuyDoi || '').trim() || null)
+    .input('LoaiRi', sql.Int, he)
+    .input('GiaBan', sql.Decimal(14, 2), b.GiaBan === '' || b.GiaBan == null ? 0 : b.GiaBan)
+    .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, DonViCoBan, DonViQuyDoi, LoaiRi, GiaBan, LoaiHang)
+            OUTPUT INSERTED.MaHangID, INSERTED.MaHang, INSERTED.TenHang
+            VALUES (@MaHang, @TenHang, @DonViCoBan, @DonViQuyDoi, @LoaiRi, @GiaBan, N'DatNgoai')`);
+  res.json({ success: true, data: r.recordset[0] });
+});
+
+router.put('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'edit'), async (req, res) => {
+  const pool = await getPool();
+  const b = req.body || {};
+  const id = parseInt(req.params.id, 10);
+  const cu = (await pool.request().input('id', sql.Int, id)
+    .query('SELECT MaHangID, MaHang FROM TheKhoHangHoa WHERE MaHangID = @id')).recordset[0];
+  if (!cu) return res.status(404).json({ success: false, message: 'Không tìm thấy mã hàng.' });
+
+  const ma = chuanMaHang(b.MaHang);
+  if (ma) {
+    const trung = (await pool.request().input('m', sql.NVarChar, ma).input('id', sql.Int, id)
+      .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang = @m AND MaHangID <> @id')).recordset[0];
+    if (trung) return res.status(400).json({ success: false, message: `Mã hàng "${ma}" đã có ở dòng khác.` });
+  }
+  /* ISNULL o MOI truong: form chi gui nhung o no co. Khong boc ISNULL thi gui thieu mot truong la
+     xoa trang truong do — dung loi da tung co o PUT /khohang/items/:id. */
+  await pool.request()
+    .input('id', sql.Int, id)
+    .input('MaHang', sql.NVarChar, ma || null)
+    .input('TenHang', sql.NVarChar, String(b.TenHang || '').trim() || null)
+    .input('DonViCoBan', sql.NVarChar, String(b.DonViCoBan || '').trim() || null)
+    .input('DonViQuyDoi', sql.NVarChar, String(b.DonViQuyDoi || '').trim() || null)
+    .input('LoaiRi', sql.Int, b.LoaiRi === '' || b.LoaiRi == null ? null : Math.max(1, parseInt(b.LoaiRi, 10) || 1))
+    .input('GiaBan', sql.Decimal(14, 2), b.GiaBan === '' || b.GiaBan == null ? null : b.GiaBan)
+    .query(`UPDATE TheKhoHangHoa SET
+              MaHang      = ISNULL(@MaHang, MaHang),
+              TenHang     = ISNULL(@TenHang, TenHang),
+              DonViCoBan  = ISNULL(@DonViCoBan, DonViCoBan),
+              DonViQuyDoi = ISNULL(@DonViQuyDoi, DonViQuyDoi),
+              LoaiRi      = ISNULL(@LoaiRi, LoaiRi),
+              GiaBan      = ISNULL(@GiaBan, GiaBan)
+            WHERE MaHangID = @id`);
+  res.json({
+    success: true,
+    message: (ma && ma !== chuanMaHang(cu.MaHang))
+      ? `Đã đổi mã ${cu.MaHang} → ${ma}. Mọi phiếu cũ vẫn liên kết đúng (các bảng lưu theo ID, không lưu chuỗi mã).`
+      : 'Đã lưu.'
+  });
+});
+
+router.delete('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'delete'), async (req, res) => {
+  const pool = await getPool();
+  const id = parseInt(req.params.id, 10);
+  const h = (await pool.request().input('id', sql.Int, id)
+    .query('SELECT MaHang FROM TheKhoHangHoa WHERE MaHangID = @id')).recordset[0];
+  if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy mã hàng.' });
+  // Chan co GIAI THICH: cau "có thể đang được tham chiếu ở nơi khác" cua factory khong giup gi.
+  const vuong = await noiDangDungMaHang(pool, id);
+  if (vuong.length) {
+    return res.status(400).json({
+      success: false,
+      message: `Không xóa được mã ${h.MaHang} — đang dùng ở: ${vuong.join(', ')}. Phải xóa/hủy các chứng từ đó trước.`
+    });
+  }
+  // Thẻ kho (TheKhoChiTietMau) va gia von mat theo ON DELETE CASCADE.
+  await pool.request().input('id', sql.Int, id).query('DELETE FROM TheKhoHangHoa WHERE MaHangID = @id');
+  res.json({ success: true, message: `Đã xóa mã ${h.MaHang} khỏi danh mục.` });
+});
+
 module.exports = router;
