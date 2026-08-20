@@ -484,21 +484,26 @@
                bên cạnh bị đẩy tụt xuống và chữ không thẳng hàng với các ô khác.
                Nhãn tỷ lệ rút về 1 dòng, phần "1 Ri = ? Cái" chuyển xuống dòng gợi ý nhỏ.
                3 ô ĐVT/tỷ lệ chỉ chứa vài ký tự -> max-width 50% cho khỏi thừa nửa ô. */''}
-          <div class="form-grid" style="grid-template-columns:repeat(4, 1fr);gap:8px 12px;align-items:start;">
-            <div><label>ĐVT chính</label><select class="nk-dvcb" style="max-width:50%;">${optDV(d.donViCoBan)}</select></div>
-            <div><label>ĐVT quy đổi</label><select class="nk-dvqd" style="max-width:50%;">${optDV(d.donViQuyDoi)}</select></div>
-            <div><label>Tỷ lệ quy đổi</label>
+          ${/* ⚠️ v7.03: MỖI Ô PHẢI CÓ class="form-row". `.form-row label` mới được `display:block` để
+               nhãn nằm TRÊN ô nhập (style.css dòng 218). Dùng <div> trơn thì <label> là inline nên
+               nhãn nằm CẠNH ô — đúng lỗi "tên tỷ lệ / giá bán / barcode chưa lên hàng trên".
+               ĐVT chính & quy đổi trước đó nhìn có vẻ đúng chỉ vì select bị đẩy xuống do hết chỗ.
+               `margin-bottom:0` vì khoảng cách dòng đã do `gap` của grid lo. */''}
+          <div class="form-grid" style="grid-template-columns:repeat(4, 1fr);gap:6px 10px;align-items:start;">
+            <div class="form-row" style="margin-bottom:0;"><label>ĐVT chính</label><select class="nk-dvcb" style="max-width:50%;">${optDV(d.donViCoBan)}</select></div>
+            <div class="form-row" style="margin-bottom:0;"><label>ĐVT quy đổi</label><select class="nk-dvqd" style="max-width:50%;">${optDV(d.donViQuyDoi)}</select></div>
+            <div class="form-row" style="margin-bottom:0;"><label>Tỷ lệ quy đổi</label>
               <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="max-width:50%;">
               <div class="empty-hint" style="margin-top:2px;">1 ${escapeHtml(d.donViQuyDoi || 'ĐVT quy đổi')} = ? ${escapeHtml(d.donViCoBan || 'ĐVT chính')}</div></div>
-            <div><label>Giá bán</label><input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}"></div>
-            <div><label>Loại hàng</label><select class="nk-nhom"><option value="">--</option>
+            <div class="form-row" style="margin-bottom:0;"><label>Giá bán</label><input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}" style="max-width:50%;"></div>
+            <div class="form-row" style="margin-bottom:0;"><label>Loại hàng</label><select class="nk-nhom"><option value="">--</option>
               ${(dm.nhom || []).map(x => `<option value="${x.NhomSanPhamID}"${String(d.nhomSanPhamId) === String(x.NhomSanPhamID) ? ' selected' : ''}>${escapeHtml(x.TenNhom)}</option>`).join('')}
             </select></div>
-            <div><label>Danh mục thẻ kho</label><select class="nk-dmthekho"><option value="">--</option>
+            <div class="form-row" style="margin-bottom:0;"><label>Danh mục thẻ kho</label><select class="nk-dmthekho"><option value="">--</option>
               ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}"${String(d.theKhoDanhMucId) === String(x.TheKhoDanhMucID) ? ' selected' : ''}>${escapeHtml(x.TenTheKho)}</option>`).join('')}
             </select></div>
-            <div><label>Mã Barcode</label><input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}"></div>
-            <div><label>Ảnh đại diện mã hàng</label>
+            <div class="form-row" style="margin-bottom:0;"><label>Mã Barcode</label><input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}" style="max-width:70%;"></div>
+            <div class="form-row" style="margin-bottom:0;"><label>Ảnh đại diện mã hàng</label>
               <div style="display:flex;align-items:center;gap:6px;">
                 ${d.anhDaiDien
                   ? `<img class="thumb" src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;">`
