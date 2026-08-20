@@ -11,13 +11,27 @@
    Dòng mang mã mới phải khai đủ: Tên hàng + ĐVT chính + ĐVT quy đổi + tỷ lệ quy đổi. Bản v6.78 mặc
    định ngầm 'Cái'/'Ri'/tỷ lệ 1 — mã thực tế quản theo Ri mà bị gán tỷ lệ 1 thì MỌI phép quy đổi tồn
    kho về sau sai gấp <tỷ lệ> lần và không có gì báo lỗi.
-   Việc còn lại ở thẻ kho (ảnh, giá bán, màu, danh mục) làm sau qua nút "Mở thẻ kho".
+   ⚠️ v6.95 — DÒNG HÀNG PHẢI CÓ MÀU. Tồn kho quản theo cặp (mã hàng + MÀU) và mọi đường xuống dưới
+   (đơn khách đặt, phiếu bán hàng, catalogue) đều kiểm tồn THEO MÀU. Bản v6.80 bỏ cột Màu đi và dồn
+   hết vào màu kỹ thuật "(Không phân màu)" ⇒ màu thật tồn 0 ⇒ "Không đủ tồn khả dụng để lên đơn" dù
+   kho có hàng. Đã trả lại cột Màu; hàng thật sự không phân màu thì phải CHỌN mục "(Không phân màu)".
+
+   ⚠️ v6.96 — PHIẾU NHẬP KHO LÀ MỘT CỬA DUY NHẤT. Dòng hàng khai luôn: mã + màu + số lượng + ẢNH MÀU,
+   và mã mới khai thêm ẢNH ĐẠI DIỆN. Tích "Tạo thẻ kho luôn khi lưu" (mặc định bật) thì lưu phiếu là
+   thẻ kho có sẵn dòng màu + ảnh — không phải sang màn khác khai lại màu lần nữa.
+   ⚠️ Tạo thẻ kho ở đây CHỈ tạo dòng màu + ghi ảnh, TUYỆT ĐỐI không ghi số lượng vào ô "Nhập" của thẻ
+   kho: tồn đã đến từ chính phiếu này (vw_TonTheoMau). Ghi vào đó là đếm hai lần.
+   Nút "Tạo thẻ kho" ở danh sách vẫn giữ — dùng cho phiếu cũ hoặc phiếu lưu lúc bỏ tích.
 
    Form và bản in đều KẺ BẢNG theo bộ lớp .phieu-form / .phieu-ke / .phieu-tong (style.css) — cùng
    một kiểu với phiếu nhập lại, để mọi phiếu trong hệ thống nhìn như nhau.
    ================================================================================================ */
 (function () {
   let container = null, currentUser = null, perm = {}, dm = null, dsPhieu = [];
+  /* v6.95: PHẢI trùng đúng chuỗi MAU_MAC_DINH ở backend/routes/nhapkho.js — nó là tên màu kỹ thuật
+     dùng cho hàng không phân màu (thẻ kho bắt buộc có màu vì khóa là MaHangID + MauSacID).
+     Lệch một ký tự là sinh ra hai màu "không phân màu" khác nhau, tồn tách đôi. */
+  const MAU_KHONG_PHAN = '(Không phân màu)';
 
   function getTabs() { return [{ key: 'nhapkho', label: 'Phiếu nhập kho' }]; }
 
@@ -211,6 +225,12 @@
         <div class="phieu-thanh-muc">
           <b>Dòng hàng nhập kho</b>
           <div style="flex:1"></div>
+          ${/* v6.96: LƯU PHIẾU LÀ TẠO XONG THẺ KHO. Phiếu đã khai đủ mã + màu + ảnh, nên không phải
+               sang màn khác khai lại. Vẫn để tích được bỏ, cho ai chỉ muốn ghi nhận nhập kho. */''}
+          <label style="display:flex;gap:5px;align-items:center;font-size:13px;margin-right:10px;white-space:nowrap;"
+                 title="Tạo dòng màu + ghi ảnh vào Thẻ kho hàng hóa. KHÔNG ghi số lượng — tồn kho lấy từ chính phiếu này.">
+            <input type="checkbox" id="nkfTaoThe" checked> Tạo thẻ kho luôn khi lưu
+          </label>
           <button type="button" class="btn small secondary" id="nkfThemDong">+ Thêm dòng</button>
         </div>
         <div class="empty-hint" style="margin:0 0 6px;">
@@ -272,9 +292,15 @@
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `
         <table class="data-table phieu-ke"><thead><tr>
-          ${/* v6.80: BỎ cột Màu — phiếu nhập kho không phân màu. Backend dồn vào một màu kỹ thuật
-               "(Không phân màu)" vì thẻ kho bắt buộc có màu (khóa MaHangID + MauSacID). */''}
+          ${/* v6.95: TRẢ LẠI cột Màu (v6.80 đã bỏ đi — sai).
+               Tồn kho hàng hóa quản theo cặp (mã hàng + MÀU), và MỌI đường xuống dưới đều kiểm tồn
+               THEO MÀU: đơn khách đặt, phiếu bán hàng, catalogue công khai. Nhập kho không khai màu
+               thì số lượng dồn vào màu kỹ thuật "(Không phân màu)" ⇒ màu thật vĩnh viễn tồn 0 và
+               KHÔNG ĐẶT HÀNG ĐƯỢC dù kho có hàng — đúng lỗi "không đủ tồn khả dụng để lên đơn". */''}
           <th style="width:46px;">STT</th><th style="width:150px;">Mã hàng</th><th>Tên hàng</th>
+          <th style="width:130px;">Màu</th>
+          ${/* v6.96: ảnh khai LUÔN ở phiếu — lưu phiếu là tạo xong thẻ kho, không phải khai màu lại. */''}
+          <th style="width:120px;">Ảnh màu</th>
           <th style="width:100px;">Số lượng</th><th style="width:90px;">ĐVT</th>
           ${sx ? '' : '<th style="width:120px;">Đơn giá</th><th style="width:130px;" class="num">Thành tiền</th>'}
           <th style="width:150px;">Ghi chú</th><th style="width:44px;"></th>
@@ -314,7 +340,12 @@
       const chuanDv = (x) => String(x == null ? '' : x).trim().toLowerCase();
       const dvLech = !moi && d.donVi
         && chuanDv(d.donVi) !== chuanDv(d.donViCoBan) && chuanDv(d.donVi) !== chuanDv(d.donViQuyDoi);
-      const soCot = sx ? 7 : 9;
+      const soCot = sx ? 9 : 11;   // v6.95 +1 cột Màu, v6.96 +1 cột Ảnh màu
+      /* Màu lấy từ DANH MỤC MÀU SẮC. Thêm sẵn lựa chọn "(Không phân màu)" để hàng thật sự không phân
+         màu vẫn nhập được — nhưng phải là CHỌN CÓ Ý THỨC, không phải mặc định âm thầm như v6.80. */
+      const tenMauHienTai = d.tenMau || (d.mauSacId
+        ? ((dm.mauSac || []).find(m => String(m.MauSacID) === String(d.mauSacId)) || {}).TenMau : '');
+      const laKhongPhanMau = String(tenMauHienTai || '') === MAU_KHONG_PHAN;
       return `<tr data-idx="${d.idx}">
         <td>${i + 1}</td>
         <td>
@@ -324,6 +355,25 @@
             : (d.maHangId ? '<div style="font-size:11px;color:#2e7d32;margin-top:2px;">✔ đã có trong danh mục</div>' : '')}
         </td>
         <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="${moi ? 'BẮT BUỘC khai cho mã mới' : 'tự điền khi chọn mã'}" style="width:100%;"></td>
+        <td>
+          <select class="nk-mau" style="width:100%;">
+            <option value="">-- chọn màu --</option>
+            <option value="__KHONG__"${laKhongPhanMau ? ' selected' : ''}>${escapeHtml(MAU_KHONG_PHAN)}</option>
+            ${(dm.mauSac || []).filter(m => m.TenMau !== MAU_KHONG_PHAN).map(m =>
+              `<option value="${m.MauSacID}"${String(d.mauSacId) === String(m.MauSacID) ? ' selected' : ''}>${escapeHtml(m.TenMau)}</option>`).join('')}
+          </select>
+          ${laKhongPhanMau ? `<div style="font-size:11px;color:#c62828;margin-top:2px;">
+            ⚠️ Không phân màu ⇒ <b>không đặt/bán được theo màu</b>
+          </div>` : ''}
+        </td>
+        <td>
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${d.anhMau
+              ? `<img src="${escapeHtml(anhNho(d.anhMau, 80))}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;" title="Đã có ảnh">`
+              : '<span style="width:28px;height:28px;border:1px dashed #dcdfe3;border-radius:4px;display:inline-block;flex:0 0 auto;"></span>'}
+            <input type="file" class="nk-anhmau" accept="image/*" style="flex:1;min-width:0;font-size:11px;">
+          </div>
+        </td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
         <td><select class="nk-dv" style="width:100%;">${optDV(d.donVi)}</select>
           ${dvLech ? `<div style="font-size:11px;color:#c62828;margin-top:2px;" title="Hệ thống chỉ quy đổi được theo ĐVT quy đổi của mã hàng">
@@ -344,6 +394,10 @@
           <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="width:70px;padding:2px 6px;">
           <b class="nk-nhan-cb">${escapeHtml(d.donViCoBan || '')}</b>
           <span style="color:#5f6368;">— hàng không quản theo lô/ri thì để tỷ lệ 1.</span>
+          ${/* v6.96: ảnh ĐẠI DIỆN là của MÃ HÀNG (không phải của màu) nên khai ở dòng phụ của mã mới. */''}
+          <br><span style="color:#8a6d3b;font-weight:600;">Ảnh đại diện mã hàng:</span>
+          ${d.anhDaiDien ? `<img src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:26px;height:26px;object-fit:cover;border-radius:4px;vertical-align:middle;margin:0 4px;">` : ''}
+          <input type="file" class="nk-anhdd" accept="image/*" style="font-size:11px;width:190px;">
         </td>
       </tr>` : ''}`;
     }
@@ -362,6 +416,14 @@
         if (oCb) oCb.onchange = () => { d.donViCoBan = oCb.value; d.donVi = oCb.value; veDong(); };
         if (oQd) oQd.onchange = () => { d.donViQuyDoi = oQd.value; veDong(); };
         if (oRi) oRi.oninput = () => { d.loaiRi = oRi.value; };
+        /* Ảnh đại diện của MÃ HÀNG. Tải lên ngay khi chọn file (không đợi bấm Lưu) để nếu upload lỗi
+           thì người dùng biết luôn, chứ không phải mất cả phiếu đã gõ. */
+        const oAdd = tr.querySelector('.nk-anhdd');
+        if (oAdd) oAdd.onchange = async () => {
+          const f = oAdd.files[0]; if (!f || !f.size) return;
+          try { d.anhDaiDien = await uploadFile(f, (d.maHang || 'mahang') + '_dd'); veDong(); }
+          catch (err) { toast('Không tải được ảnh đại diện: ' + err.message, 'error'); }
+        };
       });
 
       $('#nkfBang').querySelectorAll('tr[data-idx]:not(.nk-dong-moi)').forEach(tr => {
@@ -387,9 +449,25 @@
           veDong();
         };
         tr.querySelector('.nk-ten').oninput = (e) => { d.tenHang = e.target.value; };
+        const oMau = tr.querySelector('.nk-mau');
+        if (oMau) oMau.onchange = () => {
+          if (oMau.value === '__KHONG__') { d.mauSacId = null; d.tenMau = MAU_KHONG_PHAN; }
+          else if (oMau.value) { d.mauSacId = oMau.value; d.tenMau = null; }
+          else { d.mauSacId = null; d.tenMau = null; }
+          veDong();   // vẽ lại để bật/tắt dòng cảnh báo "không phân màu"
+        };
         tr.querySelector('.nk-sl').oninput = (e) => { d.soLuong = e.target.value; capNhatDong(tr, d, sx); };
         tr.querySelector('.nk-dv').onchange = (e) => { d.donVi = e.target.value; };
         tr.querySelector('.nk-gc').oninput = (e) => { d.ghiChu = e.target.value; };
+        // v6.96: ảnh của MÀU trên dòng này -> vào đúng dòng màu của thẻ kho.
+        const oAnhMau = tr.querySelector('.nk-anhmau');
+        if (oAnhMau) oAnhMau.onchange = async () => {
+          const f = oAnhMau.files[0]; if (!f || !f.size) return;
+          try {
+            d.anhMau = await uploadFile(f, (d.maHang || 'mahang') + '_mau' + (d.mauSacId || d.tenMau || ''));
+            veDong();
+          } catch (err) { toast('Không tải được ảnh màu: ' + err.message, 'error'); }
+        };
         const oGia = tr.querySelector('.nk-gia');
         if (oGia) oGia.oninput = (e) => { d.donGia = e.target.value; capNhatDong(tr, d, sx); };
         tr.querySelector('.nk-bo').onclick = () => {
@@ -426,7 +504,10 @@
       const sx = $('#nkfLoai').value === 'SanXuat';
       const dong = dongForm.filter(d => Number(d.soLuong) > 0).map(d => ({
         maHangId: d.maHangId || null, maHang: d.maHang, tenHang: d.tenHang,
-        mauSacId: d.mauSacId || null, tenMau: d.tenMau || null,   // v6.80: không còn ô nhập màu; để trống -> backend dùng màu mặc định
+        // v6.95: có cột Màu trở lại. tenMau = '(Không phân màu)' khi người dùng CHỌN mục đó.
+        mauSacId: d.mauSacId || null, tenMau: d.tenMau || null,
+        // v6.96: ảnh gửi kèm để backend tạo luôn thẻ kho (đường dẫn, đã upload xong từ trước)
+        anhMau: d.anhMau || null, anhDaiDien: d.anhDaiDien || null,
         soLuong: d.soLuong, donVi: d.donVi, donGia: sx ? 0 : d.donGia,
         loaiRi: d.loaiRi, donViCoBan: d.donViCoBan, donViQuyDoi: d.donViQuyDoi, ghiChu: d.ghiChu
       }));
@@ -439,12 +520,22 @@
       if (thieu.length) {
         return toast(`Mã mới ${thieu.map(d => d.maHang).join(', ')} còn thiếu Tên hàng / ĐVT / tỷ lệ quy đổi — khai đủ ở dòng phụ màu vàng.`, 'error');
       }
+      /* v6.95: BẮT chọn màu. Để trống thì backend tự dồn vào "(Không phân màu)" — âm thầm, và hậu quả
+         chỉ lộ ra lúc đặt hàng ("không đủ tồn khả dụng" dù kho có hàng). Không phân màu thật thì phải
+         CHỌN đúng mục đó, để người khai biết mình đang làm gì. */
+      const thieuMau = dong.filter(d => !d.mauSacId && !d.tenMau);
+      if (thieuMau.length) {
+        return toast(`Chưa chọn MÀU cho ${thieuMau.length} dòng (${thieuMau.map(d => d.maHang || '?').join(', ')}). `
+          + 'Tồn kho quản theo màu — thiếu màu là sau này không đặt/bán được. Hàng không phân màu thì chọn mục "(Không phân màu)".', 'error');
+      }
       const body = {
         ngayNhap: $('#nkfNgay').value, loaiNhap: sx ? 'SanXuat' : 'NhaCungCap',
         nccId: sx ? null : ($('#nkfNcc').value || null),
         donHangId: sx ? ($('#nkfDon').value || null) : null,
         soHoaDon: $('#nkfSoHD').value || null, ngayHoaDon: $('#nkfNgayHD').value || null,
-        ghiChu: $('#nkfGhiChu').value || null, dong
+        ghiChu: $('#nkfGhiChu').value || null, dong,
+        // v6.96: bỏ tích -> chỉ ghi nhận nhập kho, không tạo dòng màu/ảnh trong thẻ kho.
+        taoTheKho: !!($('#nkfTaoThe') && $('#nkfTaoThe').checked)
       };
       /* ⚠️ BẮT BUỘC try/catch: apiFetch NÉM LỖI khi máy chủ trả 4xx/5xx chứ không trả {success:false}.
          Bản trước thiếu chỗ này nên chỉ cần máy chủ báo lỗi là handler văng giữa chừng, dòng

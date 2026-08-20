@@ -30,6 +30,7 @@ const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
+const { damBaoDongMau, capNhatAnhDaiDien } = require('../utils/theKhoMau');
 
 const router = express.Router();
 
@@ -384,8 +385,34 @@ async function chuanDong(pool, tran, d, loai) {
     throw new Error(`Mã ${mh.MaHang} quản kho theo Ri (1 Ri = ${he} Cái) nên chỉ nhập được bội số của ${he} Cái — đang nhập ${soCai} Cái.`);
   }
   return Object.assign(chung, {
-    maHangId: mh.MaHangID, maHang: mh.MaHang, mauSacId: msId, donVi, slChinh, soCai
+    maHangId: mh.MaHangID, maHang: mh.MaHang, mauSacId: msId, donVi, slChinh, soCai,
+    // v6.96: anh di kem de tao luon the kho (neu phieu tich "Tao the kho")
+    anhMau: d.anhMau || null, anhDaiDien: d.anhDaiDien || null
   });
+}
+
+/* ================================================================================================
+   v6.96 — LUU PHIEU LA TAO LUON THE KHO (khi nguoi dung tich chon).
+
+   Phieu nhap kho da khai du mo(i thu the kho can biet ve MAU: ma hang + mau + anh mau + anh dai dien.
+   Bat nguoi dung bam thêm "Tao the kho" roi khai lai mau la lam hai lan cung mot viec.
+
+   ⚠️ CHI tao dong mau + ghi anh. KHONG ghi so luong vao NhapCai — ton den tu chinh bang phieu
+   (vw_TonTheoMau). Ghi vao NhapCai la dem hai lan. Xem utils/theKhoMau.js.
+   ================================================================================================ */
+async function taoTheKhoTuDong(pool, tran, dsGhi) {
+  let soMau = 0, soAnh = 0;
+  const daAnhDaiDien = new Set();
+  for (const d of dsGhi) {
+    if (!d.maHangId || !d.mauSacId) continue;
+    if (await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null)) soMau++;
+    // Anh dai dien la cua MA HANG: mot ma xuat hien nhieu dong (nhieu mau) thi chi ghi mot lan.
+    if (d.anhDaiDien && !daAnhDaiDien.has(d.maHangId)) {
+      daAnhDaiDien.add(d.maHangId);
+      if (await capNhatAnhDaiDien(pool, tran, d.maHangId, d.anhDaiDien)) soAnh++;
+    }
+  }
+  return { soMau, soAnh };
 }
 
 /* INSERT mot dong + cong ton. Dung CHUNG cho POST va PUT — hai ban sao khac nhau la duong chac chan
@@ -447,14 +474,18 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
 
     for (const d of dsGhi) await ghiDong(pool, tran, phieuId, d);
 
+    // v6.96: tich "Tao the kho" -> tao luon dong mau + ghi anh (khong ghi so luong)
+    const tk = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
+
     await tran.commit();
     const maMoi = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
     res.json({
       success: true,
       data: { phieuNKID: phieuId, soPhieu, tongTien, maMoi },
-      message: `Đã lưu phiếu ${soPhieu}.` + (maMoi.length
-        ? ` Đã sinh ${maMoi.length} mã hàng mới (${maMoi.join(', ')}) — xuất/bán được ngay. Vào "Mở thẻ kho" để bổ sung ảnh, giá bán, màu, danh mục.`
-        : '')
+      message: `Đã lưu phiếu ${soPhieu}.`
+        + (maMoi.length ? ` Đã sinh ${maMoi.length} mã hàng mới (${maMoi.join(', ')}).` : '')
+        + (tk.soMau ? ` Đã tạo ${tk.soMau} dòng màu trong thẻ kho.` : '')
+        + (tk.soAnh ? ` Đã cập nhật ảnh đại diện cho ${tk.soAnh} mã.` : '')
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* transaction co the da ket thuc */ }
@@ -495,6 +526,8 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     const dsGhi = [];
     for (const d of dong) dsGhi.push(await chuanDong(pool, tran, d, loai));
     for (const d of dsGhi) await ghiDong(pool, tran, req.params.id, d);
+    // v6.96: sua phieu cung dong bo lai the kho (them mau moi / doi anh); khong dung den so luong.
+    const tk2 = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
 
     await new sql.Request(tran)
       .input('id', sql.Int, req.params.id)
@@ -515,8 +548,9 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     const maMoi2 = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
     res.json({
       success: true,
-      message: 'Đã lưu thay đổi và tính lại tồn kho.' + (maMoi2.length
-        ? ` Đã sinh ${maMoi2.length} mã hàng mới: ${maMoi2.join(', ')}.` : '')
+      message: 'Đã lưu thay đổi và tính lại tồn kho.'
+        + (maMoi2.length ? ` Đã sinh ${maMoi2.length} mã hàng mới: ${maMoi2.join(', ')}.` : '')
+        + (tk2.soMau ? ` Đã tạo thêm ${tk2.soMau} dòng màu trong thẻ kho.` : '')
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }

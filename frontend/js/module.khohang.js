@@ -433,7 +433,15 @@ window.ModuleKhoHang = (function () {
       ${/* v6.34: bọc bằng div CÓ DẤU (data-onhap) — chỗ vẽ lại khi đổi tỷ lệ/đơn vị phải thay đúng khối
            này. Trước dùng closest('div') nên với markup mới sẽ trỏ nhầm vào ô flex bên trong. */''}
       <div data-onhap="c-socat">${oNhapRi('c-socat', 'Số cắt', soCatVal, opts.soCatReadonly, 'Lấy tự động từ công đoạn Cắt của đơn hàng, không sửa được ở đây')}</div>
-      <div data-onhap="c-nhap">${oNhapRi('c-nhap', 'Nhập', nhapVal, opts.nhapReadonly, 'Lấy tự động từ công đoạn Kho nhập của đơn hàng, không sửa được ở đây')}</div>
+      ${/* v6.95: TẠO THẺ KHO MỚI thì ô "Nhập" KHOÁ LẠI (=0). Số lượng vào kho chỉ đến từ PHIẾU NHẬP
+           KHO — phiếu đã có cột Màu nên nó khai đủ (mã + màu + số lượng); thẻ kho chỉ thêm màu/ảnh/giá.
+           Gõ số ở đây là tạo nguồn tồn thứ hai cho cùng lô hàng = đếm hai lần.
+           Vẫn cho sửa khi SỬA thẻ kho cũ: dữ liệu trước v6.89 nằm ở chính ô này, khoá lại là không
+           chỉnh được số cũ nữa. */''}
+      <div data-onhap="c-nhap">${oNhapRi('c-nhap', 'Nhập', nhapVal,
+        opts.nhapReadonly || opts.taoMoi,
+        opts.taoMoi ? 'Số lượng nhập kho lấy từ PHIẾU NHẬP KHO (phiếu có cột Màu). Thẻ kho chỉ khai màu / ảnh / giá bán.'
+                    : 'Lấy tự động từ công đoạn Kho nhập của đơn hàng, không sửa được ở đây')}</div>
       <div><label>Ảnh màu</label>
         <div style="display:flex;align-items:center;gap:6px;">
           ${existingAnh ? `<img class="thumb c-thumb" src="${existingAnh}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;">` : `<span class="c-thumb-placeholder" style="width:32px;height:32px;border:1px dashed #dcdfe3;border-radius:4px;display:inline-block;"></span>`}
@@ -558,24 +566,23 @@ window.ModuleKhoHang = (function () {
                không sửa lại được — đúng việc người dùng vừa gặp.
                Tên hàng + tỷ lệ chỉ HIỆN (readonly): sửa ở Danh mục → Hàng hóa để cả hệ thống thấy,
                chứ không phải sửa 2 nơi rồi lệch nhau. */''}
+          ${/* v6.95: Ô mã hàng dùng ĐÚNG KIỂU của dòng phiếu nhập kho — input + datalist. Vừa chọn được
+               mã có trong danh mục, vừa GÕ ĐƯỢC MÃ MỚI (lưu là tạo luôn), y như phiếu nhập kho.
+               v6.94 tôi ép thành <select> chỉ-chọn: chặn mất đường tạo mã mới, và làm hai lối vào cùng
+               một việc lại có hai kiểu nhập khác nhau. */''}
           <div class="form-row"><label>Mã hàng *</label>
-            ${isEdit
-              ? `<input name="maHang" id="inpMaHang" value="${escapeHtml(row.MaHang)}" readonly style="background:#f5f6f8;">`
-              : `<select name="maHang" id="inpMaHang" required>
-                   <option value="">-- Chọn mã hàng từ danh mục --</option>
-                   ${dsHangHoa.map(x => `<option value="${escapeHtml(x.MaHang)}">${escapeHtml(x.MaHang + ' · ' + (x.TenHang || ''))}</option>`).join('')}
-                 </select>`}
-            <div class="empty-hint" style="margin-top:2px;">
-              ${isEdit
-                ? 'Đổi mã hàng ở <b>Danh mục → Hàng hóa (mã hàng)</b>.'
-                : (dsHangHoa.length
-                    ? 'Chưa có mã cần dùng? Thêm ở <b>Danh mục → Hàng hóa (mã hàng)</b>, hoặc lập <b>Phiếu nhập kho</b> (mã tự sinh).'
-                    : '<span style="color:#c62828;">Danh mục hàng hóa đang trống — thêm mã ở <b>Danh mục → Hàng hóa (mã hàng)</b> trước.</span>')}
+            <input name="maHang" id="inpMaHang" list="dlMaHangDanhMuc" autocomplete="off"
+                   value="${escapeHtml(row ? row.MaHang : '')}" required ${isEdit ? 'readonly style="background:#f5f6f8;"' : 'placeholder="Gõ mã mới hoặc chọn mã có sẵn"'}>
+            <datalist id="dlMaHangDanhMuc">${dsHangHoa.map(x =>
+              `<option value="${escapeHtml(x.MaHang)}">${escapeHtml(x.TenHang || '')}</option>`).join('')}</datalist>
+            <div class="empty-hint" id="ttMaHang" style="margin-top:2px;">
+              ${isEdit ? 'Đổi mã hàng ở <b>Danh mục → Hàng hóa (mã hàng)</b>.'
+                       : 'Mã có sẵn → tự điền tên/ĐVT. Mã chưa có → khai Tên hàng + ĐVT + tỷ lệ, lưu là tạo luôn vào danh mục.'}
             </div>
           </div>
           <div class="form-row"><label>Tên hàng *</label>
-            <input name="tenHang" id="inpTenHang" value="${escapeHtml(row ? row.TenHang : '')}" required readonly style="background:#f5f6f8;">
-            <div class="empty-hint" style="margin-top:2px;">Tự điền theo mã hàng. Sửa tên ở <b>Danh mục → Hàng hóa (mã hàng)</b>.</div>
+            <input name="tenHang" id="inpTenHang" value="${escapeHtml(row ? row.TenHang : '')}" required>
+            <div class="empty-hint" style="margin-top:2px;">Mã đã có trong danh mục thì ô này tự điền — sửa tên ở <b>Danh mục → Hàng hóa (mã hàng)</b> để cả hệ thống thấy.</div>
           </div>
           <div class="form-row"><label>Giá bán</label><input name="giaBan" id="inpGiaBan" type="number" value="${row ? row.GiaBan : 0}">
             ${/* v6.21: KHÔNG nhập % ở đây nữa (tỷ lệ đánh chung ở đầu tab Thẻ kho) — chỉ hiện giá tính ra. */''}
@@ -634,7 +641,9 @@ window.ModuleKhoHang = (function () {
             Hàng vào kho bằng <b>phiếu nhập kho</b> — số lượng đã tính vào tồn.
             Để ô <b>Nhập</b> = 0, chỉ khai <b>màu / ảnh / giá bán</b>. Gõ số lượng vào đây là tồn bị đếm hai lần.
           </div>` : ''}
-          <div id="cRows">${(colors && colors.length ? colors.map(colorRowTemplate) : [colorRowTemplate(null)]).join('')}</div>
+          <div id="cRows">${(colors && colors.length
+            ? colors.map(c => colorRowTemplate(c, { taoMoi: !isEdit }))
+            : [colorRowTemplate(null, { taoMoi: !isEdit })]).join('')}</div>
           <button type="button" class="btn small secondary" id="btnAddColor">+ Thêm màu</button>
           <datalist id="dlMauSac">${dm.mauSac.map(m => `<option value="${escapeHtml(m.TenMau)}"></option>`).join('')}</datalist>
         </div>
@@ -784,7 +793,7 @@ window.ModuleKhoHang = (function () {
       });
     }
     modal.querySelector('#btnAddColor').addEventListener('click', () => {
-      document.getElementById('cRows').insertAdjacentHTML('beforeend', colorRowTemplate(null)); wireRemove(); wireColorThumbPreview(modal); wireColorMau(); wireNhapRi(modal);
+      document.getElementById('cRows').insertAdjacentHTML('beforeend', colorRowTemplate(null, { taoMoi: !isEdit })); wireRemove(); wireColorThumbPreview(modal); wireColorMau(); wireNhapRi(modal);
     });
 
     // Danh sach don hang san xuat - bien LOCAL cua lan mo form nay, nap 1 lan khi can (khong global).
@@ -1259,8 +1268,13 @@ window.ModuleKhoHang = (function () {
         <td style="white-space:pre-wrap;">${escapeHtml(c.GhiChu || '')}</td>
         <td>${escapeHtml(c.TenMau)}</td>
         ${/* v6.89: cột "Nhập" của lịch sử phải là TỔNG cả 2 nguồn (thẻ kho + phiếu nhập kho), khác
-             với ô Nhập của form Sửa (chỉ phần thẻ kho). Endpoint trả cả 2 trường riêng. */''}
-        <td>${fmtDualUnit(c.TongNhapCai != null ? c.TongNhapCai : c.NhapCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
+             với ô Nhập của form Sửa (chỉ phần thẻ kho). Endpoint trả cả 2 trường riêng.
+             v6.95: TÁCH RÕ số nào đến từ phiếu nhập kho — trước đây chỉ thấy một con số gộp nên khi
+             số nằm hết ở màu "(Không phân màu)" thì không hiểu vì sao màu thật lại tồn 0. */''}
+        <td>${fmtDualUnit(c.TongNhapCai != null ? c.TongNhapCai : c.NhapCai, loaiRi, donViCoBan, donViQuyDoi)}
+          ${Number(c.NhapTuPhieu) ? `<div style="font-size:11px;color:#5f6368;">trong đó ${fmtNumber(c.NhapTuPhieu)} từ phiếu nhập kho</div>` : ''}
+          ${String(c.TenMau || '') === '(Không phân màu)' && Number(c.TonCai) > 0
+            ? `<div style="font-size:11px;color:#c62828;">⚠️ hàng chưa gán màu — không đặt/bán được theo màu. Sửa phiếu nhập kho để chọn màu.</div>` : ''}</td>
         <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
         <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
