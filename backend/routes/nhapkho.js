@@ -89,7 +89,10 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
                            AND (${req.query.phieuNKID ? 'p.PhieuNKID <> ' + (parseInt(req.query.phieuNKID, 10) || 0) : '1=1'}))
        ORDER BY d.DonHangID DESC`),
     q('SELECT TheKhoDanhMucID, TenTheKho FROM TheKhoDanhMuc ORDER BY TenTheKho'),
-    q('SELECT NhomSanPhamID, TenNhom FROM NhomSanPham ORDER BY TenNhom').catch(() => []),
+    /* ⚠️ Ten bang la DanhMucNhomSanPham (migration_v54), KHONG phai NhomSanPham.
+       v6.98 tro xuong go sai ten bang, va `.catch(() => [])` NUOT LOI nen o "Loai hang" tren phieu
+       luon trong ma khong co dau hieu gi. Da bo .catch: sai ten bang thi phai NO ra de con biet. */
+    q('SELECT NhomSanPhamID, TenNhom FROM DanhMucNhomSanPham ORDER BY TenNhom'),
     q('SELECT MauSacID, TenMau FROM MauSac ORDER BY TenMau'),
     q('SELECT TenDonVi FROM DanhMucDonViTinh ORDER BY TenDonVi').catch(() => [])
   ]);

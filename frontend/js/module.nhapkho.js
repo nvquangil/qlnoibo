@@ -359,7 +359,8 @@
           <th${sx ? '' : ' style="width:350px;"'}>Tên hàng</th>
           <th style="width:130px;">Màu</th>
           ${/* v6.96: ảnh khai LUÔN ở phiếu — lưu phiếu là tạo xong thẻ kho, không phải khai màu lại. */''}
-          <th style="width:120px;">Ảnh màu</th>
+          ${/* v7.00: 60px — chỉ chứa 1 ảnh thu nhỏ 28px + nút chọn file. 120px là thừa gấp đôi. */''}
+          <th style="width:60px;">Ảnh màu</th>
           <th style="width:100px;">Số lượng</th><th style="width:90px;">ĐVT</th>
           ${sx ? '' : '<th style="width:120px;">Đơn giá</th><th style="width:130px;" class="num">Thành tiền</th>'}
           <th style="width:150px;">Ghi chú</th><th style="width:44px;"></th>
@@ -440,12 +441,11 @@
           </div>` : ''}
         </td>
         <td>
-          <div style="display:flex;align-items:center;gap:4px;">
-            ${d.anhMau
-              ? `<img src="${escapeHtml(anhNho(d.anhMau, 80))}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;" title="Đã có ảnh">`
-              : '<span style="width:28px;height:28px;border:1px dashed #dcdfe3;border-radius:4px;display:inline-block;flex:0 0 auto;"></span>'}
-            <input type="file" class="nk-anhmau" accept="image/*" style="flex:1;min-width:0;font-size:11px;">
-          </div>
+          ${/* Ảnh đã có thì hiện thumbnail thay cho ô trống; input file thu về đúng bề rộng cột. */''}
+          ${d.anhMau
+            ? `<img src="${escapeHtml(anhNho(d.anhMau, 80))}" style="width:26px;height:26px;object-fit:cover;border-radius:4px;vertical-align:middle;" title="Đã có ảnh">`
+            : ''}
+          <input type="file" class="nk-anhmau" accept="image/*" style="width:100%;font-size:10px;">
         </td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
         <td><select class="nk-dv" style="width:100%;">${optDV(d.donVi)}</select>
@@ -461,25 +461,28 @@
         <td></td>
         <td colspan="${soCot - 1}" style="font-size:12px;">
           <span style="color:#8a6d3b;font-weight:600;">Khai cho mã mới:</span>
-          &nbsp;ĐVT chính <select class="nk-dvcb" style="width:auto;padding:2px 6px;">${optDV(d.donViCoBan)}</select>
-          &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:auto;padding:2px 6px;">${optDV(d.donViQuyDoi)}</select>
+          ${/* v7.00: 78px vừa đủ cho tên ĐVT (Cái, Ri, Kg, Mét, Thùng) + mũi tên select.
+               `width:auto` để trình duyệt tự giãn theo option DÀI NHẤT của cả danh mục — một đơn vị tên
+               dài là hai ô này phình ra đẩy lệch cả dòng. Xem chuẩn kích thước ở ghi nhớ. */''}
+          &nbsp;ĐVT chính <select class="nk-dvcb" style="width:78px;padding:2px 4px;">${optDV(d.donViCoBan)}</select>
+          &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:78px;padding:2px 4px;">${optDV(d.donViQuyDoi)}</select>
           &nbsp;· tỷ lệ 1 <b class="nk-nhan-qd">${escapeHtml(d.donViQuyDoi || '')}</b> =
-          <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="width:70px;padding:2px 6px;">
+          <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="width:60px;padding:2px 4px;">
           <b class="nk-nhan-cb">${escapeHtml(d.donViCoBan || '')}</b>
           <span style="color:#5f6368;">— hàng không quản theo lô/ri thì để tỷ lệ 1.</span>
           ${/* v6.98: 4 trường CẤP MÃ HÀNG khai luôn tại đây — khỏi sang Thẻ kho / Danh mục sửa. */''}
           <br><span style="color:#8a6d3b;font-weight:600;">Giá bán</span>
-          <input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}" style="width:110px;padding:2px 6px;">
+          <input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}" style="width:100px;padding:2px 4px;">
           &nbsp;· Loại hàng
-          <select class="nk-nhom" style="width:auto;padding:2px 6px;"><option value="">--</option>
+          <select class="nk-nhom" style="width:130px;padding:2px 4px;"><option value="">--</option>
             ${(dm.nhom || []).map(x => `<option value="${x.NhomSanPhamID}"${String(d.nhomSanPhamId) === String(x.NhomSanPhamID) ? ' selected' : ''}>${escapeHtml(x.TenNhom)}</option>`).join('')}
           </select>
           &nbsp;· Danh mục thẻ kho
-          <select class="nk-dmthekho" style="width:auto;padding:2px 6px;"><option value="">--</option>
+          <select class="nk-dmthekho" style="width:150px;padding:2px 4px;"><option value="">--</option>
             ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}"${String(d.theKhoDanhMucId) === String(x.TheKhoDanhMucID) ? ' selected' : ''}>${escapeHtml(x.TenTheKho)}</option>`).join('')}
           </select>
           &nbsp;· Barcode
-          <input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}" style="width:130px;padding:2px 6px;">
+          <input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}" style="width:130px;padding:2px 4px;">
           ${/* v6.96: ảnh ĐẠI DIỆN là của MÃ HÀNG (không phải của màu) nên khai ở dòng phụ của mã. */''}
           <br><span style="color:#8a6d3b;font-weight:600;">Ảnh đại diện mã hàng:</span>
           ${d.anhDaiDien ? `<img src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:26px;height:26px;object-fit:cover;border-radius:4px;vertical-align:middle;margin:0 4px;">` : ''}
@@ -532,6 +535,14 @@
           if (mh) {
             d.maHangId = mh.MaHangID; d.tenHang = mh.TenHang; d.loaiRi = mh.LoaiRi;
             d.donViCoBan = mh.DonViCoBan; d.donViQuyDoi = mh.DonViQuyDoi;
+            /* v7.00: ĐVT của SỐ LƯỢNG cũng NHẢY THEO mã hàng vừa chọn.
+               Ô ĐVT chỉ liệt kê 2 đơn vị của mã; nếu `d.donVi` còn giữ đơn vị của mã TRƯỚC ĐÓ (hoặc
+               mặc định cũ) thì nó không khớp option nào và <select> âm thầm nhảy về option đầu —
+               người dùng tưởng đang nhập theo Ri mà thực ra hệ thống hiểu là Cái. */
+            const c = (x) => String(x == null ? '' : x).trim().toLowerCase();
+            if (c(d.donVi) !== c(mh.DonViCoBan) && c(d.donVi) !== c(mh.DonViQuyDoi)) {
+              d.donVi = mh.DonViCoBan || mh.DonViQuyDoi || '';
+            }
           } else {
             /* Không dò ra = mã mới. Mở dòng phụ để khai 2 ĐVT + tỷ lệ, KHÔNG xóa tên hàng người dùng
                đã gõ. Mặc định LẤY TỪ DANH MỤC (dvGoiY), không gõ cứng 'Cái'/'Ri'. */
