@@ -3304,7 +3304,23 @@ window.ModuleKhoHang = (function () {
        nhập kho" của chính form đó, đúng luồng cũ; không bật thêm nhánh xử lý riêng nào.
        Trước v6.93 lối vào này gửi kèm cờ `tuPhieuNKID` và backend rẽ sang một hàm ghi khác — cùng một
        việc mà hai luồng, bấm ở hai chỗ ra hai kết quả khác nhau. Đã gộp về một. */
-    await openItemForm(null, p, null, { PhieuNKID: phieuNKID, maHang });
+
+    /* ⚠️ v7.06: ĐIỀN SẴN CÁC DÒNG MÀU (kèm ẢNH MÀU) của mã này vào form.
+       Trước đây truyền `colors = null` nên form mở ra chỉ có MỘT dòng màu TRỐNG — mất hết màu và ảnh
+       màu vừa khai ở phiếu nhập kho, phải gõ lại từ đầu. Đúng chỗ Nguyen chỉ ra: form "Tạo thẻ kho
+       mới" thì mỗi dòng màu có ô ảnh đã điền, mở từ phiếu nhập kho thì không có.
+       Lưu phiếu (có tích "Tạo thẻ kho") đã tạo sẵn dòng màu + ghi ảnh vào TheKhoChiTietMau, nên ở đây
+       chỉ cần đọc lại và đưa vào form.
+       Lọc `c.ID != null`: bỏ các cặp mã/màu chỉ tồn tại trên phiếu nhập mà chưa có dòng thẻ kho. */
+    const chuanX = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
+    const rowMa = ((res.data || {}).tongHop || []).find(r => chuanX(r.MaHang) === chuanX(maHang));
+    const mauCuaMa = rowMa
+      ? ((res.data || {}).chiTiet || []).filter(c => c.MaHangID === rowMa.MaHangID && c.ID != null)
+      : [];
+    if (mauCuaMa.length) {
+      toast(`Đã điền sẵn ${mauCuaMa.length} dòng màu (kèm ảnh) của mã ${maHang} — chỉ cần bổ sung giá bán / danh mục.`, 'info');
+    }
+    await openItemForm(null, p, mauCuaMa.length ? mauCuaMa : null, { PhieuNKID: phieuNKID, maHang });
   }
 
   async function taoTheKhoTuPhieu(phieuNKID) {
