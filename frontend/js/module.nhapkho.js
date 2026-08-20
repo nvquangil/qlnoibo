@@ -346,7 +346,11 @@
       dongBoMaMoi();
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `
-        <table class="data-table phieu-ke"><thead><tr>
+        ${/* ⚠️ v7.01: PHAI co table-layout:fixed. `.phieu-ke` trong style.css KHONG khai thuoc tinh
+             nay, nen truoc do moi `width` tôi đặt ở <th> chỉ là GỢI Ý — trình duyệt dùng thuật toán
+             auto và tự giãn cột theo nội dung, đúng lý do "kích thước các ô vẫn như cũ".
+             Đặt inline cho RIÊNG bảng này, không sửa .phieu-ke chung để khỏi ảnh hưởng phiếu khác. */''}
+        <table class="data-table phieu-ke" style="table-layout:fixed;"><thead><tr>
           ${/* v6.95: TRẢ LẠI cột Màu (v6.80 đã bỏ đi — sai).
                Tồn kho hàng hóa quản theo cặp (mã hàng + MÀU), và MỌI đường xuống dưới đều kiểm tồn
                THEO MÀU: đơn khách đặt, phiếu bán hàng, catalogue công khai. Nhập kho không khai màu
@@ -458,35 +462,34 @@
         <td><button type="button" class="btn small danger nk-bo">✕</button></td>
       </tr>
       ${d.maHang && laDongKhai ? `<tr data-idx="${d.idx}" class="nk-dong-moi" style="background:#fffdf5;">
-        <td></td>
-        <td colspan="${soCot - 1}" style="font-size:12px;">
-          <span style="color:#8a6d3b;font-weight:600;">Khai cho mã mới:</span>
-          ${/* v7.00: 78px vừa đủ cho tên ĐVT (Cái, Ri, Kg, Mét, Thùng) + mũi tên select.
-               `width:auto` để trình duyệt tự giãn theo option DÀI NHẤT của cả danh mục — một đơn vị tên
-               dài là hai ô này phình ra đẩy lệch cả dòng. Xem chuẩn kích thước ở ghi nhớ. */''}
-          &nbsp;ĐVT chính <select class="nk-dvcb" style="width:78px;padding:2px 4px;">${optDV(d.donViCoBan)}</select>
-          &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:78px;padding:2px 4px;">${optDV(d.donViQuyDoi)}</select>
-          &nbsp;· tỷ lệ 1 <b class="nk-nhan-qd">${escapeHtml(d.donViQuyDoi || '')}</b> =
-          <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="width:60px;padding:2px 4px;">
-          <b class="nk-nhan-cb">${escapeHtml(d.donViCoBan || '')}</b>
-          <span style="color:#5f6368;">— hàng không quản theo lô/ri thì để tỷ lệ 1.</span>
-          ${/* v6.98: 4 trường CẤP MÃ HÀNG khai luôn tại đây — khỏi sang Thẻ kho / Danh mục sửa. */''}
-          <br><span style="color:#8a6d3b;font-weight:600;">Giá bán</span>
-          <input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}" style="width:100px;padding:2px 4px;">
-          &nbsp;· Loại hàng
-          <select class="nk-nhom" style="width:130px;padding:2px 4px;"><option value="">--</option>
-            ${(dm.nhom || []).map(x => `<option value="${x.NhomSanPhamID}"${String(d.nhomSanPhamId) === String(x.NhomSanPhamID) ? ' selected' : ''}>${escapeHtml(x.TenNhom)}</option>`).join('')}
-          </select>
-          &nbsp;· Danh mục thẻ kho
-          <select class="nk-dmthekho" style="width:150px;padding:2px 4px;"><option value="">--</option>
-            ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}"${String(d.theKhoDanhMucId) === String(x.TheKhoDanhMucID) ? ' selected' : ''}>${escapeHtml(x.TenTheKho)}</option>`).join('')}
-          </select>
-          &nbsp;· Barcode
-          <input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}" style="width:130px;padding:2px 4px;">
-          ${/* v6.96: ảnh ĐẠI DIỆN là của MÃ HÀNG (không phải của màu) nên khai ở dòng phụ của mã. */''}
-          <br><span style="color:#8a6d3b;font-weight:600;">Ảnh đại diện mã hàng:</span>
-          ${d.anhDaiDien ? `<img src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:26px;height:26px;object-fit:cover;border-radius:4px;vertical-align:middle;margin:0 4px;">` : ''}
-          <input type="file" class="nk-anhdd" accept="image/*" style="font-size:11px;width:190px;">
+        <td colspan="${soCot}" style="padding:8px 10px;">
+          ${/* v7.01: dùng ĐÚNG bố cục của form Thẻ kho (.form-grid — nhãn trên, ô nhập dưới) thay vì
+               nhồi tất cả trên một dòng chữ. Cùng một việc "khai thông tin mã hàng" thì phải nhìn
+               giống nhau ở cả hai màn; và grid tự chia bề rộng nên không phải đấu với bảng nữa. */''}
+          <div style="font-weight:600;color:#8a6d3b;margin-bottom:6px;">Khai cho mã mới: ${escapeHtml(d.maHang)}</div>
+          <div class="form-grid" style="grid-template-columns:repeat(4, 1fr);gap:8px 12px;align-items:end;">
+            <div><label>ĐVT chính</label><select class="nk-dvcb">${optDV(d.donViCoBan)}</select></div>
+            <div><label>ĐVT quy đổi</label><select class="nk-dvqd">${optDV(d.donViQuyDoi)}</select></div>
+            <div><label>Tỷ lệ (1 ${escapeHtml(d.donViQuyDoi || 'ĐVT quy đổi')} = ? ${escapeHtml(d.donViCoBan || 'ĐVT chính')})</label>
+              <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}"></div>
+            <div><label>Giá bán</label><input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}"></div>
+            <div><label>Loại hàng</label><select class="nk-nhom"><option value="">--</option>
+              ${(dm.nhom || []).map(x => `<option value="${x.NhomSanPhamID}"${String(d.nhomSanPhamId) === String(x.NhomSanPhamID) ? ' selected' : ''}>${escapeHtml(x.TenNhom)}</option>`).join('')}
+            </select></div>
+            <div><label>Danh mục thẻ kho</label><select class="nk-dmthekho"><option value="">--</option>
+              ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}"${String(d.theKhoDanhMucId) === String(x.TheKhoDanhMucID) ? ' selected' : ''}>${escapeHtml(x.TenTheKho)}</option>`).join('')}
+            </select></div>
+            <div><label>Mã Barcode</label><input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}"></div>
+            <div><label>Ảnh đại diện mã hàng</label>
+              <div style="display:flex;align-items:center;gap:6px;">
+                ${d.anhDaiDien
+                  ? `<img class="thumb" src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;">`
+                  : '<span style="width:32px;height:32px;border:1px dashed #dcdfe3;border-radius:4px;display:inline-block;"></span>'}
+                <input type="file" class="nk-anhdd" accept="image/*" style="flex:1;max-width:140px;font-size:12px;">
+              </div>
+            </div>
+          </div>
+          <div class="empty-hint" style="margin:6px 0 0;">Hàng không quản theo lô/ri thì để tỷ lệ 1. Các dòng màu tiếp theo của mã này tự dùng lại thông tin ở đây.</div>
         </td>
       </tr>` : ''}`;
     }
