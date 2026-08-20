@@ -309,11 +309,14 @@
        => Dòng ĐẦU TIÊN của mỗi mã mới là dòng khai; các dòng sau THỪA HƯỞNG y nguyên.
        ================================================================================================ */
     const chuanMa = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
-    /* v6.98: idx của DÒNG KHAI = dòng ĐẦU TIÊN mang mã đó trên phiếu (mã mới HAY mã đã có đều tính).
-       null nếu dòng chưa gõ mã. */
+    /* v6.99: idx của DÒNG KHAI = dòng ĐẦU TIÊN mang MÃ MỚI đó. Mã ĐÃ CÓ trong danh mục thì KHÔNG có
+       dòng khai — sửa thông tin mã hàng ở Danh mục → Hàng hóa.
+       ⚠️ v6.98 tôi mở dòng khai cho cả mã đã có. Ngoài việc rườm rà, nó còn nguy hiểm: 2 ô ĐVT và tỷ
+       lệ luôn có giá trị mặc định, nên chỉ cần lưu phiếu là ĐVT của một mã đang có tồn bị ghi đè —
+       tồn kho lập tức bị diễn giải lại sai gấp <tỷ lệ> lần mà không có thông báo nào. */
     function idxKhaiMoi(d) {
-      if (!d.maHang) return null;
-      const dau = dongForm.find(x => chuanMa(x.maHang) === chuanMa(d.maHang));
+      if (d.maHangId || !d.maHang) return null;
+      const dau = dongForm.find(x => !x.maHangId && chuanMa(x.maHang) === chuanMa(d.maHang));
       return dau ? dau.idx : null;
     }
     // Giữ tên cũ cho các chỗ đang gọi (đồng bộ / kiểm thiếu) — cùng một định nghĩa.
@@ -380,12 +383,10 @@
       const moi = !d.maHangId;
       /* v6.97: chỉ DÒNG KHAI (dòng đầu tiên của mã mới) mới mở dòng phụ; dòng sau thừa hưởng. */
       const idxKhai = dongKhaiCua(d);
-      /* v6.98: DÒNG KHAI mở cho MỌI mã (kể cả mã đã có) — để sửa Giá bán / Loại hàng / Danh mục thẻ
-         kho / Barcode / ĐVT / tỷ lệ ngay tại phiếu, không phải sang màn Thẻ kho hay Danh mục.
-         Vẫn CHỈ MỘT dòng khai cho mỗi mã: các dòng sau thừa hưởng (xem dongBoMaMoi). */
-      const laDongKhai = !!d.maHang && idxKhaiMoi(d) === d.idx;
-      const thuaHuong = !!d.maHang && idxKhaiMoi(d) != null && idxKhaiMoi(d) !== d.idx;
-      const maDaCo = !!d.maHangId;
+      /* v6.99: DÒNG KHAI chỉ cho MÃ MỚI, và chỉ ở dòng đầu tiên của mã đó. Mã đã có / các dòng màu
+         tiếp theo: không hiện gì thêm. */
+      const laDongKhai = moi && idxKhaiMoi(d) === d.idx;
+      const thuaHuong = moi && idxKhaiMoi(d) != null && idxKhaiMoi(d) !== d.idx;
       /* v6.93: MỌI ô ĐVT ở đây lấy từ DANH MỤC ĐƠN VỊ TÍNH (DanhMucDonViTinh) — không gõ cứng
          'Cái'/'Ri'. Nguyên tắc chung: trường nào đã có danh mục thì phải đọc từ danh mục, để thêm một
          đơn vị trong Danh mục là mọi form thấy ngay.
@@ -459,7 +460,7 @@
       ${d.maHang && laDongKhai ? `<tr data-idx="${d.idx}" class="nk-dong-moi" style="background:#fffdf5;">
         <td></td>
         <td colspan="${soCot - 1}" style="font-size:12px;">
-          <span style="color:#8a6d3b;font-weight:600;">${maDaCo ? 'Thông tin mã hàng (sửa được):' : 'Khai cho mã mới:'}</span>
+          <span style="color:#8a6d3b;font-weight:600;">Khai cho mã mới:</span>
           &nbsp;ĐVT chính <select class="nk-dvcb" style="width:auto;padding:2px 6px;">${optDV(d.donViCoBan)}</select>
           &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:auto;padding:2px 6px;">${optDV(d.donViQuyDoi)}</select>
           &nbsp;· tỷ lệ 1 <b class="nk-nhan-qd">${escapeHtml(d.donViQuyDoi || '')}</b> =

@@ -31,7 +31,6 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 const { damBaoDongMau, capNhatAnhDaiDien } = require('../utils/theKhoMau');
-const { capNhatMaHang } = require('../utils/maHangCapNhat');
 
 const router = express.Router();
 
@@ -369,18 +368,12 @@ async function timHoacTaoMaHang(pool, tran, d) {
 /* Chuan hoa 1 dong hang cua phieu -> ban ghi san sang INSERT. */
 async function chuanDong(pool, tran, d, loai) {
   const mh = await timHoacTaoMaHang(pool, tran, d);
-  /* v6.98: DONG KHAI (dong dau tien cua moi ma tren phieu) duoc sua luon thong tin cap ma hang —
-     Gia ban / Loai hang / Danh muc the kho / Barcode / 2 DVT / ty le — de khong phai sang man The kho
-     hay Danh muc sua. Chi lam khi ma DA CO san; ma vua tao thi INSERT o tren da ghi day du roi.
-     Dung CHUNG ham capNhatMaHang() voi PUT /danhmuc/hanghoa/:id — mot bo truong, mot duong ghi. */
-  if (d.laDongKhai && !mh.laMoi) {
-    const kq = await capNhatMaHang(pool, tran, mh.MaHangID, d);
-    if (kq.doiMa) mh.MaHang = kq.doiMa.den;
-    // Doc lai 2 DVT + ty le: cac phep quy doi ben duoi phai dung so VUA sua, khong phai so cu.
-    const moi = (await new sql.Request(tran).input('id', sql.Int, mh.MaHangID)
-      .query('SELECT LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0];
-    if (moi) { mh.LoaiRi = moi.LoaiRi; mh.DonViCoBan = moi.DonViCoBan; mh.DonViQuyDoi = moi.DonViQuyDoi; }
-  }
+  /* ⚠️ v6.99 — PHIEU NHAP KHO KHONG BAO GIO SUA MOT MA HANG DA CO.
+     v6.98 tung cho "dong khai" ghi de thong tin cap ma hang (Gia ban / DVT / ty le / Barcode...).
+     Nguy hiem: 2 o DVT va ty le tren form LUON co gia tri mac dinh, nen chi can lap phieu cho mot ma
+     dang co ton la DVT/ty le cua no bi ghi de am tham => moi phep quy doi ton kho sai gap <ty le> lan.
+     Ma da co thi sua o Danh muc -> Hang hoa (ma hang). Ma MOI thi INSERT ben tren da ghi day du.
+     ⚠️ KHONG mo lai duong nay. */
   const donGia = loai === 'NhaCungCap' ? so(d.donGia) : 0;
   const chung = {
     soLuong: so(d.soLuong), donGia, thanhTien: tien(donGia * so(d.soLuong)),
