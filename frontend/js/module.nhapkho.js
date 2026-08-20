@@ -258,6 +258,16 @@
       veDong();
     };
 
+    /* v6.93: DANH SÁCH ĐƠN VỊ TÍNH — nguồn duy nhất là DANH MỤC (dm.donVi ← DanhMucDonViTinh).
+       Dựng một lần cho cả form, mọi ô ĐVT (số lượng, ĐVT chính, ĐVT quy đổi) đều dùng chung. */
+    const dsDVAll = (dm.donVi || []).map(x => x.TenDonVi).filter(Boolean);
+    /* Mặc định cho mã MỚI: ưu tiên đơn vị có tên khớp gợi ý NẾU nó thật sự nằm trong danh mục; không
+       có thì lấy dòng đầu danh mục. Tuyệt đối không trả về chuỗi gõ cứng — danh mục là nguồn duy nhất. */
+    const dvGoiY = (ten) => {
+      const c = (x) => String(x == null ? '' : x).trim().toLowerCase();
+      return dsDVAll.find(x => c(x) === c(ten)) || dsDVAll[0] || '';
+    };
+
     function veDong() {
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `
@@ -281,13 +291,29 @@
          ĐVT của mã ĐÃ CÓ chỉ được chọn trong 2 đơn vị của CHÍNH mã đó — chọn đơn vị lạ là tồn kho quy
          đổi sai. Mã mới thì chưa biết 2 đơn vị đó nên lấy cả danh mục ĐVT. */
       const moi = !d.maHangId;
-      const dsDVDanhMuc = (dm.donVi || []).map(x => x.TenDonVi).filter(Boolean);
-      /* Ô ĐVT của SỐ LƯỢNG chỉ cho chọn trong 2 đơn vị của mã (chính / quy đổi) — kể cả mã mới, vì
-         2 đơn vị đó vừa được khai ở dòng phụ. Cho chọn đơn vị thứ ba là mở đường quy đổi sai: hệ
-         thống chỉ biết nhân/chia theo ĐVT quy đổi, đơn vị lạ sẽ bị coi như ĐVT chính. */
-      const dsDV = [d.donViCoBan || 'Cái', d.donViQuyDoi || 'Ri'].filter((x, k, a) => x && a.indexOf(x) === k);
-      const optDV = (chon) => (dsDVDanhMuc.length ? dsDVDanhMuc : ['Cái', 'Ri'])
-        .map(x => `<option${chon === x ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('');
+      /* v6.93: MỌI ô ĐVT ở đây lấy từ DANH MỤC ĐƠN VỊ TÍNH (DanhMucDonViTinh) — không gõ cứng
+         'Cái'/'Ri'. Nguyên tắc chung: trường nào đã có danh mục thì phải đọc từ danh mục, để thêm một
+         đơn vị trong Danh mục là mọi form thấy ngay.
+         ⚠️ Đánh đổi đã biết: danh mục có thể chứa đơn vị KHÔNG thuộc mã hàng đang chọn. Hệ thống chỉ
+         biết quy đổi theo ĐVT quy đổi của mã; đơn vị lạ sẽ bị coi như ĐVT CHÍNH (tỷ lệ 1). Nên có
+         cảnh báo ngay tại dòng bên dưới thay vì để sai âm thầm. */
+      const dsDV = dsDVAll.length ? dsDVAll : [d.donViCoBan, d.donViQuyDoi].filter(Boolean);
+      /* ⚠️ LUÔN chèn giá trị ĐANG LƯU vào danh sách nếu danh mục không còn nó (dữ liệu cũ, hoặc ai đó
+         xóa dòng trong Danh mục → Đơn vị tính). Thiếu bước này thì <select> không tìm thấy option
+         khớp và tự nhảy về dòng đầu — người dùng bấm Lưu là ĐƠN VỊ BỊ ĐỔI ÂM THẦM, kéo theo tồn kho
+         quy đổi sai mà không có thông báo nào. Đây là lỗi đã gặp ở các form khác. */
+      const optDV = (chon) => {
+        /* ⚠️ So khớp và đánh `selected` PHẢI cùng một cách so. Bản đầu tôi dò trùng theo kiểu bỏ
+           hoa/thường nhưng lại đánh selected bằng `===` — danh mục ghi "cái" mà dữ liệu ghi "Cái" thì
+           không chèn thêm mà cũng không option nào được chọn ⇒ vẫn nhảy về dòng đầu. */
+        const c = (x) => String(x == null ? '' : x).trim().toLowerCase();
+        const ds = (chon && !dsDV.some(x => c(x) === c(chon))) ? [chon, ...dsDV] : dsDV;
+        return ds.map(x => `<option${c(x) === c(chon) ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('');
+      };
+      // Đơn vị đang chọn có khớp ĐVT chính / quy đổi của mã không? (chỉ xét khi mã đã có trong danh mục)
+      const chuanDv = (x) => String(x == null ? '' : x).trim().toLowerCase();
+      const dvLech = !moi && d.donVi
+        && chuanDv(d.donVi) !== chuanDv(d.donViCoBan) && chuanDv(d.donVi) !== chuanDv(d.donViQuyDoi);
       const soCot = sx ? 7 : 9;
       return `<tr data-idx="${d.idx}">
         <td>${i + 1}</td>
@@ -299,7 +325,10 @@
         </td>
         <td><input type="text" class="nk-ten" value="${escapeHtml(d.tenHang || '')}" placeholder="${moi ? 'BẮT BUỘC khai cho mã mới' : 'tự điền khi chọn mã'}" style="width:100%;"></td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
-        <td><select class="nk-dv" style="width:100%;">${dsDV.map(x => `<option${d.donVi === x ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}</select></td>
+        <td><select class="nk-dv" style="width:100%;">${optDV(d.donVi)}</select>
+          ${dvLech ? `<div style="font-size:11px;color:#c62828;margin-top:2px;" title="Hệ thống chỉ quy đổi được theo ĐVT quy đổi của mã hàng">
+            ⚠️ ${escapeHtml(d.donVi)} không phải ĐVT của mã này (${escapeHtml(d.donViCoBan || '?')} / ${escapeHtml(d.donViQuyDoi || '?')}) — sẽ tính như ${escapeHtml(d.donViCoBan || 'ĐVT chính')}
+          </div>` : ''}</td>
         ${sx ? '' : `<td><input type="number" class="nk-gia" min="0" step="1" value="${d.donGia != null ? d.donGia : ''}" style="width:100%;"></td>
         <td class="num nk-tt">${fmtTien((Number(d.soLuong) || 0) * (Number(d.donGia) || 0))}</td>`}
         <td><input type="text" class="nk-gc" value="${escapeHtml(d.ghiChu || '')}" style="width:100%;"></td>
@@ -309,11 +338,11 @@
         <td></td>
         <td colspan="${soCot - 1}" style="font-size:12px;">
           <span style="color:#8a6d3b;font-weight:600;">Khai cho mã mới:</span>
-          &nbsp;ĐVT chính <select class="nk-dvcb" style="width:auto;padding:2px 6px;">${optDV(d.donViCoBan || 'Cái')}</select>
-          &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:auto;padding:2px 6px;">${optDV(d.donViQuyDoi || 'Ri')}</select>
-          &nbsp;· tỷ lệ 1 <b class="nk-nhan-qd">${escapeHtml(d.donViQuyDoi || 'Ri')}</b> =
+          &nbsp;ĐVT chính <select class="nk-dvcb" style="width:auto;padding:2px 6px;">${optDV(d.donViCoBan)}</select>
+          &nbsp;· ĐVT quy đổi <select class="nk-dvqd" style="width:auto;padding:2px 6px;">${optDV(d.donViQuyDoi)}</select>
+          &nbsp;· tỷ lệ 1 <b class="nk-nhan-qd">${escapeHtml(d.donViQuyDoi || '')}</b> =
           <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="width:70px;padding:2px 6px;">
-          <b class="nk-nhan-cb">${escapeHtml(d.donViCoBan || 'Cái')}</b>
+          <b class="nk-nhan-cb">${escapeHtml(d.donViCoBan || '')}</b>
           <span style="color:#5f6368;">— hàng không quản theo lô/ri thì để tỷ lệ 1.</span>
         </td>
       </tr>` : ''}`;
@@ -348,10 +377,10 @@
             d.donViCoBan = mh.DonViCoBan; d.donViQuyDoi = mh.DonViQuyDoi;
           } else {
             /* Không dò ra = mã mới. Mở dòng phụ để khai 2 ĐVT + tỷ lệ, KHÔNG xóa tên hàng người dùng
-               đã gõ. Đặt mặc định Cái/Ri/1 để dòng phụ có gì mà hiện, nhưng backend vẫn bắt khai đủ. */
+               đã gõ. Mặc định LẤY TỪ DANH MỤC (dvGoiY), không gõ cứng 'Cái'/'Ri'. */
             d.maHangId = null;
-            d.donViCoBan = d.donViCoBan || 'Cái';
-            d.donViQuyDoi = d.donViQuyDoi || 'Ri';
+            d.donViCoBan = d.donViCoBan || dvGoiY('Cái');
+            d.donViQuyDoi = d.donViQuyDoi || dvGoiY('Ri');
             if (d.loaiRi == null) d.loaiRi = 1;
             if (!d.donVi) d.donVi = d.donViCoBan;
           }

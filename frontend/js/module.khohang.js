@@ -468,7 +468,20 @@ window.ModuleKhoHang = (function () {
   // Loai hang: NhaSanXuat (lien ket 1 don hang san xuat, goi y ma hang/ten hang/mau chinh) hoac
   // DatNgoai (khai bao tay don vi tinh). Moi lan mo form deu dung bien LOCAL (khong global) nen
   // khong bao gio sot du lieu/dong mau cua lan mo truoc - xem ghi chu o cho goi openItemForm().
+  /* v6.93: danh sách mã hàng ĐANG CÓ trong danh mục — để form hỏi xác nhận khi người dùng khai một mã
+     đã tồn tại. Dựng ở đây (module-level) để CẢ HAI lối vào form đều dùng chung một dữ liệu, không
+     mỗi nơi tự tải một kiểu. */
+  let dsMaTrongDanhMuc = new Set();
+  const chuanMa = (x) => String(x == null ? '' : x).normalize('NFC').trim().toUpperCase();
+  async function napDsMaHang() {
+    try {
+      const res = await apiGet('/api/khohang/items');
+      dsMaTrongDanhMuc = new Set(((res.data || {}).tongHop || []).map(r => chuanMa(r.MaHang)));
+    } catch (e) { /* không chặn mở form chỉ vì không tải được danh sách để hỏi xác nhận */ }
+  }
+
   async function openItemForm(row, perm, colors, tuPhieuNhap) {
+    if (!row) await napDsMaHang();   // chỉ cần khi TẠO MỚI (để biết mã có trùng không)
     /* v6.84: `tuPhieuNhap` = { PhieuNKID, SoPhieu, dong: [...] } — mở form TẠO MỚI với mã hàng lấy
        từ một phiếu nhập kho. Dùng cho nút "Tạo thẻ kho" ở tab Phiếu nhập kho và cho ô chọn phiếu
        nhập ngay trong form này. */
@@ -582,10 +595,11 @@ window.ModuleKhoHang = (function () {
             </select>
             <span class="empty-hint" style="padding:0;margin-left:6px;">Kho luôn lưu theo <b>${escapeHtml((row && row.DonViCoBan) || 'Cái')}</b> — dòng dưới mỗi ô hiện số đã quy đổi.</span>
           </div>
-          ${/* v6.89: mở từ phiếu nhập kho -> nhắc ĐỪNG gõ số lượng vào ô Nhập. Số của phiếu đã nằm
-               trong tồn kho qua nguồn chứng từ (vw_TonTheoMau); gõ lại đây là tồn ĐẾM HAI LẦN. */''}
-          ${!isEdit && tuPhieuNhap ? `<div class="empty-hint" style="margin:2px 0 8px;border-left:3px solid #f0ad4e;padding-left:8px;">
-            Mã này vào kho bằng <b>phiếu nhập kho</b> — số lượng đã tính vào tồn.
+          ${/* v6.93: nhắc này hiện cho MỌI lần tạo thẻ kho mới, không riêng lối vào từ phiếu nhập —
+               form phải giống nhau ở cả hai lối vào. Số lượng vào kho luôn đến từ phiếu nhập kho, gõ
+               lại vào ô Nhập là tồn ĐẾM HAI LẦN (nguồn thứ hai, xem migration_v682). */''}
+          ${!isEdit ? `<div class="empty-hint" style="margin:2px 0 8px;border-left:3px solid #f0ad4e;padding-left:8px;">
+            Hàng vào kho bằng <b>phiếu nhập kho</b> — số lượng đã tính vào tồn.
             Để ô <b>Nhập</b> = 0, chỉ khai <b>màu / ảnh / giá bán</b>. Gõ số lượng vào đây là tồn bị đếm hai lần.
           </div>` : ''}
           <div id="cRows">${(colors && colors.length ? colors.map(colorRowTemplate) : [colorRowTemplate(null)]).join('')}</div>
@@ -773,8 +787,8 @@ window.ModuleKhoHang = (function () {
        lượng: phiếu nhập lưu xong là đã cộng tồn, điền vào đây nữa là tồn đếm hai lần. */
     async function dienTheoDongPhieu(d2, soPhieu) {
       /* v6.89: điền mã/tên/ĐVT từ dòng phiếu vào form TẠO MỚI. Mã đã có trong danh mục là bình thường
-         (phiếu nhập sinh ra), backend nhận cờ tuPhieuNKID nên lưu được — không còn tự nhảy sang form
-         Sửa như v6.86-v6.88.
+         (phiếu nhập sinh ra); backend bổ sung thẻ kho cho mã đó — cùng một đường lưu với nút
+         "+ Tạo thẻ kho mới", và form sẽ HỎI xác nhận trước khi gửi.
          KHÔNG điền số lượng: tồn của dòng phiếu này đã nằm trong tồn kho qua nguồn phiếu
          (vw_TonTheoMau, migration_v682). Điền vào ô "Nhập" nữa là ĐẾM HAI LẦN. */
       const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
@@ -970,11 +984,22 @@ window.ModuleKhoHang = (function () {
           nhomSanPhamId: fd.get('nhomSanPhamId') || null,
           // v6.61: không gửi giaAloha nữa — backend ISNULL nên giá trị cũ trong CSDL giữ nguyên.
           maBarcode: fd.get('maBarcode') || null,
-          congKhai: !!modal.querySelector('#tkCongKhai').checked,  // v6.71
-          /* v6.89: nói rõ form này mở từ một PHIẾU NHẬP KHO. Mã hàng đã được phiếu sinh ra trước đó,
-             không có cờ này thì backend chặn "Mã hàng đã tồn tại, dùng chức năng Sửa". */
-          tuPhieuNKID: (!isEdit && tuPhieuNhap && tuPhieuNhap.PhieuNKID) ? tuPhieuNhap.PhieuNKID : null
+          congKhai: !!modal.querySelector('#tkCongKhai').checked   // v6.71
+          /* v6.93: BỎ cờ `tuPhieuNKID`. Backend xử lý "mã đã tồn tại" GIỐNG NHAU cho mọi lối vào —
+             một nghiệp vụ thì một luồng dữ liệu. Việc hỏi xác nhận nằm ngay dưới đây, dùng chung cho
+             cả nút "+ Tạo thẻ kho mới" và nút "Tạo thẻ kho" ở phiếu nhập kho. */
         };
+        /* Mã đã có trong danh mục -> HỎI trước khi gửi. Không hỏi thì gõ trùng mã do vô ý sẽ bị gộp
+           màu/ảnh/giá vào một mã khác mà người dùng không hay. */
+        if (!isEdit) {
+          const daCo = dsMaTrongDanhMuc.has(chuanMa(body.maHang));
+          if (daCo && !confirm('Mã ' + body.maHang + ' ĐÃ CÓ trong danh mục.\n\n'
+            + 'Bấm OK để BỔ SUNG thẻ kho (màu / ảnh / giá bán / danh mục) cho mã này.\n'
+            + 'Số lượng tồn KHÔNG thay đổi. Bấm Cancel nếu anh gõ trùng mã do nhầm.')) {
+            submitBtn.disabled = false; submitBtn.textContent = 'Lưu';
+            return;
+          }
+        }
         let kq = null;
         if (isEdit) await apiPut('/api/khohang/items/' + row.MaHangID, body);
         else kq = await apiPost('/api/khohang/items', body);
@@ -3163,11 +3188,11 @@ window.ModuleKhoHang = (function () {
     if (!p.canCreate) { toast('Bạn không có quyền tạo thẻ kho.', 'error'); return; }
     const res = await apiGet('/api/khohang/items');
     if (res.data && res.data.tyLeCK) tyLeCK = res.data.tyLeCK;
-    /* v6.89: LUÔN mở form TẠO THẺ KHO MỚI. Mã hàng đã có sẵn trong danh mục (phiếu nhập sinh ra) là
-       chuyện bình thường — backend nhận cờ `tuPhieuNKID` nên không báo "Mã hàng đã tồn tại" mà bổ
-       sung màu/ảnh/giá bán vào mã đó.
-       ⚠️ KHÔNG tự chuyển sang form Sửa như v6.86-v6.88: người dùng bấm "Tạo thẻ kho" là muốn khai
-       thẻ kho mới, bị đẩy sang form Sửa với dữ liệu lạ thì không hiểu đang ở đâu. */
+    /* v6.93: mở ĐÚNG cái form mà nút "+ Tạo thẻ kho mới" ở tab Thẻ kho mở ra — cùng bố cục, cùng
+       đường lưu (POST /api/khohang/items). `tuPhieuNhap` chỉ để CHỌN SẴN phiếu trong ô "Tạo từ phiếu
+       nhập kho" của chính form đó, đúng luồng cũ; không bật thêm nhánh xử lý riêng nào.
+       Trước v6.93 lối vào này gửi kèm cờ `tuPhieuNKID` và backend rẽ sang một hàm ghi khác — cùng một
+       việc mà hai luồng, bấm ở hai chỗ ra hai kết quả khác nhau. Đã gộp về một. */
     await openItemForm(null, p, null, { PhieuNKID: phieuNKID, maHang });
   }
 

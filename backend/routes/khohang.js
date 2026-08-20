@@ -386,9 +386,16 @@ async function resolveMauSacId(pool, c) {
 }
 
 /* ================================================================================================
-   v6.89 — BO SUNG THE KHO CHO MA DA CO SAN TU PHIEU NHAP KHO.
+   v6.93 — BO SUNG THE KHO CHO MA HANG DA CO SAN (MOT DUONG DUY NHAT).
 
-   Goi tu POST /items khi body co `tuPhieuNKID` va ma hang DA TON TAI (phieu nhap kho da sinh ma).
+   Goi tu POST /items MOI KHI ma hang da ton tai — KHONG con phu thuoc co `tuPhieuNKID`.
+   ⚠️ v6.89 tung lam duong nay chi chay khi request den TU PHIEU NHAP KHO. Nhu vay cung mot viec
+   "tao the kho" lai co HAI luong ghi khac nhau tuy cho bam vao: bam o tab The kho thi bao loi
+   "Ma hang da ton tai", bam o phieu nhap thi lai bo sung duoc. Nguoi dung yeu cau: nghiep vu co
+   tu 2 luong tro len PHAI dung chung MOT form nhap lieu va MOT luong du lieu.
+   => Nay moi loi vao deu di qua day. Frontend chiu trach nhiem HOI XAC NHAN truoc khi gui (de nguoi
+      dung go trung ma do vo y khong bi gop nham vao ma khac).
+
    Chi cap nhat cac truong "phan the kho" + THEM cac dong mau con thieu.
 
    ⚠️ CHI THEM MAU, KHONG XOA, KHONG DAT LAI NhapCai cua mau da co:
@@ -397,7 +404,7 @@ async function resolveMauSacId(pool, c) {
        de trong/0. Ghi de 0 len mot mau dang co ton la lam bien ton ma khong ai biet.
    Muon SUA con so thi dung dung chuc nang Sua the kho (PUT /items/:id).
    ================================================================================================ */
-async function capNhatTheKhoTuPhieu(req, res, pool, maHangId) {
+async function boSungTheKhoChoMaDaCo(req, res, pool, maHangId) {
   const b = req.body || {};
   const coCongKhai = await coCotCongKhaiTheKho(pool);
   /* ISNULL o MOI truong: form co the khong gui het (vd khong doi anh, khong khai lai DVT). Khong boc
@@ -457,7 +464,7 @@ async function capNhatTheKhoTuPhieu(req, res, pool, maHangId) {
   return res.json({
     success: true,
     data: { maHangId, maHang: String(b.maHang || '').trim().toUpperCase(), boSung: true },
-    message: `Mã ${String(b.maHang || '').trim().toUpperCase()} đã có sẵn từ phiếu nhập kho — đã bổ sung thẻ kho (${themMau} dòng màu). Tồn kho không thay đổi.`
+    message: `Mã ${String(b.maHang || '').trim().toUpperCase()} đã có trong danh mục — đã bổ sung thẻ kho (${themMau} dòng màu). Tồn kho không thay đổi.`
   });
 }
 
@@ -469,12 +476,7 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
       // v5.17 (muc 1.1): 2 truong moi phuc vu chuc nang "Báo giá Aloha" - xem migration_v517.sql.
       giaAloha, maBarcode,
       // v6.71: cong tac HIEN ma hang nay tren catalogue cong khai. Khong gui = HIEN (giu thoi quen cu).
-      congKhai,
-      /* v6.89: co "toi den tu PHIEU NHAP KHO so ...". Phieu nhap kho SINH SAN ma hang trong danh muc
-         (de xuat/ban duoc ngay) nhung KHONG tao the kho. Nguoi dung bam "Tao the kho" o phieu ⇒ mo
-         form TAO MOI, va luc luu thi ma DA CO ⇒ check trung ben duoi se chan. Co nay noi ro y dinh:
-         "bo sung the kho cho ma da co san tu phieu nhap", khac han voi go trung ma do vo y. */
-      tuPhieuNKID
+      congKhai
       // v6.21: KHONG con nhan % CK theo tung ma hang (v6.20) - ty le CK nay dung chung, o CauHinhHeThong.
     } = req.body;
     if (!maHang || !tenHang) return res.status(400).json({ success: false, message: 'Thiếu mã hàng hoặc tên hàng.' });
@@ -485,13 +487,11 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
     const maChuan = String(maHang).trim().toUpperCase();
     const exists = await pool.request().input('m', sql.NVarChar, maChuan)
       .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang=@m');
+    /* v6.93: ma da ton tai -> BO SUNG the kho cho ma do, KHONG bao loi. Mot duong duy nhat cho moi
+       loi vao (tab The kho, hay nut "Tao the kho" o phieu nhap kho). Xem ghi chu o
+       boSungTheKhoChoMaDaCo(). Frontend hoi xac nhan truoc khi gui. */
     if (exists.recordset.length) {
-      if (!tuPhieuNKID) {
-        return res.status(400).json({ success: false, message: 'Mã hàng đã tồn tại, dùng chức năng Sửa.' });
-      }
-      /* Den tu phieu nhap kho: KHONG tao ma moi, chi BO SUNG the kho (mau/anh/gia ban/danh muc) cho
-         ma da co. Chuyen sang duong cap nhat de nguoi dung khong phai tu di tim nut Sua. */
-      return capNhatTheKhoTuPhieu(req, res, pool, exists.recordset[0].MaHangID);
+      return boSungTheKhoChoMaDaCo(req, res, pool, exists.recordset[0].MaHangID);
     }
 
     // LoaiHang chi nhan 2 gia tri hop le; DonHangID chi luu khi la Nha san xuat (theo dung schema v4.0)
