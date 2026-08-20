@@ -368,18 +368,23 @@
                THEO MÀU: đơn khách đặt, phiếu bán hàng, catalogue công khai. Nhập kho không khai màu
                thì số lượng dồn vào màu kỹ thuật "(Không phân màu)" ⇒ màu thật vĩnh viễn tồn 0 và
                KHÔNG ĐẶT HÀNG ĐƯỢC dù kho có hàng — đúng lỗi "không đủ tồn khả dụng để lên đơn". */''}
-          ${/* v6.98: nguồn hàng TỪ NHÀ CUNG CẤP thì tên hàng mua ngoài dài (kèm quy cách, size, hãng)
-               nên cột Tên hàng rộng 2.5× — bảng có thêm cột Đơn giá / Thành tiền, không nới thì tên bị
-               ép xuống 3-4 dòng. table-layout của .phieu-ke là fixed nên phải khai width tường minh. */''}
-          <th style="width:46px;">STT</th><th style="width:150px;">Mã hàng</th>
-          <th${sx ? '' : ' style="width:350px;"'}>Tên hàng</th>
-          <th style="width:130px;">Màu</th>
+          ${/* ⚠️ v7.04: BỀ RỘNG CỘT KHAI BẰNG %, KHÔNG BẰNG px — TỔNG ĐÚNG 100%.
+               Bản trước khai px: 46+150+350+130+60+100+90+120+130+150+44 = 1370px, vượt bề rộng modal
+               nên bảng sinh thanh cuộn ngang, phải kéo mới thấy hết cột.
+               Với table-layout:fixed + width:100%, khai % là bảng LUÔN vừa khung dù màn to hay nhỏ.
+               Tên hàng và Ghi chú lấy phần rộng nhất vì nội dung dài nhất; hai bộ % riêng cho 2 loại
+               nhập (từ NCC có thêm Đơn giá + Thành tiền). */''}
+          <th style="width:${sx ? '4%' : '4%'};">STT</th>
+          <th style="width:${sx ? '13%' : '12%'};">Mã hàng</th>
+          <th style="width:${sx ? '30%' : '22%'};">Tên hàng</th>
+          <th style="width:${sx ? '13%' : '11%'};">Màu</th>
           ${/* v6.96: ảnh khai LUÔN ở phiếu — lưu phiếu là tạo xong thẻ kho, không phải khai màu lại. */''}
-          ${/* v7.00: 60px — chỉ chứa 1 ảnh thu nhỏ 28px + nút chọn file. 120px là thừa gấp đôi. */''}
-          <th style="width:60px;">Ảnh màu</th>
-          <th style="width:100px;">Số lượng</th><th style="width:90px;">ĐVT</th>
-          ${sx ? '' : '<th style="width:120px;">Đơn giá</th><th style="width:130px;" class="num">Thành tiền</th>'}
-          <th style="width:150px;">Ghi chú</th><th style="width:44px;"></th>
+          <th style="width:6%;">Ảnh màu</th>
+          <th style="width:${sx ? '9%' : '8%'};">Số lượng</th>
+          <th style="width:${sx ? '9%' : '8%'};">ĐVT</th>
+          ${sx ? '' : '<th style="width:10%;">Đơn giá</th><th style="width:10%;" class="num">Thành tiền</th>'}
+          <th style="width:${sx ? '13%' : '6%'};">Ghi chú</th>
+          <th style="width:3%;"></th>
         </tr></thead><tbody>
           ${dongForm.map((d, i) => dongHtml(d, i, sx)).join('')}
         </tbody>
@@ -456,12 +461,13 @@
             ⚠️ Không phân màu ⇒ <b>không đặt/bán được theo màu</b>
           </div>` : ''}
         </td>
-        <td>
+        <td style="overflow:hidden;">
           ${/* Ảnh đã có thì hiện thumbnail thay cho ô trống; input file thu về đúng bề rộng cột. */''}
           ${d.anhMau
             ? `<img src="${escapeHtml(anhNho(d.anhMau, 80))}" style="width:26px;height:26px;object-fit:cover;border-radius:4px;vertical-align:middle;" title="Đã có ảnh">`
             : ''}
-          <input type="file" class="nk-anhmau" accept="image/*" style="width:100%;font-size:10px;">
+          ${/* input file co be rong toi thieu tu than no; cot chi 6% nen phai cat padding va chan tran. */''}
+          <input type="file" class="nk-anhmau" accept="image/*" style="width:100%;font-size:10px;padding:2px;">
         </td>
         <td><input type="number" class="nk-sl" min="0" step="0.01" value="${d.soLuong != null ? d.soLuong : ''}" style="width:100%;"></td>
         <td><select class="nk-dv" style="width:100%;">${optDV(d.donVi)}</select>
