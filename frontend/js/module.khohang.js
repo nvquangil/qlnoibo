@@ -184,6 +184,16 @@ window.ModuleKhoHang = (function () {
     // nhan "Loai hang" cho truong nhom san pham MOI (TenNhom, vd Quan be trai/gai) - xem migration_v54.sql.
     // Dong het hang (TongTon<=0) to mau do + ghi chu "Het hang"/"Am kho" - CHI danh sach noi bo nay,
     // KHONG ap dung Catalogue (theo xac nhan cua nguoi dung, xem public.js/catalogue.js khong doi).
+    /* v7.05: ẢNH THEO TỪNG MÀU hiện luôn ở danh sách Thẻ kho.
+       Trước đây cột Ảnh chỉ có ảnh ĐẠI DIỆN của mã; ảnh từng màu (TheKhoChiTietMau.LinkAnh) chỉ thấy
+       khi bấm vào mã để mở chi tiết, nên khai ảnh màu ở phiếu nhập kho xong nhìn vào đây tưởng là
+       KHÔNG LƯU ĐƯỢC. */
+    const anhTheoMa = new Map();
+    (chiTiet || []).forEach(c => {
+      if (!c.LinkAnh) return;
+      if (!anhTheoMa.has(c.MaHangID)) anhTheoMa.set(c.MaHangID, []);
+      anhTheoMa.get(c.MaHangID).push({ anh: c.LinkAnh, ten: c.TenMau || '' });
+    });
     const loaiList = [...new Set(tongHop.map(r => r.TenNhom).filter(Boolean))].sort();
     const dmList = [...new Set(tongHop.map(r => r.TenTheKho).filter(Boolean))].sort();
     body.innerHTML = `
@@ -225,7 +235,20 @@ window.ModuleKhoHang = (function () {
         ${/* v6.07: ô ảnh nhỏ dùng ẢNH XEM TRƯỚC 160px + loading="lazy" (trước tải đúng file gốc, có ảnh
              vài MB cho 1 ô 40px -> danh sách vài trăm dòng là tải hàng trăm MB). Bấm phóng to vẫn ảnh GỐC
              qua data-src. */''}
-        <td>${r.AnhDaiDien ? `<img class="thumb act-zoom-main" loading="lazy" decoding="async" data-src="${escapeHtml(r.AnhDaiDien)}" data-title="${escapeHtml(r.MaHang)}" src="${escapeHtml(anhNho(r.AnhDaiDien, 160))}" style="cursor:pointer;" title="Bấm để phóng to">` : ''}</td>
+        <td>${r.AnhDaiDien ? `<img class="thumb act-zoom-main" loading="lazy" decoding="async" data-src="${escapeHtml(r.AnhDaiDien)}" data-title="${escapeHtml(r.MaHang)}" src="${escapeHtml(anhNho(r.AnhDaiDien, 160))}" style="cursor:pointer;" title="Bấm để phóng to">` : ''}
+          ${(() => {
+            const ds = anhTheoMa.get(r.MaHangID) || [];
+            if (!ds.length) return '';
+            // Hiện tối đa 4 ảnh màu; nhiều hơn thì ghi "+N" để không phá bề rộng cột.
+            const hien = ds.slice(0, 4).map(x =>
+              `<img class="thumb act-zoom-main" loading="lazy" decoding="async"
+                    data-src="${escapeHtml(x.anh)}" data-title="${escapeHtml(r.MaHang + ' · ' + x.ten)}"
+                    src="${escapeHtml(anhNho(x.anh, 80))}"
+                    style="width:22px;height:22px;object-fit:cover;border-radius:3px;cursor:pointer;margin:2px 1px 0 0;"
+                    title="${escapeHtml(x.ten)}">`).join('');
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;">${hien}${
+              ds.length > 4 ? `<span style="font-size:10px;color:#5f6368;">+${ds.length - 4}</span>` : ''}</div>`;
+          })()}</td>
         ${/* v6.89: mã đã có hàng vào kho bằng PHIẾU NHẬP KHO nhưng CHƯA tạo thẻ kho -> mọi cột của
              bảng này đều 0 (đúng: bảng này chỉ hiện số liệu của thẻ kho). Không nói rõ thì người dùng
              tưởng mất hàng. Số của phiếu nằm ở Báo cáo tồn kho và ở màn Bán hàng. */''}

@@ -414,10 +414,11 @@ async function chuanDong(pool, tran, d, loai) {
    (vw_TonTheoMau). Ghi vao NhapCai la dem hai lan. Xem utils/theKhoMau.js.
    ================================================================================================ */
 async function taoTheKhoTuDong(pool, tran, dsGhi) {
-  let soMau = 0, soAnh = 0;
+  let soMau = 0, soAnh = 0, soAnhMau = 0;
   const daAnhDaiDien = new Set();
   for (const d of dsGhi) {
     if (!d.maHangId || !d.mauSacId) continue;
+    if (d.anhMau) soAnhMau++;   // dem de bao lai cho nguoi dung: anh mau CO den backend hay khong
     if (await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null)) soMau++;
     // Anh dai dien la cua MA HANG: mot ma xuat hien nhieu dong (nhieu mau) thi chi ghi mot lan.
     if (d.anhDaiDien && !daAnhDaiDien.has(d.maHangId)) {
@@ -425,7 +426,7 @@ async function taoTheKhoTuDong(pool, tran, dsGhi) {
       if (await capNhatAnhDaiDien(pool, tran, d.maHangId, d.anhDaiDien)) soAnh++;
     }
   }
-  return { soMau, soAnh };
+  return { soMau, soAnh, soAnhMau };
 }
 
 /* INSERT mot dong + cong ton. Dung CHUNG cho POST va PUT — hai ban sao khac nhau la duong chac chan
@@ -498,6 +499,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
       message: `Đã lưu phiếu ${soPhieu}.`
         + (maMoi.length ? ` Đã sinh ${maMoi.length} mã hàng mới (${maMoi.join(', ')}).` : '')
         + (tk.soMau ? ` Đã tạo ${tk.soMau} dòng màu trong thẻ kho.` : '')
+        + (tk.soAnhMau ? ` Đã ghi ${tk.soAnhMau} ảnh màu.` : '')
         + (tk.soAnh ? ` Đã cập nhật ảnh đại diện cho ${tk.soAnh} mã.` : '')
     });
   } catch (err) {
@@ -564,6 +566,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
       message: 'Đã lưu thay đổi và tính lại tồn kho.'
         + (maMoi2.length ? ` Đã sinh ${maMoi2.length} mã hàng mới: ${maMoi2.join(', ')}.` : '')
         + (tk2.soMau ? ` Đã tạo thêm ${tk2.soMau} dòng màu trong thẻ kho.` : '')
+        + (tk2.soAnhMau ? ` Đã ghi ${tk2.soAnhMau} ảnh màu.` : '')
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }
