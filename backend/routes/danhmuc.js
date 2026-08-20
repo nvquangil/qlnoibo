@@ -446,12 +446,18 @@ router.put('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'edit'), as
       giaBan: b.GiaBan, nhomSanPhamId: b.NhomSanPhamID,
       theKhoDanhMucId: b.TheKhoDanhMucID, maBarcode: b.MaBarcode
     });
-    res.json({
-      success: true,
-      message: kq.doiMa
-        ? `Đã đổi mã ${kq.doiMa.tu} → ${kq.doiMa.den}. Mọi phiếu cũ vẫn liên kết đúng (các bảng lưu theo ID, không lưu chuỗi mã).`
-        : 'Đã lưu.'
-    });
+    const tin = [];
+    if (kq.doiMa) {
+      tin.push(`Đã đổi mã ${kq.doiMa.tu} → ${kq.doiMa.den}. Mọi phiếu cũ vẫn liên kết đúng (các bảng lưu theo ID, không lưu chuỗi mã).`);
+    }
+    /* v7.02: BAO RO khi doi DVT/ty le — so trong kho khong doi nhung Y NGHIA doi, moi cho hien thi
+       (the kho, phieu ban hang, bao cao ton) se doc lai theo ty le moi. Doi im lang la nguoi dung
+       thay "2 Ri5" bien thanh "5" ma khong hieu vi sao. */
+    if (kq.doiDonVi && kq.doiDonVi.length) {
+      tin.push('⚠️ Đã đổi ' + kq.doiDonVi.join(', ')
+        + '. Số lượng trong kho KHÔNG đổi, nhưng mọi chỗ hiển thị sẽ đọc lại theo tỷ lệ mới — kiểm tra lại tồn kho và các phiếu bán hàng của mã này.');
+    }
+    res.json({ success: true, message: tin.length ? tin.join(' ') : 'Đã lưu.' });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

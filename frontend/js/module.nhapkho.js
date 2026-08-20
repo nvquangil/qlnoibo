@@ -230,7 +230,9 @@
           <div style="flex:1"></div>
           ${/* v6.96: LƯU PHIẾU LÀ TẠO XONG THẺ KHO. Phiếu đã khai đủ mã + màu + ảnh, nên không phải
                sang màn khác khai lại. Vẫn để tích được bỏ, cho ai chỉ muốn ghi nhận nhập kho. */''}
-          <label style="display:flex;gap:5px;align-items:center;font-size:13px;white-space:nowrap;"
+          ${/* v7.02: tô ĐỎ cho nổi — đây là ô quyết định có tạo thẻ kho hay không, bỏ tích mà không
+               để ý thì lưu xong lại phải bấm "Tạo thẻ kho" thủ công. */''}
+          <label style="display:flex;gap:5px;align-items:center;font-size:13px;white-space:nowrap;color:#c62828;font-weight:600;"
                  title="Tạo dòng màu + ghi ảnh vào Thẻ kho hàng hóa. KHÔNG ghi số lượng — tồn kho lấy từ chính phiếu này.">
             <input type="checkbox" id="nkfTaoThe" checked> Tạo thẻ kho luôn khi lưu
           </label>
@@ -294,11 +296,21 @@
     /* v6.93: DANH SÁCH ĐƠN VỊ TÍNH — nguồn duy nhất là DANH MỤC (dm.donVi ← DanhMucDonViTinh).
        Dựng một lần cho cả form, mọi ô ĐVT (số lượng, ĐVT chính, ĐVT quy đổi) đều dùng chung. */
     const dsDVAll = (dm.donVi || []).map(x => x.TenDonVi).filter(Boolean);
-    /* Mặc định cho mã MỚI: ưu tiên đơn vị có tên khớp gợi ý NẾU nó thật sự nằm trong danh mục; không
-       có thì lấy dòng đầu danh mục. Tuyệt đối không trả về chuỗi gõ cứng — danh mục là nguồn duy nhất. */
-    const dvGoiY = (ten) => {
+    /* Mặc định cho mã MỚI: ưu tiên đơn vị có tên khớp gợi ý NẾU nó thật sự nằm trong danh mục.
+       ⚠️ v7.02: KHÔNG được lùi về `dsDVAll[0]` cho ô "ĐVT quy đổi". Danh mục không có "Ri" thì bản cũ
+       trả về đúng dòng đầu — thường là chính đơn vị của ô "ĐVT chính" — nên hai ô bằng nhau. Khi đó
+       donViChinhLaGop() = true, hệ thống hiểu tồn đang tính theo ĐƠN VỊ GỘP và hiện "100 Cái (= 500
+       Cái)" vô nghĩa; đây chính là lý do thẻ kho của mã nhập từ phiếu mất đơn vị quy đổi.
+       Nay: ô quy đổi ưu tiên đơn vị được đánh dấu LÀ ĐƠN VỊ GỘP trong danh mục, và luôn KHÁC ô chính. */
+    const dvLaGop = (dm.donVi || []).filter(x => x.LaDonViGop === true || x.LaDonViGop === 1)
+      .map(x => x.TenDonVi).filter(Boolean);
+    const dvGoiY = (ten, tru) => {
       const c = (x) => String(x == null ? '' : x).trim().toLowerCase();
-      return dsDVAll.find(x => c(x) === c(ten)) || dsDVAll[0] || '';
+      const khac = (x) => x && c(x) !== c(tru);
+      return dsDVAll.find(x => c(x) === c(ten) && khac(x))
+          || dvLaGop.find(khac)
+          || dsDVAll.find(khac)
+          || '';
     };
 
     /* ================================================================================================
@@ -467,11 +479,17 @@
                nhồi tất cả trên một dòng chữ. Cùng một việc "khai thông tin mã hàng" thì phải nhìn
                giống nhau ở cả hai màn; và grid tự chia bề rộng nên không phải đấu với bảng nữa. */''}
           <div style="font-weight:600;color:#8a6d3b;margin-bottom:6px;">Khai cho mã mới: ${escapeHtml(d.maHang)}</div>
-          <div class="form-grid" style="grid-template-columns:repeat(4, 1fr);gap:8px 12px;align-items:end;">
-            <div><label>ĐVT chính</label><select class="nk-dvcb">${optDV(d.donViCoBan)}</select></div>
-            <div><label>ĐVT quy đổi</label><select class="nk-dvqd">${optDV(d.donViQuyDoi)}</select></div>
-            <div><label>Tỷ lệ (1 ${escapeHtml(d.donViQuyDoi || 'ĐVT quy đổi')} = ? ${escapeHtml(d.donViCoBan || 'ĐVT chính')})</label>
-              <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}"></div>
+          ${/* v7.02: align-items:START — nhãn của mọi ô đều bắt đầu ở cùng một mép trên.
+               Trước dùng `end` (căn đáy): nhãn "Tỷ lệ (1 Ri = ? Cái)" dài, xuống 2 dòng, làm ô Giá bán
+               bên cạnh bị đẩy tụt xuống và chữ không thẳng hàng với các ô khác.
+               Nhãn tỷ lệ rút về 1 dòng, phần "1 Ri = ? Cái" chuyển xuống dòng gợi ý nhỏ.
+               3 ô ĐVT/tỷ lệ chỉ chứa vài ký tự -> max-width 50% cho khỏi thừa nửa ô. */''}
+          <div class="form-grid" style="grid-template-columns:repeat(4, 1fr);gap:8px 12px;align-items:start;">
+            <div><label>ĐVT chính</label><select class="nk-dvcb" style="max-width:50%;">${optDV(d.donViCoBan)}</select></div>
+            <div><label>ĐVT quy đổi</label><select class="nk-dvqd" style="max-width:50%;">${optDV(d.donViQuyDoi)}</select></div>
+            <div><label>Tỷ lệ quy đổi</label>
+              <input type="number" class="nk-ri" min="1" step="1" value="${d.loaiRi != null ? d.loaiRi : 1}" style="max-width:50%;">
+              <div class="empty-hint" style="margin-top:2px;">1 ${escapeHtml(d.donViQuyDoi || 'ĐVT quy đổi')} = ? ${escapeHtml(d.donViCoBan || 'ĐVT chính')}</div></div>
             <div><label>Giá bán</label><input type="number" class="nk-giaban" min="0" step="1" value="${d.giaBan != null ? d.giaBan : ''}"></div>
             <div><label>Loại hàng</label><select class="nk-nhom"><option value="">--</option>
               ${(dm.nhom || []).map(x => `<option value="${x.NhomSanPhamID}"${String(d.nhomSanPhamId) === String(x.NhomSanPhamID) ? ' selected' : ''}>${escapeHtml(x.TenNhom)}</option>`).join('')}
@@ -551,7 +569,8 @@
                đã gõ. Mặc định LẤY TỪ DANH MỤC (dvGoiY), không gõ cứng 'Cái'/'Ri'. */
             d.maHangId = null;
             d.donViCoBan = d.donViCoBan || dvGoiY('Cái');
-            d.donViQuyDoi = d.donViQuyDoi || dvGoiY('Ri');
+            // Ô quy đổi phải KHÁC ô chính — truyền ô chính vào để loại trừ.
+            d.donViQuyDoi = d.donViQuyDoi || dvGoiY('Ri', d.donViCoBan);
             if (d.loaiRi == null) d.loaiRi = 1;
             if (!d.donVi) d.donVi = d.donViCoBan;
           }
@@ -649,6 +668,18 @@
       });
       if (thieu.length) {
         return toast(`Mã mới ${thieu.map(d => d.maHang).join(', ')} còn thiếu Tên hàng / ĐVT / tỷ lệ quy đổi — khai đủ ở dòng phụ màu vàng.`, 'error');
+      }
+      /* v7.02: CHẶN cấu hình ĐVT tự mâu thuẫn của mã mới: 2 ĐVT giống nhau mà tỷ lệ > 1.
+         Khi 2 ĐVT bằng nhau, hệ thống hiểu ĐVT chính CHÍNH LÀ đơn vị gộp (donViChinhLaGop = true) và
+         quy đổi theo chiều NHÂN — ra "100 Cái (= 500 Cái)" vô nghĩa, tồn kho diễn giải sai gấp tỷ lệ
+         lần. Phải chặn ở đây kẻo lưu xong mới phát hiện thì mã đã vào danh mục. */
+      const c2 = (x) => String(x == null ? '' : x).trim().toLowerCase();
+      const dvSai = dong.filter(d => !d.maHangId)
+        .filter(d => c2(d.donViCoBan) === c2(d.donViQuyDoi) && (parseInt(d.loaiRi, 10) || 1) > 1);
+      if (dvSai.length) {
+        return toast(`Mã mới ${dvSai.map(d => d.maHang).join(', ')}: ĐVT chính và ĐVT quy đổi đang GIỐNG NHAU `
+          + `("${dvSai[0].donViCoBan}") mà tỷ lệ > 1. Chọn ĐVT quy đổi khác (vd Ri, Tá, Thùng), `
+          + 'hoặc để tỷ lệ = 1 nếu hàng không quản theo lô.', 'error');
       }
       /* v6.95: BẮT chọn màu. Để trống thì backend tự dồn vào "(Không phân màu)" — âm thầm, và hậu quả
          chỉ lộ ra lúc đặt hàng ("không đủ tồn khả dụng" dù kho có hàng). Không phân màu thật thì phải

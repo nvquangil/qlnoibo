@@ -552,11 +552,13 @@ window.ModuleKhoHang = (function () {
             ${/* v6.31: lấy từ Danh mục → Đơn vị tính. optDonVi() LUÔN giữ giá trị đang lưu kể cả khi
                  nó không còn trong danh mục — nếu để mất, mở form sửa rồi bấm Lưu là đơn vị bị đổi
                  âm thầm, kéo theo tồn kho bị diễn giải lại sai gấp <tỷ lệ> lần. */''}
-            <select name="donViCoBan">${optDonVi(dsDonViTinh, (row && row.DonViCoBan) || 'Cái')}</select>
+            ${/* v7.02: rộng 1/2 — tên ĐVT chỉ vài ký tự (Cái, Ri, Kg, Mét). Giữ ĐÚNG cỡ với ô cùng
+                 loại trên phiếu nhập kho để hai form nhìn như một. */''}
+            <select name="donViCoBan" style="max-width:50%;">${optDonVi(dsDonViTinh, (row && row.DonViCoBan) || 'Cái')}</select>
           </div>
           <div class="form-row" id="blockDonViQuyDoi">
             <label>Đơn vị quy đổi</label>
-            <select name="donViQuyDoi">${optDonVi(dsDonViTinh, (row && row.DonViQuyDoi) || 'Ri')}</select>
+            <select name="donViQuyDoi" style="max-width:50%;">${optDonVi(dsDonViTinh, (row && row.DonViQuyDoi) || 'Ri')}</select>
             <div class="empty-hint" style="margin-top:2px;">Đơn vị GỘP của mã hàng (1 &lt;ĐVT quy đổi&gt; = &lt;tỷ lệ&gt; &lt;ĐVT chính&gt;).
               Hệ thống nhân/chia tỷ lệ theo <b>chính ô này</b>, không theo tên "Ri" nữa.</div>
           </div>
@@ -605,7 +607,7 @@ window.ModuleKhoHang = (function () {
             </label>
             <div class="empty-hint" style="margin-top:2px;">Vẫn phải bật công khai cho cả danh mục (Danh mục → Thẻ kho) thì khách mới xem được.</div>
           </div>
-          <div class="form-row"><label>Tỷ lệ quy đổi (VD: 5 Cái = 1 Ri)</label><input name="loaiRi" id="inpLoaiRi" type="number" value="${row ? row.LoaiRi : 1}">
+          <div class="form-row"><label>Tỷ lệ quy đổi (VD: 5 Cái = 1 Ri)</label><input name="loaiRi" id="inpLoaiRi" type="number" value="${row ? row.LoaiRi : 1}" style="max-width:50%;">
             <div class="empty-hint" style="margin-top:2px;">Đổi hệ số xong, các ô Số cắt / Nhập bên dưới sẽ tính lại theo Ri mới.</div></div>
           <!-- v5.4 (muc 1): "Loai hang" MOI (nhom san pham, vd Quan be trai/gai) - KHAC voi "Nguon hang"
                o tren (NhaSanXuat/DatNgoai) - xem migration_v54.sql ve ly do dat ten cot noi bo khac nhau. -->

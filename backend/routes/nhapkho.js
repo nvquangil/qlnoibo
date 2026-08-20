@@ -94,7 +94,10 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
        luon trong ma khong co dau hieu gi. Da bo .catch: sai ten bang thi phai NO ra de con biet. */
     q('SELECT NhomSanPhamID, TenNhom FROM DanhMucNhomSanPham ORDER BY TenNhom'),
     q('SELECT MauSacID, TenMau FROM MauSac ORDER BY TenMau'),
-    q('SELECT TenDonVi FROM DanhMucDonViTinh ORDER BY TenDonVi').catch(() => [])
+    /* v7.02: tra ve ca LaDonViGop de form biet don vi nao la don vi GOP (Ri, Ta, Thung) — dung lam
+       goi y cho o "DVT quy doi". Thieu co nay thi form phai doan theo ten "Ri", danh muc khong co
+       "Ri" la doan sai. */
+    q('SELECT TenDonVi, LaDonViGop FROM DanhMucDonViTinh ORDER BY ISNULL(ThuTu, 999), TenDonVi').catch(() => [])
   ]);
   const hang = await q(`
     SELECT MaHangID, MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi, GiaBan

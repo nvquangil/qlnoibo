@@ -32,6 +32,21 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
     if (trung) throw new Error(`Mã hàng "${ma}" đã có ở dòng khác.`);
   }
 
+  /* ⚠️ ĐỔI ĐVT / TỶ LỆ CỦA MÃ ĐANG CÓ TỒN LÀ DIỄN GIẢI LẠI TOÀN BỘ SỐ CŨ.
+     Con số trong kho (NhapCai, SoLuongChinh trên phiếu) KHÔNG đổi, nhưng ý nghĩa của nó đổi: 30 với
+     tỷ lệ 5 là 150 cái, còn tỷ lệ 1 là 30 cái. Nên phải báo ra, không được đổi im lặng.
+     (Đây chính là gốc lỗi "phiếu bán hàng mất 2 Ri5, chỉ còn đỏ 5": một đường ghi ở v6.98 đã ghi đè
+      LoaiRi của mã đang có tồn xuống 1.) */
+  const doiDonVi = [];
+  const cuDayDu = (await rq().input('id', sql.Int, maHangId)
+    .query('SELECT LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0] || {};
+  const khac = (a, b) => String(a == null ? '' : a).trim().toLowerCase() !== String(b == null ? '' : b).trim().toLowerCase();
+  if (f.loaiRi != null && f.loaiRi !== '' && Number(f.loaiRi) !== Number(cuDayDu.LoaiRi)) {
+    doiDonVi.push(`tỷ lệ ${cuDayDu.LoaiRi} → ${f.loaiRi}`);
+  }
+  if (f.donViCoBan && khac(f.donViCoBan, cuDayDu.DonViCoBan)) doiDonVi.push(`ĐVT chính ${cuDayDu.DonViCoBan} → ${f.donViCoBan}`);
+  if (f.donViQuyDoi && khac(f.donViQuyDoi, cuDayDu.DonViQuyDoi)) doiDonVi.push(`ĐVT quy đổi ${cuDayDu.DonViQuyDoi} → ${f.donViQuyDoi}`);
+
   const soHay = (v) => (v === '' || v === null || v === undefined) ? null : v;
   await rq()
     .input('id', sql.Int, maHangId)
@@ -56,7 +71,10 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
               MaBarcode       = ISNULL(@MaBarcode, MaBarcode)
             WHERE MaHangID = @id`);
 
-  return { doiMa: (ma && ma !== chuanMaHang(cu.MaHang)) ? { tu: cu.MaHang, den: ma } : null };
+  return {
+    doiMa: (ma && ma !== chuanMaHang(cu.MaHang)) ? { tu: cu.MaHang, den: ma } : null,
+    doiDonVi   // rong = khong doi gi ve don vi/ty le
+  };
 }
 
 module.exports = { capNhatMaHang, chuanMaHang };
