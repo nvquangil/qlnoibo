@@ -226,10 +226,14 @@ window.ModuleKhoHang = (function () {
              vài MB cho 1 ô 40px -> danh sách vài trăm dòng là tải hàng trăm MB). Bấm phóng to vẫn ảnh GỐC
              qua data-src. */''}
         <td>${r.AnhDaiDien ? `<img class="thumb act-zoom-main" loading="lazy" decoding="async" data-src="${escapeHtml(r.AnhDaiDien)}" data-title="${escapeHtml(r.MaHang)}" src="${escapeHtml(anhNho(r.AnhDaiDien, 160))}" style="cursor:pointer;" title="Bấm để phóng to">` : ''}</td>
+        ${/* v7.08: BỎ dòng "+ N <ĐVT> từ phiếu nhập" dưới mã hàng. Mã đã có thẻ kho thì cột Tổng nhập
+             và Tồn đã gồm sẵn phần của phiếu, ghi thêm chỉ làm rối bảng.
+             GIỮ dòng "⏳ chưa tạo thẻ kho": lúc đó 3 cột số đều bằng 0 nên không nói rõ là người dùng
+             tưởng hàng chưa vào kho. */''}
         <td><a href="javascript:void(0)" class="act-open-hist" data-mahang="${escapeHtml(r.MaHang)}" title="Xem lịch sử &amp; chi tiết theo màu">${escapeHtml(r.MaHang)}</a>${
           Number(r.TongNhapTuPhieu) && Number(r.TongTon) === 0
             ? `<div style="font-size:11px;color:#8a6d3b;">⏳ chưa tạo thẻ kho · phiếu nhập ${fmtNumber(r.TongNhapTuPhieu)} ${escapeHtml(r.DonViCoBan || 'Cái')}</div>`
-            : (Number(r.TongNhapTuPhieu) ? `<div style="font-size:11px;color:#5f6368;">+ ${fmtNumber(r.TongNhapTuPhieu)} ${escapeHtml(r.DonViCoBan || 'Cái')} từ phiếu nhập</div>` : '')
+            : ''
         }</td>
         <td>${escapeHtml(r.TenHang)}</td>
         <td>${r.LoaiHang === 'NhaSanXuat' ? `<span class="badge info">Nhà SX${r.MaDH ? ' · ' + escapeHtml(r.MaDH) : ''}</span>` : '<span class="badge warn">Đặt ngoài</span>'}</td>
