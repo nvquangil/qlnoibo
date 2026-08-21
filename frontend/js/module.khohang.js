@@ -1368,7 +1368,9 @@ window.ModuleKhoHang = (function () {
            · còn lại                   -> chưa lên phiếu (đang giữ hàng) */
       const oPhieu = (r) => {
         if (r.SoPhieuBH) {
-          return `<b>${escapeHtml(r.SoPhieuBH)}</b>${r.NgayPhieuBH ? `<div style="font-size:11px;color:#5f6368;">${fmtDate(r.NgayPhieuBH)}</div>` : ''}`;
+          // v7.21: bấm số phiếu -> mở CHI TIẾT PHIẾU BÁN HÀNG (đóng lại quay về đúng bảng này).
+          return `<a href="javascript:void(0)" class="act-h-phieu" data-id="${r.PhieuBHIDThuc || ''}" title="Xem chi tiết phiếu bán hàng"><b>${escapeHtml(r.SoPhieuBH)}</b></a>`
+            + (r.NgayPhieuBH ? `<div style="font-size:11px;color:#5f6368;">${fmtDate(r.NgayPhieuBH)}</div>` : '');
         }
         if (r.SoPhieuTheoCo || r.TrangThai === 'Đã xuất hàng') {
           return `<span style="color:#a50e0e;">⚠️ không còn trong phiếu nào</span>`
@@ -1417,6 +1419,14 @@ window.ModuleKhoHang = (function () {
     // v5.51: thao tác đơn ngay trong Lịch sử — làm xong tự mở lại Lịch sử mã hàng này.
     // v6.42.1: nút In chỉ IN GIẤY — không chuyển đơn sang "Đã giao", không đụng tồn kho.
     histBody.addEventListener('click', async (e) => {
+      // v7.21: cột Phiếu bán hàng là thẻ <a> nên phải bắt cả anchor, không chỉ <button>.
+      const lnk = e.target.closest('a.act-h-phieu');
+      if (lnk) {
+        if (!lnk.dataset.id) return toast('Không xác định được phiếu bán hàng của đơn này.', 'error');
+        try { await xemPhieuBanHang(lnk.dataset.id, perm); }
+        catch (err) { toast('Không mở được phiếu: ' + err.message, 'error'); }
+        return;
+      }
       const btn = e.target.closest('button');
       if (!btn) return;
       const id = btn.dataset.id;

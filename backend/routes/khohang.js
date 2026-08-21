@@ -1289,6 +1289,7 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
       SELECT o.DonID, o.MaHangID, o.MauSacID, h.MaHang, o.ThoiGian, o.TenKhach, ms.TenMau, o.SoLuongDat, o.DonVi, o.TrangThai,
              h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi,  /* v6.21.1: từ đây cũng in được bảng kê (giá + SL quy ra Cái) */
              ${coPBH ? 'p2.SoPhieu' : 'CAST(NULL AS NVARCHAR(30))'}    AS SoPhieuBH,
+             ${coPBH ? 'p2.PhieuBHID' : 'CAST(NULL AS INT)'}           AS PhieuBHIDThuc,
              ${coPBH ? 'p2.NgayBan' : 'CAST(NULL AS DATE)'}            AS NgayPhieuBH,
              ${coPBH ? 'p1.SoPhieu' : 'CAST(NULL AS NVARCHAR(30))'}    AS SoPhieuTheoCo,
              ${coPBH ? 'p1.TrangThai' : 'CAST(NULL AS NVARCHAR(20))'}  AS TrangThaiPhieuTheoCo
@@ -1297,7 +1298,7 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
       JOIN MauSac ms ON ms.MauSacID = o.MauSacID
       ${coPBH ? 'LEFT JOIN PhieuBanHang p1 ON p1.PhieuBHID = o.PhieuBHID' : ''}
       ${coPBH ? `OUTER APPLY (
-        SELECT TOP 1 p.SoPhieu, p.NgayBan
+        SELECT TOP 1 p.SoPhieu, p.NgayBan, p.PhieuBHID
         FROM PhieuBanHangChiTiet ct JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
         WHERE p.TrangThai <> N'Đã hủy'
           AND ( ct.DonID = o.DonID
