@@ -1265,7 +1265,7 @@ window.ModuleKhoHang = (function () {
       ${hangInfo.AnhDaiDien ? `<img class="thumb hist-main-thumb" loading="lazy" decoding="async" src="${escapeHtml(anhNho(hangInfo.AnhDaiDien, 160))}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;cursor:pointer;margin-bottom:10px;" title="Bấm để phóng to ảnh đại diện">` : ''}
 
       <h4 style="margin:0 0 8px;">Chi tiết theo màu</h4>
-      <table><thead><tr><th>Ảnh</th><th>Ghi chú</th><th>Màu</th><th>Nhập</th><th>Xuất</th><th>Tồn</th><th style="width:110px">Thao tác</th></tr></thead>
+      <table><thead><tr><th>Ảnh</th><th>Ghi chú</th><th>Màu</th><th>Nhập</th><th>Xuất</th><th>Tồn</th><th style="width:180px">Thao tác</th></tr></thead>
       <tbody>${colorDetail.map((c, idx) => `<tr>
         <td>${c.LinkAnh ? `<img class="thumb hist-thumb" data-idx="${idx}" loading="lazy" decoding="async" src="${escapeHtml(anhNho(c.LinkAnh, 80))}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;">` : ''}</td>
         <td style="white-space:pre-wrap;">${escapeHtml(c.GhiChu || '')}</td>
@@ -1280,8 +1280,19 @@ window.ModuleKhoHang = (function () {
             ? `<div style="font-size:11px;color:#c62828;">⚠️ hàng chưa gán màu — không đặt/bán được theo màu. Sửa phiếu nhập kho để chọn màu.</div>` : ''}</td>
         <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
-        <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
+        <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button> ` : ''}<button type="button" class="btn small secondary act-xn-mau" data-ms="${c.MauSacID}" title="Xem từng chứng từ nhập/xuất của màu này">Xuất/Nhập</button></td>
         </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có chi tiết theo màu</td></tr>'}</tbody></table>
+
+      ${/* v7.12: LỊCH SỬ NHẬP/XUẤT TỪNG CHỨNG TỪ, lọc được theo màu. Bảng "Chi tiết theo màu" ở trên
+           chỉ có số LŨY KẾ (nhập 500 / xuất 320) — không trả lời được "xuất đi đâu, ngày nào, phiếu nào".
+           Nguồn: phiếu nhập kho, phiếu nhập lại, phiếu bán hàng, đơn khách đã trừ tồn (dữ liệu cũ). */''}
+      <h4 style="margin:18px 0 8px;">Lịch sử nhập / xuất theo chứng từ
+        <select id="xnMauFilter" style="margin-left:10px;font-weight:normal;">
+          <option value="">— Tất cả màu —</option>
+          ${colorDetail.map(c => `<option value="${c.MauSacID}">${escapeHtml(c.TenMau)}</option>`).join('')}
+        </select>
+      </h4>
+      <div id="xnBody"><div class="empty-hint">Đang tải...</div></div>
 
       <h4 style="margin:18px 0 8px;">Lịch sử đặt hàng</h4>
       <table><thead><tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr></thead>
@@ -1300,6 +1311,44 @@ window.ModuleKhoHang = (function () {
       const c = colorDetail[Number(img.dataset.idx)];
       openImageLightbox(c.LinkAnh, hangInfo.MaHang + ' · ' + c.TenMau, backToDetail);
     }));
+    /* v7.12: nạp bảng "Lịch sử nhập / xuất theo chứng từ". Tách hàm riêng + gọi lại khi đổi màu —
+       KHÔNG vẽ lại cả modal, để người dùng không mất chỗ đang xem. */
+    const xnBody = modal.querySelector('#xnBody');
+    const xnFilter = modal.querySelector('#xnMauFilter');
+    async function loadXuatNhap() {
+      const ms = xnFilter.value;
+      xnBody.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+      try {
+        const r = await apiGet(`/api/khohang/items/${encodeURIComponent(maHang)}/xuatnhap${ms ? '?mauSacId=' + encodeURIComponent(ms) : ''}`);
+        const d = r.data;
+        const dv = (n) => fmtDualUnit(n, loaiRi, donViCoBan, donViQuyDoi);
+        xnBody.innerHTML = `
+          <table><thead><tr><th style="width:46px">STT</th><th>Ngày</th><th>Loại</th><th>Nguồn</th><th>Số phiếu</th><th>Màu</th><th>Khách / NCC / Lệnh SX</th><th>Nhập</th><th>Xuất</th></tr></thead>
+          <tbody>${d.rows.map((x, i) => `<tr>
+            <td>${i + 1}</td><td>${fmtDate(x.Ngay)}</td>
+            <td>${x.Loai === 'Nhập' ? '<span class="badge ok">Nhập</span>' : '<span class="badge danger">Xuất</span>'}</td>
+            <td>${escapeHtml(x.Nguon)}</td><td>${escapeHtml(x.SoPhieu || '')}</td>
+            <td>${escapeHtml(x.TenMau || '')}</td><td>${escapeHtml(x.DoiTuong || '')}</td>
+            <td>${x.Loai === 'Nhập' ? dv(x.SoLuong) : ''}</td>
+            <td>${x.Loai === 'Xuất' ? dv(x.SoLuong) : ''}</td>
+          </tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Chưa có chứng từ nhập/xuất nào</td></tr>'}</tbody>
+          <tfoot><tr><th colspan="7" style="text-align:right;">Tổng theo chứng từ</th><th>${dv(d.tongNhap)}</th><th>${dv(d.tongXuat)}</th></tr>
+          ${Number(d.nhapKhaiTay) ? `<tr><th colspan="7" style="text-align:right;">Nhập khai tay trên Thẻ kho (không có ngày/số phiếu)</th><th>${dv(d.nhapKhaiTay)}</th><th></th></tr>` : ''}
+          <tr><th colspan="7" style="text-align:right;">= Tồn</th><th colspan="2">${dv(d.ton)}</th></tr></tfoot></table>
+          <div style="font-size:11px;color:#5f6368;margin-top:4px;">${escapeHtml(d.ghiChu || '')}</div>`;
+      } catch (err) {
+        xnBody.innerHTML = `<div class="empty-hint" style="color:#c62828;">Không tải được lịch sử xuất nhập: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+    xnFilter.addEventListener('change', loadXuatNhap);
+    // Nút "Xuất/Nhập" ở từng dòng màu = đặt bộ lọc rồi nạp lại (một luồng dữ liệu duy nhất).
+    modal.querySelectorAll('.act-xn-mau').forEach(btn => btn.addEventListener('click', () => {
+      xnFilter.value = btn.dataset.ms;
+      loadXuatNhap();
+      xnBody.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+    loadXuatNhap();
+
     modal.querySelectorAll('.act-quick-order').forEach(btn => btn.addEventListener('click', () => {
       const c = colorDetail[Number(btn.dataset.idx)];
       // v6.44: hàm nay là async (phải tải danh mục khách) -> bắt lỗi, tránh nút "im lặng" khi API hỏng.

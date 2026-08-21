@@ -1244,6 +1244,147 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
   }
 });
 
+/* ================================================================================================
+   v7.12 — LICH SU XUAT / NHAP CUA 1 MA HANG, LOC DUOC THEO TUNG MAU
+   GET /items/:maHang/xuatnhap?mauSacId=<id|rong = tat ca mau>
+
+   Truoc day "Chi tiet ma hang" chi co SO LUY KE moi mau (Nhap / Xuat / Ton) — thay tong 500 xuat 320
+   nhung KHONG biet 320 do di dau, ngay nao, phieu nao. Man hinh nay tra ve tung CHUNG TU.
+
+   4 NGUON CO NGAY (dung dung 4 nguon dang that su lam doi ton — xem migration_v682 + v6.23):
+     NHAP  1) PhieuNhapKhoHang / ...ChiTiet     (SoLuongChinh = DA la don vi CHINH)
+     NHAP  2) PhieuNhapLai / ...ChiTiet         (khach tra hang; luu SoLuongCai = CAI)
+     XUAT  3) PhieuBanHang / ...ChiTiet         (duong tru ton DUY NHAT tu v6.23; SoLuongCai = CAI)
+     XUAT  4) DonKhachDatHang co DaTruTon = 1   (DU LIEU CU truoc v6.23; SoLuongDat theo DonVi ghi tren don)
+   Tat ca loc `TrangThai <> N'Đã hủy'`.
+
+   ⚠️ KHONG co trong danh sach: `TheKhoChiTietMau.NhapCai` — do la SO DU KHAI TAY o form The kho,
+   khong co ngay/so phieu/nguoi tao, nen khong the xep vao lich sur theo ngay. No duoc tra ve rieng o
+   `khaiTay` de nguoi dung doi chieu duoc: Ton = khai tay + tong nhap - tong xuat cua bang duoi.
+   ================================================================================================ */
+router.get('/items/:maHang/xuatnhap', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const maHang = req.params.maHang;
+    const mauSacId = req.query.mauSacId ? Number(req.query.mauSacId) : null;
+
+    const h = (await pool.request().input('m', sql.NVarChar, maHang).query(`
+      SELECT MaHangID, MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi
+      FROM TheKhoHangHoa WHERE MaHang = @m`)).recordset[0];
+    if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy mã hàng.' });
+
+    const coBang = async (ten) => !!(await pool.request()
+      .query(`SELECT OBJECT_ID('${ten}') AS id`)).recordset[0].id;
+    const coCot = async (bang, cot) => !!(await pool.request()
+      .query(`SELECT COL_LENGTH('${bang}','${cot}') AS n`)).recordset[0].n;
+    // Loc mau: dung CHUNG mot manh SQL cho ca 4 nguon de khong the lech dieu kien giua cac nguon.
+    const rq = () => { const r = pool.request().input('id', sql.Int, h.MaHangID); if (mauSacId) r.input('ms', sql.Int, mauSacId); return r; };
+    const locMau = (alias) => mauSacId ? ` AND ${alias}.MauSacID = @ms` : '';
+
+    const heSo = Number(h.LoaiRi) || 1;
+    // Ve DON VI CHINH (don vi luu ton). Nguon nao luu CAI thi chia heSo neu don vi chinh la don vi GOP.
+    const caiSangChinh = (cai) => {
+      const n = Number(cai) || 0;
+      return donViChinhLaGop(h) && heSo > 0 ? Math.round(n / heSo) : n;
+    };
+
+    const rows = [];
+
+    if (await coBang('PhieuNhapKhoHangChiTiet')) {
+      (await rq().query(`
+        SELECT p.PhieuNKID AS ChungTuID, p.SoPhieu, p.NgayNhap AS Ngay, p.LoaiNhap,
+               ct.MauSacID, ms.TenMau, ct.SoLuongChinh, ct.SoLuong, ct.DonVi,
+               ISNULL(ncc.TenNCC, ISNULL(d.MaDH, N'')) AS DoiTuong
+        FROM PhieuNhapKhoHangChiTiet ct
+        JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
+        LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
+        WHERE ct.MaHangID = @id AND p.TrangThai <> N'Đã hủy'${locMau('ct')}
+      `)).recordset.forEach(r => rows.push({
+        Ngay: r.Ngay, Loai: 'Nhập',
+        Nguon: r.LoaiNhap === 'SanXuat' ? 'Phiếu nhập kho (từ sản xuất)' : 'Phiếu nhập kho (từ NCC)',
+        ChungTu: 'nhapkho', ChungTuID: r.ChungTuID, SoPhieu: r.SoPhieu,
+        MauSacID: r.MauSacID, TenMau: r.TenMau || '', DoiTuong: r.DoiTuong || '',
+        SoLuong: Number(r.SoLuongChinh) || 0,      // DA la don vi chinh
+        SoLuongGoc: Number(r.SoLuong) || 0, DonViGoc: r.DonVi || ''
+      }));
+    }
+
+    if (await coBang('PhieuNhapLaiChiTiet')) {
+      (await rq().query(`
+        SELECT p.PhieuNLID AS ChungTuID, p.SoPhieu, p.NgayNhap AS Ngay, p.TenKhach,
+               ct.MauSacID, ms.TenMau, ct.SoLuongCai, ct.SoLuong, ct.DonVi
+        FROM PhieuNhapLaiChiTiet ct
+        JOIN PhieuNhapLai p ON p.PhieuNLID = ct.PhieuNLID
+        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+        WHERE ct.MaHangID = @id AND p.TrangThai <> N'Đã hủy'${locMau('ct')}
+      `)).recordset.forEach(r => rows.push({
+        Ngay: r.Ngay, Loai: 'Nhập', Nguon: 'Phiếu nhập lại (khách trả)',
+        ChungTu: 'nhaplai', ChungTuID: r.ChungTuID, SoPhieu: r.SoPhieu,
+        MauSacID: r.MauSacID, TenMau: r.TenMau || '', DoiTuong: r.TenKhach || '',
+        SoLuong: caiSangChinh(r.SoLuongCai),
+        SoLuongGoc: Number(r.SoLuong) || 0, DonViGoc: r.DonVi || ''
+      }));
+    }
+
+    (await rq().query(`
+      SELECT p.PhieuBHID AS ChungTuID, p.SoPhieu, p.NgayBan AS Ngay, p.TenKhach,
+             ct.MauSacID, ms.TenMau, ct.SoLuongCai, ct.SoLuong, ct.DonVi
+      FROM PhieuBanHangChiTiet ct
+      JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+      LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+      WHERE ct.MaHangID = @id AND p.TrangThai <> N'Đã hủy'${locMau('ct')}
+    `)).recordset.forEach(r => rows.push({
+      Ngay: r.Ngay, Loai: 'Xuất', Nguon: 'Phiếu bán hàng',
+      ChungTu: 'banhang', ChungTuID: r.ChungTuID, SoPhieu: r.SoPhieu,
+      MauSacID: r.MauSacID, TenMau: r.TenMau || '', DoiTuong: r.TenKhach || '',
+      SoLuong: caiSangChinh(r.SoLuongCai),
+      SoLuongGoc: Number(r.SoLuong) || 0, DonViGoc: r.DonVi || ''
+    }));
+
+    /* Don khach DA TRU TON truc tiep — chi con o DU LIEU CU (truoc v6.23). Bo qua don da len phieu
+       ban hang (PhieuBHID) keo dem hai lan voi nguon phieu ban hang o tren. */
+    if (await coCot('DonKhachDatHang', 'DaTruTon')) {
+      const coPhieuBH = await coCot('DonKhachDatHang', 'PhieuBHID');
+      (await rq().query(`
+        SELECT d.DonID AS ChungTuID, CAST(d.ThoiGian AS DATE) AS Ngay, d.TenKhach,
+               d.MauSacID, ms.TenMau, d.SoLuongDat, d.DonVi
+        FROM DonKhachDatHang d
+        LEFT JOIN MauSac ms ON ms.MauSacID = d.MauSacID
+        WHERE d.MaHangID = @id AND d.DaTruTon = 1 AND d.TrangThai <> N'Đã hủy'
+          ${coPhieuBH ? 'AND d.PhieuBHID IS NULL' : ''}${locMau('d')}
+      `)).recordset.forEach(r => rows.push({
+        Ngay: r.Ngay, Loai: 'Xuất', Nguon: 'Đơn khách đặt (dữ liệu cũ)',
+        ChungTu: 'donkhach', ChungTuID: r.ChungTuID, SoPhieu: 'Đơn #' + r.ChungTuID,
+        MauSacID: r.MauSacID, TenMau: r.TenMau || '', DoiTuong: r.TenKhach || '',
+        SoLuong: caiSangChinh(slSangCai(r.SoLuongDat, r.DonVi, h.LoaiRi, h)),
+        SoLuongGoc: Number(r.SoLuongDat) || 0, DonViGoc: r.DonVi || ''
+      }));
+    }
+
+    rows.sort((a, b) => new Date(b.Ngay) - new Date(a.Ngay) || String(b.SoPhieu).localeCompare(String(a.SoPhieu)));
+
+    // Phan khai tay (khong co ngay) — de nguoi dung doi chieu duoc voi cot Ton.
+    const khaiTay = (await rq().query(`
+      SELECT ISNULL(SUM(ct.NhapCai), 0) AS NhapKhaiTay
+      FROM TheKhoChiTietMau ct WHERE ct.MaHangID = @id${locMau('ct')}`)).recordset[0].NhapKhaiTay;
+
+    const tongNhap = rows.filter(r => r.Loai === 'Nhập').reduce((s, r) => s + r.SoLuong, 0);
+    const tongXuat = rows.filter(r => r.Loai === 'Xuất').reduce((s, r) => s + r.SoLuong, 0);
+
+    res.json({ success: true, data: {
+      hangInfo: h, mauSacId, rows,
+      tongNhap, tongXuat, nhapKhaiTay: Number(khaiTay) || 0,
+      ton: (Number(khaiTay) || 0) + tongNhap - tongXuat,
+      ghiChu: 'Số nhập khai tay trực tiếp trên Thẻ kho không có ngày/số phiếu nên không nằm trong bảng — đã tách riêng ở dòng tổng.'
+    } });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi lấy lịch sử xuất nhập: ' + err.message });
+  }
+});
+
 // ============ BAO GIA ALOHA (v5.17, muc 1.2) ============
 // 12 cot "de trong" dung theo dung chu thich trong file mau nguoi dung cung cap (filebaogia.xlsx):
 // Gia ban de xuat, Ty le tren gia von, Ty le tren gia ban, Ty le lai tham chieu (J-M) + 11 cot chi
