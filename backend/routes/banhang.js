@@ -166,16 +166,20 @@ function dsDonCuaDong(ct) {
   return ct.DonID ? [Number(ct.DonID)] : [];
 }
 let __coCotDaTruTon = null;   // do 1 lan roi nho (COL_LENGTH)
-async function layHangDangGiu(pool) {
-  /* Cột DaTruTon do migration_v657 thêm. Hàm này được gọi ở Thẻ kho, lên đơn, xác nhận đơn VÀ
-     catalogue CÔNG KHAI — query thẳng cột chưa có sẽ làm trắng cả trang khách. Dò trước. */
+/* v7.13: tach ra thanh ham rieng vi ghiChiTietPhieu() cung can (truoc chi layHangDangGiu dung). */
+async function coCotDaTruTon(pool) {
   if (__coCotDaTruTon === null) {
     try {
       const r = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','DaTruTon') AS c`)).recordset[0] || {};
       __coCotDaTruTon = r.c != null;
     } catch (e) { __coCotDaTruTon = false; }
   }
-  const dieuKienDaTru = __coCotDaTruTon ? 'AND ISNULL(o.DaTruTon, 0) = 0' : '';
+  return __coCotDaTruTon;
+}
+async function layHangDangGiu(pool) {
+  /* Cột DaTruTon do migration_v657 thêm. Hàm này được gọi ở Thẻ kho, lên đơn, xác nhận đơn VÀ
+     catalogue CÔNG KHAI — query thẳng cột chưa có sẽ làm trắng cả trang khách. Dò trước. */
+  const dieuKienDaTru = (await coCotDaTruTon(pool)) ? 'AND ISNULL(o.DaTruTon, 0) = 0' : '';
   let rs = [];
   try {
     rs = (await pool.request().query(`
@@ -681,6 +685,32 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
                 SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''})
               VALUES (@PhieuBHID, @MaHangID, @MauSacID, @SoLuong, @DonVi, @SoLuongCai,
                 @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''})`);
+    /* v7.13 — GO PHAN "DON CU DA TRU TON" TRUOC KHI PHIEU TRU TON (loi TRU HAI LAN).
+       Don dat TRUOC v6.23 da tru ton NGAY luc len don (`XuatCai += SL`, co v5.65). Tu v6.23 phieu ban
+       hang la duong tru ton duy nhat — nhung truoc day cho nay chi doi TRANG THAI don, khong he go
+       phan don da tru. Ket qua: don cu len phieu ban hang = TON BI TRU HAI LAN; va vi don sang
+       'Đã xuất hàng' nen no cung thoi duoc tinh la "dang giu" ⇒ khong con duong nao hoan lai.
+       Dung la trieu chung "cot Ton thap hon thuc te" ma khong tim ra chung tu nao giai thich.
+       ⚠️ PHAI HOAN TRUOC KHI TRU: neu tru truoc thi chinh phan don dang tru lam ton thieu, va
+       ghiXuatKho() se nem "Không đủ tồn kho" — phieu khong luu duoc du kho co hang that.
+       Go phieu (goChiTietPhieu) tra don ve 'Chờ xử lý' voi DaTruTon = 0 nen don lai giu hang binh
+       thuong — khong sinh lo hong nguoc lai. */
+    const coDaTru = await coCotDaTruTon(pool);
+    for (const donId of d.donIDs) {
+      const donCu = (await new sql.Request(tran).input('don', sql.Int, donId).query(`
+        SELECT o.DonID, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi,
+               ${coDaTru ? 'ISNULL(o.DaTruTon, 0)' : '0'} AS DaTruTon,
+               h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
+        FROM DonKhachDatHang o JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
+        WHERE o.DonID = @don`)).recordset[0];
+      if (donCu && Number(donCu.DaTruTon) === 1) {
+        const slDon = slSangDonViChinh(donCu.SoLuongDat, donCu.DonVi, donCu.DonViCoBan, donCu.LoaiRi, donCu);
+        if (donCu.MauSacID && slDon > 0) await ghiXuatKho(pool, tran, donCu.MaHangID, donCu.MauSacID, -slDon);
+        await new sql.Request(tran).input('don', sql.Int, donId)
+          .query('UPDATE DonKhachDatHang SET DaTruTon = 0 WHERE DonID = @don');
+        console.warn('[banhang] don #%s la don CU (DaTruTon=1): da hoan %s (don vi chinh) truoc khi phieu tru ton.', donId, slDon);
+      }
+    }
     // TRU TON (duong tru ton DUY NHAT cua he thong) - theo DON VI CHINH, co chan tranh ban vuot ton
     await ghiXuatKho(pool, tran, d.maHangId, d.mauSacId, d.slChinh, `${d.maHang} cần ${d.slChinh} ${d.donViCoBan || 'Cái'}`);
     /* Don khach dat lien ket -> 'Da xuat hang'. Chi nhan don CHUA co phieu va DANG CHO: neu don da
