@@ -1280,25 +1280,30 @@ window.ModuleKhoHang = (function () {
             ? `<div style="font-size:11px;color:#c62828;">⚠️ hàng chưa gán màu — không đặt/bán được theo màu. Sửa phiếu nhập kho để chọn màu.</div>` : ''}</td>
         <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
-        <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button> ` : ''}<button type="button" class="btn small secondary act-xn-mau" data-ms="${c.MauSacID}" title="Xem từng chứng từ nhập/xuất của màu này">Xuất/Nhập</button></td>
+        <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
         </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có chi tiết theo màu</td></tr>'}</tbody></table>
 
-      ${/* v7.12: LỊCH SỬ NHẬP/XUẤT TỪNG CHỨNG TỪ, lọc được theo màu. Bảng "Chi tiết theo màu" ở trên
-           chỉ có số LŨY KẾ (nhập 500 / xuất 320) — không trả lời được "xuất đi đâu, ngày nào, phiếu nào".
-           Nguồn: phiếu nhập kho, phiếu nhập lại, phiếu bán hàng, đơn khách đã trừ tồn (dữ liệu cũ). */''}
-      <h4 style="margin:18px 0 8px;">Lịch sử nhập / xuất theo chứng từ
-        <select id="xnMauFilter" style="margin-left:10px;font-weight:normal;">
-          <option value="">— Tất cả màu —</option>
-          ${colorDetail.map(c => `<option value="${c.MauSacID}">${escapeHtml(c.TenMau)}</option>`).join('')}
-        </select>
-      </h4>
-      <div id="xnBody"><div class="empty-hint">Đang tải...</div></div>
-
+      ${/* v7.14: BỎ bảng "Lịch sử nhập / xuất theo chứng từ" (v7.12) — dồn 3 bảng vào một modal làm
+           rối, và bảng đó trùng việc với Báo cáo tồn kho hàng hóa (bấm mã hàng để xem chi tiết chứng
+           từ). Thay vào đó bảng "Lịch sử đặt hàng" ngay dưới có bộ lọc riêng trên chính dòng tiêu đề. */''}
       <h4 style="margin:18px 0 8px;">Lịch sử đặt hàng</h4>
-      <table><thead><tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr></thead>
-      <tbody>${orders.map(r => `<tr><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
-        <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${histActions ? 7 : 6}" class="empty-hint">Chưa có lịch sử</td></tr>`}</tbody></table>
-      <div class="modal-actions"><button class="btn secondary" id="btnClose">Đóng</button></div>`);
+      <table><thead>
+        <tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr>
+        ${/* Dòng LỌC nằm ngay trong <thead> — cùng kiểu với ô lọc của màn "Đơn khách đặt hàng",
+             lọc NGAY trên dữ liệu đã tải (không gọi lại API) nên đổi ô nào là thấy ngay. */''}
+        <tr id="histLocRow">
+          <th><input type="date" id="hlTu" style="width:100%;" title="Từ ngày"><input type="date" id="hlDen" style="width:100%;margin-top:3px;" title="Đến ngày"></th>
+          <th><input type="text" id="hlKhach" placeholder="Tìm khách..." style="width:100%;"></th>
+          <th><select id="hlMau" style="width:100%;"><option value="">— Tất cả —</option>${colorDetail.map(c => `<option value="${c.MauSacID}">${escapeHtml(c.TenMau)}</option>`).join('')}</select></th>
+          <th></th>
+          <th><select id="hlDonVi" style="width:100%;"><option value="">— Tất cả —</option>${[...new Set(orders.map(o => o.DonVi).filter(Boolean))].map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></th>
+          <th><select id="hlTrangThai" style="width:100%;"><option value="">— Tất cả —</option>${['Chờ xác nhận', 'Chờ xử lý', 'Đã xuất hàng', 'Đã giao', 'Đã hủy'].map(s => `<option value="${s}">${s}</option>`).join('')}</select></th>
+          ${histActions ? '<th><button type="button" class="btn small secondary" id="hlReset">Bỏ lọc</button></th>' : ''}
+        </tr>
+      </thead>
+      <tbody id="histOrdBody"></tbody>
+      <tfoot><tr><th colspan="${histActions ? 7 : 6}" style="text-align:right;" id="histOrdTong"></th></tr></tfoot></table>
+      <div class="modal-actions">${histActions ? '' : '<button class="btn small secondary" id="hlReset">Bỏ lọc</button>'}<button class="btn secondary" id="btnClose">Đóng</button></div>`);
     // Mo rong modal cho vua 2 bang (min() de tren mobile van gioi han theo 96vw nhu CSS mac dinh)
     modal.querySelector('.modal').style.maxWidth = 'min(960px, 96vw)';
     modal.querySelector('#btnClose').addEventListener('click', closeModal);
@@ -1311,70 +1316,84 @@ window.ModuleKhoHang = (function () {
       const c = colorDetail[Number(img.dataset.idx)];
       openImageLightbox(c.LinkAnh, hangInfo.MaHang + ' · ' + c.TenMau, backToDetail);
     }));
-    /* v7.12: nạp bảng "Lịch sử nhập / xuất theo chứng từ". Tách hàm riêng + gọi lại khi đổi màu —
-       KHÔNG vẽ lại cả modal, để người dùng không mất chỗ đang xem. */
-    const xnBody = modal.querySelector('#xnBody');
-    const xnFilter = modal.querySelector('#xnMauFilter');
-    async function loadXuatNhap() {
-      const ms = xnFilter.value;
-      xnBody.innerHTML = '<div class="empty-hint">Đang tải...</div>';
-      try {
-        const r = await apiGet(`/api/khohang/items/${encodeURIComponent(maHang)}/xuatnhap${ms ? '?mauSacId=' + encodeURIComponent(ms) : ''}`);
-        const d = r.data;
-        const dv = (n) => fmtDualUnit(n, loaiRi, donViCoBan, donViQuyDoi);
-        xnBody.innerHTML = `
-          <table><thead><tr><th style="width:46px">STT</th><th>Ngày</th><th>Loại</th><th>Nguồn</th><th>Số phiếu</th><th>Màu</th><th>Khách / NCC / Lệnh SX</th><th>Nhập</th><th>Xuất</th></tr></thead>
-          <tbody>${d.rows.map((x, i) => `<tr>
-            <td>${i + 1}</td><td>${fmtDate(x.Ngay)}</td>
-            <td>${x.Loai === 'Nhập' ? '<span class="badge ok">Nhập</span>' : '<span class="badge danger">Xuất</span>'}</td>
-            <td>${escapeHtml(x.Nguon)}</td><td>${escapeHtml(x.SoPhieu || '')}</td>
-            <td>${escapeHtml(x.TenMau || '')}</td><td>${escapeHtml(x.DoiTuong || '')}</td>
-            <td>${x.Loai === 'Nhập' ? dv(x.SoLuong) : ''}</td>
-            <td>${x.Loai === 'Xuất' ? dv(x.SoLuong) : ''}</td>
-          </tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Chưa có chứng từ nhập/xuất nào</td></tr>'}</tbody>
-          <tfoot><tr><th colspan="7" style="text-align:right;">Tổng theo chứng từ</th><th>${dv(d.tongNhap)}</th><th>${dv(d.tongXuat)}</th></tr>
-          ${Number(d.nhapKhaiTay) ? `<tr><th colspan="7" style="text-align:right;">Nhập khai tay trên Thẻ kho (không có ngày/số phiếu)</th><th>${dv(d.nhapKhaiTay)}</th><th></th></tr>` : ''}
-          <tr><th colspan="7" style="text-align:right;">= Tồn</th><th colspan="2">${dv(d.ton)}</th></tr></tfoot></table>
-          <div style="font-size:11px;color:#5f6368;margin-top:4px;">${escapeHtml(d.ghiChu || '')}</div>`;
-      } catch (err) {
-        xnBody.innerHTML = `<div class="empty-hint" style="color:#c62828;">Không tải được lịch sử xuất nhập: ${escapeHtml(err.message)}</div>`;
-      }
-    }
-    xnFilter.addEventListener('change', loadXuatNhap);
-    // Nút "Xuất/Nhập" ở từng dòng màu = đặt bộ lọc rồi nạp lại (một luồng dữ liệu duy nhất).
-    modal.querySelectorAll('.act-xn-mau').forEach(btn => btn.addEventListener('click', () => {
-      xnFilter.value = btn.dataset.ms;
-      loadXuatNhap();
-      xnBody.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }));
-    loadXuatNhap();
-
     modal.querySelectorAll('.act-quick-order').forEach(btn => btn.addEventListener('click', () => {
       const c = colorDetail[Number(btn.dataset.idx)];
       // v6.44: hàm nay là async (phải tải danh mục khách) -> bắt lỗi, tránh nút "im lặng" khi API hỏng.
       openQuickOrderModal(hangInfo, c.MauSacID, c.TenMau, perm)
         .catch(err => toast('Không mở được Đặt hàng nhanh: ' + err.message, 'error'));
     }));
+    /* ===== v7.14: BẢNG "LỊCH SỬ ĐẶT HÀNG" CÓ BỘ LỌC =====
+       Vẽ lại RIÊNG <tbody> mỗi lần đổi ô lọc (không vẽ lại cả modal, không gọi lại API). Vì tbody
+       bị thay nên các nút Sửa/In/Trạng thái/Xóa phải gắn sự kiện LẠI sau mỗi lần vẽ — dùng UỶ QUYỀN
+       trên chính tbody (gắn 1 lần, đúng cho mọi dòng vẽ sau) thay vì gắn từng nút. */
+    const histBody = modal.querySelector('#histOrdBody');
+    const histTong = modal.querySelector('#histOrdTong');
+    const oLoc = (id) => modal.querySelector('#' + id);
+    const giaTri = (id) => { const e = oLoc(id); return e ? String(e.value || '').trim() : ''; };
+
+    function locDonHist() {
+      const tu = giaTri('hlTu'), den = giaTri('hlDen');
+      const khach = giaTri('hlKhach').toLowerCase();
+      const mau = giaTri('hlMau'), dv = giaTri('hlDonVi'), tt = giaTri('hlTrangThai');
+      return orders.filter(o => {
+        // So ngày theo chuỗi 'YYYY-MM-DD' của CHÍNH ô date — tránh lệch múi giờ khi new Date().
+        const ngay = o.ThoiGian ? new Date(o.ThoiGian) : null;
+        const ngayISO = ngay && !isNaN(ngay)
+          ? `${ngay.getFullYear()}-${String(ngay.getMonth() + 1).padStart(2, '0')}-${String(ngay.getDate()).padStart(2, '0')}` : '';
+        if (tu && (!ngayISO || ngayISO < tu)) return false;
+        if (den && (!ngayISO || ngayISO > den)) return false;
+        if (khach && String(o.TenKhach || '').toLowerCase().indexOf(khach) === -1) return false;
+        if (mau && String(o.MauSacID) !== mau) return false;
+        if (dv && String(o.DonVi || '') !== dv) return false;
+        if (tt && String(o.TrangThai || '') !== tt) return false;
+        return true;
+      });
+    }
+
+    function veDonHist() {
+      const ds = locDonHist();
+      histBody.innerHTML = ds.map(r => `<tr><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
+        <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
+        || `<tr><td colspan="${histActions ? 7 : 6}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
+      /* Tổng: CHỈ đếm số đơn, KHÔNG cộng cột SL — các đơn có thể khác đơn vị (Cái / Ri), cộng thẳng
+         là ra số vô nghĩa. Cộng được thì phải lọc 1 đơn vị: khi đó mới hiện thêm tổng SL. */
+      const dvDangLoc = giaTri('hlDonVi');
+      const tongSL = dvDangLoc ? ds.reduce((s, r) => s + (Number(r.SoLuongDat) || 0), 0) : null;
+      histTong.textContent = `${ds.length} đơn${ds.length !== orders.length ? ` / ${orders.length}` : ''}`
+        + (tongSL != null ? ` · tổng ${fmtNumber(tongSL)} ${dvDangLoc}` : '');
+    }
+
+    const locRow = modal.querySelector('#histLocRow');
+    if (locRow) {
+      locRow.addEventListener('change', veDonHist);
+      locRow.addEventListener('input', veDonHist);
+    }
+    modal.querySelectorAll('#hlReset').forEach(b => b.addEventListener('click', () => {
+      ['hlTu', 'hlDen', 'hlKhach', 'hlMau', 'hlDonVi', 'hlTrangThai'].forEach(id => { const e = oLoc(id); if (e) e.value = ''; });
+      veDonHist();
+    }));
+
     // v5.51: thao tác đơn ngay trong Lịch sử — làm xong tự mở lại Lịch sử mã hàng này.
-    modal.querySelectorAll('.act-h-edit').forEach(btn => btn.addEventListener('click', () => {
-      const o = orders.find(x => String(x.DonID) === btn.dataset.id);
-      if (o) openOrderEditModal(o, allItems, chiTiet, khachList, perm, () => openHistory(maHang, perm));
-    }));
-    modal.querySelectorAll('.act-h-status').forEach(btn => btn.addEventListener('click', async () => {
-      try { await apiPut(`/api/khohang/orders/${btn.dataset.id}/status`, { newStatus: btn.dataset.status }); toast('Đã cập nhật.', 'success'); openHistory(maHang, perm); }
-      catch (err) { toast(err.message, 'error'); }
-    }));
-    modal.querySelectorAll('.act-h-del').forEach(btn => btn.addEventListener('click', async () => {
-      if (!confirm('Xóa đơn đặt hàng này? Tồn kho sẽ được hoàn lại nếu đơn đang trừ tồn.')) return;
-      try { await apiDelete('/api/khohang/orders/' + btn.dataset.id); toast('Đã xóa đơn.', 'success'); openHistory(maHang, perm); }
-      catch (err) { toast(err.message, 'error'); }
-    }));
-    // v6.42.1: BỎ SÓT Ở v6.42 — nút in trong "Lịch sử mã hàng" vẫn còn chuyển đơn sang "Đã giao".
-    // Nay giống 3 nút in kia: chỉ in giấy, không đổi trạng thái, không đụng tồn kho.
-    modal.querySelectorAll('.act-h-inphieu').forEach(btn => btn.addEventListener('click', () => {
-      const o = orders.find(x => String(x.DonID) === btn.dataset.id);
-      if (o) printPhieuDatHang(o.TenKhach, [o], false);
-    }));
+    // v6.42.1: nút In chỉ IN GIẤY — không chuyển đơn sang "Đã giao", không đụng tồn kho.
+    histBody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const o = orders.find(x => String(x.DonID) === String(id));
+      if (btn.classList.contains('act-h-edit')) {
+        if (o) openOrderEditModal(o, allItems, chiTiet, khachList, perm, () => openHistory(maHang, perm));
+      } else if (btn.classList.contains('act-h-inphieu')) {
+        if (o) printPhieuDatHang(o.TenKhach, [o], false);
+      } else if (btn.classList.contains('act-h-status')) {
+        try { await apiPut(`/api/khohang/orders/${id}/status`, { newStatus: btn.dataset.status }); toast('Đã cập nhật.', 'success'); openHistory(maHang, perm); }
+        catch (err) { toast(err.message, 'error'); }
+      } else if (btn.classList.contains('act-h-del')) {
+        if (!confirm('Xóa đơn đặt hàng này? Tồn kho sẽ được hoàn lại nếu đơn đang trừ tồn.')) return;
+        try { await apiDelete('/api/khohang/orders/' + id); toast('Đã xóa đơn.', 'success'); openHistory(maHang, perm); }
+        catch (err) { toast(err.message, 'error'); }
+      }
+    });
+    veDonHist();
   }
 
   /* ===== v6.21: GỘP ĐƠN KHÁCH ĐẶT =====
