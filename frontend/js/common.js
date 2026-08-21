@@ -547,7 +547,16 @@ function enhanceOneSelect(sel) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); if (!panel) build(true); else { hi = Math.min(shown.length - 1, hi + 1); hl(); } }
     else if (e.key === 'ArrowUp') { e.preventDefault(); if (panel) { hi = Math.max(0, hi - 1); hl(); } }
-    else if (e.key === 'Enter') { if (panel && hi >= 0) { e.preventDefault(); pick(shown[hi]); } }
+    /* v7.18 — SỬA LỖI MẤT DÒNG VỪA GÕ.
+       Cũ: Enter chỉ chọn khi đã bấm mũi tên xuống (hi >= 0). Người dùng gõ mã rồi Enter luôn (thói
+       quen bình thường) thì KHÔNG có option nào được chọn — <select> ẩn vẫn rỗng — mà vì ô nằm trong
+       <form> nên Enter LƯU LUÔN PHIẾU. Dòng vừa gõ bị lọc bỏ (không có mã hàng) nên phiếu lưu thiếu
+       dòng đó, không báo lỗi gì: "thêm hàng vào mà tồn kho không đổi".
+       Nay: đang mở danh sách gợi ý thì Enter LUÔN chọn (dòng đang tô, hoặc gợi ý ĐẦU TIÊN) và chặn
+       submit — muốn lưu thì bấm Enter lần nữa hoặc bấm nút Lưu. */
+    else if (e.key === 'Enter') {
+      if (panel && shown.length) { e.preventDefault(); pick(shown[hi >= 0 ? hi : 0]); }
+    }
     else if (e.key === 'Escape') { close(); }
   });
 }

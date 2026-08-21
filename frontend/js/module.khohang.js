@@ -3328,6 +3328,15 @@ window.ModuleKhoHang = (function () {
         if (oSL) r.soLuong = oSL.value;
         if (oGia) r.giaBanLe = oGia.value;
         if (oCK) r.ckShop = oCK.value;
+        /* v7.18: ĐỌC CẢ MÃ HÀNG VÀ MÀU TỪ DOM — trước đây hai trường này CHỈ được cập nhật trong
+           handler 'change' của <select>. Handler không kịp bắn (gõ tìm rồi Enter, hoặc một đường vẽ
+           lại dòng nào quên nối dây) là `r.maHangId` rỗng ⇒ dòng bị `dongGui.filter` LOẠI ÂM THẦM:
+           phiếu lưu thiếu dòng, tồn kho không đổi, mà không có một câu báo lỗi nào.
+           Nguyên tắc của v6.51 áp cho nốt 2 ô này: CÁI GÌ ĐANG HIỆN TRÊN MÀN HÌNH LÀ CÁI ĐƯỢC LƯU. */
+        const oMH = el.querySelector('.bh-mahang');
+        const oMau = el.querySelector('.bh-mau');
+        if (oMH && oMH.value) r.maHangId = oMH.value;
+        if (oMau) r.mauSacId = oMau.value;
       });
       const dongGui = dong.filter(r => r.maHangId && Number(r.soLuong) > 0).map(r => ({
         maHangId: r.maHangId, mauSacId: r.mauSacId || null, soLuong: r.soLuong, donVi: r.donVi,
@@ -3337,6 +3346,21 @@ window.ModuleKhoHang = (function () {
       // frontend gửi sai hay backend ghi sai, khỏi phải đoán.
       console.log('[PHIẾU BÁN HÀNG] gửi lên:', dongGui.map(d => ({ maHangId: d.maHangId, giaBanLe: d.giaBanLe, ckShop: d.phanTramCKShop })));
       if (!dongGui.length) { toast('Chưa có dòng hàng hợp lệ (cần mã hàng + số lượng).', 'error'); return; }
+      /* v7.18 — CHỐT AN TOÀN: số dòng GỬI ĐI phải bằng số dòng ĐANG HIỆN trên bảng.
+         Lệch nghĩa là có dòng bị `filter` loại (thiếu mã hàng hoặc SL ≤ 0). Trước đây loại âm thầm:
+         người dùng thấy dòng trên màn hình, bấm Lưu, phiếu lưu THIẾU dòng đó mà không báo gì — rồi
+         kết luận "sửa phiếu mà tồn kho không đổi". Nay chặn lại và chỉ rõ dòng số mấy. */
+      const soDongHien = modal.querySelectorAll('.bh-row').length;
+      if (dongGui.length < soDongHien) {
+        const thieu = [];
+        modal.querySelectorAll('.bh-row').forEach((el, i) => {
+          const r = dong.find(x => String(x.idx) === el.dataset.idx);
+          if (!r || !r.maHangId) thieu.push(`dòng ${i + 1}: chưa chọn mã hàng`);
+          else if (!(Number(r.soLuong) > 0)) thieu.push(`dòng ${i + 1}: số lượng phải > 0`);
+        });
+        toast('Chưa lưu — còn dòng chưa hợp lệ:\n• ' + thieu.join('\n• '), 'error');
+        return;
+      }
       // Bắt buộc chọn màu: thẻ kho quản theo màu, không có màu thì không biết trừ tồn ở đâu.
       const thieuMau = dongGui.filter(d => !d.mauSacId);
       if (thieuMau.length) { toast(`${thieuMau.length} dòng chưa chọn MÀU — phải chọn màu để trừ đúng tồn kho.`, 'error'); return; }
