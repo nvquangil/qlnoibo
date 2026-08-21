@@ -3105,7 +3105,12 @@ window.ModuleKhoHang = (function () {
         <td>${tuDon
           ? `<b>${escapeHtml(r.maHang)}</b><div style="font-size:11px;color:#137333;">${escapeHtml(r.slDonGoc || '')}</div>`
           : `<select class="bh-mahang" style="width:100%;"><option value="">-- chọn mã hàng --</option>${items.map(it => `<option value="${it.MaHangID}" ${String(r.maHangId) === String(it.MaHangID) ? 'selected' : ''}>${escapeHtml(it.MaHang + ' · ' + it.TenHang)} (khả dụng ${fmtNumber(Number(it.TonKhaDungThuc != null ? it.TonKhaDungThuc : it.TonKhaDung) + (buTon.get('mh' + it.MaHangID) || 0))} ${escapeHtml(it.DonViCoBan || 'Cái')})</option>`).join('')}</select>`}</td>
-        <td>${tuDon ? escapeHtml(r.tenMau || '') : `<select class="bh-mau" style="width:100%;"><option value="">-- màu --</option></select>`}</td>
+        ${/* v7.16: dòng LẤY TỪ ĐƠN KHÁCH giờ VẪN ĐỔI ĐƯỢC MÀU (trước là chữ, không sửa được).
+             Nghiệp vụ thật: khách đặt màu xanh, hết xanh nên giao màu đen — phải sửa được màu NGAY
+             trên phiếu và GIỮ liên kết đơn. Trước đây phải xóa dòng rồi thêm lại thủ công: mất liên
+             kết đơn, đơn treo ở màu cũ, mà vào sửa đơn thì bị chặn "đã có phiếu bán hàng" = bế tắc.
+             MÃ HÀNG vẫn để chữ: đổi mã hàng là đơn khác hẳn, phải hủy phiếu/lập đơn mới. */''}
+        <td>${`<select class="bh-mau" style="width:100%;"><option value="">-- màu --</option></select>`}${tuDon ? `<div style="font-size:11px;color:#137333;">khách đặt: ${escapeHtml(r.tenMau || '')}</div>` : ''}</td>
         <td style="white-space:nowrap;"><input type="number" class="bh-sl" step="1" min="0" style="width:66px;" value="${r.soLuong != null ? r.soLuong : ''}">
           <span class="bh-dvt" style="font-size:11px;color:#5f6368;">${escapeHtml(dvGoc(r.donViCoBan, r.donViQuyDoi))}</span></td>
         <td class="bh-ri" style="text-align:right;font-size:12px;color:#5f6368;"></td>
@@ -3202,11 +3207,18 @@ window.ModuleKhoHang = (function () {
                 + (buTon.get(c.MaHangID + '|' + c.MauSacID) || 0);
               return `<option value="${c.MauSacID}" ${String(r.mauSacId) === String(c.MauSacID) ? 'selected' : ''}>${escapeHtml(c.TenMau)} (khả dụng ${fmtNumber(ton)})</option>`;
             }).join('');
+            /* v7.16: màu đang lưu KHÔNG có trong danh sách (mã/màu chưa có dòng thẻ kho) thì <select>
+               âm thầm nhảy về "-- màu --" trong khi `r.mauSacId` vẫn giữ giá trị cũ ⇒ lưu ra một màu
+               người dùng KHÔNG hề thấy trên màn hình. Xóa luôn để bắt buộc chọn lại. */
+            if (r.mauSacId && !ds.some(c => String(c.MauSacID) === String(r.mauSacId))) r.mauSacId = '';
           };
           nap();
           selMau.addEventListener('change', e => { r.mauSacId = e.target.value; tinhTong(); });
+          /* v7.16: dòng từ đơn khách CÓ ô màu nhưng KHÔNG có ô mã hàng -> phải kiểm tra null.
+             Không kiểm là `selMH.addEventListener` nổ giữa hàm, các ô SL/giá/CK phía dưới KHÔNG được
+             nối sự kiện nữa = "gõ số mà không thấy tổng đổi" (kiểu lỗi im lặng cũ của dự án). */
           const selMH = el.querySelector('.bh-mahang');
-          selMH.addEventListener('change', e => {
+          if (selMH) selMH.addEventListener('change', e => {
             r.maHangId = e.target.value;
             const it = items.find(x => String(x.MaHangID) === String(r.maHangId)) || {};
             r.loaiRi = it.LoaiRi; r.giaBanLe = it.GiaBan; r.mauSacId = '';

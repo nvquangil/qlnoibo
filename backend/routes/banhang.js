@@ -696,6 +696,7 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
        Go phieu (goChiTietPhieu) tra don ve 'Chờ xử lý' voi DaTruTon = 0 nen don lai giu hang binh
        thuong — khong sinh lo hong nguoc lai. */
     const coDaTru = await coCotDaTruTon(pool);
+    const donTruoc = new Map();   // v7.16: giữ bản ghi đơn TRƯỚC khi sửa, dùng lại ở vòng gắn đơn dưới
     for (const donId of d.donIDs) {
       const donCu = (await new sql.Request(tran).input('don', sql.Int, donId).query(`
         SELECT o.DonID, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi,
@@ -703,6 +704,7 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
                h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
         FROM DonKhachDatHang o JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
         WHERE o.DonID = @don`)).recordset[0];
+      if (donCu) donTruoc.set(String(donId), donCu);
       if (donCu && Number(donCu.DaTruTon) === 1) {
         const slDon = slSangDonViChinh(donCu.SoLuongDat, donCu.DonVi, donCu.DonViCoBan, donCu.LoaiRi, donCu);
         if (donCu.MauSacID && slDon > 0) await ghiXuatKho(pool, tran, donCu.MaHangID, donCu.MauSacID, -slDon);
@@ -716,6 +718,20 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
     /* Don khach dat lien ket -> 'Da xuat hang'. Chi nhan don CHUA co phieu va DANG CHO: neu don da
        len phieu khac roi thi rowsAffected = 0 -> throw de quay lui CA phieu (tranh tru ton 2 lan). */
     for (const donId of d.donIDs) {
+      /* v7.16 — ĐỒNG BỘ MÀU CỦA ĐƠN THEO DÒNG PHIẾU.
+         Khách đặt màu xanh nhưng thực giao màu đen (hết xanh) thì người dùng sửa MÀU trên phiếu bán
+         hàng. Trước đây chỗ này chỉ đổi trạng thái đơn: phiếu ghi đen, tồn trừ đen, nhưng ĐƠN vẫn
+         nằm ở màu xanh — Thẻ kho / Lịch sử đặt hàng hiện màu cũ, "sửa phiếu rồi mà không thấy đổi";
+         vào sửa đơn để nắn lại thì bị chặn "đã có phiếu bán hàng" = bế tắc, không đường nào sửa.
+         Nay phiếu là chứng từ THỰC XUẤT nên đơn phải chạy theo phiếu.
+         ⚠️ CHỈ đồng bộ MÀU: mã hàng đổi = đơn khác hẳn (đã chặn ở giao diện), và SỐ LƯỢNG giữ nguyên
+         của từng đơn vì một dòng phiếu có thể gộp nhiều đơn — chia lại SL sẽ làm sai đơn gốc. */
+      const donGoc = donTruoc.get(String(donId));
+      if (d.mauSacId && donGoc && String(donGoc.MauSacID) !== String(d.mauSacId)) {
+        await new sql.Request(tran).input('don', sql.Int, donId).input('ms', sql.Int, d.mauSacId)
+          .query('UPDATE DonKhachDatHang SET MauSacID = @ms WHERE DonID = @don');
+        console.warn('[banhang] don #%s: dong bo mau theo phieu (%s -> %s).', donId, donGoc.MauSacID, d.mauSacId);
+      }
       const kq = await new sql.Request(tran).input('don', sql.Int, donId).input('p', sql.Int, phieuBHID)
         .query(`UPDATE DonKhachDatHang SET TrangThai = N'Đã xuất hàng', PhieuBHID = @p
                 WHERE DonID = @don AND PhieuBHID IS NULL AND TrangThai IN (N'Chờ xác nhận', N'Chờ xử lý')`);

@@ -1150,7 +1150,11 @@ router.put('/orders/:id', requireAuth, requirePermission('KHOHANG', 'edit'), req
     /* v6.23: đơn ĐÃ XUẤT HÀNG (có phiếu bán hàng) thì KHÔNG sửa ở đây — sửa số lượng mà tồn đã trừ theo
        phiếu sẽ làm lệch cả tồn lẫn công nợ. Muốn sửa: hủy phiếu bán hàng để hệ thống hoàn tồn đúng. */
     if (String(cur.TrangThai) === 'Đã xuất hàng' || cur.PhieuBHID) {
-      return res.status(400).json({ success: false, message: 'Đơn này đã có PHIẾU BÁN HÀNG (đã xuất hàng). Hãy hủy phiếu bán hàng đó trước rồi mới sửa đơn.' });
+      /* v7.16: nói rõ ĐƯỜNG SỬA thay vì chỉ chặn. Đổi MÀU là việc hay gặp nhất (khách đặt xanh, hết
+         xanh nên giao đen) — sửa ngay trên phiếu bán hàng là đủ, đơn tự đồng bộ màu theo phiếu. */
+      return res.status(400).json({ success: false, message: 'Đơn này đã có PHIẾU BÁN HÀNG (đã xuất hàng).\n\n'
+        + '• Chỉ đổi MÀU: vào Phiếu bán hàng → Sửa → đổi màu ngay trên dòng hàng (tồn kho và đơn này tự cập nhật theo).\n'
+        + '• Đổi mã hàng / số lượng: hủy phiếu bán hàng đó trước để hệ thống hoàn tồn đúng, rồi mới sửa đơn.' });
     }
     /* v6.23 (SỬA LỖI NẶNG): điều kiện cũ là `TrangThai !== 'Đã hủy'` — sai từ v6.23 vì đơn mới KHÔNG
        trừ tồn nữa. Với đơn DaTruTon = 0, "hoàn số cũ" là hoàn một lượng chưa bao giờ bị trừ ⇒ tồn PHỒNG.
