@@ -1293,7 +1293,10 @@ window.ModuleKhoHang = (function () {
              lọc NGAY trên dữ liệu đã tải (không gọi lại API) nên đổi ô nào là thấy ngay. */''}
         <tr id="histLocRow">
           <th><input type="date" id="hlTu" style="width:100%;" title="Từ ngày"><input type="date" id="hlDen" style="width:100%;margin-top:3px;" title="Đến ngày"></th>
-          <th><input type="text" id="hlKhach" placeholder="Tìm khách..." style="width:100%;"></th>
+          ${/* v7.15: cột Khách LẤY TỪ DANH SÁCH khách đã đặt CHÍNH mã hàng này (khachList) thay vì ô gõ
+               tay — gõ tay dễ sai chính tả/thiếu dấu là ra 0 dòng mà không hiểu vì sao. Select vẫn gõ
+               tìm được nhờ enhanceSelects (common.js). */''}
+          <th><select id="hlKhach" style="width:100%;"><option value="">— Tất cả —</option>${khachList.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('')}</select></th>
           <th><select id="hlMau" style="width:100%;"><option value="">— Tất cả —</option>${colorDetail.map(c => `<option value="${c.MauSacID}">${escapeHtml(c.TenMau)}</option>`).join('')}</select></th>
           <th></th>
           <th><select id="hlDonVi" style="width:100%;"><option value="">— Tất cả —</option>${[...new Set(orders.map(o => o.DonVi).filter(Boolean))].map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></th>
@@ -1333,7 +1336,7 @@ window.ModuleKhoHang = (function () {
 
     function locDonHist() {
       const tu = giaTri('hlTu'), den = giaTri('hlDen');
-      const khach = giaTri('hlKhach').toLowerCase();
+      const khach = giaTri('hlKhach');   // v7.15: chọn từ danh sách -> so KHỚP ĐÚNG, không so gần đúng
       const mau = giaTri('hlMau'), dv = giaTri('hlDonVi'), tt = giaTri('hlTrangThai');
       return orders.filter(o => {
         // So ngày theo chuỗi 'YYYY-MM-DD' của CHÍNH ô date — tránh lệch múi giờ khi new Date().
@@ -1342,7 +1345,7 @@ window.ModuleKhoHang = (function () {
           ? `${ngay.getFullYear()}-${String(ngay.getMonth() + 1).padStart(2, '0')}-${String(ngay.getDate()).padStart(2, '0')}` : '';
         if (tu && (!ngayISO || ngayISO < tu)) return false;
         if (den && (!ngayISO || ngayISO > den)) return false;
-        if (khach && String(o.TenKhach || '').toLowerCase().indexOf(khach) === -1) return false;
+        if (khach && String(o.TenKhach || '') !== khach) return false;
         if (mau && String(o.MauSacID) !== mau) return false;
         if (dv && String(o.DonVi || '') !== dv) return false;
         if (tt && String(o.TrangThai || '') !== tt) return false;
@@ -1355,12 +1358,28 @@ window.ModuleKhoHang = (function () {
       histBody.innerHTML = ds.map(r => `<tr><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
         <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
         || `<tr><td colspan="${histActions ? 7 : 6}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
-      /* Tổng: CHỈ đếm số đơn, KHÔNG cộng cột SL — các đơn có thể khác đơn vị (Cái / Ri), cộng thẳng
-         là ra số vô nghĩa. Cộng được thì phải lọc 1 đơn vị: khi đó mới hiện thêm tổng SL. */
-      const dvDangLoc = giaTri('hlDonVi');
-      const tongSL = dvDangLoc ? ds.reduce((s, r) => s + (Number(r.SoLuongDat) || 0), 0) : null;
-      histTong.textContent = `${ds.length} đơn${ds.length !== orders.length ? ` / ${orders.length}` : ''}`
-        + (tongSL != null ? ` · tổng ${fmtNumber(tongSL)} ${dvDangLoc}` : '');
+      /* v7.15: TỔNG CỘNG TÁCH BA NHÓM — đã xuất / đã hủy / đang chờ. Trộn cả ba vào một con số là
+         sai nghiệp vụ: hàng của đơn đã hủy không đi đâu cả, đơn đang chờ thì chỉ mới GIỮ chỗ, chỉ
+         nhóm "đã xuất" là hàng thật sự ra khỏi kho.
+         ⚠️ CỘNG THEO TỪNG ĐƠN VỊ (Cái / Ri...): "5 Cái + 2 Ri" không thể thành 7 vì LoaiRi mỗi mã
+         một khác — nên mỗi nhóm in ra dạng "12 Cái, 2 Ri". */
+      const nhomCua = (tt) => (tt === 'Đã hủy' ? 'huy'
+        : (tt === 'Đã xuất hàng' || tt === 'Đã giao') ? 'xuat' : 'cho');
+      const tong = { xuat: new Map(), huy: new Map(), cho: new Map() };
+      const demDon = { xuat: 0, huy: 0, cho: 0 };
+      ds.forEach(r => {
+        const n = nhomCua(r.TrangThai);
+        const dv = String(r.DonVi || donViCoBan || 'Cái');
+        tong[n].set(dv, (tong[n].get(dv) || 0) + (Number(r.SoLuongDat) || 0));
+        demDon[n]++;
+      });
+      const inTong = (m) => [...m.entries()].map(([dv, sl]) => `${fmtNumber(sl)} ${escapeHtml(dv)}`).join(', ');
+      const phan = [];
+      if (demDon.xuat) phan.push(`<span style="color:#137333;">Đã xuất: ${inTong(tong.xuat)} (${demDon.xuat} đơn)</span>`);
+      if (demDon.cho) phan.push(`<span style="color:#b06000;">Đang chờ: ${inTong(tong.cho)} (${demDon.cho} đơn)</span>`);
+      if (demDon.huy) phan.push(`<span style="color:#a50e0e;">Đã hủy: ${inTong(tong.huy)} (${demDon.huy} đơn)</span>`);
+      histTong.innerHTML = `<b>${ds.length} đơn${ds.length !== orders.length ? ` / ${orders.length}` : ''}</b>`
+        + (phan.length ? ' &nbsp;·&nbsp; ' + phan.join(' &nbsp;·&nbsp; ') : '');
     }
 
     const locRow = modal.querySelector('#histLocRow');
