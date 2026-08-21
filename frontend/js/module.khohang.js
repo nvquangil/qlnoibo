@@ -1288,7 +1288,9 @@ window.ModuleKhoHang = (function () {
            từ). Thay vào đó bảng "Lịch sử đặt hàng" ngay dưới có bộ lọc riêng trên chính dòng tiêu đề. */''}
       <h4 style="margin:18px 0 8px;">Lịch sử đặt hàng</h4>
       <table><thead>
-        <tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr>
+        ${/* v7.20: cột PHIẾU BÁN HÀNG — biết ngay màu đó đã được lập cho phiếu nào. Số phiếu lấy từ
+             chứng từ THẬT (dòng phiếu chưa hủy đang chứa đơn), không lấy theo cờ trên đơn. */''}
+        <tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th><th>Phiếu bán hàng</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr>
         ${/* Dòng LỌC nằm ngay trong <thead> — cùng kiểu với ô lọc của màn "Đơn khách đặt hàng",
              lọc NGAY trên dữ liệu đã tải (không gọi lại API) nên đổi ô nào là thấy ngay. */''}
         <tr id="histLocRow">
@@ -1301,11 +1303,12 @@ window.ModuleKhoHang = (function () {
           <th></th>
           <th><select id="hlDonVi" style="width:100%;"><option value="">— Tất cả —</option>${[...new Set(orders.map(o => o.DonVi).filter(Boolean))].map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></th>
           <th><select id="hlTrangThai" style="width:100%;"><option value="">— Tất cả —</option>${['Chờ xác nhận', 'Chờ xử lý', 'Đã xuất hàng', 'Đã giao', 'Đã hủy'].map(s => `<option value="${s}">${s}</option>`).join('')}</select></th>
+          <th><select id="hlPhieu" style="width:100%;"><option value="">— Tất cả —</option><option value="__chua">(chưa có phiếu)</option>${[...new Set(orders.map(o => o.SoPhieuBH).filter(Boolean))].sort().map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></th>
           ${histActions ? '<th><button type="button" class="btn small secondary" id="hlReset">Bỏ lọc</button></th>' : ''}
         </tr>
       </thead>
       <tbody id="histOrdBody"></tbody>
-      <tfoot><tr><th colspan="${histActions ? 7 : 6}" style="text-align:right;" id="histOrdTong"></th></tr></tfoot></table>
+      <tfoot><tr><th colspan="${histActions ? 8 : 7}" style="text-align:right;" id="histOrdTong"></th></tr></tfoot></table>
       <div class="modal-actions">${histActions ? '' : '<button class="btn small secondary" id="hlReset">Bỏ lọc</button>'}<button class="btn secondary" id="btnClose">Đóng</button></div>`);
     // Mo rong modal cho vua 2 bang (min() de tren mobile van gioi han theo 96vw nhu CSS mac dinh)
     modal.querySelector('.modal').style.maxWidth = 'min(960px, 96vw)';
@@ -1338,6 +1341,7 @@ window.ModuleKhoHang = (function () {
       const tu = giaTri('hlTu'), den = giaTri('hlDen');
       const khach = giaTri('hlKhach');   // v7.15: chọn từ danh sách -> so KHỚP ĐÚNG, không so gần đúng
       const mau = giaTri('hlMau'), dv = giaTri('hlDonVi'), tt = giaTri('hlTrangThai');
+      const phieu = giaTri('hlPhieu');   // v7.20: '' = tất cả, '__chua' = đơn chưa có phiếu bán hàng
       return orders.filter(o => {
         // So ngày theo chuỗi 'YYYY-MM-DD' của CHÍNH ô date — tránh lệch múi giờ khi new Date().
         const ngay = o.ThoiGian ? new Date(o.ThoiGian) : null;
@@ -1349,15 +1353,33 @@ window.ModuleKhoHang = (function () {
         if (mau && String(o.MauSacID) !== mau) return false;
         if (dv && String(o.DonVi || '') !== dv) return false;
         if (tt && String(o.TrangThai || '') !== tt) return false;
+        if (phieu === '__chua' && o.SoPhieuBH) return false;
+        if (phieu && phieu !== '__chua' && String(o.SoPhieuBH || '') !== phieu) return false;
         return true;
       });
     }
 
     function veDonHist() {
       const ds = locDonHist();
+      /* v7.20: ô "Phiếu bán hàng" — số phiếu THẬT + cảnh báo khi lệch với cờ trên đơn:
+           · có phiếu thật            -> hiện số phiếu + ngày
+           · cờ nói có mà không phiếu -> ĐƠN MỒ CÔI (dòng đã bị xóa khỏi phiếu) — chỉ rõ để đi xử lý
+           · 'Đã xuất hàng' mà trắng   -> cũng là mồ côi
+           · còn lại                   -> chưa lên phiếu (đang giữ hàng) */
+      const oPhieu = (r) => {
+        if (r.SoPhieuBH) {
+          return `<b>${escapeHtml(r.SoPhieuBH)}</b>${r.NgayPhieuBH ? `<div style="font-size:11px;color:#5f6368;">${fmtDate(r.NgayPhieuBH)}</div>` : ''}`;
+        }
+        if (r.SoPhieuTheoCo || r.TrangThai === 'Đã xuất hàng') {
+          return `<span style="color:#a50e0e;">⚠️ không còn trong phiếu nào</span>`
+            + (r.SoPhieuTheoCo ? `<div style="font-size:11px;color:#a50e0e;">cờ trên đơn: ${escapeHtml(r.SoPhieuTheoCo)}${String(r.TrangThaiPhieuTheoCo || '') === 'Đã hủy' ? ' (đã hủy)' : ' (đã bỏ dòng khỏi phiếu)'}</div>` : '')
+            + `<div style="font-size:11px;color:#5f6368;">bấm "Đã hủy" nếu khách không lấy nữa</div>`;
+        }
+        return '<span class="empty-hint" style="padding:0;">chưa lên phiếu</span>';
+      };
       histBody.innerHTML = ds.map(r => `<tr><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
-        <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
-        || `<tr><td colspan="${histActions ? 7 : 6}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
+        <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td><td>${oPhieu(r)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
+        || `<tr><td colspan="${histActions ? 8 : 7}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
       /* v7.15: TỔNG CỘNG TÁCH BA NHÓM — đã xuất / đã hủy / đang chờ. Trộn cả ba vào một con số là
          sai nghiệp vụ: hàng của đơn đã hủy không đi đâu cả, đơn đang chờ thì chỉ mới GIỮ chỗ, chỉ
          nhóm "đã xuất" là hàng thật sự ra khỏi kho.
@@ -1388,7 +1410,7 @@ window.ModuleKhoHang = (function () {
       locRow.addEventListener('input', veDonHist);
     }
     modal.querySelectorAll('#hlReset').forEach(b => b.addEventListener('click', () => {
-      ['hlTu', 'hlDen', 'hlKhach', 'hlMau', 'hlDonVi', 'hlTrangThai'].forEach(id => { const e = oLoc(id); if (e) e.value = ''; });
+      ['hlTu', 'hlDen', 'hlKhach', 'hlMau', 'hlDonVi', 'hlTrangThai', 'hlPhieu'].forEach(id => { const e = oLoc(id); if (e) e.value = ''; });
       veDonHist();
     }));
 

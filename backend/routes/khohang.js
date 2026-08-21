@@ -1275,12 +1275,34 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       WHERE h.MaHang = @mh ORDER BY ms.TenMau`);
 
+    /* v7.20: THÊM SỐ PHIẾU BÁN HÀNG cho từng đơn — "màu đó được lập cho phiếu bán hàng nào".
+       Lấy từ HAI đường rồi hiện cả hai khi lệch:
+         p2 = phiếu ĐANG THẬT SỰ chứa đơn (dò PhieuBanHangChiTiet, cả cột DonIDs của dòng gộp,
+              bỏ qua phiếu đã hủy)   ← chuẩn, đây mới là chứng từ
+         p1 = phiếu theo cờ `o.PhieuBHID` ghi trên đơn                              ← có thể LỆCH
+       Lệch giữa hai đường chính là ĐƠN MỒ CÔI (dòng đã bị xóa khỏi phiếu mà cờ còn) — trả về cả
+       `SoPhieuTheoCo` để màn hình chỉ thẳng ra, thay vì để người dùng tự đoán. */
+    const coPBH = await coBangPBH(pool);
+    const coDonIDsCT = coPBH
+      && (await pool.request().query(`SELECT COL_LENGTH('PhieuBanHangChiTiet','DonIDs') AS c`)).recordset[0].c != null;
     const ordersResult = await pool.request().input('mh', sql.NVarChar, maHang).query(`
       SELECT o.DonID, o.MaHangID, o.MauSacID, h.MaHang, o.ThoiGian, o.TenKhach, ms.TenMau, o.SoLuongDat, o.DonVi, o.TrangThai,
-             h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi   /* v6.21.1: từ đây cũng in được bảng kê (giá + SL quy ra Cái) */
+             h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi,  /* v6.21.1: từ đây cũng in được bảng kê (giá + SL quy ra Cái) */
+             ${coPBH ? 'p2.SoPhieu' : 'CAST(NULL AS NVARCHAR(30))'}    AS SoPhieuBH,
+             ${coPBH ? 'p2.NgayBan' : 'CAST(NULL AS DATE)'}            AS NgayPhieuBH,
+             ${coPBH ? 'p1.SoPhieu' : 'CAST(NULL AS NVARCHAR(30))'}    AS SoPhieuTheoCo,
+             ${coPBH ? 'p1.TrangThai' : 'CAST(NULL AS NVARCHAR(20))'}  AS TrangThaiPhieuTheoCo
       FROM DonKhachDatHang o
       JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
       JOIN MauSac ms ON ms.MauSacID = o.MauSacID
+      ${coPBH ? 'LEFT JOIN PhieuBanHang p1 ON p1.PhieuBHID = o.PhieuBHID' : ''}
+      ${coPBH ? `OUTER APPLY (
+        SELECT TOP 1 p.SoPhieu, p.NgayBan
+        FROM PhieuBanHangChiTiet ct JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+        WHERE p.TrangThai <> N'Đã hủy'
+          AND ( ct.DonID = o.DonID
+                ${coDonIDsCT ? "OR ',' + ISNULL(ct.DonIDs,'') + ',' LIKE '%,' + CAST(o.DonID AS NVARCHAR(20)) + ',%'" : ''} )
+        ORDER BY p.PhieuBHID DESC) p2` : ''}
       WHERE h.MaHang = @mh ORDER BY o.ThoiGian DESC`);
 
     res.json({ success: true, data: { hangInfo, colorDetail: colorDetailResult.recordset, orders: ordersResult.recordset } });
