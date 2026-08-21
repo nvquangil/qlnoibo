@@ -7757,6 +7757,441 @@ PRINT '   POST /api/doisoat/webhook/<key>';
 GO
 
 
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+/* ================================================================================================
+   PHAN BO SUNG v6.78 -> v7.22  (gop tu migration_v681 .. migration_v685)
+
+   ⚠️ QUY TAC: co migration moi thi PHAI gop luon vao file nay. Truoc day file dung o v680 nen ai cai
+   MOI bang CAI_DAT_DAY_DU.sql se THIEU HAN phan he "Phieu nhap kho hang hoa" (bang PhieuNhapKhoHang)
+   va bo view ton kho moi -> chay backend la loi "Invalid object name" ngay man The kho.
+
+   Tat ca cac khoi duoi day IDEMPOTENT (chay lai nhieu lan khong sao) va giu NGUYEN VAN noi dung cua
+   file migration tuong ung, de con doi chieu duoc voi ban da chay tren may dang van hanh.
+   ================================================================================================ */
+
+
+
+/* ================== migration_v681.sql ================== */
+
+/* ================================================================================================
+   migration_v681.sql   (v6.78)
+   PHIEU NHAP KHO HANG HOA - trong phan he "The kho hang hoa".
+
+   TRUOC DAY ton kho THANH PHAM tang bang 2 duong, ca hai deu KHONG co chung tu:
+     (a) Go thang so vao o "Nhap" luc tao/sua the kho  (khohang.js)
+     (b) Ghi nhan cong doan cuoi o Quan ly san xuat     (qlsx.js -> NhapCai += ...)
+   => Khong tra duoc "lo hang nay nhap ngay nao, cua ai, gia bao nhieu". Nhap sai chi biet sua tay
+      lai con so, khong co gi de doi chieu.
+
+   NAY: co PHIEU NHAP KHO dung nghia, 2 loai:
+     - Nhap tu NHA CUNG CAP   : hang mua ngoai. Co don gia -> TANG CONG NO PHAI TRA cho NCC.
+     - Nhap tu NHA SAN XUAT   : hang xuong minh lam ra, gan LENH SX. KHONG sinh cong no.
+   Ma hang chua co trong danh muc thi tao luon khi lap phieu (khong bat sang man Danh muc roi quay lai).
+
+   ⚠️ CONG NO NCC: them nguon nay PHAI sua DONG BO 2 ham trong congno.js (congNoNCC + soChiTietNCC).
+      Repo da tung lech vi co 2 ban tinh cong no song song.
+   ================================================================================================ */
+
+/* ---------------- 1. Phieu nhap kho (dau phieu) ---------------- */
+IF OBJECT_ID('PhieuNhapKhoHang', 'U') IS NULL
+BEGIN
+  CREATE TABLE PhieuNhapKhoHang (
+    PhieuNKID   INT IDENTITY(1,1) PRIMARY KEY,
+    SoPhieu     NVARCHAR(30)  NOT NULL UNIQUE,       -- NK + yy + 4 so, vd NK260001
+    NgayNhap    DATE          NOT NULL,
+    -- 'NhaCungCap' = mua ngoai (co cong no) | 'SanXuat' = xuong minh lam ra (khong cong no)
+    LoaiNhap    NVARCHAR(20)  NOT NULL DEFAULT N'NhaCungCap',
+    NCC_ID      INT           NULL,                  -- chi dung khi LoaiNhap = 'NhaCungCap'
+    DonHangID   INT           NULL,                  -- lenh SX, chi dung khi LoaiNhap = 'SanXuat'
+    SoHoaDon    NVARCHAR(50)  NULL,
+    NgayHoaDon  DATE          NULL,
+    TongSLCai   INT           NULL DEFAULT 0,
+    TongTien    DECIMAL(18,2) NULL DEFAULT 0,        -- = SUM(SoLuong * DonGia); 0 khi nhap tu SX
+    TrangThai   NVARCHAR(20)  NOT NULL DEFAULT N'Hoàn thành',   -- Hoàn thành / Đã hủy
+    GhiChu      NVARCHAR(500) NULL,
+    NguoiTaoID  INT           NULL,
+    CreatedAt   DATETIME2     NOT NULL DEFAULT SYSDATETIME(),
+    CONSTRAINT FK_PhieuNKH_NCC  FOREIGN KEY (NCC_ID)     REFERENCES NhaCungCap(NCC_ID),
+    CONSTRAINT FK_PhieuNKH_Don  FOREIGN KEY (DonHangID)  REFERENCES DonHangSanXuat(DonHangID),
+    CONSTRAINT FK_PhieuNKH_User FOREIGN KEY (NguoiTaoID) REFERENCES Users(UserID)
+  );
+  CREATE INDEX IX_PhieuNhapKhoHang_Ngay ON PhieuNhapKhoHang(NgayNhap);
+  PRINT '  + Da tao bang PhieuNhapKhoHang';
+END
+ELSE PRINT '  = PhieuNhapKhoHang da co, bo qua';
+GO
+
+/* ---------------- 2. Dong hang cua phieu ---------------- */
+IF OBJECT_ID('PhieuNhapKhoHangChiTiet', 'U') IS NULL
+BEGIN
+  CREATE TABLE PhieuNhapKhoHangChiTiet (
+    ID          INT IDENTITY(1,1) PRIMARY KEY,
+    PhieuNKID   INT           NOT NULL,
+    MaHangID    INT           NOT NULL,
+    MauSacID    INT           NOT NULL,
+    SoLuong     DECIMAL(14,2) NOT NULL,              -- so nguoi dung go, theo DonVi ben duoi
+    DonVi       NVARCHAR(20)  NULL,
+    /* SoLuongChinh = quy ve DON VI CHINH cua ma hang. TheKhoChiTietMau.NhapCai luu theo don vi
+       chinh (co the la Ri), KHONG phai Cai - nham cho nay la ton kho sai gap LoaiRi lan. */
+    SoLuongChinh INT          NOT NULL,
+    DonGia      DECIMAL(14,2) NULL,                  -- chi nhap tu NCC moi co gia
+    ThanhTien   DECIMAL(18,2) NULL,
+    GhiChu      NVARCHAR(255) NULL,
+    CONSTRAINT FK_PNKHCT_Phieu  FOREIGN KEY (PhieuNKID) REFERENCES PhieuNhapKhoHang(PhieuNKID) ON DELETE CASCADE,
+    CONSTRAINT FK_PNKHCT_MaHang FOREIGN KEY (MaHangID)  REFERENCES TheKhoHangHoa(MaHangID),
+    CONSTRAINT FK_PNKHCT_Mau    FOREIGN KEY (MauSacID)  REFERENCES MauSac(MauSacID)
+  );
+  CREATE INDEX IX_PhieuNhapKhoHangChiTiet_Phieu ON PhieuNhapKhoHangChiTiet(PhieuNKID);
+  PRINT '  + Da tao bang PhieuNhapKhoHangChiTiet';
+END
+ELSE PRINT '  = PhieuNhapKhoHangChiTiet da co, bo qua';
+GO
+
+/* ---------------- 3. Chuc nang / phan quyen ----------------
+   Key PHAI trung key tab o frontend getTabs() (module.khohang.js) - effectivePerm tra theo
+   'KHOHANG:' + activeTab. Dat sai key = tab luon bi coi la khong co quyen. */
+MERGE ChucNang AS t
+USING (VALUES
+    ('KHOHANG','nhapkho', N'Phiếu nhập kho', 7)
+) AS s (ModuleCode, MaChucNang, TenChucNang, ThuTu)
+ON t.ModuleCode = s.ModuleCode AND t.MaChucNang = s.MaChucNang
+WHEN NOT MATCHED THEN INSERT (ModuleCode, MaChucNang, TenChucNang, ThuTu)
+     VALUES (s.ModuleCode, s.MaChucNang, s.TenChucNang, s.ThuTu);
+GO
+
+PRINT '';
+PRINT '=== migration_v681 XONG ===';
+PRINT 'NHO: Quan ly User -> Ma tran phan quyen -> cap chuc nang KHOHANG/nhapkho,';
+PRINT '     khong thi tab "Phieu nhap kho" se khong hien ra.';
+GO
+
+
+
+/* ================== migration_v682.sql ================== */
+
+/* ================================================================================================
+   migration_v682.sql   (v6.89)
+   PHIEU NHAP KHO LA MOT NGUON TON KHO RIENG — KHONG GHI VAO O "NHAP" CUA THE KHO NUA.
+
+   YEU CAU: luu phieu nhap kho thi chi (a) tao ma hang neu chua co, (b) cong cong no NCC,
+   (c) len BAO CAO TON KHO. O "Nhap" cua the kho chi do nguoi dung khai khi tao/sua the kho.
+
+   CACH LAM: ton kho hang hoa nay co HAI NGUON CONG LAI, khong chong nhau:
+     Nguon 1 - THE KHO   : TheKhoChiTietMau.NhapCai  (nguoi dung khai tay, hoac QLSX cong doan KN)
+     Nguon 2 - CHUNG TU  : PhieuNhapKhoHangChiTiet.SoLuongChinh (phieu chua huy)
+     TON = (Nguon1 + Nguon2) - XuatCai
+
+   ⚠️ VI SAO KHONG DUNG CO "DaVaoTheKho" ROI CHUYEN NGUON: chuyen nguon la lam hai buoc ghi cho cung
+   mot so luong, va bat ky lan nao lech nhau la ton kho sai am tham. O day hai nguon RỜI NHAU HAN
+   theo cau truc — phieu nhap khong bao gio ghi vao NhapCai — nen KHONG THE dem hai lan.
+
+   ⚠️ HE QUA: huy/xoa phieu nhap thi ton TU DONG giam, vi view doc thang tu bang phieu. Backend
+   KHONG con phai tru NhapCai khi huy phieu (da go trong nhapkho.js cung ban nay).
+
+   ⚠️ BUOC GO MOT LAN: cac ban v6.78-v6.88 DA cong NhapCai tu phieu nhap. Neu khong go ra thi sau khi
+   doi view se dem hai lan. Buoc 3 duoi day tru dung so da cong, co chot chong chay lai 2 lan.
+   Phep tru nay BU TRU CHINH XAC voi phan view cong vao => ton kho KHONG doi mot don vi nao.
+   ================================================================================================ */
+
+/* ---------------- 0. Chan chay khi chua co bang cua migration_v681 ----------------
+   ⚠️ RAISERROR mot minh KHONG dung script; phai SET NOEXEC ON thi cac batch sau moi bi bo qua.
+   Khong chan la buoc 3 se tru NhapCai roi ghi chot ma view chua kip tao => ton tut. */
+IF OBJECT_ID('PhieuNhapKhoHangChiTiet', 'U') IS NULL
+BEGIN
+  RAISERROR('DUNG: chua co bang PhieuNhapKhoHangChiTiet - phai chay migration_v681 truoc.', 16, 1);
+  SET NOEXEC ON;
+END
+GO
+
+/* ---------------- 1. Nguon 2: so luong tu PHIEU NHAP KHO ----------------
+   ⚠️ CREATE VIEW PHAI LA CAU DAU TIEN CUA BATCH (SQL Server Msg 111). Khong duoc de PRINT hay bat cu
+   cau nao khac dung truoc no trong cung mot batch — moi CREATE VIEW o day deu co GO ngay truoc. */
+GO
+CREATE OR ALTER VIEW vw_NhapKhoTuPhieu AS
+SELECT ct.MaHangID, ct.MauSacID, SUM(ISNULL(ct.SoLuongChinh, 0)) AS NhapTuPhieu
+FROM PhieuNhapKhoHangChiTiet ct
+JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+WHERE p.TrangThai <> N'Đã hủy'
+GROUP BY ct.MaHangID, ct.MauSacID;
+GO
+PRINT '  + vw_NhapKhoTuPhieu';
+GO
+
+/* ---------------- 2. TON THEO TUNG MAU — MOT DINH NGHIA DUY NHAT ----------------
+   Truoc day co 14 cho trong backend tu viet SUM(NhapCai - XuatCai). Them nguon thu hai ma de nguyen
+   14 ban sao la chac chan se co cho bi bo sot. Nay MOI cho doc ton deu phai JOIN view nay.
+
+   Khoa la UNION cua hai nguon: ma hang moi chi co phieu nhap thi CHUA co dong nao trong
+   TheKhoChiTietMau (chua tao the kho) — neu chi LEFT JOIN tu TheKhoChiTietMau thi hang vua nhap se
+   khong ton tai trong moi phep tinh ton. */
+GO
+CREATE OR ALTER VIEW vw_TonTheoMau AS
+SELECT k.MaHangID, k.MauSacID,
+       ISNULL(ct.SoCatCai, 0)      AS SoCatCai,
+       ISNULL(ct.NhapCai, 0)       AS NhapCai,        -- nguon 1: khai tay o the kho / QLSX
+       ISNULL(pk.NhapTuPhieu, 0)   AS NhapTuPhieu,    -- nguon 2: phieu nhap kho
+       ISNULL(ct.NhapCai, 0) + ISNULL(pk.NhapTuPhieu, 0) AS TongNhapCai,
+       ISNULL(ct.XuatCai, 0)       AS XuatCai,
+       -- TonTheKho: CHI phan cua THE KHO. Man hinh "The kho hang hoa" hien cot nay - ma chua tao the
+       -- kho thi phai la 0/trong, khong duoc muon so cua phieu nhap de trong nhu da co the kho.
+       ISNULL(ct.NhapCai, 0) - ISNULL(ct.XuatCai, 0) AS TonTheKho,
+       -- TonCai: TON THAT (gom chung tu). Dung cho bao cao ton kho, ban hang, catalogue, don khach.
+       ISNULL(ct.NhapCai, 0) + ISNULL(pk.NhapTuPhieu, 0) - ISNULL(ct.XuatCai, 0) AS TonCai,
+       ct.ID AS ChiTietID, ct.LinkAnh, ct.GhiChu
+FROM (
+  SELECT MaHangID, MauSacID FROM TheKhoChiTietMau
+  UNION
+  SELECT MaHangID, MauSacID FROM vw_NhapKhoTuPhieu
+) k
+LEFT JOIN TheKhoChiTietMau ct ON ct.MaHangID = k.MaHangID AND ct.MauSacID = k.MauSacID
+LEFT JOIN vw_NhapKhoTuPhieu pk ON pk.MaHangID = k.MaHangID AND pk.MauSacID = k.MauSacID;
+GO
+PRINT '  + vw_TonTheoMau';
+PRINT '  ! Luu y: cot vat ly TheKhoChiTietMau.TonCai (computed = NhapCai - XuatCai) TU NAY LA SO SAI';
+PRINT '    - no khong gom nguon phieu nhap kho. Moi cho tinh ton phai doc vw_TonTheoMau.TonCai.';
+GO
+
+/* ---------------- 3. GO MOT LAN phan NhapCai ma phieu nhap da cong (v6.78-v6.88) ----------------
+   Chot: CauHinhHeThong.ConfigKey = 'V682_GO_NHAPCAI_PHIEUNK'. Co chot roi thi BO QUA.
+   Phep tru nay khong lam ton doi: so tru ra dung bang so view vua cong vao.
+
+   ⚠️ HAI DIEU KIEN, thieu mot la KHONG duoc tru:
+     (a) chua co chot   -> chua tru lan nao;
+     (b) vw_TonTheoMau DA TON TAI -> chac chan co ai do cong lai phan vua tru.
+   Thieu (b) thi khi buoc 2 loi ma buoc nay van chay, ton se TUT dung bang tong phieu nhap va chot da
+   ghi nen chay lai cung khong tu sua. */
+IF NOT EXISTS (SELECT 1 FROM CauHinhHeThong WHERE ConfigKey = 'V682_GO_NHAPCAI_PHIEUNK')
+   AND OBJECT_ID('vw_TonTheoMau', 'V') IS NOT NULL
+BEGIN
+  DECLARE @soDong INT = 0, @soLuong INT = 0;
+
+  SELECT @soDong = COUNT(*), @soLuong = ISNULL(SUM(NhapTuPhieu), 0) FROM vw_NhapKhoTuPhieu;
+
+  UPDATE ct
+     SET ct.NhapCai = ct.NhapCai - pk.NhapTuPhieu
+    FROM TheKhoChiTietMau ct
+    JOIN vw_NhapKhoTuPhieu pk ON pk.MaHangID = ct.MaHangID AND pk.MauSacID = ct.MauSacID;
+
+  INSERT INTO CauHinhHeThong (ConfigKey, ConfigValue)
+  VALUES ('V682_GO_NHAPCAI_PHIEUNK',
+          CONVERT(NVARCHAR(30), SYSDATETIME(), 120) + N' | dong=' + CAST(@soDong AS NVARCHAR(20))
+          + N' | soluong=' + CAST(@soLuong AS NVARCHAR(20)));
+
+  PRINT '  + Da GO NhapCai do phieu nhap cong truoc day: ' + CAST(@soDong AS VARCHAR(20))
+        + ' dong ma-mau, tong ' + CAST(@soLuong AS VARCHAR(20)) + ' (don vi chinh).';
+  PRINT '    Ton kho KHONG doi - view vw_TonTheoMau cong lai dung so nay tu bang phieu.';
+END
+ELSE IF OBJECT_ID('vw_TonTheoMau', 'V') IS NULL
+  PRINT '  ! BO QUA buoc go NhapCai: chua tao duoc vw_TonTheoMau (xem loi o tren). CHAY LAI file nay.';
+ELSE PRINT '  = Da go NhapCai tu truoc (co chot V682_GO_NHAPCAI_PHIEUNK), bo qua';
+GO
+
+/* ---------------- 4. Dung lai vw_TonKhoHangHoa tren nguon moi ----------------
+   Giu NGUYEN bo cot cua ban v642 (nhieu noi dang doc: khohang.js GET /items + export,
+   public.js catalogue/danhmuc) va THEM TongNhapTuPhieu de man hinh phan biet duoc ton den tu dau.
+   ⚠️ Khong doi ten cot TongNhap/TongXuat/TongTon - doi la vo cac route dang chay. */
+/* QUY TAC HIEN THI CUA MAN "THE KHO HANG HOA":
+     - Ma CHUA CO THE KHO (khong co dong nao trong TheKhoChiTietMau) -> TongNhap/TongTon = 0.
+       Luu phieu nhap kho khong duoc lam ma do "tu nhien co ton" o man the kho.
+     - Ma DA CO THE KHO -> hien TON THAT, gom ca so luong tu phieu nhap kho.
+   => Dung the: bam "Tao the kho" xong thi so moi hien ra o day.
+   Cac man khac (Bao cao ton kho, Ban hang, Catalogue, Don khach) LUON dung TongTonThuc.
+   ⚠️ Phai boc qua mot bang dan xuat: khong the vua tinh MAX(...) lam co "co the kho" vua dung no
+   trong CASE cua cung mot muc SELECT. */
+GO
+CREATE OR ALTER VIEW vw_TonKhoHangHoa AS
+SELECT x.MaHangID, x.MaHang, x.TenHang, x.GiaBan, x.LoaiRi, x.AnhDaiDien,
+       x.TheKhoDanhMucID, x.TenTheKho,
+       x.LoaiHang, x.DonHangID, x.DonViCoBan, x.DonViQuyDoi, x.MaDH,
+       x.GiaAloha, x.MaBarcode, x.NhomSanPhamID, x.TenNhom,
+       x.TongSoCat, x.TongXuat, x.TongNhapTuPhieu, x.CoTheKho,
+       CASE WHEN x.CoTheKho = 1 THEN x.TongNhapThuc ELSE 0 END AS TongNhap,
+       CASE WHEN x.CoTheKho = 1 THEN x.TongTonThuc  ELSE 0 END AS TongTon,
+       x.TongNhapThuc, x.TongTonThuc
+FROM (
+  SELECT
+      h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
+      h.TheKhoDanhMucID, tk.TenTheKho,
+      h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
+      h.GiaAloha, h.MaBarcode,
+      h.NhomSanPhamID, nsp.TenNhom,
+      ISNULL(SUM(t.SoCatCai), 0)     AS TongSoCat,
+      ISNULL(SUM(t.XuatCai), 0)      AS TongXuat,
+      ISNULL(SUM(t.NhapTuPhieu), 0)  AS TongNhapTuPhieu,   -- phan den tu phieu nhap kho
+      ISNULL(SUM(t.TongNhapCai), 0)  AS TongNhapThuc,      -- the kho + phieu
+      ISNULL(SUM(t.TonCai), 0)       AS TongTonThuc,       -- ton THAT = the kho + phieu - xuat
+      MAX(CASE WHEN t.ChiTietID IS NOT NULL THEN 1 ELSE 0 END) AS CoTheKho
+  FROM TheKhoHangHoa h
+  LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
+  LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
+  LEFT JOIN vw_TonTheoMau t ON t.MaHangID = h.MaHangID
+  LEFT JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
+  GROUP BY
+      h.MaHangID, h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.AnhDaiDien,
+      h.TheKhoDanhMucID, tk.TenTheKho,
+      h.LoaiHang, h.DonHangID, h.DonViCoBan, h.DonViQuyDoi, d.MaDH,
+      h.GiaAloha, h.MaBarcode, h.NhomSanPhamID, nsp.TenNhom
+) x;
+GO
+PRINT '  + vw_TonKhoHangHoa (dung lai tren vw_TonTheoMau)';
+
+PRINT '';
+PRINT '=== migration_v682 XONG ===';
+PRINT 'PHAI pm2 restart qlnoibo (sua backend/routes: nhapkho, khohang, banhang, baocao, public).';
+PRINT 'Kiem nhanh - hai so nay phai BANG NHAU:';
+PRINT '  SELECT SUM(TongTon) FROM vw_TonKhoHangHoa;';
+PRINT '  SELECT SUM(NhapCai) - SUM(XuatCai) FROM TheKhoChiTietMau';
+PRINT '   + (SELECT SUM(NhapTuPhieu) FROM vw_NhapKhoTuPhieu);';
+GO
+SET NOEXEC OFF;
+GO
+
+
+
+/* ================== migration_v683.sql ================== */
+
+/* ================================================================================================
+   migration_v683.sql   (v6.94)
+   DANH MUC HANG HOA (MA HANG) — them chuc nang de phan quyen duoc.
+
+   ⚠️ KHONG tao bang moi. `TheKhoHangHoa` DA LA danh muc hang hoa; truoc gio chi THIEU MOT MAN HINH
+   de sua Ma hang / Ten hang, nen go sai la khong sua duoc. Tao bang `DanhMucHangHoa` rieng se thanh
+   HAI nguon su that cho cung mot thu — chac chan lech nhau.
+   File nay vi vay CHI them 1 dong ChucNang.
+
+   Khong chay file nay thi tab "Hàng hóa (mã hàng)" VAN hoat dong (effectivePerm: khong co dong cau
+   hinh rieng thi khong han che them) — chi la khong hien trong Ma tran phan quyen de chan bot ai.
+   ================================================================================================ */
+MERGE ChucNang AS t
+USING (VALUES
+    ('DANHMUC','hanghoa', N'Hàng hóa (mã hàng)', 12)
+) AS s (ModuleCode, MaChucNang, TenChucNang, ThuTu)
+ON t.ModuleCode = s.ModuleCode AND t.MaChucNang = s.MaChucNang
+WHEN NOT MATCHED THEN INSERT (ModuleCode, MaChucNang, TenChucNang, ThuTu)
+     VALUES (s.ModuleCode, s.MaChucNang, s.TenChucNang, s.ThuTu);
+GO
+
+PRINT '';
+PRINT '=== migration_v683 XONG ===';
+PRINT 'Vao Quan ly User -> Ma tran phan quyen -> cap DANHMUC/hanghoa neu muon gioi han rieng tab nay.';
+PRINT 'PHAI pm2 restart qlnoibo (sua backend/routes/danhmuc.js + utils/maHangThamChieu.js moi).';
+GO
+
+
+
+/* ================== migration_v684.sql ================== */
+
+/* ================================================================================================
+   migration_v684.sql   (v7.10)
+   QUYEN "XEM TAT CA LENH SX" — tach PHAM VI XEM khoi QUYEN GHI TIEN DO
+
+   VAN DE: tu truoc den nay "user nao thay lenh SX nao" bi quyet dinh boi bang UserCongDoan — chinh
+   la bang dung de cap QUYEN GHI TIEN DO cong doan. Mot bang ganh HAI viec:
+       - Khong tick cong doan nao  => thay TAT CA lenh SX (nhung khong ghi duoc tien do o dau)
+       - Tick vai cong doan        => chi thay lenh dang o dung cong doan do
+   Nen muon cho 1 nguoi XEM HET lenh SX ma VAN ghi tien do o 1 cong doan la KHONG THE LAM DUOC.
+
+   CACH GIAI: them 1 CHUC NANG rieng 'QLSX/xemtatca' — tick o Ma tran phan quyen la thay het,
+   khong lien quan gi den danh sach cong doan nua.
+
+   ⚠️ VI SAO PHAI THEM COT `ChucNang.MacDinhCho`:
+   Toan bo he thong chuc nang hien hanh chay theo quy uoc "KHONG co dong cau hinh = DUOC PHEP"
+   (xem middleware/auth.js:requireChucNang va users.js: `ISNULL(cp.CanView, 1)`). Neu de
+   'xemtatca' theo quy uoc do thi vua chay migration la MOI NGUOI thay het lenh SX — nguoc hoan
+   toan y muon. Con te hon: o Ma tran phan quyen no se hien TICK SAN, ai mo ra bam Luu la vo tinh
+   cap quyen cho ca nhom.
+   Vi vay them cot `MacDinhCho` (mac dinh 1 = giu nguyen hanh vi cu cho MOI chuc nang dang co);
+   rieng cac chuc nang kieu "NANG LUC MO RONG" (nhu xemtatca) dat 0 = PHAI TICK MOI CO.
+
+   Chay lai file nay nhieu lan khong sao (idempotent).
+   ================================================================================================ */
+SET NOCOUNT ON;
+GO
+
+/* --- 1. Cot MacDinhCho tren ChucNang ------------------------------------------------------------ */
+IF COL_LENGTH('ChucNang', 'MacDinhCho') IS NULL
+BEGIN
+    ALTER TABLE ChucNang ADD MacDinhCho BIT NOT NULL CONSTRAINT DF_ChucNang_MacDinhCho DEFAULT 1;
+    PRINT '  + Da them cot ChucNang.MacDinhCho (mac dinh 1 = giu nguyen hanh vi cu).';
+END
+ELSE
+    PRINT '  = Cot ChucNang.MacDinhCho da co.';
+GO
+
+/* --- 2. Chuc nang QLSX/xemtatca (MacDinhCho = 0: phai tick moi co) ------------------------------ */
+MERGE ChucNang AS t
+USING (VALUES
+    ('QLSX', 'xemtatca', N'Xem tất cả lệnh SX (mọi công đoạn)', 90, CAST(0 AS BIT))
+) AS s (ModuleCode, MaChucNang, TenChucNang, ThuTu, MacDinhCho)
+ON t.ModuleCode = s.ModuleCode AND t.MaChucNang = s.MaChucNang
+WHEN MATCHED THEN UPDATE SET TenChucNang = s.TenChucNang, MacDinhCho = s.MacDinhCho
+WHEN NOT MATCHED THEN INSERT (ModuleCode, MaChucNang, TenChucNang, ThuTu, MacDinhCho)
+     VALUES (s.ModuleCode, s.MaChucNang, s.TenChucNang, s.ThuTu, s.MacDinhCho);
+GO
+
+PRINT '';
+PRINT '=== migration_v684 XONG ===';
+PRINT 'PHAI pm2 restart qlnoibo (sua loadUserContext.js + middleware/auth.js + routes/qlsx.js + routes/users.js).';
+PRINT 'Cach dung: Quan ly User -> Ma tran phan quyen -> nhom (hoac tab "Theo tung user") ->';
+PRINT '           khoi QLSX -> tick o "Xem" cua dong "Xem tat ca lenh SX (moi cong doan)" -> Luu.';
+PRINT 'Nguoi duoc cap PHAI dang xuat / dang nhap lai (quyen cache trong session).';
+GO
+
+
+
+/* ================== migration_v685.sql ================== */
+
+/* ================================================================================================
+   migration_v685.sql   (v7.22)
+   LUONG DU LIEU HAI CHIEU: PHIEU BAN HANG  <->  CHI TIET DAT HANG
+
+   YEU CAU: sua phieu ban hang (doi mau / xoa ma hang / them ma moi) thi CHI TIET DAT HANG cua ma
+   hang do phai phan anh theo. Muon lam duoc phai PHAN BIET hai loai dong trong DonKhachDatHang:
+
+     1. DON THAT cua khach  (khach dat trong app hoac tren web)
+        -> Doi mau: don doi theo phieu. Bo khoi phieu: HOI nguoi dung (huy hay giu cho giao sau).
+     2. DON PHAN CHIEU tu phieu ban hang  (`NguonDat = 'PhieuBH'`)
+        Sinh tu dong khi mot dong phieu KHONG xuat phat tu don nao (ban thang, hoac them ma moi luc
+        sua phieu). No chi la BAN GHI PHAN CHIEU cua dong phieu, khong phai yeu cau cua khach.
+        -> Dong phieu mat thi XOA luon don nay (khong de treo, khong giu ton).
+
+   Cot `NguonDat` da co tu migration_v657 (dung cho don dat qua Web). File nay chi DAM BAO cot ton
+   tai o cac ban cai chua chay v657, va noi rong do dai neu cot dang qua ngan.
+   KHONG sua mot dong du lieu nao dang co.
+   ================================================================================================ */
+SET NOCOUNT ON;
+GO
+
+IF COL_LENGTH('DonKhachDatHang', 'NguonDat') IS NULL
+BEGIN
+    ALTER TABLE DonKhachDatHang ADD NguonDat NVARCHAR(30) NULL;
+    PRINT '  + Da them cot DonKhachDatHang.NguonDat.';
+END
+ELSE
+    PRINT '  = Cot DonKhachDatHang.NguonDat da co.';
+GO
+
+/* Do dai phai chua duoc chuoi 'PhieuBH' (7 ky tu) - cac ban cu khai NVARCHAR(10) van du, nhung neu
+   ai do khai ngan hon thi noi ra cho chac. */
+IF COL_LENGTH('DonKhachDatHang', 'NguonDat') < 20
+BEGIN
+    ALTER TABLE DonKhachDatHang ALTER COLUMN NguonDat NVARCHAR(30) NULL;
+    PRINT '  + Da noi rong NguonDat len NVARCHAR(30).';
+END
+GO
+
+PRINT '';
+PRINT '=== migration_v685 XONG ===';
+PRINT 'PHAI pm2 restart qlnoibo (sua backend/routes/banhang.js).';
+PRINT 'Tu day: moi dong phieu ban hang khong gan don se tu sinh 1 dong o Chi tiet dat hang';
+PRINT '        (NguonDat = PhieuBH, trang thai "Đã xuất hàng", KHONG tru ton lan hai).';
+PRINT 'Kiem nhanh sau khi dung mot thoi gian:';
+PRINT '  SELECT NguonDat, COUNT(*) FROM DonKhachDatHang GROUP BY NguonDat;';
+GO
+
+
 //////////////////////////////////////////////////////////////////////////////////////////////////
 PRINT '';
 PRINT '=== CAI DAT XONG. Buoc tiep: Quan ly User -> Ma tran phan quyen -> cap quyen. ===';
