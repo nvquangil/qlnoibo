@@ -663,9 +663,53 @@ async function chuanBiPhieu(pool, b, tonBu) {
 }
 
 /* GHI cac dong chi tiet + TRU TON + gan don khach dat. Dung chung boi POST va PUT (trong transaction). */
-async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
+/* v7.22 (migration_v685): cot NguonDat de phan biet DON THAT cua khach vs DON PHAN CHIEU tu phieu. */
+let __coCotNguonDat = null;
+async function coCotNguonDat(pool) {
+  if (__coCotNguonDat === null) {
+    try {
+      const r = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','NguonDat') AS c`)).recordset[0] || {};
+      __coCotNguonDat = r.c != null;
+    } catch (e) { __coCotNguonDat = false; }
+  }
+  return __coCotNguonDat;
+}
+const NGUON_PHIEU_BH = 'PhieuBH';
+
+/* v7.22 — LUONG HAI CHIEU: dong phieu KHONG gan don nao thi TU SINH mot dong o Chi tiet dat hang.
+   Vi sao: "sua phieu ban hang - them ma moi / doi mau - deu phai ghi vao chi tiet dat hang cua ma
+   hang do". Truoc day chi co chieu DON -> PHIEU; ban thang hoac them ma luc sua phieu thi Chi tiet
+   dat hang cua ma do trong tron, khong theo doi duoc ai da mua mau nao.
+   ⚠️ Don sinh ra o day KHONG duoc tru ton lan hai: dat DaTruTon = 0 va trang thai 'Đã xuất hàng'
+   (trang thai nay khong nam trong danh sach "dang giu hang" cua layHangDangGiu) — phieu la chung tu
+   tru ton duy nhat, giu dung nguyen tac v6.23. */
+async function taoDonPhanChieu(pool, tran, phieuBHID, d, tt) {
+  const coNguon = await coCotNguonDat(pool);
+  const coDaTru = await coCotDaTruTon(pool);
+  const cot = ['TenKhach', 'MaHangID', 'MauSacID', 'SoLuongDat', 'DonVi', 'TrangThai', 'PhieuBHID', 'NguoiTaoID'];
+  const val = ['@tk', '@mh', '@ms', '@sl', '@dv', "N'Đã xuất hàng'", '@p', '@u'];
+  if (coDaTru) { cot.push('DaTruTon'); val.push('0'); }
+  if (coNguon) { cot.push('NguonDat'); val.push('@ng'); }
+  if (tt.khachHangId) { cot.push('KhachHangID'); val.push('@kh'); }
+  const rq = new sql.Request(tran)
+    .input('tk', sql.NVarChar, String(tt.tenKhach || '').trim())
+    .input('mh', sql.Int, d.maHangId)
+    .input('ms', sql.Int, d.mauSacId)
+    .input('sl', sql.Int, Math.round(Number(d.soLuong) || 0))
+    .input('dv', sql.NVarChar, d.donVi || 'Cái')
+    .input('p', sql.Int, phieuBHID)
+    .input('u', sql.Int, tt.nguoiTaoID || null);
+  if (coNguon) rq.input('ng', sql.NVarChar, NGUON_PHIEU_BH);
+  if (tt.khachHangId) rq.input('kh', sql.Int, tt.khachHangId);
+  const r = await rq.query(`INSERT INTO DonKhachDatHang (${cot.join(', ')})
+                            OUTPUT INSERTED.DonID
+                            VALUES (${val.join(', ')})`);
+  return r.recordset[0].DonID;
+}
+
+async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPhieu) {
   for (const d of dong) {
-    await new sql.Request(tran)
+    const ctID = (await new sql.Request(tran)
       .input('PhieuBHID', sql.Int, phieuBHID)
       .input('MaHangID', sql.Int, d.maHangId)
       .input('MauSacID', sql.Int, d.mauSacId)
@@ -683,8 +727,24 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
       .input('GhiChu', sql.NVarChar, d.ghiChu)
       .query(`INSERT INTO PhieuBanHangChiTiet (PhieuBHID, MaHangID, MauSacID, SoLuong, DonVi, SoLuongCai,
                 SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''})
+              OUTPUT INSERTED.ID
               VALUES (@PhieuBHID, @MaHangID, @MauSacID, @SoLuong, @DonVi, @SoLuongCai,
-                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''})`);
+                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''})`)).recordset[0].ID;
+
+    /* v7.22 — CHIEU PHIEU -> DON: dong nay khong xuat phat tu don nao (ban thang, hoac vua THEM MA
+       MOI luc sua phieu) thi sinh mot dong o Chi tiet dat hang roi GAN NGUOC lai vao dong phieu.
+       Nho vay Chi tiet dat hang cua ma hang do luon tra loi duoc "mau nay ban cho ai, theo phieu nao",
+       ke ca hang ban thang khong qua dat hang. */
+    let donPhanChieuId = null;   // đơn do CHÍNH chỗ này sinh ra -> vòng "gắn đơn" phải BỎ QUA
+    if (!d.donIDs.length && d.mauSacId && thongTinPhieu) {
+      const donMoi = await taoDonPhanChieu(pool, tran, phieuBHID, d, thongTinPhieu);
+      donPhanChieuId = donMoi;
+      d.donIDs = [donMoi];   // để PUT tính "đơn còn gắn" và để cột Phiếu bán hàng dò ra được
+      await new sql.Request(tran).input('ct', sql.Int, ctID).input('don', sql.Int, donMoi)
+        .query(`UPDATE PhieuBanHangChiTiet SET DonID = @don${coDonIDs ? ', DonIDs = CAST(@don AS NVARCHAR(200))' : ''}
+                WHERE ID = @ct`);
+      console.warn('[banhang] dong %s (%s) khong co don -> da sinh don phan chieu #%s.', ctID, d.maHang, donMoi);
+    }
     /* v7.13 — GO PHAN "DON CU DA TRU TON" TRUOC KHI PHIEU TRU TON (loi TRU HAI LAN).
        Don dat TRUOC v6.23 da tru ton NGAY luc len don (`XuatCai += SL`, co v5.65). Tu v6.23 phieu ban
        hang la duong tru ton duy nhat — nhung truoc day cho nay chi doi TRANG THAI don, khong he go
@@ -698,6 +758,7 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
     const coDaTru = await coCotDaTruTon(pool);
     const donTruoc = new Map();   // v7.16: giữ bản ghi đơn TRƯỚC khi sửa, dùng lại ở vòng gắn đơn dưới
     for (const donId of d.donIDs) {
+      if (donId === donPhanChieuId) continue;   // v7.22: đơn vừa sinh, đã đúng màu/SL, chưa từng trừ tồn
       const donCu = (await new sql.Request(tran).input('don', sql.Int, donId).query(`
         SELECT o.DonID, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi,
                ${coDaTru ? 'ISNULL(o.DaTruTon, 0)' : '0'} AS DaTruTon,
@@ -718,6 +779,9 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
     /* Don khach dat lien ket -> 'Da xuat hang'. Chi nhan don CHUA co phieu va DANG CHO: neu don da
        len phieu khac roi thi rowsAffected = 0 -> throw de quay lui CA phieu (tranh tru ton 2 lan). */
     for (const donId of d.donIDs) {
+      /* v7.22: đơn PHẢN CHIẾU do chính hàm này vừa sinh đã ở 'Đã xuất hàng' và gắn phiếu sẵn — chạy
+         tiếp câu UPDATE dưới sẽ ra 0 dòng rồi ném lỗi "đã lên phiếu khác", nên phải bỏ qua. */
+      if (donId === donPhanChieuId) continue;
       /* v7.16 — ĐỒNG BỘ MÀU CỦA ĐƠN THEO DÒNG PHIẾU.
          Khách đặt màu xanh nhưng thực giao màu đen (hết xanh) thì người dùng sửa MÀU trên phiếu bán
          hàng. Trước đây chỗ này chỉ đổi trạng thái đơn: phiếu ghi đen, tồn trừ đen, nhưng ĐƠN vẫn
@@ -748,6 +812,7 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
    "xoa mau do khoi phieu roi ma chi tiet dat hang van con". */
 async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
   const dsDonGo = [];
+  const coNguon = await coCotNguonDat(pool);   // v7.22
   const ct = (await new sql.Request(tran).input('id', sql.Int, phieuBHID).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.DonID,
            ${coDonIDs ? 'ct.DonIDs' : "CAST(NULL AS NVARCHAR(200)) AS DonIDs"}, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
@@ -757,10 +822,21 @@ async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
     const slChinh = slSangDonViChinh(d.SoLuong, d.DonVi, d.DonViCoBan, d.LoaiRi, d);
     if (d.MauSacID) await ghiXuatKho(pool, tran, d.MaHangID, d.MauSacID, -slChinh);   // HOAN ton
     for (const donId of dsDonCuaDong(d)) {
+      /* v7.22 — ĐƠN PHẢN CHIẾU (`NguonDat = 'PhieuBH'`) chỉ là bản ghi phản chiếu của DÒNG PHIẾU:
+         dòng mất thì nó phải mất theo, XÓA HẲN. Nếu trả về 'Chờ xử lý' như đơn thật thì nó thành đơn
+         treo GIỮ TỒN cho một yêu cầu khách chưa từng có — sai tồn khả dụng và rác danh sách đơn. */
+      if (coNguon) {
+        const kqXoa = await new sql.Request(tran).input('don', sql.Int, donId).query(
+          `DELETE FROM DonKhachDatHang WHERE DonID = @don AND NguonDat = N'${NGUON_PHIEU_BH}'`);
+        if (kqXoa.rowsAffected[0]) {
+          console.warn('[banhang] go phieu: da XOA don phan chieu #%s (sinh tu chinh phieu nay).', donId);
+          continue;
+        }
+      }
       await new sql.Request(tran).input('don', sql.Int, donId).input('id', sql.Int, phieuBHID)
         .query(`UPDATE DonKhachDatHang SET TrangThai = N'Chờ xử lý', PhieuBHID = NULL
                 WHERE DonID = @don AND PhieuBHID = @id`);
-      dsDonGo.push(Number(donId));
+      dsDonGo.push(Number(donId));   // chỉ ĐƠN THẬT mới cần báo "đang treo" cho người dùng
     }
   }
   await new sql.Request(tran).input('id', sql.Int, phieuBHID)
@@ -828,7 +904,8 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
               VALUES (@SoPhieu, @NgayBan, @KhachHangID, @TenKhach, @SDT, @DiaChi,
                 @CKNPP, @VAT, @TongTienHang, @TienCKNPP, @TienTruocVAT, @TienVAT, @TongThanhToan,
                 @TongSLCai, @GhiChu, @NguoiTaoID)`)).recordset[0].PhieuBHID;
-    await ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs);
+    await ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs,
+      { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: user.userId });   // v7.22
     await tran.commit();
     res.json({ success: true, data: { phieuBHID, soPhieu, tongThanhToan: tong.tongThanhToan } });
   } catch (err) {
@@ -902,7 +979,8 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
                 TongTienHang=@TongTienHang, TienCKNPP=@TienCKNPP, TienTruocVAT=@TienTruocVAT,
                 TienVAT=@TienVAT, TongThanhToan=@TongThanhToan, TongSLCai=@TongSLCai, GhiChu=@GhiChu
               WHERE PhieuBHID=@id`);
-    await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs);
+    await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs,
+      { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: (req.session.user || {}).userId });   // v7.22
 
     /* v7.17 — ĐƠN KHÁCH BỊ BỎ RA KHỎI PHIẾU.
        Xóa một dòng khỏi phiếu thì đơn khách của dòng đó quay về 'Chờ xử lý' (đúng: hàng chưa giao),
@@ -947,6 +1025,7 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
   /* HOAN TON theo DON VI CHINH - phai quy lai tu SoLuong+DonVi cua dong (SoLuongCai la so CAI, dung
      cho tien; dung no de hoan se hoan gap LoaiRi lan voi hang don vi chinh = Ri). */
   const coDonIDs = await coCotDonIDs(pool);
+  const coNguonDatHuy = await coCotNguonDat(pool);   // v7.22
   const ct = (await pool.request().input('id', sql.Int, req.params.id).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.DonID, ${coDonIDs ? 'ct.DonIDs' : "CAST(NULL AS NVARCHAR(200)) AS DonIDs"}, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
     FROM PhieuBanHangChiTiet ct JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -959,6 +1038,13 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
       const slChinh = slSangDonViChinh(d.SoLuong, d.DonVi, d.DonViCoBan, d.LoaiRi, d);
       if (d.MauSacID) await ghiXuatKho(pool, tran, d.MaHangID, d.MauSacID, -slChinh);   // HOAN ton
       for (const donId of dsDonCuaDong(d)) {
+        /* v7.22: ĐƠN PHẢN CHIẾU -> chuyển 'Đã hủy' (giữ dấu vết cùng phiếu đã hủy), TUYỆT ĐỐI không
+           để về 'Chờ xử lý' vì trạng thái đó GIỮ TỒN cho một yêu cầu khách chưa từng có. */
+        if (coNguonDatHuy) {
+          const kq = await new sql.Request(tran).input('don', sql.Int, donId).query(
+            `UPDATE DonKhachDatHang SET TrangThai = N'Đã hủy' WHERE DonID = @don AND NguonDat = N'${NGUON_PHIEU_BH}'`);
+          if (kq.rowsAffected[0]) continue;
+        }
         // `AND PhieuBHID = @id`: don co the da duoc len phieu KHAC sau khi phieu nay bi huy.
         await new sql.Request(tran).input('don', sql.Int, donId).input('id', sql.Int, req.params.id)
           .query(`UPDATE DonKhachDatHang SET TrangThai = N'Chờ xử lý', PhieuBHID = NULL
@@ -985,6 +1071,7 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
     .query('SELECT COUNT(*) AS C FROM PhieuThu WHERE PhieuBHID=@id')).recordset[0].C;
   if (daThu > 0) return res.status(400).json({ success: false, message: 'Phiếu này đang có phiếu thu liên kết — xóa phiếu thu trước.' });
   const coDonIDs = await coCotDonIDs(pool);
+  const coNguonDatXoa = await coCotNguonDat(pool);   // v7.22
   const ct = (await pool.request().input('id', sql.Int, req.params.id).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.DonID, ${coDonIDs ? 'ct.DonIDs' : "CAST(NULL AS NVARCHAR(200)) AS DonIDs"}, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
     FROM PhieuBanHangChiTiet ct JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -1000,12 +1087,29 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
         const slChinh = slSangDonViChinh(d.SoLuong, d.DonVi, d.DonViCoBan, d.LoaiRi, d);
         if (d.MauSacID) await ghiXuatKho(pool, tran, d.MaHangID, d.MauSacID, -slChinh);
         for (const donId of dsDonCuaDong(d)) {
+          /* v7.22: XOA phieu -> XOA luon don PHAN CHIEU (no chi la ban ghi phan chieu cua dong phieu). */
+          if (coNguonDatXoa) {
+            const kq = await new sql.Request(tran).input('don', sql.Int, donId).query(
+              `DELETE FROM DonKhachDatHang WHERE DonID = @don AND NguonDat = N'${'PhieuBH'}'`);
+            if (kq.rowsAffected[0]) continue;
+          }
           await new sql.Request(tran).input('don', sql.Int, donId).input('id', sql.Int, req.params.id)
             .query(`UPDATE DonKhachDatHang SET TrangThai = N'Chờ xử lý', PhieuBHID = NULL
                     WHERE DonID = @don AND PhieuBHID = @id`);
         }
       }
     }
+    /* v7.22 — DỌN SẠCH THAM CHIẾU TRƯỚC KHI XÓA PHIẾU (chạy cho MỌI phiếu, kể cả phiếu đã hủy):
+         · đơn PHẢN CHIẾU của phiếu này -> XÓA (nó chỉ là bản ghi phản chiếu, không phải yêu cầu khách)
+         · đơn THẬT còn trỏ tới phiếu   -> gỡ cờ PhieuBHID
+       Không dọn thì khóa ngoại `DonKhachDatHang.PhieuBHID` chặn câu DELETE, người dùng chỉ thấy lỗi
+       "REFERENCE constraint" không hiểu vì sao. */
+    if (coNguonDatXoa) {
+      await new sql.Request(tran).input('id', sql.Int, req.params.id).query(
+        `DELETE FROM DonKhachDatHang WHERE PhieuBHID = @id AND NguonDat = N'${NGUON_PHIEU_BH}'`);
+    }
+    await new sql.Request(tran).input('id', sql.Int, req.params.id)
+      .query('UPDATE DonKhachDatHang SET PhieuBHID = NULL WHERE PhieuBHID = @id');
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query('DELETE FROM PhieuBanHang WHERE PhieuBHID=@id');   // chi tiet CASCADE
     await tran.commit();
