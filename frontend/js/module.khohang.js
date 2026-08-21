@@ -1462,7 +1462,13 @@ window.ModuleKhoHang = (function () {
     // 'Đã giao' vì lúc đó tồn kho CHƯA bị trừ.
     /* v6.23: đơn 'Đã xuất hàng' (đã có phiếu bán hàng, đã trừ tồn) KHÔNG cho đổi trạng thái tay —
        muốn quay lại thì HỦY phiếu bán hàng để hệ thống hoàn tồn đúng. */
-    if (o.TrangThai === 'Đã xuất hàng') return '<span class="empty-hint" style="padding:0;">đã có phiếu bán hàng — hủy phiếu đó nếu muốn sửa</span>';
+    /* v7.19: đơn 'Đã xuất hàng' VẪN hiện nút Hủy. Trước đây chỉ hiện dòng chữ nên ĐƠN MỒ CÔI (dòng đã
+       bị xóa khỏi phiếu nhưng cờ trên đơn còn) không còn đường nào xử lý từ giao diện — đúng ca "đã
+       xóa màu khỏi phiếu mà Thẻ kho vẫn còn màu đó cho khách". Backend mới kiểm bằng dữ liệu: đơn nào
+       thật sự còn nằm trong phiếu chưa hủy thì báo rõ số phiếu và chặn, đơn mồ côi thì cho hủy. */
+    if (o.TrangThai === 'Đã xuất hàng') {
+      return `<button class="btn small secondary act-status" data-id="${o.DonID}" data-status="Đã hủy" title="Đơn đã lên phiếu bán hàng thì hệ thống sẽ chặn và chỉ ra số phiếu; chỉ hủy được đơn không còn nằm trong phiếu nào">Đã hủy</button>`;
+    }
     const options = (o.TrangThai === 'Chờ xác nhận' ? ['Đã hủy'] : ['Chờ xử lý', 'Đã giao', 'Đã hủy']).filter(s => s !== o.TrangThai);
     return options.map(s => `<button class="btn small secondary act-status" data-id="${o.DonID}" data-status="${s}">${s}</button>`).join(' ');
   }

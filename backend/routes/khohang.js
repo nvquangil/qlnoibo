@@ -171,6 +171,30 @@ async function coBangPBH(pool) {
   }
   return __coBangPBH;
 }
+/* ================================================================================================
+   v7.19 — ĐƠN NÀY CÒN NẰM TRONG PHIẾU BÁN HÀNG NÀO KHÔNG?  (kiểm bằng DỮ LIỆU, không tin cờ trạng thái)
+   Trước đây mọi đường sửa/xóa/đổi trạng thái đơn đều chặn cứng theo `TrangThai = 'Đã xuất hàng'` hoặc
+   `PhieuBHID IS NOT NULL`. Hai cờ đó có thể LỆCH với thực tế: xóa một dòng khỏi phiếu bán hàng thì
+   dòng chi tiết mất, nhưng nếu vì lý do nào đó cờ trên đơn không được gỡ, đơn thành ĐƠN MỒ CÔI —
+   nói "đã xuất hàng" mà KHÔNG có chứng từ nào, và người dùng KHÔNG CÒN ĐƯỜNG NÀO sửa hay hủy nó
+   (giao diện bảo "hãy hủy phiếu bán hàng đó trước", nhưng phiếu đó không còn dòng của đơn này).
+   Đúng ca "đã xóa màu xanh navy khỏi phiếu mà Thẻ kho vẫn còn màu đó cho khách".
+   Hàm này trả về SỐ PHIẾU thật sự đang chứa đơn (phiếu chưa hủy), hoặc null nếu không còn ở đâu.
+   Dò cả `DonID` (1 đơn) lẫn `DonIDs` (nhiều đơn gộp 1 dòng, migration_v671).
+   ================================================================================================ */
+async function phieuBHDangChuaDon(pool, donId) {
+  if (!(await coBangPBH(pool))) return null;
+  const coDonIDs = (await pool.request().query(`SELECT COL_LENGTH('PhieuBanHangChiTiet','DonIDs') AS c`)).recordset[0].c != null;
+  const r = (await pool.request().input('don', sql.Int, donId).query(`
+    SELECT TOP 1 p.SoPhieu, p.PhieuBHID
+    FROM PhieuBanHangChiTiet ct
+    JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+    WHERE p.TrangThai <> N'Đã hủy'
+      AND ( ct.DonID = @don
+            ${coDonIDs ? "OR ',' + ISNULL(ct.DonIDs,'') + ',' LIKE '%,' + CAST(@don AS NVARCHAR(20)) + ',%'" : ''} )`)).recordset[0];
+  return r || null;
+}
+
 /* v6.71: cot TheKhoHangHoa.CongKhai (migration_v679) — cong tac HIEN/AN tung ma hang tren catalogue.
    Do truoc khi dua vao SQL: chua chay migration ma ghi thang cot chua co la HONG CA duong luu the kho. */
 let __coCongKhaiTheKho = null;
@@ -957,8 +981,17 @@ router.put('/orders/:id/status', requireAuth, requirePermission('KHOHANG', 'edit
       return res.status(400).json({ success: false,
         message: 'Đơn này chưa xuất hàng khỏi kho. Hãy dùng "🧾 Chuyển sang phiếu bán hàng" — phiếu bán hàng mới là chứng từ trừ tồn kho và ghi công nợ (từ v6.23).' });
     }
-    if (row.TrangThai === 'Đã xuất hàng') {
-      return res.status(400).json({ success: false, message: 'Đơn đã có phiếu bán hàng — muốn đổi thì hủy phiếu bán hàng đó (hệ thống sẽ hoàn tồn đúng).' });
+    /* v7.19: chặn theo DỮ LIỆU THẬT, không theo cờ. Đơn còn nằm trong phiếu chưa hủy -> chặn, nêu
+       đúng số phiếu. Đơn MỒ CÔI (cờ nói 'Đã xuất hàng' mà không phiếu nào chứa nó — thường do một
+       dòng đã bị xóa khỏi phiếu) -> CHO xử lý, và gỡ luôn cờ phiếu để dữ liệu thôi mâu thuẫn. */
+    if (row.TrangThai === 'Đã xuất hàng' || row.PhieuBHID) {
+      const pBH = await phieuBHDangChuaDon(pool, req.params.id);
+      if (pBH) {
+        return res.status(400).json({ success: false, message: `Đơn này đang nằm trong phiếu bán hàng ${pBH.SoPhieu} — muốn đổi thì hủy/sửa phiếu đó (hệ thống sẽ hoàn tồn đúng).` });
+      }
+      await pool.request().input('id', sql.Int, req.params.id)
+        .query(`UPDATE DonKhachDatHang SET PhieuBHID = NULL WHERE DonID = @id`);
+      console.warn('[khohang] don #%s la DON MO COI (co "Đã xuất hàng" nhung khong phieu nao chua) -> cho phep doi trang thai.', req.params.id);
     }
 
     await pool.request().input('id', sql.Int, req.params.id).input('s', sql.NVarChar, newStatus)
@@ -1102,12 +1135,13 @@ router.delete('/orders/:id', requireAuth, requirePermission('KHOHANG', 'delete')
     if (!cur) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn.' });
     /* v6.23: đơn đã lên PHIẾU BÁN HÀNG thì chặn trước, báo câu dễ hiểu — nếu để SQL tự nổ FK
        (PhieuBanHangChiTiet.DonID) người dùng chỉ thấy nguyên văn lỗi "REFERENCE constraint". */
-    if (await coBangPBH(pool)) {
-      const gan = (await pool.request().input('id', sql.Int, req.params.id).query(`
-        SELECT TOP 1 p.SoPhieu FROM PhieuBanHangChiTiet ct
-        JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID WHERE ct.DonID = @id`)).recordset[0];
-      if (gan) {
-        return res.status(400).json({ success: false, message: `Không xóa được: đơn này nằm trong phiếu bán hàng ${gan.SoPhieu}. Hãy xóa/hủy phiếu bán hàng đó trước.` });
+    /* v7.19: dùng chung phieuBHDangChuaDon() — dò cả cột DonIDs (dòng gộp nhiều đơn) và BỎ QUA phiếu
+       đã hủy. Bản cũ chỉ xét ct.DonID nên đơn nằm trong dòng gộp thì lọt, còn đơn thuộc phiếu ĐÃ HỦY
+       thì bị chặn oan (phiếu hủy đã hoàn tồn, không có lý gì giữ đơn lại). */
+    {
+      const pBH = await phieuBHDangChuaDon(pool, req.params.id);
+      if (pBH) {
+        return res.status(400).json({ success: false, message: `Không xóa được: đơn này nằm trong phiếu bán hàng ${pBH.SoPhieu}. Hãy xóa/hủy phiếu bán hàng đó trước.` });
       }
     }
     // v5.63: chỉ hoàn tồn khi đơn ĐÃ TRỪ TỒN (đơn khách 'Chờ xác nhận' chưa trừ -> không cộng trả).
@@ -1151,10 +1185,18 @@ router.put('/orders/:id', requireAuth, requirePermission('KHOHANG', 'edit'), req
        phiếu sẽ làm lệch cả tồn lẫn công nợ. Muốn sửa: hủy phiếu bán hàng để hệ thống hoàn tồn đúng. */
     if (String(cur.TrangThai) === 'Đã xuất hàng' || cur.PhieuBHID) {
       /* v7.16: nói rõ ĐƯỜNG SỬA thay vì chỉ chặn. Đổi MÀU là việc hay gặp nhất (khách đặt xanh, hết
-         xanh nên giao đen) — sửa ngay trên phiếu bán hàng là đủ, đơn tự đồng bộ màu theo phiếu. */
-      return res.status(400).json({ success: false, message: 'Đơn này đã có PHIẾU BÁN HÀNG (đã xuất hàng).\n\n'
-        + '• Chỉ đổi MÀU: vào Phiếu bán hàng → Sửa → đổi màu ngay trên dòng hàng (tồn kho và đơn này tự cập nhật theo).\n'
-        + '• Đổi mã hàng / số lượng: hủy phiếu bán hàng đó trước để hệ thống hoàn tồn đúng, rồi mới sửa đơn.' });
+         xanh nên giao đen) — sửa ngay trên phiếu bán hàng là đủ, đơn tự đồng bộ màu theo phiếu.
+         v7.19: chỉ chặn khi đơn THỰC SỰ còn trong một phiếu chưa hủy; đơn mồ côi thì cho sửa. */
+      const pBH = await phieuBHDangChuaDon(pool, req.params.id);
+      if (pBH) {
+        return res.status(400).json({ success: false, message: `Đơn này đang nằm trong PHIẾU BÁN HÀNG ${pBH.SoPhieu}.\n\n`
+          + '• Chỉ đổi MÀU: vào Phiếu bán hàng → Sửa → đổi màu ngay trên dòng hàng (tồn kho và đơn này tự cập nhật theo).\n'
+          + '• Đổi mã hàng / số lượng: hủy phiếu bán hàng đó trước để hệ thống hoàn tồn đúng, rồi mới sửa đơn.' });
+      }
+      await pool.request().input('id', sql.Int, req.params.id)
+        .query(`UPDATE DonKhachDatHang SET TrangThai = N'Chờ xử lý', PhieuBHID = NULL WHERE DonID = @id`);
+      cur.TrangThai = 'Chờ xử lý'; cur.PhieuBHID = null;
+      console.warn('[khohang] don #%s MO COI -> tra ve "Chờ xử lý" de sua duoc.', req.params.id);
     }
     /* v6.23 (SỬA LỖI NẶNG): điều kiện cũ là `TrangThai !== 'Đã hủy'` — sai từ v6.23 vì đơn mới KHÔNG
        trừ tồn nữa. Với đơn DaTruTon = 0, "hoàn số cũ" là hoàn một lượng chưa bao giờ bị trừ ⇒ tồn PHỒNG.
