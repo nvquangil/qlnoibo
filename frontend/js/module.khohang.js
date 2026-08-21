@@ -2796,11 +2796,14 @@ window.ModuleKhoHang = (function () {
       <div style="text-align:right;margin-bottom:8px;"><b>Số: ${escapeHtml(h.SoPhieu || '')}</b></div>
       ${h.TrangThai === 'Đã hủy' ? '<div style="text-align:center;color:#a00;">(PHIẾU ĐÃ HỦY)</div>' : ''}
       <p style="margin:2px 0;"><b>Khách hàng:</b> ${escapeHtml(h.TenKhach || '')} &nbsp;&nbsp;&nbsp; <b>SĐT:</b> ${escapeHtml(h.SDT || '')}</p>
-      <p style="margin:2px 0 8px;"><b>Địa chỉ:</b> ${escapeHtml(h.DiaChi || '')}</p>
+      ${/* v7.09: GHI CHÚ lên CÙNG HÀNG với Địa chỉ, thay vì nằm dưới khối công nợ ở cuối phiếu.
+           Ghi chú thường là thông tin giao hàng (giao giờ nào, gọi trước, hàng dễ vỡ...) nên phải
+           nằm cạnh địa chỉ để người giao đọc một lượt, không phải tìm ở cuối trang. */''}
+      <p style="margin:2px 0 8px;"><b>Địa chỉ:</b> ${escapeHtml(h.DiaChi || '')}${
+        h.GhiChu ? ` &nbsp;&nbsp;&nbsp; <b>Ghi chú:</b> ${escapeHtml(h.GhiChu)}` : ''}</p>
       ${bangChiTietBanHangHtml(ct, h, true)}
       <p style="margin:8px 0;"><b>Số tiền bằng chữ:</b> ${escapeHtml(docSoTienBangChu(h.TongThanhToan))}</p>
       ${khoiCongNoHtml(h)}
-      ${h.GhiChu ? `<p style="margin:2px 0;"><b>Ghi chú:</b> ${escapeHtml(h.GhiChu)}</p>` : ''}
       <div class="p-sign" style="display:flex;justify-content:space-between;margin-top:26px;text-align:center;">
         <div style="flex:1;"><div class="line">Khách hàng</div></div>
         <div style="flex:1;"><div class="line">Thủ kho</div></div>

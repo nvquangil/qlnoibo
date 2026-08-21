@@ -124,7 +124,28 @@ async function loadUserContext(userId) {
 
   // hiddenChucNang duoc SUY RA tu chucNangPerm (canView=false) - giu lai de tuong thich nguoc voi
   // app.js (visibleTabsOf) dang doc truong nay de an/hien tab tren menu, khong can sua app.js.
+  // TINH TRUOC khi bo sung cac chuc nang MacDinhCho=0 o duoi: chung la NANG LUC (vd QLSX/xemtatca),
+  // KHONG phai tab tren menu - dua vao day chi lam ban danh sach tab bi an.
   const hiddenChucNang = Object.keys(chucNangPerm).filter(k => chucNangPerm[k].canView === false);
+
+  /* v7.10 (migration_v684) — CHUC NANG "PHAI TICK MOI CO" (ChucNang.MacDinhCho = 0).
+     Quy uoc chung cua he thong chuc nang la "khong co dong cau hinh = DUOC PHEP" (xem ghi chu tren
+     va requireChucNang). Quy uoc do dung cho viec AN/HIEN tab, nhung SAI hoan toan voi cac chuc nang
+     kieu NANG LUC MO RONG (vd 'QLSX/xemtatca' = xem het lenh SX bat ke cong doan): mac dinh cho la
+     ai cung co, chang con y nghia gi. Nen voi cac dong MacDinhCho = 0, ta TU DIEN entry canView=false
+     khi user chua duoc cap - de moi cho tieu thu (coQuyenChucNang) doc ra "khong co quyen". */
+  if (!isAdmin) {
+    try {
+      const optIn = (await pool.request().query(
+        `SELECT ModuleCode, MaChucNang FROM ChucNang WHERE ISNULL(MacDinhCho, 1) = 0`)).recordset;
+      optIn.forEach(r => {
+        const key = r.ModuleCode + ':' + r.MaChucNang;
+        if (!chucNangPerm[key]) chucNangPerm[key] = { canView: false, canEdit: false, canDelete: false };
+      });
+    } catch (e) {
+      // Chua chay migration_v684 (chua co cot MacDinhCho) - bo qua, giu nguyen hanh vi cu.
+    }
+  }
 
   return {
     userId: u.UserID,

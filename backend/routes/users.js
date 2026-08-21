@@ -175,12 +175,26 @@ router.put('/permissions/:groupId', requireAuth, requirePermission('USERS', 'edi
 // ============ PHAN QUYEN CHI TIET THEO CHUC NANG (v5.0 - bo sung, xem migration_v5_chucnang.sql) ============
 // An/hien tung tab/man hinh con trong 1 phan he theo tung nhom quyen. Doc them ghi chu trong
 // loadUserContext.js: mac dinh (chua co dong nao trong ChucNangPermissions) = duoc xem.
+/* v7.10 (migration_v684) — `MacDinhCho` quyet dinh o TICK SAN hay KHONG khi chua co dong cau hinh.
+   Chuc nang thuong: MacDinhCho = 1 (tick san, dung nhu truoc gio). Chuc nang kieu NANG LUC MO RONG
+   (vd QLSX/xemtatca): MacDinhCho = 0 -> KHONG tick san. Neu de tick san thi chi can ai mo Ma tran
+   phan quyen ra bam Luu la MERGE se ghi CanView = 1 cho ca nhom = vo tinh cap quyen xem het lenh SX.
+   Ham nay tra ve mot manh SQL cho gia tri mac dinh, tu do doi ban cai chua chay migration_v684. */
+async function bieuThucMacDinhChucNang(pool) {
+  const r = await pool.request().query("SELECT COL_LENGTH('ChucNang','MacDinhCho') AS Co");
+  return r.recordset[0] && r.recordset[0].Co ? 'ISNULL(cn.MacDinhCho, 1)' : '1';
+}
+
 router.get('/permissions-chucnang/:groupId', requireAuth, requirePermission('USERS', 'view'), async (req, res) => {
   const pool = await getPool();
   try {
+    const macDinh = await bieuThucMacDinhChucNang(pool);
     const result = await pool.request().input('gid', sql.Int, req.params.groupId).query(`
       SELECT cn.ChucNangID, cn.ModuleCode, cn.MaChucNang, cn.TenChucNang,
-             ISNULL(cp.CanView, 1) AS CanView, ISNULL(cp.CanEdit, 1) AS CanEdit, ISNULL(cp.CanDelete, 1) AS CanDelete
+             CAST(${macDinh} AS BIT) AS MacDinhCho,
+             ISNULL(cp.CanView, ${macDinh}) AS CanView,
+             ISNULL(cp.CanEdit, ${macDinh}) AS CanEdit,
+             ISNULL(cp.CanDelete, ${macDinh}) AS CanDelete
       FROM ChucNang cn
       LEFT JOIN ChucNangPermissions cp ON cp.ChucNangID = cn.ChucNangID AND cp.GroupID = @gid
       ORDER BY cn.ModuleCode, cn.ThuTu`);
@@ -262,10 +276,14 @@ router.put('/permissions-user/:userId', requireAuth, requirePermission('USERS', 
 router.get('/permissions-chucnang-user/:userId', requireAuth, requirePermission('USERS', 'view'), async (req, res) => {
   const pool = await getPool();
   try {
+    const macDinh = await bieuThucMacDinhChucNang(pool); // v7.10: xem ghi chu o /permissions-chucnang
     const result = await pool.request().input('uid', sql.Int, req.params.userId).query(`
       SELECT cn.ChucNangID, cn.ModuleCode, cn.MaChucNang, cn.TenChucNang,
              CASE WHEN ucp.UserChucNangPermissionID IS NULL THEN 0 ELSE 1 END AS HasOverride,
-             ISNULL(ucp.CanView, 1) AS CanView, ISNULL(ucp.CanEdit, 1) AS CanEdit, ISNULL(ucp.CanDelete, 1) AS CanDelete
+             CAST(${macDinh} AS BIT) AS MacDinhCho,
+             ISNULL(ucp.CanView, ${macDinh}) AS CanView,
+             ISNULL(ucp.CanEdit, ${macDinh}) AS CanEdit,
+             ISNULL(ucp.CanDelete, ${macDinh}) AS CanDelete
       FROM ChucNang cn
       LEFT JOIN UserChucNangPermissions ucp ON ucp.ChucNangID = cn.ChucNangID AND ucp.UserID = @uid
       ORDER BY cn.ModuleCode, cn.ThuTu`);

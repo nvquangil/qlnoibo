@@ -95,4 +95,16 @@ function requireChucNangAny(moduleCode, maChucNangs) {
   };
 }
 
-module.exports = { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny };
+/* v7.10 — KIEM TRA MOT NANG LUC (chuc nang co ChucNang.MacDinhCho = 0, vd 'QLSX/xemtatca').
+   KHAC HAN requireChucNang o tren: o day "khong co dong cau hinh" = KHONG CO QUYEN (opt-in), vi
+   loadUserContext.js da tu dien entry canView=false cho cac chuc nang MacDinhCho = 0. Dung cho cac
+   quyen MO RONG pham vi (thay nhieu hon binh thuong) - mac dinh cho moi nguoi thi vo nghia.
+   Tra ve BOOLEAN (khong phai middleware) vi cho dung la giua mot route, de noi rong bo loc. */
+function coQuyenChucNang(user, moduleCode, maChucNang) {
+  if (!user) return false;
+  if (user.isAdmin) return true;
+  const cn = user.chucNangPerm && user.chucNangPerm[moduleCode + ':' + maChucNang];
+  return !!(cn && cn.canView === true);
+}
+
+module.exports = { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny, coQuyenChucNang };

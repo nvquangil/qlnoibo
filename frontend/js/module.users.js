@@ -4,6 +4,20 @@ window.ModuleUsers = (function () {
   let container, currentUser;
   let groupsCache = [], boPhanCache = [], stagesCache = [], modulesCache = [], nhanVienCache = [];
 
+  /* v7.10 (migration_v684) — CHUC NANG kieu "NANG LUC MO RONG" (ChucNang.MacDinhCho = 0, vd
+     QLSX/xemtatca = xem tat ca lenh SX). Khac cac dong con lai:
+       - KHONG tick san (mac dinh la KHONG co quyen) - phai tu tick moi duoc cap;
+       - chi o "Xem" co y nghia, "Sua"/"Xoa" khong dung den nen khoa lai cho khoi hieu nham.
+     Ban cai chua chay migration_v684 thi MacDinhCho luon = 1 -> khong dong nao la nang luc, giao
+     dien y nguyen nhu truoc. */
+  // MacDinhCho la BIT: driver tra ve true/false, nhung nhan ca 0/1 cho chac (JSON/driver co the doi kieu).
+  function laNangLuc(r) { return !!r && (r.MacDinhCho === false || r.MacDinhCho === 0); }
+  function nhanNangLuc(r) {
+    return laNangLuc(r)
+      ? ' <span style="color:#a00;font-size:11px;">(quyền mở rộng — mặc định KHÔNG có, phải tự tick ô Xem)</span>'
+      : '';
+  }
+
   function getTabs() {
     return [
       { key: 'users', label: 'Tài khoản' },
@@ -80,6 +94,9 @@ window.ModuleUsers = (function () {
             <input type="checkbox" name="groupIds" value="${g.GroupID}" ${row && row.groupIds && row.groupIds.indexOf(g.GroupID) !== -1 ? 'checked' : ''}> ${escapeHtml(g.TenNhom)}</label>`).join('')}</div>
         </div>
         <div class="form-row"><label>Công đoạn sản xuất được phép cập nhật (chỉ áp dụng cho phân hệ Quản lý sản xuất)</label>
+          ${/* v7.10: truoc day o nay ganh CA "pham vi xem lenh SX" (bo trong = xem het) nen khong the
+               "xem het ma van ghi tien do 1 cong doan". Nay da co quyen rieng QLSX/xemtatca. */''}
+          <div style="font-size:12px;color:#5f6368;margin-bottom:4px;">Muốn user <b>xem hết mọi lệnh SX</b> mà vẫn chỉ ghi tiến độ ở công đoạn của mình: giữ nguyên các ô dưới đây, rồi vào <b>Ma trận phân quyền</b> tick ô "Xem" của dòng <i>Xem tất cả lệnh SX (mọi công đoạn)</i>.</div>
           <div>${stagesCache.map(s => `<label style="display:inline-block;margin-right:14px;font-weight:normal;">
             <input type="checkbox" name="stageIds" value="${s.StageID}" ${row && row.stageIds && row.stageIds.indexOf(s.StageID) !== -1 ? 'checked' : ''}> ${escapeHtml(s.TenCongDoan)}</label>`).join('')}</div>
         </div>
@@ -220,16 +237,16 @@ window.ModuleUsers = (function () {
       rows.forEach(r => { (byModule[r.ModuleCode] = byModule[r.ModuleCode] || []).push(r); });
       holder.innerHTML = `
         <h3>2. Theo từng chức năng (Xem/Sửa/Xóa riêng cho từng màn hình con trong phân hệ đã cho xem ở trên)</h3>
-        <p style="color:#5f6368;font-size:13px;margin-top:-6px;">Mặc định mọi chức năng đều được cả 3 quyền (đã tick sẵn). Bỏ tick "Xem" = ẩn hẳn tab khỏi menu của nhóm này. Bỏ tick "Sửa"/"Xóa" = tab vẫn hiện nhưng thao tác đó bị chặn, dù phân hệ ở mục 1 vẫn cho phép (2 lớp phải cùng cho phép mới thực hiện được).</p>
+        <p style="color:#5f6368;font-size:13px;margin-top:-6px;">Mặc định mọi chức năng đều được cả 3 quyền (đã tick sẵn). Bỏ tick "Xem" = ẩn hẳn tab khỏi menu của nhóm này. Bỏ tick "Sửa"/"Xóa" = tab vẫn hiện nhưng thao tác đó bị chặn, dù phân hệ ở mục 1 vẫn cho phép (2 lớp phải cùng cho phép mới thực hiện được).<br><span style="color:#a00;">Riêng dòng ghi <b>"quyền mở rộng"</b> thì ngược lại: mặc định KHÔNG có, phải tự tick ô "Xem" mới được cấp (vd <i>Xem tất cả lệnh SX</i> — cho xem hết lệnh SX mà vẫn giữ nguyên danh sách công đoạn được ghi tiến độ).</span></p>
         ${Object.keys(byModule).map(mc => `
           <div class="card">
             <b>${escapeHtml(mc)}</b>
             <table style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
             <tbody>${byModule[mc].map(r => `<tr data-cnid="${r.ChucNangID}">
-                <td>${escapeHtml(r.TenChucNang)}</td>
+                <td>${escapeHtml(r.TenChucNang)}${nhanNangLuc(r)}</td>
                 <td><input type="checkbox" class="cn-view" ${r.CanView ? 'checked' : ''}></td>
-                <td><input type="checkbox" class="cn-edit" ${r.CanEdit ? 'checked' : ''}></td>
-                <td><input type="checkbox" class="cn-delete" ${r.CanDelete ? 'checked' : ''}></td>
+                <td><input type="checkbox" class="cn-edit" ${r.CanEdit ? 'checked' : ''} ${laNangLuc(r) ? 'disabled' : ''}></td>
+                <td><input type="checkbox" class="cn-delete" ${r.CanDelete ? 'checked' : ''} ${laNangLuc(r) ? 'disabled' : ''}></td>
               </tr>`).join('')}</tbody></table>
           </div>`).join('')}
         ${perm.canEdit ? '<button class="btn" id="btnSaveChucNang">Lưu phân quyền chức năng</button>' : ''}`;
@@ -329,12 +346,12 @@ window.ModuleUsers = (function () {
           <div class="card">
             <b>${escapeHtml(mc)}</b>
             <table style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:80px">Ghi đè</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
-            <tbody>${byModule[mc].map(r => `<tr data-cnid="${r.ChucNangID}">
-                <td>${escapeHtml(r.TenChucNang)}</td>
+            <tbody>${byModule[mc].map(r => `<tr data-cnid="${r.ChucNangID}"${laNangLuc(r) ? ' data-nangluc="1"' : ''}>
+                <td>${escapeHtml(r.TenChucNang)}${nhanNangLuc(r)}</td>
                 <td><input type="checkbox" class="cn-ov" ${r.HasOverride ? 'checked' : ''}></td>
                 <td><input type="checkbox" class="cn-view" ${r.CanView ? 'checked' : ''} ${r.HasOverride ? '' : 'disabled'}></td>
-                <td><input type="checkbox" class="cn-edit" ${r.CanEdit ? 'checked' : ''} ${r.HasOverride ? '' : 'disabled'}></td>
-                <td><input type="checkbox" class="cn-delete" ${r.CanDelete ? 'checked' : ''} ${r.HasOverride ? '' : 'disabled'}></td>
+                <td><input type="checkbox" class="cn-edit" ${r.CanEdit ? 'checked' : ''} ${r.HasOverride && !laNangLuc(r) ? '' : 'disabled'}></td>
+                <td><input type="checkbox" class="cn-delete" ${r.CanDelete ? 'checked' : ''} ${r.HasOverride && !laNangLuc(r) ? '' : 'disabled'}></td>
               </tr>`).join('')}</tbody></table>
           </div>`).join('')}
         ${perm.canEdit ? '<button class="btn" id="btnSaveUserChucNang">Lưu phân quyền chức năng riêng</button>' : ''}`;
@@ -342,7 +359,11 @@ window.ModuleUsers = (function () {
       holder.querySelectorAll('tbody tr[data-cnid]').forEach(tr => {
         const ov = tr.querySelector('.cn-ov');
         ov.addEventListener('change', () => {
-          ['.cn-view', '.cn-edit', '.cn-delete'].forEach(s => { tr.querySelector(s).disabled = !ov.checked; });
+          // v7.10: dong NANG LUC (data-nangluc) chi dung o "Xem" - Sua/Xoa phai KHOA lai ngay ca khi
+          // da tick "Ghi de", keo mo ra roi lai hieu nham la co y nghia.
+          const nangLuc = tr.dataset.nangluc === '1';
+          tr.querySelector('.cn-view').disabled = !ov.checked;
+          ['.cn-edit', '.cn-delete'].forEach(s => { tr.querySelector(s).disabled = !ov.checked || nangLuc; });
         });
       });
 

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { sql, getPool } = require('../db');
-const { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny } = require('../middleware/auth');
+const { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny, coQuyenChucNang } = require('../middleware/auth');
 const { checkOverdueOrders } = require('../utils/checkOverdue');
 const { notifyStageUsers } = require('./notifications');
 
@@ -190,7 +190,14 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
   // loc con 0 dong (mang rong .indexOf(...) luon la -1 voi moi don) - danh sach trong khong nghia ly gi
   // vi ho khong bi gioi han o 1 cong doan nao ca, nen phai duoc thay TOAN BO thay vi thay trong. Nguoi
   // CO duoc phan cong (VD to Cat/May) van chi thay dung don hang o cong doan cua ho nhu truoc, khong doi.
+  /* v7.10 — QUYEN RIENG 'QLSX/xemtatca' (migration_v684): TACH "pham vi xem" khoi "quyen ghi tien do".
+     Truoc day muon cho ai xem het lenh SX thi buoc phai BO HET cong doan cua ho (UserCongDoan rong)
+     - nhung chinh bang do la bang cap quyen GHI TIEN DO, nen xem het = mat quyen ghi, va nguoc lai.
+     Nay tick 1 o o Ma tran phan quyen la xem het, danh sach cong doan giu nguyen cho viec ghi tien do.
+     Cac dieu kien cu (isAdmin / Bo phan Quan ly, Giao nhan / khong duoc phan cong doan nao) GIU NGUYEN
+     de khong lam mat quyen cua bat ky ai dang chay on. */
   const seesAll = user.isAdmin || user.boPhan === 'Quản lý' || user.boPhan === 'Giao nhận'
+    || coQuyenChucNang(user, 'QLSX', 'xemtatca')
     || !Array.isArray(user.congDoanIds) || user.congDoanIds.length === 0;
   // v5.9: doi tu so sanh TEN cong doan (user.congDoan, mang chuoi) sang StageID (user.congDoanIds, xem
   // loadUserContext.js) - truoc day doi ten 1 cong doan trong Danh muc se khien user dang duoc phan cong
