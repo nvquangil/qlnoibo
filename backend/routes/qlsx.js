@@ -4,6 +4,7 @@ const XLSX = require('xlsx');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny, coQuyenChucNang } = require('../middleware/auth');
 const { checkOverdueOrders } = require('../utils/checkOverdue');
+const { raSoatXoaDonHang, cauBaoChan } = require('../utils/donHangThamChieu');   // v7.11: xoa lenh SX
 const { notifyStageUsers } = require('./notifications');
 
 const router = express.Router();
@@ -1006,11 +1007,37 @@ router.delete('/orders/:maDH', requireAuth, requirePermission('QLSX', 'delete'),
     const pool = await getPool();
     const order = await getOrderByMaDH(pool, req.params.maDH);
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
-    await pool.request().input('id', sql.Int, order.DonHangID).query('DELETE FROM DonHangSanXuat WHERE DonHangID=@id');
+
+    /* v7.11 — TRUOC DAY: `DELETE FROM DonHangSanXuat` roi bat exception, tra ve 1 cau chung chung.
+       Hau qua: lenh VUA RA XONG, CHUA BAT DAU gi cung khong xoa duoc — chi can 1 dong `ChiDinhVaiSX`
+       (Chi dinh vai SX khai ngay luc ra lenh) hay 1 dong `ThongBao` ("co lenh SX moi") la khoa ngoai
+       NO ACTION chan lai, ma nguoi dung khong biet vuong o dau. 17 bang con da ON DELETE CASCADE,
+       chi 7 bang la NO ACTION -> tach lam 2 nhom: du lieu CUA CHINH LENH thi xoa kem, NGHIEP VU KHAC
+       (phieu xuat vai / xuat vat tu / phu kien / nhap kho / the kho) thi CHAN VA NOI RO ten + so dong.
+       Dò khoa ngoai luc chay, khong liet ke ten bang bang tay - xem utils/donHangThamChieu.js. */
+    const { chan, xoaKem } = await raSoatXoaDonHang(pool, order.DonHangID);
+    if (chan.length) return res.status(400).json({ success: false, message: cauBaoChan(chan) });
+
+    const tran = new sql.Transaction(pool);
+    await tran.begin();
+    try {
+      for (const f of xoaKem) {
+        await new sql.Request(tran).input('id', sql.Int, order.DonHangID)
+          .query(`DELETE FROM ${f.bang} WHERE ${f.cot} = @id`);
+      }
+      await new sql.Request(tran).input('id', sql.Int, order.DonHangID)
+        .query('DELETE FROM DonHangSanXuat WHERE DonHangID=@id');
+      await tran.commit();
+    } catch (e) {
+      await tran.rollback();
+      throw e;
+    }
     res.json({ success: true });
   } catch (err) {
     console.error(err);
-    res.status(400).json({ success: false, message: 'Không thể xóa (lệnh đã có Thẻ kho hàng hóa, xuất vải hoặc dữ liệu liên kết khác).' });
+    // Con vuong bang MOI chua co trong phan loai -> in ra loi that (co ten rang buoc) de sua tiep,
+    // thay vi cau chung chung khong lan ra duoc nguyen nhan nhu truoc.
+    res.status(400).json({ success: false, message: 'Không thể xóa lệnh SX: ' + err.message });
   }
 });
 
