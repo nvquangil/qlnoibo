@@ -742,8 +742,12 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs) {
   }
 }
 /* GO 1 phieu: hoan ton theo chi tiet dang co + tra cac don ve 'Cho xu ly' + xoa chi tiet.
-   Dung khi SUA phieu (go roi ghi lai) - cung logic voi Huy phieu nen khong the lech nhau. */
+   Dung khi SUA phieu (go roi ghi lai) - cung logic voi Huy phieu nen khong the lech nhau.
+   v7.17: TRA VE danh sach DonID vua go, de PUT biet don nao KHONG duoc gan lai (dong bi xoa khoi
+   phieu) ma bao cho nguoi dung - truoc day don do quay ve 'Chờ xử lý' AM THAM, van GIU hang, nen
+   "xoa mau do khoi phieu roi ma chi tiet dat hang van con". */
 async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
+  const dsDonGo = [];
   const ct = (await new sql.Request(tran).input('id', sql.Int, phieuBHID).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.DonID,
            ${coDonIDs ? 'ct.DonIDs' : "CAST(NULL AS NVARCHAR(200)) AS DonIDs"}, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
@@ -756,10 +760,34 @@ async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
       await new sql.Request(tran).input('don', sql.Int, donId).input('id', sql.Int, phieuBHID)
         .query(`UPDATE DonKhachDatHang SET TrangThai = N'Chờ xử lý', PhieuBHID = NULL
                 WHERE DonID = @don AND PhieuBHID = @id`);
+      dsDonGo.push(Number(donId));
     }
   }
   await new sql.Request(tran).input('id', sql.Int, phieuBHID)
     .query('DELETE FROM PhieuBanHangChiTiet WHERE PhieuBHID = @id');
+  return dsDonGo;
+}
+
+/* v7.17: HUY don khach dat (dung khi nguoi dung xoa dong khoi phieu va chon "hủy luôn đơn").
+   Chi huy don DANG CHO va KHONG con gan phieu nao - de khong bao gio huy mat mot don dang duoc phieu
+   khac giu. Don cu (DaTruTon = 1) thi hoan ton truoc, dung nguyen tac cua PUT /orders/:id/status. */
+async function huyDonKhach(pool, tran, donId) {
+  const coDaTru = await coCotDaTruTon(pool);
+  const o = (await new sql.Request(tran).input('don', sql.Int, donId).query(`
+    SELECT o.DonID, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi, o.TrangThai, o.PhieuBHID,
+           ${coDaTru ? 'ISNULL(o.DaTruTon, 0)' : '0'} AS DaTruTon,
+           h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
+    FROM DonKhachDatHang o JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
+    WHERE o.DonID = @don`)).recordset[0];
+  if (!o || o.PhieuBHID) return false;
+  if (['Chờ xác nhận', 'Chờ xử lý'].indexOf(String(o.TrangThai)) === -1) return false;
+  if (Number(o.DaTruTon) === 1) {
+    const sl = slSangDonViChinh(o.SoLuongDat, o.DonVi, o.DonViCoBan, o.LoaiRi, o);
+    if (o.MauSacID && sl > 0) await ghiXuatKho(pool, tran, o.MaHangID, o.MauSacID, -sl);
+  }
+  await new sql.Request(tran).input('don', sql.Int, donId).query(
+    `UPDATE DonKhachDatHang SET TrangThai = N'Đã hủy'${coDaTru ? ', DaTruTon = 0' : ''} WHERE DonID = @don`);
+  return true;
 }
 
 router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', CN), async (req, res) => {
@@ -853,7 +881,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    await goChiTietPhieu(pool, tran, p.PhieuBHID, coDonIDs);
+    const dsDonGo = await goChiTietPhieu(pool, tran, p.PhieuBHID, coDonIDs);
     await new sql.Request(tran).input('id', sql.Int, p.PhieuBHID)
       .input('NgayBan', sql.Date, b.ngayBan || p.NgayBan)
       .input('KhachHangID', sql.Int, b.khachHangId || null)
@@ -875,8 +903,28 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
                 TienVAT=@TienVAT, TongThanhToan=@TongThanhToan, TongSLCai=@TongSLCai, GhiChu=@GhiChu
               WHERE PhieuBHID=@id`);
     await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs);
+
+    /* v7.17 — ĐƠN KHÁCH BỊ BỎ RA KHỎI PHIẾU.
+       Xóa một dòng khỏi phiếu thì đơn khách của dòng đó quay về 'Chờ xử lý' (đúng: hàng chưa giao),
+       NHƯNG trước đây việc này diễn ra âm thầm: người dùng thấy "đã xóa màu đó khỏi phiếu mà chi tiết
+       đặt hàng vẫn còn", và đơn đó tiếp tục GIỮ tồn nên khả dụng không nhả ra.
+       Nay: (1) đơn nào người dùng chọn HỦY LUÔN thì hủy tại đây; (2) đơn còn treo thì trả về cho
+       frontend để báo rõ ràng, không để người dùng tự phát hiện. */
+    const donDaGan = new Set();
+    dong.forEach(d => (d.donIDs || []).forEach(id => donDaGan.add(Number(id))));
+    const donHuyYeuCau = (Array.isArray(b.donHuy) ? b.donHuy : []).map(x => parseInt(x, 10)).filter(x => x > 0);
+    const donDaHuy = [];
+    for (const id of donHuyYeuCau) {
+      if (donDaGan.has(id)) continue;          // vẫn còn trong phiếu -> không hủy
+      if (await huyDonKhach(pool, tran, id)) donDaHuy.push(id);
+    }
+    const donTreo = [...new Set(dsDonGo)].filter(id => !donDaGan.has(id) && donDaHuy.indexOf(id) === -1);
+
     await tran.commit();
-    res.json({ success: true, data: { phieuBHID: p.PhieuBHID, soPhieu: p.SoPhieu, tongThanhToan: tong.tongThanhToan } });
+    res.json({ success: true, data: {
+      phieuBHID: p.PhieuBHID, soPhieu: p.SoPhieu, tongThanhToan: tong.tongThanhToan,
+      donTreo, donDaHuy
+    } });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* transaction co the da ket thuc */ }
     console.error('[banhang PUT /phieu] ', err);

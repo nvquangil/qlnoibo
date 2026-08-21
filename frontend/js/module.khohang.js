@@ -3053,6 +3053,8 @@ window.ModuleKhoHang = (function () {
       });
     }
     let dong = dongBanDau.slice();
+    // v7.17: các đơn khách người dùng chọn HỦY LUÔN khi xóa dòng khỏi phiếu (gửi kèm lúc lưu).
+    const donHuyList = [];
 
     const modal = openModal(`
       <h3>${phieuSua ? 'Sửa phiếu bán hàng ' + escapeHtml(phieuSua.header.SoPhieu)
@@ -3235,6 +3237,16 @@ window.ModuleKhoHang = (function () {
         el.querySelector('.bh-ck').addEventListener('input', e => { r.ckShop = e.target.value; tinhTong(); });
         el.querySelector('.bh-them-duoi').addEventListener('click', () => themDongMoi(r.idx));
         el.querySelector('.bh-xoa').addEventListener('click', () => {
+          /* v7.17: dòng lấy TỪ ĐƠN KHÁCH — xóa khỏi phiếu thì đơn quay về "Chờ xử lý" và VẪN GIỮ tồn.
+             Trước đây im lặng nên người dùng tưởng đã xóa hẳn ("xóa màu đó rồi mà chi tiết đặt hàng
+             vẫn còn"). Nay hỏi rõ: hủy luôn đơn, hay để đơn chờ giao lần sau. */
+          if (r.donIDs && r.donIDs.length) {
+            const ds = r.donIDs.map(x => '#' + x).join(', ');
+            const huy = confirm(`Dòng này lấy từ ${r.donIDs.length} đơn khách đặt (${ds}).\n\n`
+              + `• OK  = HỦY LUÔN các đơn đó (nhả tồn, đơn chuyển "Đã hủy").\n`
+              + `• Cancel = chỉ bỏ khỏi phiếu, đơn quay về "Chờ xử lý" và VẪN GIỮ hàng để giao lần sau.`);
+            if (huy) r.donIDs.forEach(id => { if (donHuyList.indexOf(id) === -1) donHuyList.push(id); });
+          }
           dong = dong.filter(x => x.idx !== r.idx);
           el.remove();
           if (!dong.length) modal.querySelector('.bh-chan').insertAdjacentHTML('beforebegin',
@@ -3335,13 +3347,22 @@ window.ModuleKhoHang = (function () {
         const payload = {
           ngayBan: fd.get('ngayBan'), tenKhach: fd.get('tenKhach'), sdt: fd.get('sdt'), diaChi: fd.get('diaChi'),
           khachHangId: fd.get('khachHangId') || null,
-          phanTramCKNPP: fd.get('ckNPP'), phanTramVAT: fd.get('vat'), ghiChu: fd.get('ghiChu'), dong: dongGui
+          phanTramCKNPP: fd.get('ckNPP'), phanTramVAT: fd.get('vat'), ghiChu: fd.get('ghiChu'), dong: dongGui,
+          donHuy: donHuyList   // v7.17: đơn khách chọn hủy luôn khi bỏ dòng khỏi phiếu
         };
         const r = phieuSua
           ? await apiPut('/api/banhang/phieu/' + phieuSua.header.PhieuBHID, payload)
           : await apiPost('/api/banhang/phieu', payload);
         closeModal();
         toast(`Đã lưu phiếu ${r.data.soPhieu} — tồn kho và công nợ đã tính lại (${fmtTien(r.data.tongThanhToan)} đ).`, 'success');
+        /* v7.17: NÓI RÕ số phận các đơn khách bị bỏ ra khỏi phiếu — không để người dùng tự phát hiện
+           là đơn vẫn còn treo và vẫn đang giữ tồn. */
+        if (r.data.donDaHuy && r.data.donDaHuy.length) {
+          toast(`Đã hủy ${r.data.donDaHuy.length} đơn khách (${r.data.donDaHuy.map(x => '#' + x).join(', ')}) — tồn đã nhả ra.`, 'info');
+        }
+        if (r.data.donTreo && r.data.donTreo.length) {
+          toast(`⚠️ ${r.data.donTreo.length} đơn khách (${r.data.donTreo.map(x => '#' + x).join(', ')}) đã bị bỏ khỏi phiếu, quay về "Chờ xử lý" và VẪN GIỮ hàng. Vào Đơn khách đặt hàng để sửa hoặc hủy nếu khách không lấy nữa.`, 'error');
+        }
         activeTab = 'banhang';
         render(container, currentUser);
         // In luôn cho khách ký
