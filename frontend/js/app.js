@@ -17,6 +17,8 @@ const MODULES = [
   { code: 'CONGNO', label: 'Quản lý công nợ', icon: '💵', mod: window.ModuleCongNo },
   // v6.26: báo cáo tồn kho (hàng hóa/vải/phụ kiện) + tài chính + kết quả kinh doanh
   { code: 'BAOCAO', label: 'Báo cáo kinh doanh', icon: '📊', mod: window.ModuleBaoCao },
+  // v7.23: đi tuyến thị trường (shop bán lẻ, ghé thăm GPS, lộ trình, doanh số NVKD)
+  { code: 'DMS', label: 'Đi tuyến thị trường', icon: '🛣️', mod: window.ModuleDMS },
   { code: 'HRM', label: 'Quản lý nhân sự', icon: '👥', mod: window.ModuleHRM },
   { code: 'PAYROLL', label: 'Tính lương', icon: '💰', mod: window.ModulePayroll },
   { code: 'MYPAY', label: 'Bảng lương của tôi', icon: '🧾', mod: window.ModuleMyPay },
