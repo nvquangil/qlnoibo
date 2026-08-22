@@ -716,13 +716,22 @@ async function keThuaShopNVTuDon(pool, tran, phieuBHID, dong) {
   (dong || []).forEach(d => (d.donIDs || []).forEach(i => ids.push(Number(i))));
   if (!ids.length) return;
   const r = (await new sql.Request(tran).query(`
-    SELECT TOP 1 ShopID, NhanVienID FROM DonKhachDatHang
-    WHERE DonID IN (${[...new Set(ids)].join(',')}) AND (ShopID IS NOT NULL OR NhanVienID IS NOT NULL)
-    ORDER BY DonID`)).recordset[0];
+    SELECT TOP 1 o.ShopID, o.NhanVienID, sh.NhaPhanPhoiID, kh.TenKhachHang AS TenNPP
+    FROM DonKhachDatHang o
+    LEFT JOIN ShopBanLe sh ON sh.ShopID = o.ShopID
+    LEFT JOIN KhachHang kh ON kh.KhachHangID = sh.NhaPhanPhoiID
+    WHERE o.DonID IN (${[...new Set(ids)].join(',')}) AND (o.ShopID IS NOT NULL OR o.NhanVienID IS NOT NULL)
+    ORDER BY o.DonID`)).recordset[0];
   if (!r) return;
+  /* v7.26: shop thuoc NPP nao thi KHACH HANG cua phieu la NPP do — cong no thuoc NPP, shop chi la
+     diem giao. Van dung ISNULL: nguoi lap phieu chon tay roi thi TON TRONG lua chon do. */
   await new sql.Request(tran).input('p', sql.Int, phieuBHID)
     .input('s', sql.Int, r.ShopID || null).input('n', sql.Int, r.NhanVienID || null)
-    .query(`UPDATE PhieuBanHang SET ShopID = ISNULL(ShopID, @s), NhanVienID = ISNULL(NhanVienID, @n)
+    .input('kh', sql.Int, r.NhaPhanPhoiID || null)
+    .input('tkh', sql.NVarChar, r.TenNPP || null)
+    .query(`UPDATE PhieuBanHang SET ShopID = ISNULL(ShopID, @s), NhanVienID = ISNULL(NhanVienID, @n),
+              KhachHangID = ISNULL(KhachHangID, @kh),
+              TenKhach = CASE WHEN KhachHangID IS NULL AND @tkh IS NOT NULL THEN @tkh ELSE TenKhach END
             WHERE PhieuBHID = @p`);
 }
 
@@ -1187,14 +1196,28 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
     const ids = String(req.query.ids).split(',').map(x => parseInt(x, 10)).filter(x => x > 0);
     if (ids.length) dieuKien += ` AND o.DonID IN (${ids.join(',')})`;
   }
+  /* v7.26: don lay tu DI TUYEN mang them SHOP + NHAN VIEN. Phieu ban hang phai xuat cho NHA PHAN
+     PHOI quan ly shop do (cong no thuoc NPP; shop chi la diem giao), va gan doanh so cho nhan vien
+     lay don — ca hai tu dien, khong bat nguoi lap phieu chon lai.
+     Do cot/bang truoc: ban CSDL chua chay migration_v686/v687 van len phieu binh thuong. */
+  const coDMS = (await pool.request().query(`
+    SELECT COL_LENGTH('DonKhachDatHang','ShopID') AS s, COL_LENGTH('DonKhachDatHang','NhanVienID') AS n,
+           OBJECT_ID('ShopBanLe') AS b`)).recordset[0];
+  const coShop = coDMS.s != null && coDMS.n != null && coDMS.b != null;
   const rows = (await rq.query(`
     SELECT o.DonID, o.ThoiGian, o.TenKhach, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi, o.TrangThai,
            h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi, h.AnhDaiDien, ms.TenMau,
            ISNULL((SELECT SUM(t.TonCai) FROM vw_TonTheoMau t
                    WHERE t.MaHangID = o.MaHangID AND t.MauSacID = o.MauSacID), 0) AS TonCai
+           ${coShop ? `, o.ShopID, o.NhanVienID, sh.MaShop, sh.TenShop, sh.DiaChi AS DiaChiShop,
+             sh.NhaPhanPhoiID, kh.TenKhachHang AS TenNPP, kh.SDT AS SDTNPP, kh.DiaChi AS DiaChiNPP,
+             nv.HoTen AS TenNhanVien` : ''}
     FROM DonKhachDatHang o
     JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = o.MauSacID
+    ${coShop ? `LEFT JOIN ShopBanLe sh ON sh.ShopID = o.ShopID
+    LEFT JOIN KhachHang kh ON kh.KhachHangID = sh.NhaPhanPhoiID
+    LEFT JOIN NhanVien  nv ON nv.NhanVienID  = o.NhanVienID` : ''}
     WHERE ${dieuKien}
     ORDER BY o.ThoiGian DESC, o.DonID DESC`)).recordset;
   res.json({ success: true, data: rows, tyLe: await layTyLeCK(pool) });

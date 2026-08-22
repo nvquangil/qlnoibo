@@ -2997,7 +2997,8 @@ window.ModuleKhoHang = (function () {
     const modal = openModal(`
       <h3>Chọn đơn khách đặt để lên phiếu bán hàng</h3>
       <div class="empty-hint" style="text-align:left;">Một phiếu bán hàng chỉ của <b>MỘT khách</b>. Chọn khách rồi tích các đơn cần xuất.
-        Đơn đã lên phiếu sẽ chuyển sang <b>"Đã xuất hàng"</b> và <b>trừ tồn kho</b>.</div>
+        Đơn đã lên phiếu sẽ chuyển sang <b>"Đã xuất hàng"</b> và <b>trừ tồn kho</b>.
+        ${don.some(d => d.ShopID) ? '<br>Đơn lấy từ <b>Đi tuyến</b> hiện tên <b>shop</b> ở cột Khách — khi lên phiếu, hóa đơn/công nợ tự ghi cho <b>nhà phân phối</b> quản lý shop đó.' : ''}</div>
       <div class="form-row"><label>Khách hàng</label>
         <select id="dcxKhach">${khachList.map(k =>
           `<option value="${escapeHtml(k.ten)}">${escapeHtml(k.ten)} — ${k.soDon} đơn${k.soBien > 1 ? ` (gộp ${k.soBien} cách viết tên)` : ''}</option>`).join('')}</select></div>
@@ -3040,6 +3041,14 @@ window.ModuleKhoHang = (function () {
       const ids = Array.from(modal.querySelectorAll('.dcx-chon:checked')).map(c => Number(c.dataset.id));
       if (!ids.length) { toast('Chưa tích đơn nào.', 'error'); return; }
       const chon = don.filter(d => ids.includes(d.DonID));
+      /* v7.26: CHẶN trộn nhiều nhà phân phối trong một phiếu. Đơn từ Đi tuyến ghi hóa đơn cho NPP của
+         shop; tích lẫn shop của hai NPP thì phiếu chỉ lấy được MỘT NPP -> phần còn lại ghi sai công nợ
+         mà không ai thấy. Thà chặn ngay, tách hai phiếu. */
+      const nppSet = [...new Set(chon.filter(d => d.ShopID).map(d => String(d.NhaPhanPhoiID || 'kh_le')))];
+      if (nppSet.length > 1) {
+        toast('Các đơn đang tích thuộc NHIỀU nhà phân phối khác nhau — một phiếu bán hàng chỉ ghi cho một khách. Hãy tách thành nhiều phiếu.', 'error');
+        return;
+      }
       openPhieuBanHangForm(perm, chon);
     });
   }
@@ -3057,7 +3066,19 @@ window.ModuleKhoHang = (function () {
     const dItems = (await apiGet('/api/khohang/items')).data;
     const items = dItems.tongHop || [];
     const chiTietMau = dItems.chiTiet || [];
-    const khach0 = donChon && donChon.length ? donChon[0].TenKhach : '';
+    /* v7.26 — ĐƠN LẤY TỪ ĐI TUYẾN: khách hàng của phiếu là NHÀ PHÂN PHỐI quản lý shop, không phải
+       tên shop. Lý do nghiệp vụ: shop mua qua NPP nên công nợ + hóa đơn thuộc NPP; shop chỉ là điểm
+       giao hàng (hiện riêng ở ô "Shop bán lẻ" và ghi vào phiếu). Nhân viên lấy đơn cũng tự điền.
+       Shop KHÔNG thuộc NPP nào (bán lẻ trực tiếp) thì giữ nguyên tên shop làm khách. */
+    const donDMS = (donChon || []).find(d => d.ShopID);
+    const khachNPP = donDMS && donDMS.NhaPhanPhoiID ? {
+      id: donDMS.NhaPhanPhoiID, ten: donDMS.TenNPP, sdt: donDMS.SDTNPP, diaChi: donDMS.DiaChiNPP
+    } : null;
+    const shopGiao = donDMS ? {
+      id: donDMS.ShopID, ma: donDMS.MaShop, ten: donDMS.TenShop, diaChi: donDMS.DiaChiShop
+    } : null;
+    const nvkdTuDon = donDMS && donDMS.NhanVienID ? { id: donDMS.NhanVienID, ten: donDMS.TenNhanVien } : null;
+    const khach0 = khachNPP ? khachNPP.ten : (donChon && donChon.length ? donChon[0].TenKhach : '');
     // v6.23.2: khách hàng chọn từ DANH MỤC (không gõ tự do) — kèm SĐT/địa chỉ để in thẳng lên phiếu.
     const dsKhach = await apiGet('/api/danhmuc/khachhang').then(r => r.data || []).catch(() => []);
     /* v7.24: SHOP BÁN LẺ + NHÂN VIÊN KINH DOANH (phân hệ Đi tuyến) để tính doanh số nhân viên.
@@ -3129,10 +3150,10 @@ window.ModuleKhoHang = (function () {
           <div class="form-row"><label>Khách hàng *</label>
             <div style="display:flex;gap:6px;">
               ${/* v6.25.5: khi SỬA phải chọn sẵn đúng khách của phiếu, kẻo lưu lại làm mất KhachHangID. */''}
-              <select id="bhKhachSel" style="flex:1;"><option value="">-- chọn khách trong danh mục --</option>${dsKhach.map(k => `<option value="${k.KhachHangID}" ${(phieuSua ? String(k.KhachHangID) === String(phieuSua.header.KhachHangID) : k.TenKhachHang === khach0) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}${k.SDT ? ' · ' + escapeHtml(k.SDT) : ''}</option>`).join('')}</select>
+              <select id="bhKhachSel" style="flex:1;"><option value="">-- chọn khách trong danh mục --</option>${dsKhach.map(k => `<option value="${k.KhachHangID}" ${(phieuSua ? String(k.KhachHangID) === String(phieuSua.header.KhachHangID) : (khachNPP ? String(k.KhachHangID) === String(khachNPP.id) : k.TenKhachHang === khach0)) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}${k.SDT ? ' · ' + escapeHtml(k.SDT) : ''}</option>`).join('')}</select>
               <button type="button" class="btn small secondary" id="bhThemKhach">+ Khách mới</button>
             </div>
-            <input type="hidden" name="khachHangId" id="bhKhachId" value="${phieuSua ? (phieuSua.header.KhachHangID || '') : ''}">
+            <input type="hidden" name="khachHangId" id="bhKhachId" value="${phieuSua ? (phieuSua.header.KhachHangID || '') : (khachNPP ? khachNPP.id : '')}">
             <input name="tenKhach" id="bhKhach" required readonly value="${escapeHtml(phieuSua ? phieuSua.header.TenKhach : khach0)}" placeholder="Chọn khách ở trên" style="margin-top:4px;">
             ${/* v6.69: KHÓA ô tên (readonly) — trước đây gõ sửa được sau khi đã chọn ở dropdown, lệch
                  một khoảng trắng hay một chữ hoa là công nợ tách khách đó thành hai dòng. Ô cùng vai
@@ -3140,12 +3161,13 @@ window.ModuleKhoHang = (function () {
                  Cần tên khác danh mục thì thêm khách mới ở Danh mục rồi chọn lại. */''}
             <div class="empty-hint" style="margin-top:2px;">Công nợ nhóm theo <b>TÊN KHÁCH</b> — chọn từ danh mục để tên luôn khớp.</div>
           </div>
-          <div class="form-row"><label>SĐT</label><input name="sdt" id="bhSDT" value="${escapeHtml(phieuSua ? (phieuSua.header.SDT || '') : '')}"></div>
-          <div class="form-row"><label>Địa chỉ</label><input name="diaChi" id="bhDiaChi" value="${escapeHtml(phieuSua ? (phieuSua.header.DiaChi || '') : '')}"></div>
+          <div class="form-row"><label>SĐT</label><input name="sdt" id="bhSDT" value="${escapeHtml(phieuSua ? (phieuSua.header.SDT || '') : (khachNPP ? (khachNPP.sdt || '') : ''))}"></div>
+          <div class="form-row"><label>Địa chỉ</label><input name="diaChi" id="bhDiaChi" value="${escapeHtml(phieuSua ? (phieuSua.header.DiaChi || '') : (khachNPP ? (khachNPP.diaChi || '') : ''))}"></div>
           ${dmsShop.length ? `<div class="form-row"><label>Shop bán lẻ (nếu bán cho shop)</label>
-            <select name="shopId"><option value="">— không phải shop / bán cho NPP —</option>${dmsShop.map(s2 => `<option value="${s2.ShopID}" ${phieuSua && String(phieuSua.header.ShopID) === String(s2.ShopID) ? 'selected' : ''}>${escapeHtml(s2.MaShop + ' · ' + s2.TenShop)}</option>`).join('')}</select></div>` : ''}
+            <select name="shopId"><option value="">— không phải shop / bán cho NPP —</option>${dmsShop.map(s2 => `<option value="${s2.ShopID}" ${(phieuSua ? String(phieuSua.header.ShopID) === String(s2.ShopID) : (shopGiao && String(shopGiao.id) === String(s2.ShopID))) ? 'selected' : ''}>${escapeHtml(s2.MaShop + ' · ' + s2.TenShop)}</option>`).join('')}</select>
+            ${shopGiao ? `<div class="empty-hint" style="margin-top:2px;text-align:left;">Đơn lấy tại shop <b>${escapeHtml(shopGiao.ma + ' · ' + shopGiao.ten)}</b>${shopGiao.diaChi ? ' — ' + escapeHtml(shopGiao.diaChi) : ''}. Hóa đơn/công nợ ghi cho <b>${escapeHtml(khachNPP ? khachNPP.ten : 'chính shop')}</b>.</div>` : ''}</div>` : ''}
           ${dmsNV.length ? `<div class="form-row"><label>Nhân viên kinh doanh (tính doanh số)</label>
-            <select name="nhanVienId"><option value="">— chưa gán —</option>${dmsNV.map(n => `<option value="${n.NhanVienID}" ${phieuSua && String(phieuSua.header.NhanVienID) === String(n.NhanVienID) ? 'selected' : ''}>${escapeHtml(n.HoTen)}${n.MaNhanVien ? ' · ' + escapeHtml(n.MaNhanVien) : ''}</option>`).join('')}</select>
+            <select name="nhanVienId"><option value="">— chưa gán —</option>${dmsNV.map(n => `<option value="${n.NhanVienID}" ${(phieuSua ? String(phieuSua.header.NhanVienID) === String(n.NhanVienID) : (nvkdTuDon && String(nvkdTuDon.id) === String(n.NhanVienID))) ? 'selected' : ''}>${escapeHtml(n.HoTen)}${n.MaNhanVien ? ' · ' + escapeHtml(n.MaNhanVien) : ''}</option>`).join('')}</select>
             <div class="empty-hint" style="margin-top:2px;">Đơn lấy từ <b>Đi tuyến</b> tự điền sẵn — chỉ chọn tay khi bán trực tiếp tại xưởng.</div></div>` : ''}
           ${/* v6.75: GHI CHÚ chuyển lên NGAY SAU địa chỉ (trước đây nằm tận dưới bảng dòng hàng).
                Ghi chú thường là thông tin giao hàng ("giao thứ 5", "gọi trước khi đến") — thuộc về
