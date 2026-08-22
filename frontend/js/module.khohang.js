@@ -2092,7 +2092,13 @@ window.ModuleKhoHang = (function () {
     });
   }
 
-  async function openOrderForm(allItems, chiTiet, khachList) {
+  /* v7.25: `opts` cho phep DUNG LAI form nay tu phan he khac (Di tuyen thi truong) — chi truyen san
+     shop + nhan vien, KHONG viet form thu hai. `opts = { shop, nhanVienId, gheThamID, onDone }`.
+     Co shop  -> khoi "Khach hang" thay bang dong SHOP co dinh (ten khach = ten shop).
+     Khong co -> y nguyen man hinh cu, khong ai thay khac gi. */
+  async function openOrderForm(allItems, chiTiet, khachList, opts) {
+    opts = opts || {};
+    const shop = opts.shop || null;
     /* v6.89: lọc theo TỒN THỰC (gồm phiếu nhập kho), KHÔNG theo TongTon (chỉ phần thẻ kho) — nếu
        không thì hàng vừa nhập bằng phiếu sẽ không có trong danh sách chọn để đặt/bán. */
     const items = allItems.filter(i => Number(i.TongTonThuc != null ? i.TongTonThuc : i.TongTon) > 0);
@@ -2147,14 +2153,19 @@ window.ModuleKhoHang = (function () {
     const html = `
       <h3>Lên đơn đặt hàng</h3>
       <form id="ordForm">
-        <div class="form-row"><label>Khách hàng *</label>
+        ${shop ? `<div class="form-row"><label>Shop bán lẻ</label>
+          <input name="tenKhach" id="ordKhachTen" required readonly value="${escapeHtml(shop.TenShop)}" style="background:#f8f9fa;">
+          <div class="empty-hint" style="margin-top:2px;text-align:left;">
+            <b>${escapeHtml(shop.MaShop)}</b>${shop.TenNPP ? ' · NPP: ' + escapeHtml(shop.TenNPP) : ''}${shop.DiaChi ? ' · ' + escapeHtml(shop.DiaChi) : ''}
+            <br>Đơn này được ghi cho <b>shop</b> và <b>nhân viên đi tuyến</b> — tồn kho chỉ giảm khi văn phòng xuất phiếu bán hàng.</div>
+        </div>` : `<div class="form-row"><label>Khách hàng *</label>
           <div style="display:flex;gap:6px;">
             <select id="ordKhachSel" style="flex:1;"><option value="">-- chọn khách trong danh mục --</option>${dsKhach.map(k => `<option value="${k.KhachHangID}">${escapeHtml(k.TenKhachHang)}${k.SDT ? ' · ' + escapeHtml(k.SDT) : ''}</option>`).join('')}</select>
             <button type="button" class="btn small secondary" id="ordThemKhach">+ Khách mới</button>
           </div>
           <input name="tenKhach" id="ordKhachTen" required readonly placeholder="Chọn khách ở trên" style="margin-top:4px;background:#f8f9fa;">
           <div class="empty-hint" id="ordKhachTT" style="margin-top:2px;"></div>
-        </div>
+        </div>`}
         <div id="oRows">${rowTemplate()}</div>
         <div class="empty-hint" style="${items.length ? 'display:none;' : ''}">Không còn mã hàng nào còn tồn kho để lên đơn.</div>
         <button type="button" class="btn small secondary" id="btnAddO" style="${items.length ? '' : 'display:none;'}">+ Thêm sản phẩm</button>
@@ -2168,14 +2179,15 @@ window.ModuleKhoHang = (function () {
     // v6.23.2: chọn / thêm nhanh khách hàng
     const oSel = modal.querySelector('#ordKhachSel');
     function apKhachOrder(k) {
+      if (!oSel) return;   // v7.25: che do SHOP khong co khoi chon khach
       modal.querySelector('#ordKhachTen').value = k ? k.TenKhachHang : '';
       modal.querySelector('#ordKhachTT').innerHTML = k
         ? `SĐT: ${escapeHtml(k.SDT || '—')} · Địa chỉ: ${escapeHtml(k.DiaChi || '—')}`
         : 'Chưa có trong danh mục? Bấm <b>+ Khách mới</b>.';
     }
-    oSel.addEventListener('change', () => apKhachOrder(dsKhach.find(x => String(x.KhachHangID) === oSel.value)));
+    if (oSel) oSel.addEventListener('change', () => apKhachOrder(dsKhach.find(x => String(x.KhachHangID) === oSel.value)));
     apKhachOrder(null);
-    modal.querySelector('#ordThemKhach').addEventListener('click', async () => {
+    if (oSel) modal.querySelector('#ordThemKhach').addEventListener('click', async () => {
       const k = await themKhachNhanh('');
       if (!k) return;
       dsKhach.push(k);
@@ -2269,8 +2281,16 @@ window.ModuleKhoHang = (function () {
       }
       if (orderItems.some(it => !it.mauSacId)) { toast('Có dòng chưa chọn màu.', 'error'); return; }
       try {
-        await apiPost('/api/khohang/orders', { tenKhach: fd.get('tenKhach'), items: orderItems });
-        closeModal(); toast('Đã lên đơn.', 'success'); render(container, currentUser);
+        await apiPost('/api/khohang/orders', {
+          tenKhach: fd.get('tenKhach'), items: orderItems,
+          /* v7.25: cung MOT route /api/khohang/orders cho ca hai loi vao — chi khac 3 tham so nay. */
+          shopId: shop ? shop.ShopID : undefined,
+          nhanVienId: opts.nhanVienId || undefined,
+          gheThamID: opts.gheThamID || undefined
+        });
+        closeModal();
+        toast(shop ? `Đã lên đơn cho ${shop.TenShop} — hàng được giữ, văn phòng xuất phiếu bán hàng để trừ kho.` : 'Đã lên đơn.', 'success');
+        if (opts.onDone) opts.onDone(); else render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
     });
   }
@@ -3532,5 +3552,12 @@ window.ModuleKhoHang = (function () {
     });
   }
 
-  return { render, getTabs, taoTheKhoTuPhieu };
+  /* v7.25: mo form "Len don dat hang" TU PHAN HE KHAC (Di tuyen). Tu tai san danh muc mat hang de
+     ben goi khong phai biet cau truc du lieu cua The kho. */
+  async function moFormDatHang(opts) {
+    const d = (await apiGet('/api/khohang/items')).data;
+    return openOrderForm(d.tongHop, d.chiTiet, [], opts);
+  }
+
+  return { render, getTabs, taoTheKhoTuPhieu, moFormDatHang };
 })();

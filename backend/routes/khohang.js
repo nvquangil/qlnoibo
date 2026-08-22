@@ -803,16 +803,45 @@ router.post('/orders', requireAuth, requirePermission('KHOHANG', 'create'), requ
        Do bang COL_LENGTH de ban CSDL chua chay migration_v657 van chay duoc. */
     const coCotDaTruTon = (await pool.request().query(
       `SELECT COL_LENGTH('DonKhachDatHang','DaTruTon') AS c`)).recordset[0].c != null;
+    /* v7.25 — MOT NGHIEP VU, MOT LUONG: nhan vien di tuyen (phan he DMS) dung CHINH route nay, chi
+       truyen them shopId / nhanVienId / gheThamID. Truoc do co POST /api/dms/donhang la BAN THU HAI
+       cua cung viec "len don" -> hai noi kiem ton khac nhau, som muon lech (bai hoc ghiXuatKho/cong no).
+       Do cot truoc de ban CSDL chua chay migration_v687 van len don binh thuong. */
+    const coCotShopNV = (await pool.request().query(
+      `SELECT COL_LENGTH('DonKhachDatHang','ShopID') AS s, COL_LENGTH('DonKhachDatHang','NhanVienID') AS n`)).recordset[0];
+    const coShop = coCotShopNV.s != null && coCotShopNV.n != null;
+    const shopId = coShop && req.body.shopId ? Number(req.body.shopId) : null;
+    const nvId = coShop && req.body.nhanVienId ? Number(req.body.nhanVienId) : null;
+    const donIDs = [];
     for (const { item, slGoc } of lineInfo) {
-      await pool.request()
+      const cot = ['TenKhach', 'MaHangID', 'MauSacID', 'SoLuongDat', 'DonVi', 'NguoiTaoID'];
+      const val = ['@TenKhach', '@MaHangID', '@MauSacID', '@SoLuongDat', '@DonVi', '@NguoiTaoID'];
+      if (coCotDaTruTon) { cot.push('DaTruTon'); val.push('0'); }
+      if (shopId) { cot.push('ShopID'); val.push('@ShopID'); }
+      if (nvId) { cot.push('NhanVienID'); val.push('@NhanVienID'); }
+      const rq = pool.request()
         .input('TenKhach', sql.NVarChar, tenKhach)
         .input('MaHangID', sql.Int, item.maHangId)
         .input('MauSacID', sql.Int, item.mauSacId)
         .input('SoLuongDat', sql.Int, slGoc)
         .input('DonVi', sql.NVarChar, item.donVi || 'Cái')
-        .input('NguoiTaoID', sql.Int, user.userId)
-        .query(`INSERT INTO DonKhachDatHang (TenKhach, MaHangID, MauSacID, SoLuongDat, DonVi, NguoiTaoID${coCotDaTruTon ? ', DaTruTon' : ''})
-                VALUES (@TenKhach, @MaHangID, @MauSacID, @SoLuongDat, @DonVi, @NguoiTaoID${coCotDaTruTon ? ', 0' : ''})`);
+        .input('NguoiTaoID', sql.Int, user.userId);
+      if (shopId) rq.input('ShopID', sql.Int, shopId);
+      if (nvId) rq.input('NhanVienID', sql.Int, nvId);
+      const r = await rq.query(`INSERT INTO DonKhachDatHang (${cot.join(', ')})
+                                OUTPUT INSERTED.DonID VALUES (${val.join(', ')})`);
+      donIDs.push(r.recordset[0].DonID);
+    }
+    /* Gan don dau tien vao LAN GHE THAM + danh dau 'Có đơn' — mo lan ghe la thay no ra don gi. */
+    if (req.body.gheThamID && donIDs.length && (await pool.request()
+        .query(`SELECT OBJECT_ID('GheTham') AS o`)).recordset[0].o != null) {
+      await pool.request().input('g', sql.Int, req.body.gheThamID).input('d', sql.Int, donIDs[0])
+        .query(`UPDATE GheTham SET DonID = @d, KetQua = N'Có đơn' WHERE GheThamID = @g`);
+    }
+    if (shopId) {
+      await pool.request().input('id', sql.Int, shopId)
+        .query(`UPDATE ShopBanLe SET TrangThai = N'Đang bán', UpdatedAt = SYSDATETIME()
+                WHERE ShopID = @id AND TrangThai = N'Tiềm năng'`);
     }
     /* v6.23: ĐÃ BỎ đoạn trừ tồn ở đây (trước là XuatCai += SL ngay khi lên đơn, v5.65).
        Nay đơn chỉ GIỮ hàng; tồn kho chỉ giảm khi xuất PHIẾU BÁN HÀNG (routes/banhang.js) — chỗ trừ

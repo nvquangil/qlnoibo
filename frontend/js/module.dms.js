@@ -544,7 +544,7 @@ window.ModuleDMS = (function () {
     document.getElementById('dmGoiDien').addEventListener('click', () => moForm('GoiDien'));
     document.getElementById('dmLenDon').addEventListener('click', () => {
       /* Gan don vao LAN GHE GAN NHAT trong ngay cua chinh shop do (neu co) — de mo lan ghe la thay don. */
-      formLenDon(shops, d, null).catch(err => toast('Không mở được form lên đơn: ' + err.message, 'error'));
+      lenDonTaiShop(shops, d, null).catch(err => toast('Không mở được form lên đơn: ' + err.message, 'error'));
     });
     /* Bang "don toi da lay" — nap rieng de loi o day khong lam trang ca tab. */
     (async () => {
@@ -636,109 +636,39 @@ window.ModuleDMS = (function () {
     });
   }
 
-  /* ---------- FORM LEN DON TAI SHOP (v7.24) ----------
-     Chi cho chon MA HANG + MAU con TON KHA DUNG (ton that - hang dang giu cho don khac): nhan vien
-     ngoai thi truong khong the hua ban hang khong con. Don CHI GIU HANG, ton chi giam khi xuat phieu
-     ban hang — dung nguyen tac v6.23. */
-  async function formLenDon(shops, d, shopIdMacDinh) {
-    const hb = (await apiGet('/api/dms/hangban')).data;
-    const giuMap = new Map(hb.giu.map(g => [g.MaHangID + '|' + g.MauSacID, Number(g.SoGiu) || 0]));
-    const khaDung = (mh, ms) => {
-      const m = hb.mau.find(x => String(x.MaHangID) === String(mh) && String(x.MauSacID) === String(ms));
-      return m ? Math.max(0, Number(m.TonCai || 0) - (giuMap.get(mh + '|' + ms) || 0)) : 0;
-    };
-    let idx = 0;
-    let dong = [{ idx: ++idx }];
-    const uuTien = (d.shopKeHoach || []).map(s => s.ShopID);
+  /* ---------- LEN DON TAI SHOP (v7.25) ----------
+     KHONG con form rieng: goi lai CHINH form "Len don dat hang" cua phan he The kho hang hoa
+     (window.ModuleKhoHang.moFormDatHang) va chi truyen san shop + nhan vien + lan ghe tham.
+     Vi sao: "moi nghiep vu = mot form + mot luong du lieu". Ban v7.24 tu ve mot form thu hai -> hai
+     noi kiem ton kha dung, hai kieu chon don vi (Cai/Ri), hai cach chan trung mau => som muon lech
+     nhau va nguoi dung phai hoc hai giao dien cho cung mot viec. */
+  async function lenDonTaiShop(shops, d, shopIdMacDinh) {
+    if (!window.ModuleKhoHang || !window.ModuleKhoHang.moFormDatHang) {
+      toast('Không mở được form đặt hàng (thiếu quyền phân hệ Thẻ kho hàng hóa hoặc chưa cập nhật module.khohang.js).', 'error');
+      return;
+    }
+    /* Chon shop truoc — form dat hang khong co o chon shop (no nhan shop da chon san). */
+    const uuTien = (d.shopKeHoach || []).map(s2 => s2.ShopID);
     const dsShop = [...shops].sort((a, b) => (uuTien.indexOf(b.ShopID) - uuTien.indexOf(a.ShopID)));
-    const optMH = (chon) => `<option value="">-- chọn mã hàng --</option>` + hb.items.map(it =>
-      `<option value="${it.MaHangID}" ${String(chon) === String(it.MaHangID) ? 'selected' : ''}>${escapeHtml(it.MaHang + ' · ' + it.TenHang)}</option>`).join('');
-
-    const modal = openModal(`
-      <h3>🛒 Lên đơn tại shop</h3>
-      <form id="dmFDon">
-        <div class="form-grid">
-          <div class="form-row"><label>Shop *</label><select name="shopId" required>${dsShop.map(s =>
-            `<option value="${s.ShopID}" ${String(shopIdMacDinh) === String(s.ShopID) ? 'selected' : ''}>${escapeHtml(s.MaShop + ' · ' + s.TenShop)}${uuTien.indexOf(s.ShopID) !== -1 ? ' ★ tuyến hôm nay' : ''}</option>`).join('')}</select></div>
-          <div class="form-row"><label>Ghi chú của khách</label><input name="ghiChu"></div>
-        </div>
-        <table class="phieu-ke" style="table-layout:fixed;"><thead><tr>
-          <th style="width:6%">STT</th><th style="width:34%">Mã hàng</th><th style="width:26%">Màu</th>
-          <th style="width:14%">Số lượng</th><th style="width:14%">Khả dụng</th><th style="width:6%"></th>
-        </tr></thead><tbody id="dmDonTbody"></tbody></table>
-        <button type="button" class="btn small secondary" id="dmThemDong" style="margin-top:6px;">+ Thêm dòng</button>
-        <div class="modal-actions"><button type="button" class="btn secondary" id="dmHuy">Hủy</button>
-          <button type="submit" class="btn">Lưu đơn</button></div>
-      </form>`);
-    modal.querySelector('.modal').style.maxWidth = 'min(820px, 96vw)';
-    modal.querySelector('#dmHuy').addEventListener('click', closeModal);
-
-    const veDong = () => {
-      modal.querySelector('#dmDonTbody').innerHTML = dong.map((r, i) => `<tr data-idx="${r.idx}">
-        <td>${i + 1}</td>
-        <td><select class="dd-mh" style="width:100%;">${optMH(r.maHangId)}</select></td>
-        <td><select class="dd-mau" style="width:100%;"><option value="">-- màu --</option></select></td>
-        <td><input type="number" class="dd-sl" min="1" step="1" style="width:100%;" value="${r.soLuong || ''}"></td>
-        <td class="dd-kd" style="text-align:right;"></td>
-        <td><button type="button" class="btn small danger dd-xoa" style="padding:2px 6px;">✕</button></td>
-      </tr>`).join('');
-      modal.querySelectorAll('#dmDonTbody tr').forEach(tr => {
-        const r = dong.find(x => String(x.idx) === tr.dataset.idx);
-        const selMH = tr.querySelector('.dd-mh'), selMau = tr.querySelector('.dd-mau'), oKD = tr.querySelector('.dd-kd');
-        const napMau = () => {
-          const ds = hb.mau.filter(m => String(m.MaHangID) === String(r.maHangId));
-          selMau.innerHTML = '<option value="">-- màu --</option>' + ds.map(m =>
-            `<option value="${m.MauSacID}" ${String(r.mauSacId) === String(m.MauSacID) ? 'selected' : ''}>${escapeHtml(m.TenMau)} (khả dụng ${fmtNumber(khaDung(m.MaHangID, m.MauSacID))})</option>`).join('');
-          if (r.mauSacId && !ds.some(m => String(m.MauSacID) === String(r.mauSacId))) r.mauSacId = '';
-          oKD.textContent = r.maHangId && r.mauSacId ? fmtNumber(khaDung(r.maHangId, r.mauSacId)) : '';
-        };
-        napMau();
-        selMH.addEventListener('change', e => { r.maHangId = e.target.value; r.mauSacId = ''; napMau(); });
-        selMau.addEventListener('change', e => { r.mauSacId = e.target.value; napMau(); });
-        tr.querySelector('.dd-sl').addEventListener('input', e => { r.soLuong = e.target.value; });
-        tr.querySelector('.dd-xoa').addEventListener('click', () => {
-          dong = dong.filter(x => x.idx !== r.idx);
-          if (!dong.length) dong = [{ idx: ++idx }];
-          veDong();
-        });
+    const shop = await new Promise(ok => {
+      const m = openModal(`
+        <h3>🛒 Lên đơn — chọn shop</h3>
+        <div class="form-row"><label>Shop *</label>
+          <select id="dmChonShop">${dsShop.map(s2 => `<option value="${s2.ShopID}" ${String(shopIdMacDinh) === String(s2.ShopID) ? 'selected' : ''}>${escapeHtml(s2.MaShop + ' · ' + s2.TenShop)}${uuTien.indexOf(s2.ShopID) !== -1 ? ' ★ tuyến hôm nay' : ''}</option>`).join('')}</select></div>
+        <div class="modal-actions"><button class="btn secondary" id="dmCsHuy">Hủy</button>
+          <button class="btn" id="dmCsOk">Tiếp tục</button></div>`);
+      m.querySelector('#dmCsHuy').addEventListener('click', () => { closeModal(); ok(null); });
+      m.querySelector('#dmCsOk').addEventListener('click', () => {
+        const id = m.querySelector('#dmChonShop').value;
+        closeModal(); ok(shops.find(x => String(x.ShopID) === String(id)) || null);
       });
-    };
-    modal.querySelector('#dmThemDong').addEventListener('click', () => { dong.push({ idx: ++idx }); veDong(); });
-    veDong();
-
-    modal.querySelector('#dmFDon').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      /* Doc lai TU DOM truoc khi gui — bai hoc v7.18: chi tin bien trong bo nho la co dong bi loai am tham. */
-      modal.querySelectorAll('#dmDonTbody tr').forEach(tr => {
-        const r = dong.find(x => String(x.idx) === tr.dataset.idx);
-        if (!r) return;
-        const mh = tr.querySelector('.dd-mh'), mau = tr.querySelector('.dd-mau'), sl = tr.querySelector('.dd-sl');
-        if (mh && mh.value) r.maHangId = mh.value;
-        if (mau) r.mauSacId = mau.value;
-        if (sl) r.soLuong = sl.value;
-      });
-      const gui = dong.filter(r => r.maHangId && Number(r.soLuong) > 0);
-      if (!gui.length) { toast('Chưa có dòng hàng hợp lệ (cần mã hàng + số lượng).', 'error'); return; }
-      if (gui.length < modal.querySelectorAll('#dmDonTbody tr').length) {
-        const thieu = [];
-        modal.querySelectorAll('#dmDonTbody tr').forEach((tr, i) => {
-          const r = dong.find(x => String(x.idx) === tr.dataset.idx);
-          if (!r || !r.maHangId) thieu.push(`dòng ${i + 1}: chưa chọn mã hàng`);
-          else if (!(Number(r.soLuong) > 0)) thieu.push(`dòng ${i + 1}: số lượng phải > 0`);
-        });
-        if (thieu.length) { toast('Chưa lưu — còn dòng chưa hợp lệ:\n• ' + thieu.join('\n• '), 'error'); return; }
-      }
-      const fd = new FormData(e.target);
-      try {
-        const r = await apiPost('/api/dms/donhang', {
-          shopId: fd.get('shopId'), ghiChu: fd.get('ghiChu'),
-          gheThamID: (d.daGhe.filter(g => String(g.ShopID) === String(fd.get('shopId'))).pop() || {}).GheThamID || null,
-          dong: gui.map(r2 => ({ maHangId: r2.maHangId, mauSacId: r2.mauSacId, soLuong: r2.soLuong, donVi: 'Cái' }))
-        });
-        closeModal();
-        toast(`Đã lưu đơn ${r.data.soDong} dòng — hàng được giữ, văn phòng bấm "Chuyển sang phiếu bán hàng" để xuất kho.`, 'success');
-        renderGheTham();
-      } catch (err) { toast(err.message, 'error'); }
+    });
+    if (!shop) return;
+    /* Lan ghe GAN NHAT hom nay cua chinh shop do -> don se gan vao lan ghe do (KetQua = 'Có đơn'). */
+    const ghe = (d.daGhe || []).filter(g => String(g.ShopID) === String(shop.ShopID)).pop();
+    await window.ModuleKhoHang.moFormDatHang({
+      shop, nhanVienId: d.nhanVienId, gheThamID: ghe ? ghe.GheThamID : null,
+      onDone: () => renderGheTham()
     });
   }
 
