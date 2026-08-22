@@ -111,35 +111,92 @@ window.ModuleDMS = (function () {
     return __leaflet;
   }
 
-  /* Ve ban do vao 1 the div. `diem` = [{lat, lon, nhan, mau, thuTu}]; `noiTuyen` = ve duong noi. */
+  /* ================================================================================================
+     v7.24 — TU DO NGUON TILE (anh nen ban do)
+     Trieu chung da gap: marker xanh hien ra nhung KHONG CO ANH BAN DO. Nghia la Leaflet (cdnjs) tai
+     duoc, con MAY CHU TILE bi mang chan — rat hay gap voi tile.openstreetmap.org o mang cong ty/nha
+     mang VN. Leaflet khong bao loi gi ca, chi de nen trong => nhin nhu "phan mem loi".
+     Nay: tai THU 1 anh tile that tu tung nguon, dung nguon dau tien chay duoc. Khong nguon nao chay
+     thi noi ro LA DO MANG CHAN va van liet ke diem kem link Google Maps de con dung duoc.
+     Muon dung tile rieng/proxy noi bo: them dong CauHinhHeThong `DMS_TILE_URL` (dang
+     https://may-chu/{z}/{x}/{y}.png) — backend tra ve trong /api/dms/danhmuc -> cauHinh.tileUrl.
+     ================================================================================================ */
+  const NGUON_TILE = [
+    { ten: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', thu: 'https://a.tile.openstreetmap.org/12/3272/1965.png', ghi: '© OpenStreetMap' },
+    { ten: 'OSM Đức',       url: 'https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png',  thu: 'https://a.tile.openstreetmap.de/12/3272/1965.png',  ghi: '© OpenStreetMap DE' },
+    { ten: 'Carto',         url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', thu: 'https://a.basemaps.cartocdn.com/light_all/12/3272/1965.png', ghi: '© OpenStreetMap, © CARTO' }
+  ];
+  let __tileOk = undefined;   // undefined = chua do, null = khong nguon nao duoc
+
+  function thuMotTile(url, hanMs) {
+    return new Promise(ok => {
+      const img = new Image();
+      const xong = kq => { img.onload = img.onerror = null; ok(kq); };
+      const t = setTimeout(() => xong(false), hanMs || 5000);
+      img.onload = () => { clearTimeout(t); xong(img.naturalWidth > 0); };
+      img.onerror = () => { clearTimeout(t); xong(false); };
+      img.src = url + (url.indexOf('?') === -1 ? '?' : '&') + 'v=' + Date.now();
+    });
+  }
+  async function doNguonTile() {
+    if (__tileOk !== undefined) return __tileOk;
+    const riengs = (dm.cauHinh && dm.cauHinh.tileUrl) ? [{ ten: 'Tile nội bộ', url: dm.cauHinh.tileUrl,
+      thu: dm.cauHinh.tileUrl.replace('{z}', '12').replace('{x}', '3272').replace('{y}', '1965').replace('{s}', 'a'), ghi: '' }] : [];
+    for (const n of riengs.concat(NGUON_TILE)) {
+      if (await thuMotTile(n.thu)) { __tileOk = n; return n; }
+    }
+    __tileOk = null;
+    return null;
+  }
+
+  /* Ve ban do vao 1 the div. `diem` = [{lat, lon, nhan, phu, mau, thuTu}]; `noiTuyen` = ve duong noi. */
   async function veBanDo(divId, diem, noiTuyen) {
     const box = document.getElementById(divId);
     if (!box) return;
-    const co = await napLeaflet();
     const hopLe = (diem || []).filter(d => d.lat != null && d.lon != null && !isNaN(d.lat) && !isNaN(d.lon));
-    if (!co) {
-      box.innerHTML = `<div class="empty-hint">Không tải được thư viện bản đồ (máy này không vào được cdnjs.cloudflare.com).<br>
-        Các phần khác vẫn dùng bình thường — bấm 📍 ở từng dòng để mở Google Maps.</div>`;
-      return;
-    }
+    box.innerHTML = '<div class="empty-hint">Đang tải bản đồ...</div>';
+    const coLeaflet = await napLeaflet();
+    const nguon = coLeaflet ? await doNguonTile() : null;
+
+    /* Khong ve duoc thi VAN DUNG DUOC: liet ke diem + link mo Google Maps (ca tuyen mot lan). */
+    const veThayThe = (lyDo) => {
+      const dsLink = hopLe.map((d, i) => `<div style="padding:2px 0;">
+          ${d.thuTu != null ? d.thuTu : i + 1}. ${escapeHtml(d.nhan || '')}
+          <a href="https://www.google.com/maps?q=${d.lat},${d.lon}" target="_blank" rel="noopener">📍 mở</a></div>`).join('');
+      const caTuyen = hopLe.length > 1
+        ? `<a class="btn small secondary" target="_blank" rel="noopener"
+             href="https://www.google.com/maps/dir/${hopLe.map(d => d.lat + ',' + d.lon).join('/')}">🗺️ Mở cả tuyến trên Google Maps</a>` : '';
+      box.innerHTML = `<div class="empty-hint" style="text-align:left;">
+        <b style="color:#a50e0e;">${escapeHtml(lyDo)}</b><br>
+        ${caTuyen}
+        <div style="margin-top:6px;max-height:300px;overflow:auto;">${dsLink || 'Chưa có điểm nào có toạ độ.'}</div>
+        <button type="button" class="btn small secondary dm-thu-lai" style="margin-top:6px;">Thử lại</button></div>`;
+      const btn = box.querySelector('.dm-thu-lai');
+      if (btn) btn.addEventListener('click', () => { __tileOk = undefined; __leaflet = null; veBanDo(divId, diem, noiTuyen); });
+    };
+
+    if (!coLeaflet) return veThayThe('Không tải được thư viện bản đồ — máy này không vào được cdnjs.cloudflare.com.');
+    if (!nguon) return veThayThe('Mạng của máy này CHẶN mọi máy chủ ảnh bản đồ (OpenStreetMap / Carto). Nhờ IT mở, hoặc dùng các link Google Maps dưới đây.');
     if (!hopLe.length) { box.innerHTML = '<div class="empty-hint">Chưa có điểm nào có toạ độ để vẽ lên bản đồ.</div>'; return; }
+
     box.innerHTML = '';
-    box.style.height = box.style.height || '420px';
+    if (!box.style.height) box.style.height = '420px';
     const map = L.map(box).setView([hopLe[0].lat, hopLe[0].lon], 14);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    L.tileLayer(nguon.url, { maxZoom: 19, attribution: nguon.ghi }).addTo(map);
     const bounds = [];
     hopLe.forEach((d, i) => {
-      const m = L.circleMarker([d.lat, d.lon], {
+      L.circleMarker([d.lat, d.lon], {
         radius: 9, color: d.mau || '#1a56c4', fillColor: d.mau || '#1a56c4', fillOpacity: 0.85, weight: 2
-      }).addTo(map);
-      m.bindPopup(`<b>${d.thuTu != null ? d.thuTu + '. ' : ''}${(d.nhan || '').replace(/</g, '&lt;')}</b>`
-        + (d.phu ? '<br>' + String(d.phu).replace(/</g, '&lt;') : ''));
+      }).addTo(map).bindPopup(`<b>${d.thuTu != null ? d.thuTu + '. ' : ''}${escapeHtml(d.nhan || '')}</b>`
+        + (d.phu ? '<br>' + escapeHtml(d.phu) : '')
+        + `<br><a href="https://www.google.com/maps?q=${d.lat},${d.lon}" target="_blank" rel="noopener">Mở Google Maps</a>`);
       bounds.push([d.lat, d.lon]);
     });
     if (noiTuyen && bounds.length > 1) L.polyline(bounds, { color: '#1a56c4', weight: 3, opacity: 0.6 }).addTo(map);
     if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30] });
-    setTimeout(() => map.invalidateSize(), 200);   // modal/tab vua hien -> Leaflet do sai kich thuoc
+    /* Modal/tab vua hien -> Leaflet do sai kich thuoc, ban do bi xam mot nua. Do lai sau khi ve. */
+    setTimeout(() => map.invalidateSize(), 200);
+    setTimeout(() => map.invalidateSize(), 800);
   }
 
   /* ============================== TAB 1: SHOP BAN LE ============================== */
@@ -461,6 +518,7 @@ window.ModuleDMS = (function () {
         · đã ghé <b>${d.daGhe.length}</b> điểm
         <button class="btn" id="dmCheckin" ${d.nhanVienId ? '' : 'disabled'}>📍 Check-in tại shop</button>
         <button class="btn secondary" id="dmGoiDien" ${d.nhanVienId ? '' : 'disabled'}>📞 Ghi nhận gọi điện / Zalo</button>
+        <button class="btn secondary" id="dmLenDon" ${d.nhanVienId ? '' : 'disabled'}>🛒 Lên đơn cho shop</button>
       </div>
       ${d.shopKeHoach.length ? `<h4 style="margin:6px 0;">Shop theo kế hoạch hôm nay</h4>
       <table><thead><tr><th style="width:46px">TT</th><th>Shop</th><th>Địa chỉ</th><th style="width:70px">Vị trí</th><th>Tình trạng</th></tr></thead>
@@ -478,10 +536,33 @@ window.ModuleDMS = (function () {
           <td>${g.LoaiTiepXuc === 'GheTham' ? '🚶' : (g.LoaiTiepXuc === 'GoiDien' ? '📞' : '💬')} ${escapeHtml(g.LoaiTiepXuc)}</td>
           <td>${g.KetQua ? statusBadge(g.KetQua) : ''}</td>
           <td>${g.KhoangCachM != null ? fmtNumber(g.KhoangCachM) + ' m' : ''}${g.NgoaiVung ? ' <span class="badge danger">ngoài vùng</span>' : ''}</td></tr>`;
-      }).join('') || '<tr><td colspan="6" class="empty-hint">Chưa ghi nhận điểm nào hôm nay</td></tr>'}</tbody></table>`;
+      }).join('') || '<tr><td colspan="6" class="empty-hint">Chưa ghi nhận điểm nào hôm nay</td></tr>'}</tbody></table>
+      <h4 style="margin:18px 0 6px;">Đơn tôi đã lấy (30 ngày gần nhất)</h4>
+      <div id="dmDonToi"><div class="empty-hint">Đang tải...</div></div>`;
     const moForm = (loai) => formGheTham(loai, d, shops);
     document.getElementById('dmCheckin').addEventListener('click', () => moForm('GheTham'));
     document.getElementById('dmGoiDien').addEventListener('click', () => moForm('GoiDien'));
+    document.getElementById('dmLenDon').addEventListener('click', () => {
+      /* Gan don vao LAN GHE GAN NHAT trong ngay cua chinh shop do (neu co) — de mo lan ghe la thay don. */
+      formLenDon(shops, d, null).catch(err => toast('Không mở được form lên đơn: ' + err.message, 'error'));
+    });
+    /* Bang "don toi da lay" — nap rieng de loi o day khong lam trang ca tab. */
+    (async () => {
+      const box = document.getElementById('dmDonToi');
+      try {
+        const ds = (await apiGet('/api/dms/donhang')).data;
+        box.innerHTML = `<table><thead><tr><th style="width:46px">STT</th><th>Ngày</th><th>Shop</th><th>Mã hàng</th>
+          <th>Màu</th><th>SL</th><th>Trạng thái</th><th>Phiếu bán hàng</th></tr></thead>
+          <tbody>${ds.map((o, i) => `<tr>
+            <td>${i + 1}</td><td>${fmtDate(o.ThoiGian)}</td>
+            <td>${escapeHtml(o.MaShop ? o.MaShop + ' · ' + o.TenShop : (o.TenKhach || ''))}</td>
+            <td>${escapeHtml(o.MaHang)}</td><td>${escapeHtml(o.TenMau || '')}</td>
+            <td>${fmtNumber(o.SoLuongDat)} ${escapeHtml(o.DonVi || '')}</td>
+            <td>${statusBadge(o.TrangThai)}</td>
+            <td>${o.SoPhieu ? `${escapeHtml(o.SoPhieu)}<div style="font-size:11px;color:#5f6368;">${fmtTien(o.TongThanhToan)} đ</div>` : '<span class="empty-hint" style="padding:0;">chưa lên phiếu</span>'}</td>
+          </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa lấy đơn nào trong 30 ngày</td></tr>'}</tbody></table>`;
+      } catch (err) { box.innerHTML = `<div class="empty-hint">Không tải được đơn: <b>${escapeHtml(err.message)}</b></div>`; }
+    })();
   }
 
   function formGheTham(loai, d, shops) {
@@ -550,6 +631,112 @@ window.ModuleDMS = (function () {
         } else {
           toast('Đã ghi nhận' + (kc != null ? ` (cách shop ${fmtNumber(kc)} m).` : '.'), 'success');
         }
+        renderGheTham();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  /* ---------- FORM LEN DON TAI SHOP (v7.24) ----------
+     Chi cho chon MA HANG + MAU con TON KHA DUNG (ton that - hang dang giu cho don khac): nhan vien
+     ngoai thi truong khong the hua ban hang khong con. Don CHI GIU HANG, ton chi giam khi xuat phieu
+     ban hang — dung nguyen tac v6.23. */
+  async function formLenDon(shops, d, shopIdMacDinh) {
+    const hb = (await apiGet('/api/dms/hangban')).data;
+    const giuMap = new Map(hb.giu.map(g => [g.MaHangID + '|' + g.MauSacID, Number(g.SoGiu) || 0]));
+    const khaDung = (mh, ms) => {
+      const m = hb.mau.find(x => String(x.MaHangID) === String(mh) && String(x.MauSacID) === String(ms));
+      return m ? Math.max(0, Number(m.TonCai || 0) - (giuMap.get(mh + '|' + ms) || 0)) : 0;
+    };
+    let idx = 0;
+    let dong = [{ idx: ++idx }];
+    const uuTien = (d.shopKeHoach || []).map(s => s.ShopID);
+    const dsShop = [...shops].sort((a, b) => (uuTien.indexOf(b.ShopID) - uuTien.indexOf(a.ShopID)));
+    const optMH = (chon) => `<option value="">-- chọn mã hàng --</option>` + hb.items.map(it =>
+      `<option value="${it.MaHangID}" ${String(chon) === String(it.MaHangID) ? 'selected' : ''}>${escapeHtml(it.MaHang + ' · ' + it.TenHang)}</option>`).join('');
+
+    const modal = openModal(`
+      <h3>🛒 Lên đơn tại shop</h3>
+      <form id="dmFDon">
+        <div class="form-grid">
+          <div class="form-row"><label>Shop *</label><select name="shopId" required>${dsShop.map(s =>
+            `<option value="${s.ShopID}" ${String(shopIdMacDinh) === String(s.ShopID) ? 'selected' : ''}>${escapeHtml(s.MaShop + ' · ' + s.TenShop)}${uuTien.indexOf(s.ShopID) !== -1 ? ' ★ tuyến hôm nay' : ''}</option>`).join('')}</select></div>
+          <div class="form-row"><label>Ghi chú của khách</label><input name="ghiChu"></div>
+        </div>
+        <table class="phieu-ke" style="table-layout:fixed;"><thead><tr>
+          <th style="width:6%">STT</th><th style="width:34%">Mã hàng</th><th style="width:26%">Màu</th>
+          <th style="width:14%">Số lượng</th><th style="width:14%">Khả dụng</th><th style="width:6%"></th>
+        </tr></thead><tbody id="dmDonTbody"></tbody></table>
+        <button type="button" class="btn small secondary" id="dmThemDong" style="margin-top:6px;">+ Thêm dòng</button>
+        <div class="modal-actions"><button type="button" class="btn secondary" id="dmHuy">Hủy</button>
+          <button type="submit" class="btn">Lưu đơn</button></div>
+      </form>`);
+    modal.querySelector('.modal').style.maxWidth = 'min(820px, 96vw)';
+    modal.querySelector('#dmHuy').addEventListener('click', closeModal);
+
+    const veDong = () => {
+      modal.querySelector('#dmDonTbody').innerHTML = dong.map((r, i) => `<tr data-idx="${r.idx}">
+        <td>${i + 1}</td>
+        <td><select class="dd-mh" style="width:100%;">${optMH(r.maHangId)}</select></td>
+        <td><select class="dd-mau" style="width:100%;"><option value="">-- màu --</option></select></td>
+        <td><input type="number" class="dd-sl" min="1" step="1" style="width:100%;" value="${r.soLuong || ''}"></td>
+        <td class="dd-kd" style="text-align:right;"></td>
+        <td><button type="button" class="btn small danger dd-xoa" style="padding:2px 6px;">✕</button></td>
+      </tr>`).join('');
+      modal.querySelectorAll('#dmDonTbody tr').forEach(tr => {
+        const r = dong.find(x => String(x.idx) === tr.dataset.idx);
+        const selMH = tr.querySelector('.dd-mh'), selMau = tr.querySelector('.dd-mau'), oKD = tr.querySelector('.dd-kd');
+        const napMau = () => {
+          const ds = hb.mau.filter(m => String(m.MaHangID) === String(r.maHangId));
+          selMau.innerHTML = '<option value="">-- màu --</option>' + ds.map(m =>
+            `<option value="${m.MauSacID}" ${String(r.mauSacId) === String(m.MauSacID) ? 'selected' : ''}>${escapeHtml(m.TenMau)} (khả dụng ${fmtNumber(khaDung(m.MaHangID, m.MauSacID))})</option>`).join('');
+          if (r.mauSacId && !ds.some(m => String(m.MauSacID) === String(r.mauSacId))) r.mauSacId = '';
+          oKD.textContent = r.maHangId && r.mauSacId ? fmtNumber(khaDung(r.maHangId, r.mauSacId)) : '';
+        };
+        napMau();
+        selMH.addEventListener('change', e => { r.maHangId = e.target.value; r.mauSacId = ''; napMau(); });
+        selMau.addEventListener('change', e => { r.mauSacId = e.target.value; napMau(); });
+        tr.querySelector('.dd-sl').addEventListener('input', e => { r.soLuong = e.target.value; });
+        tr.querySelector('.dd-xoa').addEventListener('click', () => {
+          dong = dong.filter(x => x.idx !== r.idx);
+          if (!dong.length) dong = [{ idx: ++idx }];
+          veDong();
+        });
+      });
+    };
+    modal.querySelector('#dmThemDong').addEventListener('click', () => { dong.push({ idx: ++idx }); veDong(); });
+    veDong();
+
+    modal.querySelector('#dmFDon').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      /* Doc lai TU DOM truoc khi gui — bai hoc v7.18: chi tin bien trong bo nho la co dong bi loai am tham. */
+      modal.querySelectorAll('#dmDonTbody tr').forEach(tr => {
+        const r = dong.find(x => String(x.idx) === tr.dataset.idx);
+        if (!r) return;
+        const mh = tr.querySelector('.dd-mh'), mau = tr.querySelector('.dd-mau'), sl = tr.querySelector('.dd-sl');
+        if (mh && mh.value) r.maHangId = mh.value;
+        if (mau) r.mauSacId = mau.value;
+        if (sl) r.soLuong = sl.value;
+      });
+      const gui = dong.filter(r => r.maHangId && Number(r.soLuong) > 0);
+      if (!gui.length) { toast('Chưa có dòng hàng hợp lệ (cần mã hàng + số lượng).', 'error'); return; }
+      if (gui.length < modal.querySelectorAll('#dmDonTbody tr').length) {
+        const thieu = [];
+        modal.querySelectorAll('#dmDonTbody tr').forEach((tr, i) => {
+          const r = dong.find(x => String(x.idx) === tr.dataset.idx);
+          if (!r || !r.maHangId) thieu.push(`dòng ${i + 1}: chưa chọn mã hàng`);
+          else if (!(Number(r.soLuong) > 0)) thieu.push(`dòng ${i + 1}: số lượng phải > 0`);
+        });
+        if (thieu.length) { toast('Chưa lưu — còn dòng chưa hợp lệ:\n• ' + thieu.join('\n• '), 'error'); return; }
+      }
+      const fd = new FormData(e.target);
+      try {
+        const r = await apiPost('/api/dms/donhang', {
+          shopId: fd.get('shopId'), ghiChu: fd.get('ghiChu'),
+          gheThamID: (d.daGhe.filter(g => String(g.ShopID) === String(fd.get('shopId'))).pop() || {}).GheThamID || null,
+          dong: gui.map(r2 => ({ maHangId: r2.maHangId, mauSacId: r2.mauSacId, soLuong: r2.soLuong, donVi: 'Cái' }))
+        });
+        closeModal();
+        toast(`Đã lưu đơn ${r.data.soDong} dòng — hàng được giữ, văn phòng bấm "Chuyển sang phiếu bán hàng" để xuất kho.`, 'success');
         renderGheTham();
       } catch (err) { toast(err.message, 'error'); }
     });

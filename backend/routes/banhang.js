@@ -676,6 +676,56 @@ async function coCotNguonDat(pool) {
 }
 const NGUON_PHIEU_BH = 'PhieuBH';
 
+/* v7.24 (migration_v686 + v687): phieu ban hang co ShopID + NhanVienID (nhan vien kinh doanh) de
+   tinh doanh so di tuyen. Do cot truoc vi ban chua chay migration van phai chay binh thuong. */
+let __coCotShopNV = null;
+async function coCotShopNV(pool) {
+  if (__coCotShopNV === null) {
+    try {
+      const r = (await pool.request().query(`
+        SELECT COL_LENGTH('PhieuBanHang','ShopID') AS s, COL_LENGTH('PhieuBanHang','NhanVienID') AS n,
+               COL_LENGTH('DonKhachDatHang','ShopID') AS ds, COL_LENGTH('DonKhachDatHang','NhanVienID') AS dn`)).recordset[0] || {};
+      __coCotShopNV = { phieu: r.s != null && r.n != null, don: r.ds != null && r.dn != null };
+    } catch (e) { __coCotShopNV = { phieu: false, don: false }; }
+  }
+  return __coCotShopNV;
+}
+
+/* KE THUA Shop + Nhan vien kinh doanh TU DON sang PHIEU.
+   Vi sao tu dong: nhan vien di tuyen lay don ngoai thi truong, o van phong chi bam "Chuyen sang phieu
+   ban hang". Neu bat ke toan go tay lai Shop/Nhan vien thi 9/10 lan bi bo trong -> tab Doanh so mai
+   mai bang 0 va khong ai hieu tai sao. Chi ghi khi phieu CHUA co (khong ghi de lua chon tay). */
+/* Ghi Shop / Nhan vien kinh doanh CHON TAY tren form phieu ban hang. Gui chuoi rong = XOA lua chon
+   (khac null = khong gui gi). */
+async function ghiShopNVKD(pool, tran, phieuBHID, b) {
+  const co = await coCotShopNV(pool);
+  if (!co.phieu) return;
+  const coGui = (v) => v !== undefined;
+  if (!coGui(b.shopId) && !coGui(b.nhanVienId)) return;
+  const rq = new sql.Request(tran).input('p', sql.Int, phieuBHID);
+  const dat = [];
+  if (coGui(b.shopId)) { rq.input('s', sql.Int, b.shopId === '' || b.shopId === null ? null : b.shopId); dat.push('ShopID = @s'); }
+  if (coGui(b.nhanVienId)) { rq.input('n', sql.Int, b.nhanVienId === '' || b.nhanVienId === null ? null : b.nhanVienId); dat.push('NhanVienID = @n'); }
+  await rq.query(`UPDATE PhieuBanHang SET ${dat.join(', ')} WHERE PhieuBHID = @p`);
+}
+
+async function keThuaShopNVTuDon(pool, tran, phieuBHID, dong) {
+  const co = await coCotShopNV(pool);
+  if (!co.phieu || !co.don) return;
+  const ids = [];
+  (dong || []).forEach(d => (d.donIDs || []).forEach(i => ids.push(Number(i))));
+  if (!ids.length) return;
+  const r = (await new sql.Request(tran).query(`
+    SELECT TOP 1 ShopID, NhanVienID FROM DonKhachDatHang
+    WHERE DonID IN (${[...new Set(ids)].join(',')}) AND (ShopID IS NOT NULL OR NhanVienID IS NOT NULL)
+    ORDER BY DonID`)).recordset[0];
+  if (!r) return;
+  await new sql.Request(tran).input('p', sql.Int, phieuBHID)
+    .input('s', sql.Int, r.ShopID || null).input('n', sql.Int, r.NhanVienID || null)
+    .query(`UPDATE PhieuBanHang SET ShopID = ISNULL(ShopID, @s), NhanVienID = ISNULL(NhanVienID, @n)
+            WHERE PhieuBHID = @p`);
+}
+
 /* v7.22 — LUONG HAI CHIEU: dong phieu KHONG gan don nao thi TU SINH mot dong o Chi tiet dat hang.
    Vi sao: "sua phieu ban hang - them ma moi / doi mau - deu phai ghi vao chi tiet dat hang cua ma
    hang do". Truoc day chi co chieu DON -> PHIEU; ban thang hoac them ma luc sua phieu thi Chi tiet
@@ -906,6 +956,8 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
                 @TongSLCai, @GhiChu, @NguoiTaoID)`)).recordset[0].PhieuBHID;
     await ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs,
       { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: user.userId });   // v7.22
+    await ghiShopNVKD(pool, tran, phieuBHID, b);              // v7.24: chon tay tren form (neu co)
+    await keThuaShopNVTuDon(pool, tran, phieuBHID, dong);     // v7.24: hoac ke thua tu don di tuyen
     await tran.commit();
     res.json({ success: true, data: { phieuBHID, soPhieu, tongThanhToan: tong.tongThanhToan } });
   } catch (err) {
@@ -981,6 +1033,8 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
               WHERE PhieuBHID=@id`);
     await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs,
       { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: (req.session.user || {}).userId });   // v7.22
+    await ghiShopNVKD(pool, tran, p.PhieuBHID, b);              // v7.24
+    await keThuaShopNVTuDon(pool, tran, p.PhieuBHID, dong);     // v7.24
 
     /* v7.17 — ĐƠN KHÁCH BỊ BỎ RA KHỎI PHIẾU.
        Xóa một dòng khỏi phiếu thì đơn khách của dòng đó quay về 'Chờ xử lý' (đúng: hàng chưa giao),

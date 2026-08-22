@@ -32,12 +32,15 @@ const so = v => Number(v) || 0;
 async function layCauHinh(pool) {
   const rs = (await pool.request().query(`
     SELECT ConfigKey, ConfigValue FROM CauHinhHeThong
-    WHERE ConfigKey IN ('DMS_BAN_KINH_CHECKIN_M', 'DMS_BAT_BUOC_ANH')`)).recordset;
+    WHERE ConfigKey IN ('DMS_BAN_KINH_CHECKIN_M', 'DMS_BAT_BUOC_ANH', 'DMS_TILE_URL')`)).recordset;
   const m = {};
   rs.forEach(r => { m[r.ConfigKey] = r.ConfigValue; });
   return {
     banKinhM: so(m.DMS_BAN_KINH_CHECKIN_M) || 200,
-    batBuocAnh: String(m.DMS_BAT_BUOC_ANH == null ? '1' : m.DMS_BAT_BUOC_ANH) === '1'
+    batBuocAnh: String(m.DMS_BAT_BUOC_ANH == null ? '1' : m.DMS_BAT_BUOC_ANH) === '1',
+    /* v7.24: tile ban do noi bo/proxy. Trong = frontend tu do lan luot OSM -> OSM DE -> Carto.
+       Khai vao khi mang cong ty chan het may chu tile ngoai (trieu chung: co marker, khong co anh nen). */
+    tileUrl: m.DMS_TILE_URL || null
   };
 }
 
@@ -459,6 +462,130 @@ router.delete('/ghetham/:id', ...CN_GHI('ghetham', 'delete'), async (req, res) =
   } catch (err) {
     res.status(400).json({ success: false, message: 'Lỗi khi xóa ghé thăm: ' + err.message });
   }
+});
+
+
+/* ================================================================================================
+   3b. LEN DON NGAY TAI SHOP  (v7.24, migration_v687)
+   Nhan vien di tuyen ghe shop, khach dat hang -> lap don LUON tren dien thoai.
+   - Don ghi vao `DonKhachDatHang` (mot dong / mot ma hang + mau), `TenKhach` = TEN SHOP vi cong no
+     va phieu in dang gom theo TEN (xem ghi chu trong routes/danhmuc.js) — doi sang khoa so la pha
+     ca phan he cong no dang chay.
+   - Gan `ShopID` + `NhanVienID` de sau nay phieu ban hang KE THUA -> doanh so nhan vien tu co.
+   - `DaTruTon = 0`: don CHI GIU HANG, ton chi giam khi xuat PHIEU BAN HANG (nguyen tac v6.23).
+   - Kiem TON KHA DUNG truoc khi nhan: khong de nhan vien ngoai thi truong hua ban hang khong con.
+   ================================================================================================ */
+router.get('/hangban', ...CN('ghetham'), async (req, res) => {
+  const pool = await getPool();
+  /* Dung CHINH view ton cua he thong (vw_TonKhoHangHoa / vw_TonTheoMau) — khong tu tinh lai ton o
+     phan he nay, kẻo hai noi ra hai so. */
+  const items = (await pool.request().query(`
+    SELECT MaHangID, MaHang, TenHang, GiaBan, LoaiRi, DonViCoBan, DonViQuyDoi, TongTonThuc
+    FROM vw_TonKhoHangHoa ORDER BY MaHang`)).recordset;
+  const mau = (await pool.request().query(`
+    SELECT t.MaHangID, t.MauSacID, ms.TenMau, t.TonCai
+    FROM vw_TonTheoMau t JOIN MauSac ms ON ms.MauSacID = t.MauSacID
+    ORDER BY ms.TenMau`)).recordset;
+  const giu = (await pool.request().query(`
+    SELECT o.MaHangID, o.MauSacID, SUM(o.SoLuongDat) AS SoGiu
+    FROM DonKhachDatHang o
+    WHERE o.TrangThai IN (N'Chờ xác nhận', N'Chờ xử lý') ${''}
+    GROUP BY o.MaHangID, o.MauSacID`)).recordset;
+  res.json({ success: true, data: { items, mau, giu } });
+});
+
+router.post('/donhang', ...CN_GHI('ghetham', 'create'), async (req, res) => {
+  const pool = await getPool();
+  const b = req.body || {};
+  const dong = Array.isArray(b.dong) ? b.dong.filter(d => d && d.maHangId && so(d.soLuong) > 0) : [];
+  if (!b.shopId) return res.status(400).json({ success: false, message: 'Chưa chọn shop.' });
+  if (!dong.length) return res.status(400).json({ success: false, message: 'Chưa có dòng hàng nào (cần mã hàng + số lượng).' });
+  const thieuMau = dong.filter(d => !d.mauSacId);
+  if (thieuMau.length) return res.status(400).json({ success: false, message: `${thieuMau.length} dòng chưa chọn MÀU — thẻ kho quản theo màu nên phải chọn.` });
+
+  const nvId = b.nhanVienId || await nhanVienCuaUser(pool, req.session.user);
+  if (!nvId) return res.status(400).json({ success: false, message: 'Tài khoản của bạn chưa được gắn NHÂN VIÊN — nhờ quản lý gắn ở Quản lý User rồi đăng nhập lại.' });
+  const shop = (await pool.request().input('id', sql.Int, b.shopId)
+    .query('SELECT ShopID, TenShop FROM ShopBanLe WHERE ShopID = @id')).recordset[0];
+  if (!shop) return res.status(404).json({ success: false, message: 'Không tìm thấy shop.' });
+
+  const coShopCol = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','ShopID') AS c`)).recordset[0].c != null;
+  if (!coShopCol) return res.status(400).json({ success: false, message: 'Chưa chạy database/migration_v687.sql nên đơn chưa gắn được shop/nhân viên.' });
+  const coDaTru = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','DaTruTon') AS c`)).recordset[0].c != null;
+  const coNguon = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','NguonDat') AS c`)).recordset[0].c != null;
+
+  const tran = new sql.Transaction(pool);
+  await tran.begin();
+  try {
+    const ids = [];
+    for (const d of dong) {
+      /* TON KHA DUNG = ton that - hang dang giu cho don khac. Kiem TRONG transaction de hai nhan vien
+         khong cung hua ban mot lo hang. */
+      const t = (await new sql.Request(tran).input('mh', sql.Int, d.maHangId).input('ms', sql.Int, d.mauSacId).query(`
+        SELECT ISNULL(v.TonCai, 0) AS TonCai,
+               ISNULL((SELECT SUM(o.SoLuongDat) FROM DonKhachDatHang o
+                       WHERE o.MaHangID = @mh AND o.MauSacID = @ms
+                         AND o.TrangThai IN (N'Chờ xác nhận', N'Chờ xử lý')), 0) AS DangGiu
+        FROM vw_TonTheoMau v WHERE v.MaHangID = @mh AND v.MauSacID = @ms`)).recordset[0]
+        || { TonCai: 0, DangGiu: 0 };
+      const khaDung = so(t.TonCai) - so(t.DangGiu);
+      if (so(d.soLuong) > khaDung) {
+        throw new Error(`Không đủ tồn khả dụng cho một dòng: cần ${so(d.soLuong)}, còn ${khaDung} (tồn ${so(t.TonCai)}, đang giữ cho đơn khác ${so(t.DangGiu)}).`);
+      }
+      const cot = ['TenKhach', 'MaHangID', 'MauSacID', 'SoLuongDat', 'DonVi', 'TrangThai', 'NguoiTaoID', 'ShopID', 'NhanVienID'];
+      const val = ['@tk', '@mh', '@ms', '@sl', '@dv', "N'Chờ xử lý'", '@u', '@shop', '@nv'];
+      if (coDaTru) { cot.push('DaTruTon'); val.push('0'); }
+      if (coNguon) { cot.push('NguonDat'); val.push("N'DiTuyen'"); }
+      if (b.ghiChu) { cot.push('GhiChuKhach'); val.push('@gc'); }
+      const rq = new sql.Request(tran)
+        .input('tk', sql.NVarChar, shop.TenShop)
+        .input('mh', sql.Int, d.maHangId).input('ms', sql.Int, d.mauSacId)
+        .input('sl', sql.Int, Math.round(so(d.soLuong)))
+        .input('dv', sql.NVarChar, d.donVi || 'Cái')
+        .input('u', sql.Int, req.session.user.userId)
+        .input('shop', sql.Int, b.shopId).input('nv', sql.Int, nvId);
+      if (b.ghiChu) rq.input('gc', sql.NVarChar, b.ghiChu);
+      const r = await rq.query(`INSERT INTO DonKhachDatHang (${cot.join(', ')})
+                                OUTPUT INSERTED.DonID VALUES (${val.join(', ')})`);
+      ids.push(r.recordset[0].DonID);
+    }
+    /* Gan don DAU TIEN vao lan ghe tham (GheTham.DonID) + danh dau ket qua 'Có đơn' — mo lan ghe la
+       thay ngay no ra don gi. */
+    if (b.gheThamID && ids.length) {
+      await new sql.Request(tran).input('g', sql.Int, b.gheThamID).input('d', sql.Int, ids[0])
+        .query(`UPDATE GheTham SET DonID = @d, KetQua = N'Có đơn' WHERE GheThamID = @g`);
+    }
+    await new sql.Request(tran).input('id', sql.Int, b.shopId)
+      .query(`UPDATE ShopBanLe SET TrangThai = N'Đang bán', UpdatedAt = SYSDATETIME()
+              WHERE ShopID = @id AND TrangThai = N'Tiềm năng'`);
+    await tran.commit();
+    res.json({ success: true, data: { donIDs: ids, soDong: ids.length } });
+  } catch (err) {
+    try { await tran.rollback(); } catch (e) { /* da ket thuc */ }
+    console.error('[dms POST /donhang] ', err);
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+/* Don CUA NHAN VIEN (man hinh "don toi da lay") */
+router.get('/donhang', ...CN('ghetham'), async (req, res) => {
+  const pool = await getPool();
+  const nvId = req.query.nhanVienId ? Number(req.query.nhanVienId) : await nhanVienCuaUser(pool, req.session.user);
+  const tuNgay = req.query.tuNgay || new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
+  const denNgay = req.query.denNgay || new Date().toISOString().slice(0, 10);
+  if (!nvId) return res.json({ success: true, data: [] });
+  const rows = (await pool.request().input('nv', sql.Int, nvId)
+    .input('tu', sql.Date, tuNgay).input('den', sql.Date, denNgay).query(`
+    SELECT o.DonID, o.ThoiGian, o.TenKhach, o.SoLuongDat, o.DonVi, o.TrangThai, o.PhieuBHID,
+           h.MaHang, h.TenHang, ms.TenMau, s.MaShop, s.TenShop, p.SoPhieu, p.TongThanhToan
+    FROM DonKhachDatHang o
+    JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
+    LEFT JOIN MauSac ms ON ms.MauSacID = o.MauSacID
+    LEFT JOIN ShopBanLe s ON s.ShopID = o.ShopID
+    LEFT JOIN PhieuBanHang p ON p.PhieuBHID = o.PhieuBHID
+    WHERE o.NhanVienID = @nv AND CAST(o.ThoiGian AS DATE) BETWEEN @tu AND @den
+    ORDER BY o.ThoiGian DESC`)).recordset;
+  res.json({ success: true, data: rows, ky: { tuNgay, denNgay, nhanVienId: nvId } });
 });
 
 /* Lich su cham soc CUA MOT SHOP — de "luu thong tin shop de cham soc ve sau" */

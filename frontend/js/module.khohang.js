@@ -3040,6 +3040,11 @@ window.ModuleKhoHang = (function () {
     const khach0 = donChon && donChon.length ? donChon[0].TenKhach : '';
     // v6.23.2: khách hàng chọn từ DANH MỤC (không gõ tự do) — kèm SĐT/địa chỉ để in thẳng lên phiếu.
     const dsKhach = await apiGet('/api/danhmuc/khachhang').then(r => r.data || []).catch(() => []);
+    /* v7.24: SHOP BÁN LẺ + NHÂN VIÊN KINH DOANH (phân hệ Đi tuyến) để tính doanh số nhân viên.
+       Chưa chạy migration_v686/v687 hoặc tài khoản chưa có quyền DMS thì .catch trả rỗng -> hai ô này
+       ẩn đi, form phiếu bán hàng chạy y như trước (không được để một phân hệ mới làm vỡ phiếu bán). */
+    const dmsShop = await apiGet('/api/dms/shop').then(r => r.data || []).catch(() => []);
+    const dmsNV = await apiGet('/api/dms/danhmuc').then(r => (r.data || {}).nhanVien || []).catch(() => []);
     let idx = 0;
     /* v6.23.2: mọi dòng nhập theo CÁI, cột quy đổi hiện RI (yêu cầu: "Số lượng thể hiện cái, đơn vị
        quy đổi là ri") — kể cả dòng lấy từ đơn đặt ghi đơn vị Ri thì cũng quy về Cái ở đây.
@@ -3117,6 +3122,11 @@ window.ModuleKhoHang = (function () {
           </div>
           <div class="form-row"><label>SĐT</label><input name="sdt" id="bhSDT" value="${escapeHtml(phieuSua ? (phieuSua.header.SDT || '') : '')}"></div>
           <div class="form-row"><label>Địa chỉ</label><input name="diaChi" id="bhDiaChi" value="${escapeHtml(phieuSua ? (phieuSua.header.DiaChi || '') : '')}"></div>
+          ${dmsShop.length ? `<div class="form-row"><label>Shop bán lẻ (nếu bán cho shop)</label>
+            <select name="shopId"><option value="">— không phải shop / bán cho NPP —</option>${dmsShop.map(s2 => `<option value="${s2.ShopID}" ${phieuSua && String(phieuSua.header.ShopID) === String(s2.ShopID) ? 'selected' : ''}>${escapeHtml(s2.MaShop + ' · ' + s2.TenShop)}</option>`).join('')}</select></div>` : ''}
+          ${dmsNV.length ? `<div class="form-row"><label>Nhân viên kinh doanh (tính doanh số)</label>
+            <select name="nhanVienId"><option value="">— chưa gán —</option>${dmsNV.map(n => `<option value="${n.NhanVienID}" ${phieuSua && String(phieuSua.header.NhanVienID) === String(n.NhanVienID) ? 'selected' : ''}>${escapeHtml(n.HoTen)}${n.MaNhanVien ? ' · ' + escapeHtml(n.MaNhanVien) : ''}</option>`).join('')}</select>
+            <div class="empty-hint" style="margin-top:2px;">Đơn lấy từ <b>Đi tuyến</b> tự điền sẵn — chỉ chọn tay khi bán trực tiếp tại xưởng.</div></div>` : ''}
           ${/* v6.75: GHI CHÚ chuyển lên NGAY SAU địa chỉ (trước đây nằm tận dưới bảng dòng hàng).
                Ghi chú thường là thông tin giao hàng ("giao thứ 5", "gọi trước khi đến") — thuộc về
                phần thông tin khách, để tít dưới cuối form thì lúc nhập hay quên, lúc đọc lại phải
@@ -3409,6 +3419,8 @@ window.ModuleKhoHang = (function () {
         const payload = {
           ngayBan: fd.get('ngayBan'), tenKhach: fd.get('tenKhach'), sdt: fd.get('sdt'), diaChi: fd.get('diaChi'),
           khachHangId: fd.get('khachHangId') || null,
+          shopId: fd.get('shopId') != null ? (fd.get('shopId') || null) : undefined,          // v7.24
+          nhanVienId: fd.get('nhanVienId') != null ? (fd.get('nhanVienId') || null) : undefined,
           phanTramCKNPP: fd.get('ckNPP'), phanTramVAT: fd.get('vat'), ghiChu: fd.get('ghiChu'), dong: dongGui,
           donHuy: donHuyList   // v7.17: đơn khách chọn hủy luôn khi bỏ dòng khỏi phiếu
         };
