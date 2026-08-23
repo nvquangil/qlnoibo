@@ -182,65 +182,87 @@ router.delete('/shop/:id', ...CN_GHI('shop', 'delete'), async (req, res) => {
   try {
     const pool = await getPool();
     const id = Number(req.params.id);
-    const xoaKem = String(req.query.xoaKem || '') === '1';
-    const dem = async (bang, cot, dieuKienThem) => (await pool.request().input('id', sql.Int, id)
-      .query(`SELECT COUNT(*) AS C FROM ${bang} WHERE ${cot} = @id ${dieuKienThem || ''}`)).recordset[0].C;
+    const xacNhan = String(req.query.xacNhan || req.query.xoaKem || '') === '1';
+    const dem = async (bang, cot, them) => (await pool.request().input('id', sql.Int, id)
+      .query(`SELECT COUNT(*) AS C FROM ${bang} WHERE ${cot} = @id ${them || ''}`)).recordset[0].C;
     const coCot = async (bang, cot) => (await pool.request()
       .query(`SELECT COL_LENGTH('${bang}','${cot}') AS c`)).recordset[0].c != null;
 
+    const shop = (await pool.request().input('id', sql.Int, id)
+      .query('SELECT ShopID, MaShop, TenShop, TrangThai FROM ShopBanLe WHERE ShopID = @id')).recordset[0];
+    if (!shop) return res.status(404).json({ success: false, message: 'Không tìm thấy shop.' });
+    const nhanShop = shop.MaShop + ' · ' + shop.TenShop;
+
     /* ================================================================================================
-       v7.27 — TÁCH BA NHÓM RÀNG BUỘC. Bản v7.23 gộp tất cả vào một câu "không xóa được" nên shop chỉ
-       mới ghé thăm một lần (chưa bán gì) cũng không xóa nổi, dù đã chuyển Trạng thái = Ngừng.
-         1. CHẶN HẲN  — chứng từ: phiếu bán hàng, đơn khách chưa hủy. Xóa shop là mất dấu vết doanh
-                        số / công nợ đã phát sinh. Giữ Trạng thái "Ngừng" là cách đúng.
-         2. XÓA KÈM   — lịch sử ghé thăm: dữ liệu vận hành của chính shop, không ai khác dùng. Cho xóa
-                        nhưng phải XÁC NHẬN vì mất hẳn (trả 409 + số lượng để giao diện hỏi lại).
-         3. TỰ GỠ     — shop nằm trong tuyến: chỉ là danh sách, gỡ ra là xong, không cần hỏi.
+       v7.28 — XOA DUOC SHOP MA KHONG MAT DU LIEU KE TOAN.
+       Ban v7.27 chan han khi co phieu ban hang. Nhung chung tu ke toan KHONG phu thuoc shop: khach
+       hang cua phieu la NHA PHAN PHOI (KhachHangID + TenKhach), doanh so ghi cho NHAN VIEN
+       (NhanVienID) — shop chi la DIEM GIAO. Nen chi can GIU LAI TEN SHOP dang chu (snapshot
+       PhieuBanHang.TenShop / DonKhachDatHang.TenShop, migration_v688) roi go lien ket la xong:
+       so tien, cong no, doanh so nhan vien, bao cao cu — tat ca nguyen ven.
+
+       DUY NHAT mot rang buoc con lai: PHAI o trang thai "Ngừng" moi xoa duoc. Shop dang ban ma xoa
+       nham thi nhan vien mat diem den va lich su cham soc; bat doi trang thai truoc la mot buoc cham
+       tay co y thuc, khong phai thu tuc vo nghia.
        ================================================================================================ */
-    const chan = [];
-    if (await coCot('PhieuBanHang', 'ShopID')) {
-      const n = await dem('PhieuBanHang', 'ShopID');
-      if (n) chan.push(`${n} phiếu bán hàng`);
-    }
-    if (await coCot('DonKhachDatHang', 'ShopID')) {
-      const n = await dem('DonKhachDatHang', 'ShopID', "AND TrangThai <> N'Đã hủy'");
-      if (n) chan.push(`${n} đơn khách đặt hàng (chưa hủy)`);
-    }
-    if (chan.length) {
+    if (String(shop.TrangThai) !== 'Ngừng') {
       return res.status(400).json({ success: false, message:
-        `Không xóa được shop này vì đã phát sinh chứng từ: ${chan.join(', ')}.\n\n`
-        + 'Chứng từ bán hàng phải giữ được dấu vết bán cho ai. Cách đúng là để Trạng thái = "Ngừng" '
-        + '(shop vẫn nằm trong lịch sử nhưng không hiện ra để đặt hàng nữa).' });
+        `Shop "${nhanShop}" đang ở trạng thái "${shop.TrangThai}".\n\n`
+        + 'Chỉ xóa được shop đã chuyển Trạng thái = "Ngừng" (bấm Sửa để đổi). '
+        + 'Đây là chốt an toàn để không xóa nhầm shop đang bán.' });
     }
 
+    const coPhieuCol = await coCot('PhieuBanHang', 'ShopID');
+    const coDonCol = await coCot('DonKhachDatHang', 'ShopID');
+    const soPhieu = coPhieuCol ? await dem('PhieuBanHang', 'ShopID') : 0;
+    const soDon = coDonCol ? await dem('DonKhachDatHang', 'ShopID') : 0;
     const soGhe = await dem('GheTham', 'ShopID');
     const soTuyen = await dem('TuyenChiTiet', 'ShopID');
-    if (soGhe && !xoaKem) {
-      /* 409 = "cần xác nhận", KHÁC 400 (sai/không được phép) — để giao diện biết phải hỏi lại
-         thay vì hiện thẳng câu lỗi rồi bỏ cuộc. */
-      return res.status(409).json({ success: false, canXacNhan: true, soGheTham: soGhe, soTuyen,
-        message: `Shop này có ${soGhe} lần ghé thăm/liên hệ đã ghi nhận${soTuyen ? ` và đang nằm trong ${soTuyen} tuyến` : ''}.\n\n`
-          + 'Xóa shop sẽ XÓA LUÔN toàn bộ lịch sử ghé thăm đó (không lấy lại được).' });
+
+    if ((soPhieu || soDon || soGhe) && !xacNhan) {
+      /* 409 = "can xac nhan", KHAC 400 (khong duoc phep) — de giao dien hoi lai thay vi bo cuoc. */
+      const mo = [];
+      if (soPhieu) mo.push(`${soPhieu} phiếu bán hàng`);
+      if (soDon) mo.push(`${soDon} đơn khách đặt`);
+      if (soGhe) mo.push(`${soGhe} lần ghé thăm`);
+      return res.status(409).json({ success: false, canXacNhan: true,
+        soPhieu, soDon, soGheTham: soGhe, soTuyen,
+        message: `Shop "${nhanShop}" đang có: ${mo.join(', ')}${soTuyen ? `, nằm trong ${soTuyen} tuyến` : ''}.\n\n`
+          + 'KHI XÓA:\n'
+          + `• GIỮ NGUYÊN ${soPhieu} phiếu bán hàng và ${soDon} đơn — số tiền, công nợ nhà phân phối, doanh số nhân viên không đổi; tên shop được lưu lại trên chứng từ.\n`
+          + `• XÓA HẲN ${soGhe} lần ghé thăm/liên hệ (lịch sử chăm sóc, không lấy lại được).\n`
+          + (soTuyen ? '• Gỡ shop khỏi các tuyến.\n' : '') });
     }
 
     const tran = new sql.Transaction(pool);
     await tran.begin();
     try {
-      await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM TuyenChiTiet WHERE ShopID = @id');
-      if (xoaKem) await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM GheTham WHERE ShopID = @id');
-      /* Đơn đã hủy còn trỏ tới shop -> gỡ liên kết để khóa ngoại không chặn (đơn hủy không còn giá
-         trị chứng từ, nhưng vẫn giữ lại dòng đơn để không mất dấu vết là đã từng có đơn). */
-      if (await coCot('DonKhachDatHang', 'ShopID')) {
-        await new sql.Request(tran).input('id', sql.Int, id)
-          .query('UPDATE DonKhachDatHang SET ShopID = NULL WHERE ShopID = @id');
+      /* 1. SNAPSHOT ten shop len chung tu TRUOC khi go lien ket (chi ghi khi con trong — phieu cu da
+            co ten thi giu nguyen ten LUC BAN, khong ghi de bang ten hien tai). */
+      if (coPhieuCol && await coCot('PhieuBanHang', 'TenShop')) {
+        await new sql.Request(tran).input('id', sql.Int, id).input('ten', sql.NVarChar, nhanShop)
+          .query('UPDATE PhieuBanHang SET TenShop = ISNULL(TenShop, @ten) WHERE ShopID = @id');
       }
+      if (coDonCol && await coCot('DonKhachDatHang', 'TenShop')) {
+        await new sql.Request(tran).input('id', sql.Int, id).input('ten', sql.NVarChar, nhanShop)
+          .query('UPDATE DonKhachDatHang SET TenShop = ISNULL(TenShop, @ten) WHERE ShopID = @id');
+      }
+      /* 2. Go lien ket (chung tu o lai nguyen ven), xoa du lieu VAN HANH cua rieng shop. */
+      if (coPhieuCol) await new sql.Request(tran).input('id', sql.Int, id)
+        .query('UPDATE PhieuBanHang SET ShopID = NULL WHERE ShopID = @id');
+      if (coDonCol) await new sql.Request(tran).input('id', sql.Int, id)
+        .query('UPDATE DonKhachDatHang SET ShopID = NULL WHERE ShopID = @id');
+      await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM TuyenChiTiet WHERE ShopID = @id');
+      await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM GheTham WHERE ShopID = @id');
       await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM ShopBanLe WHERE ShopID = @id');
       await tran.commit();
     } catch (e) {
       await tran.rollback();
       throw e;
     }
-    res.json({ success: true, data: { daXoaGheTham: xoaKem ? soGhe : 0, daGoKhoiTuyen: soTuyen } });
+    console.warn('[dms] da xoa shop %s: giu %s phieu + %s don (go lien ket, luu ten shop), xoa %s lan ghe tham.',
+      nhanShop, soPhieu, soDon, soGhe);
+    res.json({ success: true, data: { giuPhieu: soPhieu, giuDon: soDon, daXoaGheTham: soGhe, daGoKhoiTuyen: soTuyen } });
   } catch (err) {
     console.error('[dms DELETE /shop] ', err);
     res.status(400).json({ success: false, message: 'Lỗi khi xóa shop: ' + err.message });

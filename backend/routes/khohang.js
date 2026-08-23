@@ -811,6 +811,8 @@ router.post('/orders', requireAuth, requirePermission('KHOHANG', 'create'), requ
       `SELECT COL_LENGTH('DonKhachDatHang','ShopID') AS s, COL_LENGTH('DonKhachDatHang','NhanVienID') AS n`)).recordset[0];
     const coShop = coCotShopNV.s != null && coCotShopNV.n != null;
     const shopId = coShop && req.body.shopId ? Number(req.body.shopId) : null;
+    const coTenShopDon = (await pool.request().query(
+      `SELECT COL_LENGTH('DonKhachDatHang','TenShop') AS c`)).recordset[0].c != null;
     const nvId = coShop && req.body.nhanVienId ? Number(req.body.nhanVienId) : null;
     const donIDs = [];
     for (const { item, slGoc } of lineInfo) {
@@ -818,6 +820,11 @@ router.post('/orders', requireAuth, requirePermission('KHOHANG', 'create'), requ
       const val = ['@TenKhach', '@MaHangID', '@MauSacID', '@SoLuongDat', '@DonVi', '@NguoiTaoID'];
       if (coCotDaTruTon) { cot.push('DaTruTon'); val.push('0'); }
       if (shopId) { cot.push('ShopID'); val.push('@ShopID'); }
+      /* v7.28: snapshot ten shop de xoa shop ve sau van biet don nay lay o dau. */
+      if (shopId && coTenShopDon) {
+        cot.push('TenShop');
+        val.push("(SELECT s2.MaShop + N' · ' + s2.TenShop FROM ShopBanLe s2 WHERE s2.ShopID = @ShopID)");
+      }
       if (nvId) { cot.push('NhanVienID'); val.push('@NhanVienID'); }
       const rq = pool.request()
         .input('TenKhach', sql.NVarChar, tenKhach)

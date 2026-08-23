@@ -684,8 +684,9 @@ async function coCotShopNV(pool) {
     try {
       const r = (await pool.request().query(`
         SELECT COL_LENGTH('PhieuBanHang','ShopID') AS s, COL_LENGTH('PhieuBanHang','NhanVienID') AS n,
-               COL_LENGTH('DonKhachDatHang','ShopID') AS ds, COL_LENGTH('DonKhachDatHang','NhanVienID') AS dn`)).recordset[0] || {};
-      __coCotShopNV = { phieu: r.s != null && r.n != null, don: r.ds != null && r.dn != null };
+               COL_LENGTH('DonKhachDatHang','ShopID') AS ds, COL_LENGTH('DonKhachDatHang','NhanVienID') AS dn,
+               COL_LENGTH('PhieuBanHang','TenShop') AS ts`)).recordset[0] || {};
+      __coCotShopNV = { phieu: r.s != null && r.n != null, don: r.ds != null && r.dn != null, tenShop: r.ts != null };
     } catch (e) { __coCotShopNV = { phieu: false, don: false }; }
   }
   return __coCotShopNV;
@@ -705,6 +706,11 @@ async function ghiShopNVKD(pool, tran, phieuBHID, b) {
   const rq = new sql.Request(tran).input('p', sql.Int, phieuBHID);
   const dat = [];
   if (coGui(b.shopId)) { rq.input('s', sql.Int, b.shopId === '' || b.shopId === null ? null : b.shopId); dat.push('ShopID = @s'); }
+  /* v7.28: SNAPSHOT ten shop ngay luc luu phieu. Nho vay doi ten shop (hoac xoa shop) ve sau khong
+     lam sai phieu cu — cung nguyen tac dang dung cho `TenKhach`. */
+  if (co.tenShop && coGui(b.shopId)) {
+    dat.push(`TenShop = (SELECT s2.MaShop + N' · ' + s2.TenShop FROM ShopBanLe s2 WHERE s2.ShopID = @s)`);
+  }
   if (coGui(b.nhanVienId)) { rq.input('n', sql.Int, b.nhanVienId === '' || b.nhanVienId === null ? null : b.nhanVienId); dat.push('NhanVienID = @n'); }
   await rq.query(`UPDATE PhieuBanHang SET ${dat.join(', ')} WHERE PhieuBHID = @p`);
 }
@@ -732,6 +738,8 @@ async function keThuaShopNVTuDon(pool, tran, phieuBHID, dong) {
     .query(`UPDATE PhieuBanHang SET ShopID = ISNULL(ShopID, @s), NhanVienID = ISNULL(NhanVienID, @n),
               KhachHangID = ISNULL(KhachHangID, @kh),
               TenKhach = CASE WHEN KhachHangID IS NULL AND @tkh IS NOT NULL THEN @tkh ELSE TenKhach END
+              ${co.tenShop ? `, TenShop = ISNULL(TenShop,
+                  (SELECT s2.MaShop + N' · ' + s2.TenShop FROM ShopBanLe s2 WHERE s2.ShopID = @s))` : ''}
             WHERE PhieuBHID = @p`);
 }
 
@@ -1204,12 +1212,16 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
     SELECT COL_LENGTH('DonKhachDatHang','ShopID') AS s, COL_LENGTH('DonKhachDatHang','NhanVienID') AS n,
            OBJECT_ID('ShopBanLe') AS b`)).recordset[0];
   const coShop = coDMS.s != null && coDMS.n != null && coDMS.b != null;
+  const coTenShopDon = (await pool.request().query(
+    `SELECT COL_LENGTH('DonKhachDatHang','TenShop') AS c`)).recordset[0].c != null;
   const rows = (await rq.query(`
     SELECT o.DonID, o.ThoiGian, o.TenKhach, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi, o.TrangThai,
            h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi, h.AnhDaiDien, ms.TenMau,
            ISNULL((SELECT SUM(t.TonCai) FROM vw_TonTheoMau t
                    WHERE t.MaHangID = o.MaHangID AND t.MauSacID = o.MauSacID), 0) AS TonCai
-           ${coShop ? `, o.ShopID, o.NhanVienID, sh.MaShop, sh.TenShop, sh.DiaChi AS DiaChiShop,
+           ${/* v7.28: shop da bi XOA thi sh.* la NULL -> lay ten da luu tren don (snapshot TenShop). */''}
+           ${coShop ? `, o.ShopID, o.NhanVienID, sh.MaShop,
+             ISNULL(sh.TenShop, ${coTenShopDon ? 'o.TenShop' : 'NULL'}) AS TenShop, sh.DiaChi AS DiaChiShop,
              sh.NhaPhanPhoiID, kh.TenKhachHang AS TenNPP, kh.SDT AS SDTNPP, kh.DiaChi AS DiaChiNPP,
              nv.HoTen AS TenNhanVien` : ''}
     FROM DonKhachDatHang o

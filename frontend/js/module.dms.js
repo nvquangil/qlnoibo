@@ -256,17 +256,19 @@ window.ModuleDMS = (function () {
         if (!confirm(`Xóa shop ${s2.MaShop || ''} · ${s2.TenShop || ''}?`)) return;
         /* v7.27: backend trả 409 = "có lịch sử ghé thăm, cần xác nhận xóa kèm". Hỏi lại rồi gọi lại
            CÙNG endpoint với ?xoaKem=1 — không viết đường xóa thứ hai. */
-        const xoa = async (xoaKem) => apiDelete('/api/dms/shop/' + b.dataset.id + (xoaKem ? '?xoaKem=1' : ''));
+        const xoa = async (xacNhan) => apiDelete('/api/dms/shop/' + b.dataset.id + (xacNhan ? '?xacNhan=1' : ''));
         try {
           const r = await xoa(false);
           toast('Đã xóa shop.' + (r.data && r.data.daGoKhoiTuyen ? ` Đã gỡ khỏi ${r.data.daGoKhoiTuyen} tuyến.` : ''), 'success');
           renderShop();
         } catch (err) {
           if (err.status === 409 && err.data && err.data.canXacNhan) {
-            if (!confirm(err.message + '\n\nBấm OK để xóa shop VÀ toàn bộ lịch sử ghé thăm.')) return;
+            if (!confirm(err.message + '\nBấm OK để xóa shop.')) return;
             try {
               const r2 = await xoa(true);
-              toast(`Đã xóa shop và ${(r2.data || {}).daXoaGheTham || 0} lần ghé thăm.`, 'success');
+              const d2 = r2.data || {};
+              toast(`Đã xóa shop. Giữ nguyên ${d2.giuPhieu || 0} phiếu bán hàng + ${d2.giuDon || 0} đơn `
+                + `(số tiền, công nợ NPP, doanh số nhân viên không đổi); xóa ${d2.daXoaGheTham || 0} lần ghé thăm.`, 'success');
               renderShop();
             } catch (e2) { toast(e2.message, 'error'); }
           } else { toast(err.message, 'error'); }
