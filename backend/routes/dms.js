@@ -181,21 +181,68 @@ router.put('/shop/:id', ...CN_GHI('shop'), async (req, res) => {
 router.delete('/shop/:id', ...CN_GHI('shop', 'delete'), async (req, res) => {
   try {
     const pool = await getPool();
-    /* Chan theo DU LIEU THAT, bao ro vuong o dau (bai hoc tu viec xoa lenh SX bao chung chung). */
-    const vuong = [];
-    const dem = async (bang, cot) => (await pool.request().input('id', sql.Int, req.params.id)
-      .query(`SELECT COUNT(*) AS C FROM ${bang} WHERE ${cot} = @id`)).recordset[0].C;
-    if (await dem('GheTham', 'ShopID')) vuong.push('lịch sử ghé thăm');
-    if (await dem('TuyenChiTiet', 'ShopID')) vuong.push('tuyến bán hàng');
-    if ((await pool.request().query(`SELECT COL_LENGTH('PhieuBanHang','ShopID') AS c`)).recordset[0].c != null
-        && await dem('PhieuBanHang', 'ShopID')) vuong.push('phiếu bán hàng');
-    if (vuong.length) {
-      return res.status(400).json({ success: false,
-        message: `Không xóa được shop này vì đã có ${vuong.join(', ')}. Muốn ẩn đi thì đổi Trạng thái sang "Ngừng".` });
+    const id = Number(req.params.id);
+    const xoaKem = String(req.query.xoaKem || '') === '1';
+    const dem = async (bang, cot, dieuKienThem) => (await pool.request().input('id', sql.Int, id)
+      .query(`SELECT COUNT(*) AS C FROM ${bang} WHERE ${cot} = @id ${dieuKienThem || ''}`)).recordset[0].C;
+    const coCot = async (bang, cot) => (await pool.request()
+      .query(`SELECT COL_LENGTH('${bang}','${cot}') AS c`)).recordset[0].c != null;
+
+    /* ================================================================================================
+       v7.27 — TÁCH BA NHÓM RÀNG BUỘC. Bản v7.23 gộp tất cả vào một câu "không xóa được" nên shop chỉ
+       mới ghé thăm một lần (chưa bán gì) cũng không xóa nổi, dù đã chuyển Trạng thái = Ngừng.
+         1. CHẶN HẲN  — chứng từ: phiếu bán hàng, đơn khách chưa hủy. Xóa shop là mất dấu vết doanh
+                        số / công nợ đã phát sinh. Giữ Trạng thái "Ngừng" là cách đúng.
+         2. XÓA KÈM   — lịch sử ghé thăm: dữ liệu vận hành của chính shop, không ai khác dùng. Cho xóa
+                        nhưng phải XÁC NHẬN vì mất hẳn (trả 409 + số lượng để giao diện hỏi lại).
+         3. TỰ GỠ     — shop nằm trong tuyến: chỉ là danh sách, gỡ ra là xong, không cần hỏi.
+       ================================================================================================ */
+    const chan = [];
+    if (await coCot('PhieuBanHang', 'ShopID')) {
+      const n = await dem('PhieuBanHang', 'ShopID');
+      if (n) chan.push(`${n} phiếu bán hàng`);
     }
-    await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM ShopBanLe WHERE ShopID=@id');
-    res.json({ success: true });
+    if (await coCot('DonKhachDatHang', 'ShopID')) {
+      const n = await dem('DonKhachDatHang', 'ShopID', "AND TrangThai <> N'Đã hủy'");
+      if (n) chan.push(`${n} đơn khách đặt hàng (chưa hủy)`);
+    }
+    if (chan.length) {
+      return res.status(400).json({ success: false, message:
+        `Không xóa được shop này vì đã phát sinh chứng từ: ${chan.join(', ')}.\n\n`
+        + 'Chứng từ bán hàng phải giữ được dấu vết bán cho ai. Cách đúng là để Trạng thái = "Ngừng" '
+        + '(shop vẫn nằm trong lịch sử nhưng không hiện ra để đặt hàng nữa).' });
+    }
+
+    const soGhe = await dem('GheTham', 'ShopID');
+    const soTuyen = await dem('TuyenChiTiet', 'ShopID');
+    if (soGhe && !xoaKem) {
+      /* 409 = "cần xác nhận", KHÁC 400 (sai/không được phép) — để giao diện biết phải hỏi lại
+         thay vì hiện thẳng câu lỗi rồi bỏ cuộc. */
+      return res.status(409).json({ success: false, canXacNhan: true, soGheTham: soGhe, soTuyen,
+        message: `Shop này có ${soGhe} lần ghé thăm/liên hệ đã ghi nhận${soTuyen ? ` và đang nằm trong ${soTuyen} tuyến` : ''}.\n\n`
+          + 'Xóa shop sẽ XÓA LUÔN toàn bộ lịch sử ghé thăm đó (không lấy lại được).' });
+    }
+
+    const tran = new sql.Transaction(pool);
+    await tran.begin();
+    try {
+      await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM TuyenChiTiet WHERE ShopID = @id');
+      if (xoaKem) await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM GheTham WHERE ShopID = @id');
+      /* Đơn đã hủy còn trỏ tới shop -> gỡ liên kết để khóa ngoại không chặn (đơn hủy không còn giá
+         trị chứng từ, nhưng vẫn giữ lại dòng đơn để không mất dấu vết là đã từng có đơn). */
+      if (await coCot('DonKhachDatHang', 'ShopID')) {
+        await new sql.Request(tran).input('id', sql.Int, id)
+          .query('UPDATE DonKhachDatHang SET ShopID = NULL WHERE ShopID = @id');
+      }
+      await new sql.Request(tran).input('id', sql.Int, id).query('DELETE FROM ShopBanLe WHERE ShopID = @id');
+      await tran.commit();
+    } catch (e) {
+      await tran.rollback();
+      throw e;
+    }
+    res.json({ success: true, data: { daXoaGheTham: xoaKem ? soGhe : 0, daGoKhoiTuyen: soTuyen } });
   } catch (err) {
+    console.error('[dms DELETE /shop] ', err);
     res.status(400).json({ success: false, message: 'Lỗi khi xóa shop: ' + err.message });
   }
 });

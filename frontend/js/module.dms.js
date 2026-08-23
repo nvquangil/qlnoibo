@@ -252,9 +252,25 @@ window.ModuleDMS = (function () {
           .catch(err => toast('Không mở được lịch sử: ' + err.message, 'error'));
       }));
       document.querySelectorAll('.dm-xoa').forEach(b => b.addEventListener('click', async () => {
-        if (!confirm('Xóa shop này?')) return;
-        try { await apiDelete('/api/dms/shop/' + b.dataset.id); toast('Đã xóa shop.', 'success'); renderShop(); }
-        catch (err) { toast(err.message, 'error'); }
+        const s2 = rows.find(x => String(x.ShopID) === b.dataset.id) || {};
+        if (!confirm(`Xóa shop ${s2.MaShop || ''} · ${s2.TenShop || ''}?`)) return;
+        /* v7.27: backend trả 409 = "có lịch sử ghé thăm, cần xác nhận xóa kèm". Hỏi lại rồi gọi lại
+           CÙNG endpoint với ?xoaKem=1 — không viết đường xóa thứ hai. */
+        const xoa = async (xoaKem) => apiDelete('/api/dms/shop/' + b.dataset.id + (xoaKem ? '?xoaKem=1' : ''));
+        try {
+          const r = await xoa(false);
+          toast('Đã xóa shop.' + (r.data && r.data.daGoKhoiTuyen ? ` Đã gỡ khỏi ${r.data.daGoKhoiTuyen} tuyến.` : ''), 'success');
+          renderShop();
+        } catch (err) {
+          if (err.status === 409 && err.data && err.data.canXacNhan) {
+            if (!confirm(err.message + '\n\nBấm OK để xóa shop VÀ toàn bộ lịch sử ghé thăm.')) return;
+            try {
+              const r2 = await xoa(true);
+              toast(`Đã xóa shop và ${(r2.data || {}).daXoaGheTham || 0} lần ghé thăm.`, 'success');
+              renderShop();
+            } catch (e2) { toast(e2.message, 'error'); }
+          } else { toast(err.message, 'error'); }
+        }
       }));
       document.querySelectorAll('.dm-anh').forEach(img => img.addEventListener('click',
         () => xemAnh(img.dataset.src, 'Ảnh mặt tiền')));

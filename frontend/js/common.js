@@ -36,7 +36,13 @@ async function apiFetch(url, options = {}) {
     throw new Error(data.message || 'Chưa đăng nhập hoặc sai thông tin đăng nhập.');
   }
   if (!res.ok || data.success === false) {
-    throw new Error(data.message || 'Có lỗi xảy ra (' + res.status + ')');
+    /* v7.27: GẮN status + body vào Error. Trước đây chỉ còn `message`, nên chỗ gọi không phân biệt
+       được "sai/không được phép" (400) với "cần người dùng xác nhận rồi làm tiếp" (409) — muốn hỏi
+       lại một câu là phải viết fetch riêng, tức là có hai đường gọi API song song. */
+    const err = new Error(data.message || 'Có lỗi xảy ra (' + res.status + ')');
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   return data;
 }
