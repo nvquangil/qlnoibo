@@ -225,8 +225,22 @@ router.get('/cay/:cayId/lichsu', requireAuth, requirePermission('KHOVAI', 'view'
       WHERE ct.CayID = @id
       ORDER BY px.NgayXuat, px.PhieuXuatID`)).recordset;
 
+    /* v7.34.1 SUA LOI TIEM AN: bang PhieuXuatVatTuVai (migration_v528) KHONG co cot SoMet — chi co
+       ID / PhieuVatTuID / CayID / KieuVai / KGXuat. Hien tai bang do khong ton tai nen coBang() chan
+       lai, nhung he thong nao chay migration_v528 la man "chi tiet cay vai" nem ngay
+       "Invalid column name 'SoMet'". Nay do cot bang COL_LENGTH truoc khi dua vao SELECT.
+       Bat duoc bang utils/kiem_ten_bang_cot.js. */
+    let coSoMetVT = false;
+    if (await coBang('PhieuXuatVatTuVai')) {
+      try {
+        coSoMetVT = ((await pool.request().query(
+          `SELECT COL_LENGTH('PhieuXuatVatTuVai','SoMet') AS a`)).recordset[0] || {}).a != null;
+      } catch (e) { coSoMetVT = false; }
+    }
     const xuatVatTu = (await coBang('PhieuXuatVatTuVai')) ? (await pool.request().input('id', sql.Int, id).query(`
-      SELECT vt.PhieuVatTuID, vt.KGXuat, vt.SoMet, p.NgayXuat, p.MaDon, p.GhiChu
+      SELECT vt.PhieuVatTuID, vt.KGXuat,
+             ${coSoMetVT ? 'vt.SoMet' : 'CAST(NULL AS DECIMAL(10,2)) AS SoMet'},
+             p.NgayXuat, p.MaDon, p.GhiChu
       FROM PhieuXuatVatTuVai vt
       LEFT JOIN PhieuXuatVatTu p ON p.PhieuVatTuID = vt.PhieuVatTuID
       WHERE vt.CayID = @id ORDER BY p.NgayXuat`)).recordset : [];

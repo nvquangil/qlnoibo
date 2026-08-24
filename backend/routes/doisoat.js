@@ -41,7 +41,10 @@ async function layCauHinh(pool, khoa, macDinh) {
 router.get('/taikhoan', requireAuth, requirePermission('DOISOAT', 'view'), requireChucNang('DOISOAT', 'taikhoan'), async (req, res) => {
   const pool = await getPool();
   const rs = (await pool.request().query(`
-    SELECT b.*, tk.TenTaiKhoan,
+    ${/* v7.34.1 SUA LOI: bang danh muc tai khoan ke toan ten cot la TenTK, KHONG phai TenTaiKhoan
+         -> route nay truoc do luon nem "Invalid column name 'TenTaiKhoan'". Cung dung loi da mac o
+         congno.js v7.32.1; nay bat duoc bang utils/kiem_ten_bang_cot.js. */''}
+    SELECT b.*, tk.TenTK AS TenTaiKhoan,
            (SELECT COUNT(*) FROM BankGiaoDich g WHERE g.BankTKID = b.BankTKID) AS SoGiaoDich
     FROM BankTaiKhoan b
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = b.TaiKhoanID

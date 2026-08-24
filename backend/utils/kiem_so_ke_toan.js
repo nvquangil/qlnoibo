@@ -155,8 +155,14 @@ const chiTietNCC = new Map([
   wsN.eachRow((r, i) => { if (!dongTDn && String(r.getCell(1).value || '').trim() === 'Mã') dongTDn = i; });
   const nhanN = [];
   for (let c = 8; c <= 9; c++) nhanN.push(String(wsN.getRow(dongTDn).getCell(c).value || ''));
-  ok(nhanN.join('|') === 'Phiếu chi|Mua hàng',
-    'Sổ NHÀ CUNG CẤP: 2 cột tiền là "Phiếu chi" / "Mua hàng"', nhanN.join(' | '));
+  ok(nhanN.join('|') === 'Mua hàng|Phiếu chi',
+    'Sổ NHÀ CUNG CẤP: 2 cột tiền là "Mua hàng" / "Phiếu chi" - CUNG THU TU voi so khach hang',
+    nhanN.join(' | '));
+  /* Thu tu 2 cot tien phai GIONG NHAU o ca hai so: cot 8 = hang, cot 9 = tien. Dao thu tu o mot so
+     la loi da tung mac (nguoi dung phai nhac). */
+  const duDauN = wsN.getRow(dongTDn + 2);
+  ok(String(duDauN.getCell(4).value || '') === 'Dư đầu kỳ',
+    'Sổ NCC cũng có dòng "Dư đầu kỳ" ở cùng vị trí', String(duDauN.getCell(4).value));
 
   /* Doc toan bo dong du lieu de kiem thu tu va dong chi tiet */
   const bang = [];

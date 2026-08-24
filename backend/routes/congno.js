@@ -1310,11 +1310,14 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId) {
      - Xep CU -> MOI (so ke toan doc tu tren xuong), nguoc voi man hinh xem.
 
    TEN 2 COT TIEN (yeu cau: "cho Ps no Ps co thay bang phieu thu phieu chi"):
-     - Khach hang     : 'Bán hàng'  (tang no)  |  'Phiếu thu' (giam no)
-     - Nha cung cap   : 'Phiếu chi' (giam no)  |  'Mua hàng'  (tang no)
+     - Khach hang     : 'Bán hàng' | 'Phiếu thu'
+     - Nha cung cap   : 'Mua hàng' | 'Phiếu chi'
    Dat ten theo CHUNG TU thuc su nam trong cot do. KHONG the de ca hai cot cua CUNG mot so la
-   "Phieu thu" / "Phieu chi": tren so khach hang, cot tang no chua PHIEU BAN HANG chu khong phai
-   phieu chi -> ghi vay la sai chung tu.
+   "Phieu thu" / "Phieu chi": tren so khach hang, cot dau chua PHIEU BAN HANG chu khong phai phieu
+   chi -> ghi vay la sai chung tu.
+   THU TU: cot 8 luon la HANG (lam tang no), cot 9 luon la TIEN (lam giam no) - GIONG NHAU o ca hai
+   so. Ban dau tôi dao thu tu o so NCC theo quy uoc No/Co ke toan (Phieu chi | Mua hang), nhung nhu
+   the hai so doc nguoc chieu nhau nen rat de nhin lan; nguoi dung da yeu cau doi lai.
 
    DUNG LAI soChiTietKH / soChiTietNCC — khong tinh lai cong no lan hai (mot nghiep vu = mot luong
    du lieu). Hai ban tinh song song chac chan se troi khoi nhau.
@@ -1545,8 +1548,11 @@ function veSoKeToan(wb, tienIch, opt) {
      soChiTietKH/NCC tinh, lay lai la chac chan khop voi man hinh xem. */
   const duDau = truocKy.length ? so(truocKy[truocKy.length - 1].LuyKe) : 0;
 
-  const nhanNo = laKH ? 'Bán hàng' : 'Phiếu chi';
-  const nhanCo = laKH ? 'Phiếu thu' : 'Mua hàng';
+  /* v7.34.1: CUNG MOT THU TU cho ca hai so — cot 8 luon la HANG (tang no), cot 9 luon la TIEN
+     (giam no). Ban dau tôi dao thu tu o so NCC theo dung quy uoc No/Co cua ke toan, nhung nhu the
+     hai so doc nguoc nhau, rat de nhin lan. Nguoi dung yeu cau: "Mua hang, Phieu chi". */
+  const nhanNo = laKH ? 'Bán hàng' : 'Mua hàng';
+  const nhanCo = laKH ? 'Phiếu thu' : 'Phiếu chi';
   const cot = [
     { header: 'Mã', key: 'Ma', width: 6 },
     { header: 'Ngày', key: 'Ngay', width: 11 },
@@ -1570,12 +1576,9 @@ function veSoKeToan(wb, tienIch, opt) {
   ghiChu.getCell(1).font = { italic: true, size: 9, color: { argb: 'FF5F6368' } };
   ws.mergeCells(ghiChu.number, 1, ghiChu.number, cot.length);
 
-  /* --- Du dau ky. So du duong: khach thi nam cot NO, NCC thi nam cot CO (ta dang no ho). --- */
-  const oDu = (giaTri) => {
-    const duong = giaTri >= 0;
-    const benNo = laKH ? duong : !duong;
-    return benNo ? { No: Math.abs(giaTri) } : { Co: Math.abs(giaTri) };
-  };
+  /* --- Du dau / cuoi ky. So du DUONG = con no -> dat o cot 8 (cot "hang", cung cot voi phat sinh
+     tang no) cho ca hai so. So du AM (tra thua / da thu qua) -> cot 9, de doc thay ngay la nguoc dau. --- */
+  const oDu = (giaTri) => (giaTri >= 0 ? { No: Math.abs(giaTri) } : { Co: Math.abs(giaTri) });
   const rDau = ws.addRow({ DienGiai: 'Dư đầu kỳ', ...oDu(duDau) });
   rDau.font = { bold: true };
 
