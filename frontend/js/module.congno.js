@@ -478,7 +478,8 @@ window.ModuleCongNo = (function () {
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
-        <button class="btn small secondary" id="btnXuat">⬇️ Xuất Excel</button>
+        ${/* v7.34: ghi rõ "tổng hợp" — sổ chi tiết theo mẫu kế toán nằm trong popup từng khách. */''}
+        <button class="btn small secondary" id="btnXuat" title="Bảng tổng hợp công nợ + sổ chi tiết của tất cả khách + các sheet chứng từ">⬇️ Xuất tổng hợp (Excel)</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải thu: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} khách</span>
       </div>
       <div class="empty-hint" style="text-align:left;">Phải thu = tổng <b>phiếu bán hàng</b> (chưa hủy) + điều chỉnh · Đã thu = tổng <b>phiếu thu</b> · Bấm tên khách để xem sổ chi tiết.</div>
@@ -517,14 +518,54 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
-      ${/* v6.47: xuất riêng sổ của khách này. */''}
+      ${/* v6.47: xuất riêng sổ của khách này. v7.34: thêm khối kỳ + nút xuất mẫu sổ kế toán. */''}
+      ${khoiXuatSoHtml()}
       <div class="modal-actions">
         <button type="button" class="btn small secondary" id="btnXuatCT" title="File gồm: sổ chi tiết + chi tiết từng dòng hàng của phiếu bán hàng + danh sách phiếu thu">⬇️ Xuất Excel sổ này (kèm chứng từ)</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
     modal.querySelector('#btnXuatCT').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=kh&khach=' + encodeURIComponent(khach), 'cong_no_khach.xlsx'));
+    noiDayXuatSo(modal, 'loai=kh&khach=' + encodeURIComponent(khach), 'so_chi_tiet_cong_no.xlsx');   // v7.34
     noiDaySoPhieu(modal, () => soChiTietKH(khach));   // v6.55
+  }
+
+  /* ================================================================================================
+     v7.34 — KHỐI XUẤT EXCEL trong popup sổ công nợ (dùng CHUNG cho khách hàng và nhà cung cấp).
+     Hai nút, hai mục đích khác nhau — đặt cạnh nhau để không ai phải đoán:
+       • "Xuất sổ chi tiết"  -> ?kieu=so  : mẫu SỔ KẾ TOÁN 9 cột (Mã / Ngày / Số / Diễn giải / Số lượng
+                                /Đơn giá / Thành tiền / 2 cột tiền), có Dư đầu kỳ – Phát sinh trong kỳ
+                                – Dư cuối kỳ và các dòng hàng thụt lề dưới từng chứng từ. Theo KỲ.
+       • "Xuất tổng hợp"     -> không kèm kieu : giữ ĐÚNG file như trước (bảng tổng hợp + sổ chi tiết
+                                của tất cả đối tượng + các sheet chứng từ).
+     Kỳ mặc định: 01/01 năm nay -> hôm nay. Để trống cả hai ô = lấy toàn bộ phát sinh từ đầu.
+     ================================================================================================ */
+  function ngayISO(d) {
+    const h = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${h(d.getMonth() + 1)}-${h(d.getDate())}`;
+  }
+  function khoiXuatSoHtml() {
+    const nay = new Date();
+    return `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 0;padding-top:8px;border-top:1px solid #e0e0e0;">
+        <span style="font-size:12px;color:#5f6368;">Kỳ:</span>
+        <input type="date" id="soTuNgay" value="${ngayISO(new Date(nay.getFullYear(), 0, 1))}" style="width:auto;">
+        <span style="font-size:12px;color:#5f6368;">đến</span>
+        <input type="date" id="soDenNgay" value="${ngayISO(nay)}" style="width:auto;">
+        <button type="button" class="btn small" id="btnXuatSo"
+          title="Mẫu sổ kế toán 9 cột: Dư đầu kỳ – phát sinh từng chứng từ (kèm dòng hàng) – Dư cuối kỳ">⬇️ Xuất sổ chi tiết</button>
+      </div>`;
+  }
+  /* `duong` là phần query xác định đối tượng, vd 'loai=kh&khach=...' hoặc 'loai=ncc&nccId=12'. */
+  function noiDayXuatSo(modal, duong, tenFile) {
+    const nut = modal.querySelector('#btnXuatSo');
+    if (!nut) return;
+    nut.addEventListener('click', () => {
+      const tu = (modal.querySelector('#soTuNgay') || {}).value || '';
+      const den = (modal.querySelector('#soDenNgay') || {}).value || '';
+      if (tu && den && tu > den) return toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error');
+      taiFile(`/api/congno/export?${duong}&kieu=so&tuNgay=${tu}&denNgay=${den}`, tenFile);
+    });
   }
 
   /* v6.55: ô SỐ PHIẾU trong sổ công nợ — bấm được với mọi chứng từ có màn chi tiết.
@@ -636,7 +677,7 @@ window.ModuleCongNo = (function () {
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
-        <button class="btn small secondary" id="btnXuat">⬇️ Xuất Excel</button>
+        <button class="btn small secondary" id="btnXuat" title="Bảng tổng hợp công nợ + sổ chi tiết của tất cả NCC + sheet phiếu chi">⬇️ Xuất tổng hợp (Excel)</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} NCC</span>
       </div>
       <div class="empty-hint" style="text-align:left;">Phải trả tự tính từ <b>phiếu nhập vải</b> (KG × đơn giá từng cây) + <b>phiếu nhập phụ kiện</b> (SL × đơn giá) + điều chỉnh nhập tay (gia công, in thêu, nợ đầu kỳ). Đã trả = tổng <b>phiếu chi</b> có chọn NCC. Bấm tên NCC để xem sổ chi tiết.</div>
@@ -673,12 +714,14 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
+      ${khoiXuatSoHtml() /* v7.34 */}
       <div class="modal-actions">
         <button type="button" class="btn small secondary" id="btnXuatCT">⬇️ Xuất Excel sổ này</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
     modal.querySelector('#btnXuatCT').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=ncc&nccId=' + encodeURIComponent(nccId), 'cong_no_ncc.xlsx'));
+    noiDayXuatSo(modal, 'loai=ncc&nccId=' + encodeURIComponent(nccId), 'so_chi_tiet_cong_no_ncc.xlsx');   // v7.34
     noiDaySoPhieu(modal, () => soChiTietNCC(nccId));   // v6.55
   }
 
