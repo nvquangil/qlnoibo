@@ -2777,7 +2777,8 @@ window.ModuleKhoHang = (function () {
         <button type="button" class="btn" id="btnIn">🖨️ In phiếu</button>
       </div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
-    modal.querySelector('#btnIn').addEventListener('click', () => printPhieuBanHang(h, d.chiTiet));
+    modal.querySelector('#btnIn').addEventListener('click', () => inPhieuBanHangDayDu(h, d.chiTiet)
+      .catch(err => toast('Không in được: ' + err.message, 'error')));
   }
 
   // Bảng dòng hàng + chân phiếu (dùng cho cả modal xem và bản in)
@@ -2914,12 +2915,38 @@ window.ModuleKhoHang = (function () {
 
   /* v6.24.5: 2 dòng công nợ đặt DƯỚI dòng "Số tiền bằng chữ" (theo yêu cầu), không nằm trong bảng. */
   function khoiCongNoHtml(h) {
-    if (h.CongNoTruoc == null) return '';
+    /* v7.29 — TRUOC DAY: thieu `CongNoTruoc` thi IM LANG bo ca khoi cong no. Ket qua: phieu PX26093
+       in ra KHONG co dong "Công nợ trước phiếu" trong khi phieu khac co — khach doi chieu khong hieu,
+       ma nguoi in cung khong biet la thieu.
+       Nay: `printPhieuBanHang` bao dam luon co du lieu (tu goi API neu thieu). Neu VAN thieu thi in
+       dong canh bao RO RANG thay vi bo mat — mot dong bao thieu con hon mot phieu sai im lang. */
+    if (h.CongNoTruoc == null) {
+      console.warn('[phieu ban hang] THIEU CongNoTruoc khi in phieu', h.SoPhieu, '- goi /api/banhang/phieu/:id de lay du header.');
+      return `<table style="width:56%;margin-left:auto;margin-top:6px;">
+        <tr><td style="text-align:right;color:#a00;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}</td>
+          <td style="text-align:right;width:38%;color:#a00;">(không lấy được)</td></tr></table>`;
+    }
     return `<table style="width:56%;margin-left:auto;margin-top:6px;">
       <tr><td style="text-align:right;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}</td>
         <td style="text-align:right;width:38%;">${fmtTien(h.CongNoTruoc)}</td></tr>
       <tr style="font-weight:bold;background:#fff3e0;"><td style="text-align:right;">TỔNG CÔNG NỢ</td>
         <td style="text-align:right;font-size:15px;">${fmtTien(h.TongCongNo)}</td></tr></table>`;
+  }
+
+  /* v7.29: BAO DAM du lieu truoc khi in. Moi duong in phai co `CongNoTruoc`/`TongCongNo` — hai truong
+     nay CHI co o GET /api/banhang/phieu/:id (backend tinh tai thoi diem doc), khong nam trong bang.
+     Duong nao truyen header lay tu danh sach phieu (thieu 2 truong do) thi tu goi API bo sung.
+     Async: moi cho goi phai `.catch` de khong thanh "bam In khong thay gi xay ra". */
+  async function inPhieuBanHangDayDu(h, ct) {
+    if (h && h.CongNoTruoc == null && h.PhieuBHID) {
+      try {
+        const d = (await apiGet('/api/banhang/phieu/' + h.PhieuBHID)).data;
+        return printPhieuBanHang(d.header, d.chiTiet || ct);
+      } catch (e) {
+        toast('Không lấy được công nợ của phiếu: ' + e.message, 'error');
+      }
+    }
+    return printPhieuBanHang(h, ct);
   }
 
   // In ĐÚNG khuôn mẫu Word: đầu phiếu công ty, tiêu đề, ngày + số, khách/SĐT/địa chỉ, bảng, tiền bằng chữ, 3 ô ký.
