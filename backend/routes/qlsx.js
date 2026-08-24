@@ -5,6 +5,7 @@ const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, canUpdateStage, requireChucNang, requireChucNangAny, coQuyenChucNang } = require('../middleware/auth');
 const { checkOverdueOrders } = require('../utils/checkOverdue');
 const { raSoatXoaDonHang, cauBaoChan } = require('../utils/donHangThamChieu');   // v7.11: xoa lenh SX
+const { conHangSQL } = require('../utils/tonVai');   // v7.36: "con hang" = con KG HOAC con MET
 const { notifyStageUsers } = require('./notifications');
 
 const router = express.Router();
@@ -2355,7 +2356,9 @@ router.post('/dongiamay/import', requireAuth, requirePermission('QLSX', 'create'
 // Proxy sang du lieu cay vai kho (vw_TonCayVai) de man hinh QLSX chon cay ma khong can quyen module KHOVAI.
 router.get('/vaicay-kho', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   const pool = await getPool();
-  const result = await pool.request().query('SELECT * FROM vw_TonCayVai WHERE KGCon > 0 ORDER BY NgayNhap DESC');
+  // v7.36: con KG HOAC con MET (vai nhap theo met/cay co KGNhap = 0) - xem utils/tonVai.js
+  const result = await pool.request().query(
+    `SELECT * FROM vw_TonCayVai t WHERE ${conHangSQL('t')} ORDER BY t.NgayNhap DESC`);
   res.json({ success: true, data: result.recordset });
 });
 
@@ -2372,7 +2375,7 @@ router.get('/orders/:maDH/vaicay-kho-loc', requireAuth, requirePermission('QLSX'
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     JOIN DonHangChiTietVai ct ON ct.DonHangID = @id AND ct.MauSacID = dv.MauSacID
       AND (ct.LoaiVaiID IS NULL OR ct.LoaiVaiID = dv.LoaiVaiID)
-    WHERE vc.KGCon > 0
+    WHERE ${conHangSQL('vc')}
     ORDER BY vc.NgayNhap DESC`);
   res.json({ success: true, data: result.recordset });
 });

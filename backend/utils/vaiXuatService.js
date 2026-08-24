@@ -1,4 +1,5 @@
 const { sql } = require('../db');
+const { capNhatTrangThaiCay } = require('./tonVai');   // v7.36: MOT ban cong thuc TrangThai cay vai
 
 // Logic xuat kho vai dung chung cho:
 //  - Xuat thu cong tu phan he Kho vai (routes/khovai.js -> POST /xuat)
@@ -51,7 +52,12 @@ async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan,
   const chiTiet = [];
   for (const roll of rolls) {
     const cayResult = await pool.request().input('id', sql.Int, roll.cayId).query('SELECT * FROM VaiCay WHERE CayID=@id');
-    if (!cayResult.recordset.length) continue;
+    /* v7.36: truoc day la `continue` IM LANG -> cayId sai/khong con thi phieu van duoc tao nhung
+       THIEU DONG do (hoac rong hoan toan), nguoi dung thay "luu thanh cong ma khong xuat gi".
+       Nay bao loi ro rang; ca ham nam trong 1 giao dich nen phieu khong bi tao nua vo. */
+    if (!cayResult.recordset.length) {
+      throw new Error(`Không tìm thấy cây vải (CayID=${roll.cayId}) — có thể cây đã bị xóa. Tải lại trang rồi chọn lại.`);
+    }
     const cay = cayResult.recordset[0];
     const kgXuat = Number(roll.kgXuat) || 0;
     const soMet = (roll.soMet === '' || roll.soMet == null) ? null : Number(roll.soMet);   // v5.50
@@ -64,18 +70,12 @@ async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan,
       .input('KieuVai', sql.NVarChar, roll.kieuVai === 'Phối' ? 'Phối' : 'Chính')   // v5.31: Chính/Phối tung cay
       .query('INSERT INTO PhieuXuatVaiChiTiet (PhieuXuatID, CayID, KGXuat, SoMet, KieuVai) VALUES (@PhieuXuatID, @CayID, @KGXuat, @SoMet, @KieuVai)');
 
-    const sumResult = await pool.request().input('id', sql.Int, roll.cayId)
-      .query('SELECT ISNULL(SUM(KGXuat),0) AS Tong FROM PhieuXuatVaiChiTiet WHERE CayID=@id');
-    const daXuat = Number(sumResult.recordset[0].Tong) || 0;
-    const kgCon = Math.round((Number(cay.KGNhap) - daXuat) * 100) / 100;
-    const trangThai = kgCon <= 0.05 ? 'Hết' : 'Cây lẻ';
+    /* v7.36: dung HAM CHUNG capNhatTrangThaiCay (utils/tonVai.js) thay vi copy cong thuc.
+       Ham do xet CA MET — truoc day cho nay chi xet KG nen cay quan theo MET/CAY (KGNhap = 0 =>
+       kgCon = 0) bi danh 'Hết' NGAY LAN XUAT DAU TIEN du con nguyen met. */
+    const tt = await capNhatTrangThaiCay(pool, sql, roll.cayId) || {};
 
-    await pool.request()
-      .input('id', sql.Int, roll.cayId)
-      .input('TrangThai', sql.NVarChar, trangThai)
-      .query('UPDATE VaiCay SET TrangThai=@TrangThai WHERE CayID=@id');
-
-    chiTiet.push({ cayId: roll.cayId, maCay: cay.MaCay, kgXuat, kgCon });
+    chiTiet.push({ cayId: roll.cayId, maCay: cay.MaCay, kgXuat, kgCon: tt.kgCon, metCon: tt.metCon });
   }
   return { phieuXuatId, chiTiet };
 }

@@ -3,6 +3,9 @@ const ExcelJS = require('exceljs'); // v5.19 (muc 4): xuat Excel cho Ton kho vai
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { xuatKhoVai } = require('../utils/vaiXuatService');
+/* v7.36: MOT dinh nghia "con hang" cho ca he thong (con KG HOAC con MET) — xem utils/tonVai.js.
+   Truoc day 8 cho tu viet `KGCon > 0` nen vai nhap theo met/cay (KGNhap = 0) vo hinh o moi man xuat. */
+const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung } = require('../utils/tonVai');
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
 
@@ -28,22 +31,12 @@ const router = express.Router();
 // thu tu neu trung) neu day la lan dau nhap loai+mau nay. Giu nguyen moi metadata (Kho vai/GSM/MaPM...)
 // cua DanhMucVai da co - CHI tao moi khi thuc su chua ton tai cap Loai vai+Mau nay.
 /* v6.58: TINH LAI TrangThai cua 1 cay vai (Nguyên cây / Cây lẻ / Hết).
-   TrangThai la cot LUU SAN chu khong tinh tu view, nen moi cho lam doi KGNhap hoac so KG da xuat
-   deu phai goi ham nay. Truoc day cong thuc nay nam RAI RAC 3 cho (PUT /xuat/:id, DELETE /xuat/:id,
-   utils/vaiXuatService.js) va PUT /nhap/:id thi QUEN han -> sua KG nhap xong trang thai dung im.
-   Gom lai 1 cho de sau nay sua cong thuc chi phai sua 1 lan. */
+   v7.36: cong thuc DA CHUYEN HAN sang utils/tonVai.js (xet ca MET, khong chi KG) va CA BON cho goi
+   cung mot ban — truoc day v6.58 gom vao day nhung PUT /xuat/:id, DELETE /xuat/:id va
+   utils/vaiXuatService.js VAN COPY cong thuc rieng. Ham nay chi con la lop bao de khong phai doi
+   moi cho goi. */
 async function capNhatTrangThaiCay(pool, cayId) {
-  const cay = await pool.request().input('id', sql.Int, cayId)
-    .query('SELECT KGNhap FROM VaiCay WHERE CayID=@id');
-  if (!cay.recordset.length) return;
-  const kgNhap = Number(cay.recordset[0].KGNhap) || 0;
-  const sum = await pool.request().input('id', sql.Int, cayId)
-    .query('SELECT ISNULL(SUM(KGXuat),0) AS Tong FROM PhieuXuatVaiChiTiet WHERE CayID=@id');
-  const daXuat = Number(sum.recordset[0].Tong) || 0;
-  const kgCon = Math.round((kgNhap - daXuat) * 100) / 100;
-  const trangThai = daXuat <= 0 ? 'Nguyên cây' : (kgCon <= 0.05 ? 'Hết' : 'Cây lẻ');
-  await pool.request().input('id', sql.Int, cayId).input('TrangThai', sql.NVarChar, trangThai)
-    .query('UPDATE VaiCay SET TrangThai=@TrangThai WHERE CayID=@id');
+  return capNhatTrangThaiCayDungChung(pool, sql, cayId);
 }
 
 async function resolveOrCreateVaiId(pool, loaiVaiId, mauSacId) {
@@ -138,7 +131,7 @@ router.get('/rolls', requireAuth, requirePermission('KHOVAI', 'view'), async (re
   const onlyAvailable = req.query.available !== 'false';
   const result = await pool.request().query('SELECT * FROM vw_TonCayVai ORDER BY NgayNhap DESC');
   let rows = result.recordset;
-  if (onlyAvailable) rows = rows.filter(r => Number(r.KGCon) > 0);
+  if (onlyAvailable) rows = rows.filter(conHang);   // v7.36: con KG HOAC con MET
   if (req.query.ngayNhap) {
     const target = new Date(req.query.ngayNhap).toDateString();
     rows = rows.filter(r => new Date(r.NgayNhap).toDateString() === target);
@@ -174,7 +167,7 @@ router.get('/phieunhap/:id/cay', requireAuth, requirePermission('KHOVAI', 'view'
   const rs = (await pool.request().input('id', sql.Int, req.params.id).query(`
     SELECT t.*, vc.DonGiaNhap
     FROM vw_TonCayVai t JOIN VaiCay vc ON vc.CayID = t.CayID
-    WHERE vc.PhieuNhapID = @id AND t.KGCon > 0
+    WHERE vc.PhieuNhapID = @id AND ${conHangSQL('t')}
     ORDER BY t.MaCay`)).recordset;
   res.json({ success: true, data: rs });
 });
@@ -271,7 +264,7 @@ router.get('/rolls/export', requireAuth, requirePermission('KHOVAI', 'view'), as
     const onlyAvailable = req.query.available !== 'false';
     const result = await pool.request().query('SELECT * FROM vw_TonCayVai ORDER BY NgayNhap DESC');
     let rows = result.recordset;
-    if (onlyAvailable) rows = rows.filter(r => Number(r.KGCon) > 0);
+    if (onlyAvailable) rows = rows.filter(conHang);   // v7.36: con KG HOAC con MET
     await sendSimpleExcel(res, 'the_kho_vai_cay.xlsx', 'Thẻ kho vải cây', [
       { header: 'Mã cây', key: 'MaCay', width: 16 },
       { header: 'Mã vải', key: 'MaVai', width: 16 },
@@ -330,15 +323,23 @@ router.get('/orders', requireAuth, requirePermission('KHOVAI', 'view'), requireC
 // them ca Mau, khong chi Loai vai) nho co san DonHangChiTietVai.MauSacID tu Cau truc vai cua Ra lenh SX.
 router.get('/orders/:donHangId/vaichophep', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'xuat'), async (req, res) => {
   const pool = await getPool();
-  // v5.47: KHÔI PHỤC lọc cây theo chỉ định — chỉ cây vải CÙNG Loại vải + Màu với 1 dòng "Chỉ định vải SX"
-  // (SoKGYeuCau > 0) của đơn, còn tồn (KGCon > 0). (Đơn khai Loại vải/Màu kiểu "gõ tự do" — không có
-  // LoaiVaiID/MauSacID — sẽ không khớp cây nào; cần chọn Loại vải/Màu từ danh mục để xuất theo chỉ định.)
+  /* v5.47: lọc cây theo chỉ định — chỉ cây vải CÙNG Loại vải + Màu với 1 dòng "Chỉ định vải SX" của
+     đơn, còn hàng. (Đơn khai Loại vải/Màu kiểu "gõ tự do" — không có LoaiVaiID/MauSacID — sẽ không
+     khớp cây nào; cần chọn Loại vải/Màu từ danh mục.)
+
+     v7.36 SỬA HAI LỖI ở đúng câu này:
+     1) `t.KGCon > 0`  ->  còn KG HOẶC còn MÉT (conHangSQL). Vải nhập theo mét/cây có KGNhap = 0 nên
+        KGCon = 0 ngay từ lúc nhập; điều kiện cũ coi như hết ⇒ có hàng thật mà không xuất được.
+     2) `cd.SoKGYeuCau > 0`  ->  KG > 0 HOẶC SỐ MÉT > 0. v5.64 đã nới điều kiện này ở GET /orders
+        (dòng 319) cho ca "chỉ khai theo SỐ MÉT" nhưng QUÊN sửa ở đây và ở perMauResult bên dưới ⇒ đơn
+        VẪN HIỆN trong dropdown mà danh sách cây lại trống, người lập phiếu tưởng nút hỏng. */
   const cayResult = await pool.request().input('id', sql.Int, req.params.donHangId).query(`
     SELECT t.* FROM vw_TonCayVai t
     JOIN DanhMucVai dv ON dv.VaiID = t.VaiID
-    WHERE t.KGCon > 0
+    WHERE ${conHangSQL('t')}
       AND EXISTS (SELECT 1 FROM ChiDinhVaiSX cd
-                  WHERE cd.DonHangID = @id AND cd.SoKGYeuCau > 0
+                  WHERE cd.DonHangID = @id
+                    AND (ISNULL(cd.SoKGYeuCau, 0) > 0 OR ISNULL(cd.SoMet, 0) > 0)
                     AND cd.LoaiVaiID = dv.LoaiVaiID AND cd.MauSacID = dv.MauSacID)
     ORDER BY t.NgayNhap DESC`);
   // v5.19 (muc 3.1, yeu cau "nếu theo đơn hàng thì hiển thị tổng số lượng theo chỉ định vải SX để tham
@@ -367,7 +368,9 @@ router.get('/orders/:donHangId/vaichophep', requireAuth, requirePermission('KHOV
     FROM ChiDinhVaiSX cd
     LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = cd.LoaiVaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = cd.MauSacID
-    WHERE cd.DonHangID = @id AND cd.SoKGYeuCau IS NOT NULL AND cd.SoKGYeuCau > 0
+    ${/* v7.36: đồng bộ với câu lấy cây ở trên — dòng chỉ định khai theo SỐ MÉT (KG để trống) vẫn
+         phải hiện trong bảng tham khảo, không thì người lập phiếu không biết còn thiếu bao nhiêu. */''}
+    WHERE cd.DonHangID = @id AND (ISNULL(cd.SoKGYeuCau, 0) > 0 OR ISNULL(cd.SoMet, 0) > 0)
     ORDER BY cd.Kieu, lv.TenLoaiVai, ms.TenMau`);
   res.json({ success: true, data: { cayChoPhep: cayResult.recordset, chiDinhVaiSX: chiDinhResult.recordset[0], chiDinhTheoMau: perMauResult.recordset } });
 });
@@ -901,17 +904,8 @@ router.put('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
       }
     }
 
-    for (const cayId of affectedCayIds) {
-      const cayResult = await pool.request().input('id', sql.Int, cayId).query('SELECT KGNhap FROM VaiCay WHERE CayID=@id');
-      if (!cayResult.recordset.length) continue;
-      const kgNhap = Number(cayResult.recordset[0].KGNhap) || 0;
-      const sumResult = await pool.request().input('id', sql.Int, cayId).query('SELECT ISNULL(SUM(KGXuat),0) AS Tong FROM PhieuXuatVaiChiTiet WHERE CayID=@id');
-      const daXuat = Number(sumResult.recordset[0].Tong) || 0;
-      const kgCon = Math.round((kgNhap - daXuat) * 100) / 100;
-      const trangThai = daXuat <= 0 ? 'Nguyên cây' : (kgCon <= 0.05 ? 'Hết' : 'Cây lẻ');
-      await pool.request().input('id', sql.Int, cayId).input('TrangThai', sql.NVarChar, trangThai)
-        .query('UPDATE VaiCay SET TrangThai=@TrangThai WHERE CayID=@id');
-    }
+    // v7.36: dung HAM CHUNG (xet ca met) thay vi copy cong thuc — xem utils/tonVai.js
+    for (const cayId of affectedCayIds) await capNhatTrangThaiCay(pool, cayId);
 
     res.json({ success: true });
   } catch (err) {
@@ -930,17 +924,8 @@ router.delete('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'delete'), r
     const linesResult = await pool.request().input('id', sql.Int, id).query('SELECT CayID FROM PhieuXuatVaiChiTiet WHERE PhieuXuatID=@id');
     const cayIds = linesResult.recordset.map(r => r.CayID);
     await pool.request().input('id', sql.Int, id).query('DELETE FROM PhieuXuatVai WHERE PhieuXuatID=@id');
-    for (const cayId of cayIds) {
-      const cayResult = await pool.request().input('id', sql.Int, cayId).query('SELECT KGNhap FROM VaiCay WHERE CayID=@id');
-      if (!cayResult.recordset.length) continue;
-      const kgNhap = Number(cayResult.recordset[0].KGNhap) || 0;
-      const sumResult = await pool.request().input('id', sql.Int, cayId).query('SELECT ISNULL(SUM(KGXuat),0) AS Tong FROM PhieuXuatVaiChiTiet WHERE CayID=@id');
-      const daXuat = Number(sumResult.recordset[0].Tong) || 0;
-      const kgCon = Math.round((kgNhap - daXuat) * 100) / 100;
-      const trangThai = daXuat <= 0 ? 'Nguyên cây' : (kgCon <= 0.05 ? 'Hết' : 'Cây lẻ');
-      await pool.request().input('id', sql.Int, cayId).input('TrangThai', sql.NVarChar, trangThai)
-        .query('UPDATE VaiCay SET TrangThai=@TrangThai WHERE CayID=@id');
-    }
+    // v7.36: dung HAM CHUNG (xet ca met) thay vi copy cong thuc — xem utils/tonVai.js
+    for (const cayId of cayIds) await capNhatTrangThaiCay(pool, cayId);
     res.json({ success: true });
   } catch (err) {
     console.error(err);

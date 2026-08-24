@@ -9,6 +9,17 @@ window.ModuleKhoVai = (function () {
   // chuc nang tim + in lai tem theo ma cay o tab "In tem" de khong phai goi lai API nhieu lan.
   let rollsAllCache = null;
 
+  /* v7.36 — "CÒN HÀNG" của một cây vải: CÒN KG **HOẶC** CÒN MÉT.
+     Trước đây 3 chỗ ở file này (và 5 chỗ ở backend) tự viết `Number(r.KGCon) > 0`. Nhưng
+     `KGCon = KGNhap − KG đã xuất`, và form nhập kho CHO PHÉP KG = 0 khi vải quản theo MÉT/CÂY
+     (khovai.js: `const kg = Number(roll.kgNhap) || 0`). Cây như vậy có KGCon = 0 ngay từ lúc nhập,
+     nên bị coi là "hết" ở mọi màn xuất kho ⇒ vải có thật trong kho mà không ai xuất được.
+     Bản backend dùng chung là `backend/utils/tonVai.js` — sửa quy tắc thì phải sửa CẢ HAI nơi. */
+  function conHangVai(r) {
+    if (!r) return false;
+    return (Number(r.KGCon) || 0) > 0 || (Number(r.MetCon) || 0) > 0;
+  }
+
   function getTabs(user) {
     const perm = user.isAdmin ? { canView: true, canCreate: true, canEdit: true, canDelete: true } : (user.permissions.KHOVAI || {});
     const tabs = [
@@ -183,8 +194,8 @@ window.ModuleKhoVai = (function () {
     const res = await apiGet('/api/khovai/rolls?available=false');
     const rows = res.data;
     rollsAllCache = rows; // cache lai cho tab "In tem" dung ham tim theo ma cay (GIU DU ca cay het)
-    // v5.36: "tồn cây" chỉ hiện cây CÒN TỒN (KGCon>0), tự ẩn cây Hết. (rollsAllCache van du cho In tem.)
-    const shownRows = rows.filter(r => Number(r.KGCon) > 0);
+    // v5.36: "tồn cây" chỉ hiện cây CÒN TỒN, tự ẩn cây Hết. (rollsAllCache van du cho In tem.)
+    const shownRows = rows.filter(conHangVai);
     const colCount = perm.canEdit ? 18 : 17;   // v5.53: +Khổ vải/Số mét đã xuất/Số mét còn
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -206,7 +217,7 @@ window.ModuleKhoVai = (function () {
         <td>${fmtNumber(r.KGNhap)}</td><td>${fmtNumber(r.KGDaXuat)}</td><td>${fmtNumber(r.KGCon)}</td><td>${r.KhoVai != null ? fmtNumber(r.KhoVai) : ''}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${r.MetDaXuat != null ? fmtNumber(r.MetDaXuat) : ''}</td><td>${r.MetCon != null ? fmtNumber(r.MetCon) : ''}</td>
         <td class="act-drill-status" data-status="${escapeHtml(r.TrangThai)}" style="cursor:pointer;" title="Xem các cây vải cùng trạng thái">${statusBadge(r.TrangThai)}</td><td>${fmtDate(r.NgayNhap)}</td>
         <td>${r.QRCode ? `<a href="${r.QRCode}" target="_blank">Xem QR</a>` : ''}</td>
-        ${perm.canEdit ? `<td>${Number(r.KGCon) > 0 ? `<button type="button" class="btn small secondary act-xuat-cay" data-cayid="${r.CayID}">Xuất kho</button>` : ''}</td>` : ''}</tr>`;
+        ${perm.canEdit ? `<td>${conHangVai(r) ? `<button type="button" class="btn small secondary act-xuat-cay" data-cayid="${r.CayID}">Xuất kho</button>` : ''}</td>` : ''}</tr>`;
     }
     function wireRowActions() {
       body.querySelectorAll('.act-xuat-cay').forEach(btn => btn.onclick = () => {
@@ -248,7 +259,7 @@ window.ModuleKhoVai = (function () {
           ` · đã xuất ${fmtNumber(c.KGDaXuat)} · CÒN ${fmtNumber(c.KGCon)} KG` +
           `${c.MetCon != null ? ' / ' + fmtNumber(c.MetCon) + ' m' : ''}` +
           `${c.ViTriKho ? '\nVị trí ' + c.ViTriKho : ''}${c.NgayNhap ? ' · nhập ' + fmtDate(c.NgayNhap) : ''}`,
-          Number(c.KGCon) > 0 ? 'success' : 'info');
+          conHangVai(c) ? 'success' : 'info');
       });
     });
   }

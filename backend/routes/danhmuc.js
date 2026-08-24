@@ -15,21 +15,27 @@ router.use('/bophan', buildCrudRouter({
   ]
 }));
 
-// --- Loai vai ---
+/* --- Loai vai ---
+   v7.36: `duyNhat` cho TenLoaiVai. UNIQUE cua SQL Server bo qua khoang trang CUOI nhung khong chan
+   khoang trang DAU / DOI, nen da co that hai ban ghi cung ten "Thô karo Thắng Liên 6111"
+   (LoaiVaiID 2144 va 2153): cay vai nhap vao 2144, Chi dinh vai SX tro 2153 => phep loc cay cho phep
+   xuat (ghep bang LoaiVaiID) truot sach => "co ton dung loai dung mau ma khong xuat duoc". */
 router.use('/loaivai', buildCrudRouter({
   table: 'LoaiVai', idCol: 'LoaiVaiID', moduleCode: 'DANHMUC',
   columns: [
-    { name: 'TenLoaiVai', sqlType: sql.NVarChar, required: true },
-    { name: 'MaLoai', sqlType: sql.NVarChar }
+    { name: 'TenLoaiVai', sqlType: sql.NVarChar, required: true, duyNhat: true },
+    { name: 'MaLoai', sqlType: sql.NVarChar, trim: true }
   ]
 }));
 
-// --- Mau sac ---
+/* --- Mau sac ---
+   `MauSac.TenMau` KHONG co UNIQUE (chi MaMau co) nen con de trung hon ca LoaiVai — thuc te dang co
+   3 mau Lami trung ten khac ID. Chan ca hai cot. */
 router.use('/mausac', buildCrudRouter({
   table: 'MauSac', idCol: 'MauSacID', moduleCode: 'DANHMUC',
   columns: [
-    { name: 'MaMau', sqlType: sql.NVarChar, required: true },
-    { name: 'TenMau', sqlType: sql.NVarChar, required: true }
+    { name: 'MaMau', sqlType: sql.NVarChar, required: true, duyNhat: true },
+    { name: 'TenMau', sqlType: sql.NVarChar, required: true, duyNhat: true }
   ]
 }));
 
