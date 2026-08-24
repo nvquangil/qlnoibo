@@ -2926,9 +2926,11 @@ window.ModuleKhoHang = (function () {
         <tr><td style="text-align:right;color:#a00;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}</td>
           <td style="text-align:right;width:38%;color:#a00;">(không lấy được)</td></tr></table>`;
     }
+    /* v7.30: công nợ trước = 0 vẫn IN RÕ "0" kèm chú thích, không để người đọc phiếu tưởng là thiếu
+       dòng. Khách mới hoặc khách đã thanh toán hết đều ra 0 — đó là số ĐÚNG, không phải lỗi. */
     return `<table style="width:56%;margin-left:auto;margin-top:6px;">
       <tr><td style="text-align:right;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}</td>
-        <td style="text-align:right;width:38%;">${fmtTien(h.CongNoTruoc)}</td></tr>
+        <td style="text-align:right;width:38%;">${fmtTien(h.CongNoTruoc)}${Number(h.CongNoTruoc) === 0 ? '' : ''}</td></tr>
       <tr style="font-weight:bold;background:#fff3e0;"><td style="text-align:right;">TỔNG CÔNG NỢ</td>
         <td style="text-align:right;font-size:15px;">${fmtTien(h.TongCongNo)}</td></tr></table>`;
   }

@@ -105,6 +105,35 @@ const soDep = n => (Number(n) || 0).toLocaleString('vi-VN');
         : '  >> Backend TRA DU du lieu. Phieu in thieu dong cong no la do BAN IN CU tren may in phieu:'
           + '\n     Ctrl+F5 tren may do (hoac copy lai frontend/js/module.khohang.js + doi ?v=), roi in lai.');
 
+      /* ================================================================================================
+         v7.30 — SOI THEO `KhachHangID`: day la cach duy nhat thay duoc "cung mot khach nhung ten tren
+         phieu viet khac nhau". Cong no dang gom theo TEN KHACH (chuoi), nen chi can mot phieu ghi
+         "Minh Thành" va mot phieu ghi "Minh Thành - Hà Nội" la thanh HAI khach -> cong no truoc = 0
+         du khach da mua nhieu lan. Truong hop nay KHONG bi cau canh bao ben duoi bat (no chi so cac
+         ten chi khac khoang trang / hoa-thuong).
+         ================================================================================================ */
+      if (p.KhachHangID) {
+        const cungID = (await pool.request().input('kh', sql.Int, p.KhachHangID).query(`
+          SELECT TenKhach, COUNT(*) AS SoPhieu, SUM(TongThanhToan) AS Tong,
+                 MIN(NgayBan) AS TuNgay, MAX(NgayBan) AS DenNgay
+          FROM PhieuBanHang WHERE KhachHangID = @kh AND TrangThai <> N'Đã hủy'
+          GROUP BY TenKhach ORDER BY COUNT(*) DESC`)).recordset;
+        const tenDM = (await pool.request().input('kh', sql.Int, p.KhachHangID).query(
+          'SELECT TenKhachHang FROM KhachHang WHERE KhachHangID = @kh')).recordset[0];
+        console.log('');
+        console.log(`--- MOI PHIEU CUA KHACH #${p.KhachHangID} (danh muc: "${tenDM ? tenDM.TenKhachHang : '?'}") ---`);
+        cungID.forEach(g => console.log(`   "${g.TenKhach}": ${g.SoPhieu} phieu, ${soDep(g.Tong)}`
+          + `  (${new Date(g.TuNgay).toLocaleDateString('vi-VN')} - ${new Date(g.DenNgay).toLocaleDateString('vi-VN')})`));
+        if (cungID.length > 1) {
+          console.log('   ⚠️ CUNG MOT KHACH MA CO ' + cungID.length + ' CACH VIET TEN -> cong no bi TACH RA lam '
+            + cungID.length + ' khoi. Day chinh la ly do "cong no truoc phieu = 0" du khach da mua truoc do.');
+          console.log('   >> Gop ten: cd D:\\QLSX\\backend && node utils/gop_ten_khach.js --liet-ke');
+        }
+      } else {
+        console.log('');
+        console.log('--- Phieu nay KHONG gan KhachHangID -> khong doi chieu duoc theo ma khach.');
+      }
+
       /* Ten khach viet lech nhau la nguyen nhan pho bien lam cong no "bien mat": phieu nay ghi
          "Minh Thành - Hà Nội", phieu truoc ghi "Minh Thanh - Ha Noi" -> hai khach khac nhau. */
       const gan = (await pool.request().input('ten', sql.NVarChar, ten).query(`
