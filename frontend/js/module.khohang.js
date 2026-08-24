@@ -1265,7 +1265,12 @@ window.ModuleKhoHang = (function () {
       ${hangInfo.AnhDaiDien ? `<img class="thumb hist-main-thumb" loading="lazy" decoding="async" src="${escapeHtml(anhNho(hangInfo.AnhDaiDien, 160))}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;cursor:pointer;margin-bottom:10px;" title="Bấm để phóng to ảnh đại diện">` : ''}
 
       <h4 style="margin:0 0 8px;">Chi tiết theo màu</h4>
-      <table><thead><tr><th>Ảnh</th><th>Ghi chú</th><th>Màu</th><th>Nhập</th><th>Xuất</th><th>Tồn</th><th style="width:180px">Thao tác</th></tr></thead>
+      ${/* v7.38: THÊM cột "Nhập lại" (hàng khách trả). Nhập lại KHÔNG tạo bản ghi nhập — nó GIẢM
+           `TheKhoChiTietMau.XuatCai` (xem đầu backend/utils/nhapLaiHangHoa.js). Nên trước đây cột
+           "Nhập" không đổi và cột "Xuất" tự thấp đi mà không dòng nào giải thích ⇒ "tồn đã cộng mà
+           chi tiết không thể hiện ra". Đặt cạnh Xuất vì nó là phần ĐIỀU CHỈNH của Xuất.
+           8 cột: Ảnh · Ghi chú · Màu · Nhập · Xuất · Nhập lại · Tồn · Thao tác (colspan dưới = 8). */''}
+      <table><thead><tr><th>Ảnh</th><th>Ghi chú</th><th>Màu</th><th>Nhập</th><th>Xuất</th><th>Nhập lại</th><th>Tồn</th><th style="width:180px">Thao tác</th></tr></thead>
       <tbody>${colorDetail.map((c, idx) => `<tr>
         <td>${c.LinkAnh ? `<img class="thumb hist-thumb" data-idx="${idx}" loading="lazy" decoding="async" src="${escapeHtml(anhNho(c.LinkAnh, 80))}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;">` : ''}</td>
         <td style="white-space:pre-wrap;">${escapeHtml(c.GhiChu || '')}</td>
@@ -1278,10 +1283,12 @@ window.ModuleKhoHang = (function () {
           ${Number(c.NhapTuPhieu) ? `<div style="font-size:11px;color:#5f6368;">trong đó ${fmtNumber(c.NhapTuPhieu)} từ phiếu nhập kho</div>` : ''}
           ${String(c.TenMau || '') === '(Không phân màu)' && Number(c.TonCai) > 0
             ? `<div style="font-size:11px;color:#c62828;">⚠️ hàng chưa gán màu — không đặt/bán được theo màu. Sửa phiếu nhập kho để chọn màu.</div>` : ''}</td>
-        <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}</td>
+        <td>${fmtDualUnit(c.XuatCai, loaiRi, donViCoBan, donViQuyDoi)}
+          ${Number(c.NhapLai) ? `<div style="font-size:11px;color:#5f6368;">đã trừ ${fmtNumber(c.NhapLai)} trả lại</div>` : ''}</td>
+        <td>${Number(c.NhapLai) ? fmtDualUnit(c.NhapLai, loaiRi, donViCoBan, donViQuyDoi) : ''}</td>
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
         <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
-        </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có chi tiết theo màu</td></tr>'}</tbody></table>
+        </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có chi tiết theo màu</td></tr>'}</tbody></table>
 
       ${/* v7.14: BỎ bảng "Lịch sử nhập / xuất theo chứng từ" (v7.12) — dồn 3 bảng vào một modal làm
            rối, và bảng đó trùng việc với Báo cáo tồn kho hàng hóa (bấm mã hàng để xem chi tiết chứng
@@ -1290,7 +1297,11 @@ window.ModuleKhoHang = (function () {
       <table><thead>
         ${/* v7.20: cột PHIẾU BÁN HÀNG — biết ngay màu đó đã được lập cho phiếu nào. Số phiếu lấy từ
              chứng từ THẬT (dòng phiếu chưa hủy đang chứa đơn), không lấy theo cờ trên đơn. */''}
-        <tr><th>Thời gian</th><th>Khách</th><th>Màu</th><th>SL</th><th>Đơn vị</th><th>Trạng thái</th><th>Phiếu bán hàng</th>${histActions ? '<th style="width:320px">Thao tác</th>' : ''}</tr>
+        ${/* v7.39.1: cột Thao tác 320px → 160px (một nửa) và khai bề rộng cho các cột còn lại để
+             chỗ dư dồn sang Khách / Màu / Phiếu — ba cột hay bị cắt chữ nhất. Nút trong ô Thao tác
+             tự xuống dòng nhờ white-space:normal (mặc định của td), không bị tràn. */''}
+        <tr><th style="width:92px">Thời gian</th><th>Khách</th><th>Màu</th><th style="width:64px">SL</th>
+          <th style="width:64px">Đơn vị</th><th style="width:110px">Trạng thái</th><th style="width:150px">Phiếu bán hàng</th>${histActions ? '<th style="width:160px">Thao tác</th>' : ''}</tr>
         ${/* Dòng LỌC nằm ngay trong <thead> — cùng kiểu với ô lọc của màn "Đơn khách đặt hàng",
              lọc NGAY trên dữ liệu đã tải (không gọi lại API) nên đổi ô nào là thấy ngay. */''}
         <tr id="histLocRow">
@@ -1302,7 +1313,9 @@ window.ModuleKhoHang = (function () {
           <th><select id="hlMau" style="width:100%;"><option value="">— Tất cả —</option>${colorDetail.map(c => `<option value="${c.MauSacID}">${escapeHtml(c.TenMau)}</option>`).join('')}</select></th>
           <th></th>
           <th><select id="hlDonVi" style="width:100%;"><option value="">— Tất cả —</option>${[...new Set(orders.map(o => o.DonVi).filter(Boolean))].map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></th>
-          <th><select id="hlTrangThai" style="width:100%;"><option value="">— Tất cả —</option>${['Chờ xác nhận', 'Chờ xử lý', 'Đã xuất hàng', 'Đã giao', 'Đã hủy'].map(s => `<option value="${s}">${s}</option>`).join('')}</select></th>
+          ${/* v7.39: thêm 'Hoàn thành' — trạng thái THẬT của phiếu nhập lại (migration_v676:
+               'Hoàn thành' / 'Đã hủy'), để lọc riêng xem/ẩn các dòng khách trả hàng. */''}
+          <th><select id="hlTrangThai" style="width:100%;"><option value="">— Tất cả —</option>${['Chờ xác nhận', 'Chờ xử lý', 'Đã xuất hàng', 'Đã giao', 'Đã hủy', 'Hoàn thành'].map(s => `<option value="${s}">${s}</option>`).join('')}</select></th>
           <th><select id="hlPhieu" style="width:100%;"><option value="">— Tất cả —</option><option value="__chua">(chưa có phiếu)</option>${[...new Set(orders.map(o => o.SoPhieuBH).filter(Boolean))].sort().map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></th>
           ${histActions ? '<th><button type="button" class="btn small secondary" id="hlReset">Bỏ lọc</button></th>' : ''}
         </tr>
@@ -1367,6 +1380,16 @@ window.ModuleKhoHang = (function () {
            · 'Đã xuất hàng' mà trắng   -> cũng là mồ côi
            · còn lại                   -> chưa lên phiếu (đang giữ hàng) */
       const oPhieu = (r) => {
+        /* v7.39: dòng NHẬP LẠI (hàng khách trả) — cột này hiện số PHIẾU NHẬP LẠI, không phải phiếu
+           bán hàng, nên phải rẽ nhánh TRƯỚC mọi logic "đơn mồ côi" bên dưới (dòng này không có đơn
+           khách nên mọi cảnh báo mồ côi đều vô nghĩa với nó). */
+        if (r.LaNhapLai) {
+          /* v7.39.1: bấm số phiếu -> mở CHI TIẾT PHIẾU NHẬP LẠI. Dùng lại window.ModuleNhapLai.xemPhieu
+             thay vì tự vẽ lại bảng chi tiết (một nghiệp vụ một luồng). Hàm đó KHÔNG gọi closeModal()
+             ở đầu nên nhờ ngăn xếp modal (v5.97), đóng phiếu sẽ tự quay về đúng popup thẻ kho này. */
+          return `<a href="javascript:void(0)" class="act-h-phieunl" data-id="${r.PhieuNLID || ''}" title="Xem chi tiết phiếu nhập lại"><b>${escapeHtml(r.SoPhieuBH || '')}</b></a>`
+            + (r.GhiChu ? `<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.GhiChu)}</div>` : '');
+        }
         if (r.SoPhieuBH) {
           // v7.21: bấm số phiếu -> mở CHI TIẾT PHIẾU BÁN HÀNG (đóng lại quay về đúng bảng này).
           return `<a href="javascript:void(0)" class="act-h-phieu" data-id="${r.PhieuBHIDThuc || ''}" title="Xem chi tiết phiếu bán hàng"><b>${escapeHtml(r.SoPhieuBH)}</b></a>`
@@ -1379,20 +1402,33 @@ window.ModuleKhoHang = (function () {
         }
         return '<span class="empty-hint" style="padding:0;">chưa lên phiếu</span>';
       };
-      histBody.innerHTML = ds.map(r => `<tr><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
-        <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td><td>${oPhieu(r)}</td>${histActions ? `<td>${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
+      /* v7.39: ô THAO TÁC. Dòng nhập lại KHÔNG phải đơn khách (DonID null) nên phải ẩn hết nút —
+         để nguyên thì bấm Sửa/Xóa sẽ gọi API với id rỗng, đúng kiểu "bấm nút không có gì xảy ra". */
+      const oThaoTac = (r) => {
+        if (r.LaNhapLai) return '<span class="empty-hint" style="padding:0;">—</span>';
+        return `${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}`
+          + `${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}`
+          + `${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}`
+          + `${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}`;
+      };
+      histBody.innerHTML = ds.map(r => `<tr${r.LaNhapLai ? ' style="background:#fdf3f2;"' : ''}><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
+        <td${r.LaNhapLai ? ' style="color:#c0392b;font-weight:700;"' : ''}>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td><td>${oPhieu(r)}</td>${histActions ? `<td>${oThaoTac(r)}</td>` : ''}</tr>`).join('')
         || `<tr><td colspan="${histActions ? 8 : 7}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
       /* v7.15: TỔNG CỘNG TÁCH BA NHÓM — đã xuất / đã hủy / đang chờ. Trộn cả ba vào một con số là
          sai nghiệp vụ: hàng của đơn đã hủy không đi đâu cả, đơn đang chờ thì chỉ mới GIỮ chỗ, chỉ
          nhóm "đã xuất" là hàng thật sự ra khỏi kho.
          ⚠️ CỘNG THEO TỪNG ĐƠN VỊ (Cái / Ri...): "5 Cái + 2 Ri" không thể thành 7 vì LoaiRi mỗi mã
          một khác — nên mỗi nhóm in ra dạng "12 Cái, 2 Ri". */
-      const nhomCua = (tt) => (tt === 'Đã hủy' ? 'huy'
-        : (tt === 'Đã xuất hàng' || tt === 'Đã giao') ? 'xuat' : 'cho');
-      const tong = { xuat: new Map(), huy: new Map(), cho: new Map() };
-      const demDon = { xuat: 0, huy: 0, cho: 0 };
+      /* v7.39: THÊM NHÓM RIÊNG cho dòng nhập lại. Bắt buộc phải tách: nhóm mặc định của hàm này là
+         'cho' (đang chờ), nên nếu để dòng nhập lại rơi vào đó thì số ÂM sẽ TRỪ vào "Đang chờ" và làm
+         con số đó sai. Nhận diện bằng cờ `LaNhapLai`, không dựa vào chuỗi trạng thái. */
+      const nhomCua = (r) => (r.LaNhapLai ? 'nhapLai'
+        : r.TrangThai === 'Đã hủy' ? 'huy'
+        : (r.TrangThai === 'Đã xuất hàng' || r.TrangThai === 'Đã giao') ? 'xuat' : 'cho');
+      const tong = { xuat: new Map(), huy: new Map(), cho: new Map(), nhapLai: new Map() };
+      const demDon = { xuat: 0, huy: 0, cho: 0, nhapLai: 0 };
       ds.forEach(r => {
-        const n = nhomCua(r.TrangThai);
+        const n = nhomCua(r);
         const dv = String(r.DonVi || donViCoBan || 'Cái');
         tong[n].set(dv, (tong[n].get(dv) || 0) + (Number(r.SoLuongDat) || 0));
         demDon[n]++;
@@ -1402,7 +1438,11 @@ window.ModuleKhoHang = (function () {
       if (demDon.xuat) phan.push(`<span style="color:#137333;">Đã xuất: ${inTong(tong.xuat)} (${demDon.xuat} đơn)</span>`);
       if (demDon.cho) phan.push(`<span style="color:#b06000;">Đang chờ: ${inTong(tong.cho)} (${demDon.cho} đơn)</span>`);
       if (demDon.huy) phan.push(`<span style="color:#a50e0e;">Đã hủy: ${inTong(tong.huy)} (${demDon.huy} đơn)</span>`);
-      histTong.innerHTML = `<b>${ds.length} đơn${ds.length !== orders.length ? ` / ${orders.length}` : ''}</b>`
+      if (demDon.nhapLai) phan.push(`<span style="color:#c0392b;">Khách trả lại: ${inTong(tong.nhapLai)} (${demDon.nhapLai} phiếu)</span>`);
+      /* Đếm "đơn" chỉ tính đơn khách thật; dòng nhập lại đếm riêng là "phiếu". */
+      const soDon = ds.length - demDon.nhapLai;
+      const soDonGoc = orders.length - orders.filter(o => o.LaNhapLai).length;
+      histTong.innerHTML = `<b>${soDon} đơn${soDon !== soDonGoc ? ` / ${soDonGoc}` : ''}</b>`
         + (phan.length ? ' &nbsp;·&nbsp; ' + phan.join(' &nbsp;·&nbsp; ') : '');
     }
 
@@ -1425,6 +1465,21 @@ window.ModuleKhoHang = (function () {
         if (!lnk.dataset.id) return toast('Không xác định được phiếu bán hàng của đơn này.', 'error');
         try { await xemPhieuBanHang(lnk.dataset.id, perm); }
         catch (err) { toast('Không mở được phiếu: ' + err.message, 'error'); }
+        return;
+      }
+      /* v7.39.1: bấm số PHIẾU NHẬP LẠI -> mở chi tiết phiếu đó. Gọi qua window.ModuleNhapLai vì hàm
+         xemPhieu là biến CỤC BỘ của module.nhaplai.js — gọi trực tiếp `xemPhieu(...)` ở đây sẽ là
+         ReferenceError (đúng lỗi từng mắc với openImageLightbox khi gọi từ module.dms.js).
+         Kiểm sự tồn tại trước: nếu người dùng chưa được cấp quyền/chưa nạp module thì báo rõ chứ
+         không để nút "im lặng". */
+      const lnkNL = e.target.closest('a.act-h-phieunl');
+      if (lnkNL) {
+        if (!lnkNL.dataset.id) return toast('Không xác định được phiếu nhập lại.', 'error');
+        if (!(window.ModuleNhapLai && typeof window.ModuleNhapLai.xemPhieu === 'function')) {
+          return toast('Chưa mở được phân hệ Nhập lại — vào Kho hàng hóa → Nhập lại một lần rồi thử lại.', 'error');
+        }
+        try { await window.ModuleNhapLai.xemPhieu(lnkNL.dataset.id); }
+        catch (err) { toast('Không mở được phiếu nhập lại: ' + err.message, 'error'); }
         return;
       }
       const btn = e.target.closest('button');

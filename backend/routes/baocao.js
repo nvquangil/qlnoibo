@@ -37,6 +37,10 @@ const express = require('express');
 const ExcelJS = require('exceljs');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+/* v7.38: nguon "nhap lai" (hang khach tra). Doc ky ghi chu dau utils/nhapLaiHangHoa.js truoc khi sua —
+   nhap lai KHONG cong vao ton (no giam XuatCai), nhung PHAI cong vao NhapKy/NhapSauKy vi hai con so
+   do dung de LUI tu ton hien tai. */
+const nhapLai = require('../utils/nhapLaiHangHoa');
 
 const router = express.Router();
 
@@ -258,6 +262,10 @@ async function baoCaoTonHangHoa(pool, ky) {
       .query(sqlXuatDon.replace('BETWEEN @a AND @b', '> @a AND CAST(d.ThoiGian AS DATE) <= @b'))).recordset;
   }
 
+  /* ⚠️ v7.38: KHONG cong nhap lai vao NhapKy/NhapSauKy.
+     Da thu va nguoi dung bac: so lieu cua bang tong hop (Ton dau ky / Nhap / Xuat / Ton cuoi) DANG
+     DUNG HET. Yeu cau chi la HIEN dong nhap lai o bang chi tiet, khong phai sua phep tinh.
+     Cong vao day se lam Ton dau ky lech di dung bang so hang khach tra trong ky. */
   const khoa = r => r.MaHangID;
   gomVao(map, nhapPhieuKy, khoa, 'NhapKy');        // v6.91: PHIEU NHAP KHO la nguon nhap DUY NHAT
   gomVao(map, nhapPhieuSau, khoa, 'NhapSauKy');
@@ -756,6 +764,11 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
     GROUP BY p.NgayNhap, p.SoPhieu, p.LoaiNhap, ncc.TenNCC, d.MaDH, p.PhieuNKID
     ORDER BY p.NgayNhap, p.SoPhieu`)).recordset : [];
 
+  /* v7.38: DONG "NHAP LAI" (hang khach tra). Truoc day bang nay khong co dong nao cho nhap lai nen
+     nguoi dung thay "ton da cong ma chi tiet khong the hien ra". Chi THEM DONG DE XEM — khong sua
+     phep tinh ton dau/cuoi ky (nhung so do dang dung). */
+  const nhapTraLai = (await nhapLai.coBangNhapLai(pool)) ? (await rq().query(nhapLai.SQL_CHUNG_TU)).recordset : [];
+
   // --- XUAT 1: phieu ban hang ---
   const xuatBH = (await rq().query(`
     SELECT p.NgayBan AS Ngay, p.SoPhieu, p.TenKhach, ms.TenMau, ct.SoLuongCai
@@ -787,6 +800,12 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
     Ngay: r.Ngay,
     Loai: r.LoaiNhap === 'SanXuat' ? 'Nhập kho (từ sản xuất)' : 'Nhập kho (từ NCC)',
     SoPhieu: r.SoPhieu, DoiTuong: r.DoiTuong || '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
+  /* v7.38: dong NHAP LAI. `PhatSinh` da duoc quy ve DON VI CHINH ngay trong cau SQL (xem
+     SL_VE_DON_VI_CHINH trong utils/nhapLaiHangHoa.js) nen o day KHONG quy doi lai lan hai. */
+  nhapTraLai.forEach(r => { if (so(r.PhatSinh)) rows.push({
+    Ngay: r.Ngay, Loai: 'Nhập lại (khách trả)', SoPhieu: r.SoPhieu,
+    DoiTuong: r.TenKhach || '', GhiChu: r.DienGiai || '',
+    Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
   xuatBH.forEach(r => rows.push({
     Ngay: r.Ngay, Loai: 'Phiếu bán hàng', SoPhieu: r.SoPhieu, DoiTuong: r.TenKhach || '',
     TenMau: r.TenMau || '', Nhap: 0,
@@ -804,7 +823,9 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   res.json({ success: true, ky, data: {
     ma: h.MaHang, ten: h.TenHang, donVi: h.DonViCoBan || 'Cái',
     tonDau: so(dongTong.TonDau), tonCuoi: so(dongTong.TonCuoi), rows,
-    ghiChu: 'Phần nhập/sửa tay trực tiếp trên thẻ kho không có ngày nên không hiện ở đây — nó nằm trong "Tồn đầu kỳ".'
+    ghiChu: 'Phần nhập/sửa tay trực tiếp trên thẻ kho không có ngày nên không hiện ở đây — nó nằm trong "Tồn đầu kỳ". '
+      + 'Dòng "Nhập lại (khách trả)" là hàng khách trả về (v7.38): trên thẻ kho nó được ghi bằng cách GIẢM số đã xuất, '
+      + 'nên cột "Xuất" của mã hàng nhìn thấp hơn tổng các phiếu bán hàng đúng bằng số đã trả lại.'
   } });
 });
 

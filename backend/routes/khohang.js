@@ -9,6 +9,9 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 // v6.23: TỒN KHẢ DỤNG = tồn kho − hàng đang giữ cho đơn khách đặt. Định nghĩa nằm ở routes/banhang.js
 // (nơi giữ luồng bán hàng) để CHỈ CÓ 1 chỗ tính — đừng viết lại công thức này ở file khác.
 const { layHangDangGiu } = require('./banhang');
+/* v7.38: nguon "nhap lai" (hang khach tra) — chi de HIEN THI, khong duoc cong vao ton.
+   Doc ghi chu dau utils/nhapLaiHangHoa.js truoc khi sua. */
+const nhapLai = require('../utils/nhapLaiHangHoa');
 
 const router = express.Router();
 
@@ -1342,7 +1345,53 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
         ORDER BY p.PhieuBHID DESC) p2` : ''}
       WHERE h.MaHang = @mh ORDER BY o.ThoiGian DESC`);
 
-    res.json({ success: true, data: { hangInfo, colorDetail: colorDetailResult.recordset, orders: ordersResult.recordset } });
+    /* v7.38: SỐ NHẬP LẠI (hàng khách trả) THEO TỪNG MÀU.
+       Nhập lại không tạo bản ghi "nhập" — nó GIẢM `TheKhoChiTietMau.XuatCai` (xem đầu
+       utils/nhapLaiHangHoa.js). Nên cột "Nhập" của bảng này không đổi, còn cột "Xuất" tự thấp đi mà
+       không dòng nào giải thích ⇒ người dùng thấy "tồn đã cộng mà chi tiết không thể hiện ra".
+       Đây là số ĐỌC-THUẦN để hiển thị, KHÔNG được cộng vào tồn (tồn đã tính rồi). */
+    let nhapLaiTheoMau = [];
+    if (await nhapLai.coBangNhapLai(pool)) {
+      nhapLaiTheoMau = (await pool.request().input('id', sql.Int, hangInfo.MaHangID)
+        .query(nhapLai.SQL_TONG_THEO_MAU)).recordset;
+    }
+    const mapNL = new Map(nhapLaiTheoMau.map(r => [r.MauSacID, Number(r.NhapLai) || 0]));
+    const colorDetail = colorDetailResult.recordset.map(c => ({
+      ...c, NhapLai: mapNL.get(c.MauSacID) || 0
+    }));
+
+    /* v7.39: XEN CÁC DÒNG NHẬP LẠI VÀO CHÍNH BẢNG "Lịch sử đặt hàng".
+       Yêu cầu của người dùng: giữ đúng 7 cột hiện có, chỉ khác:
+         Số lượng      -> ÂM (hàng đi ngược chiều với đơn bán)
+         Trạng thái    -> 'Đã nhập kho'
+         Phiếu bán hàng-> số PHIẾU NHẬP LẠI
+       Cách này đơn giản hơn làm bảng/popup riêng, và đọc được ngay trong một mạch thời gian.
+       `DonID` để NULL: frontend dựa vào đó để ẩn mọi nút Sửa/In/Xóa — dòng này không phải đơn khách,
+       không sửa được ở đây (bấm vào sẽ là nút "im lặng" nếu không chặn). */
+    let dongNhapLai = [];
+    if (await nhapLai.coBangNhapLai(pool)) {
+      const rs = (await pool.request().input('id', sql.Int, hangInfo.MaHangID)
+        .query(nhapLai.SQL_DONG_THEO_MA)).recordset;
+      dongNhapLai = rs.map(r => ({
+        DonID: null, LaNhapLai: true, PhieuNLID: r.PhieuNLID,
+        MaHangID: hangInfo.MaHangID, MaHang: hangInfo.MaHang,
+        MauSacID: r.MauSacID, TenMau: r.TenMau || '',
+        ThoiGian: r.NgayNhap, TenKhach: r.TenKhach || '',
+        SoLuongDat: -(Number(r.SL) || 0),          // ÂM
+        DonVi: r.DonViCoBan || 'Cái',
+        /* Lấy TRẠNG THÁI THẬT của phiếu nhập lại ('Hoàn thành' / 'Đã hủy' — migration_v676) thay vì
+           gán cứng một chuỗi: gán cứng là hai màn hình nói hai điều khác nhau về cùng một phiếu. */
+        TrangThai: r.TrangThai || '',
+        SoPhieuBH: r.SoPhieu,                       // cột "Phiếu bán hàng" hiện số phiếu nhập lại
+        GhiChu: r.LyDo || ''
+      }));
+    }
+    /* Trộn rồi sắp lại theo thời gian giảm dần — cùng thứ tự với câu SQL đơn khách (ThoiGian DESC),
+       để dòng nhập lại nằm đúng vị trí trong mạch thời gian chứ không dồn xuống cuối. */
+    const orders = [...ordersResult.recordset, ...dongNhapLai]
+      .sort((a, b) => new Date(b.ThoiGian) - new Date(a.ThoiGian));
+
+    res.json({ success: true, data: { hangInfo, colorDetail, orders } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi lấy lịch sử: ' + err.message });
