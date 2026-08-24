@@ -140,6 +140,35 @@ async function coCotLoaiPhieu(pool) {
   }
   return __coCotLoaiPhieu;
 }
+/* ================================================================================================
+   v7.33 — DO COT THAT CUA BANG TRUOC KHI SELECT.
+   Hai lan lien tiep xuat Excel loi ("Invalid object name 'TaiKhoan'", "Invalid column name
+   'LoaiPhieu'") deu vi mot ly do: DOAN ten bang/cot roi viet thang vao SQL. Rieng lan sau con te hon
+   — co `coCotLoaiPhieu()` nhung ham do do cot `LoaiPhieu` cua bang DanhMucLoaiTaiKhoan, khong phai
+   cua PhieuThu/PhieuChi, nen no tra `true` va SQL van no.
+   Nay: doc TAP COT THAT tu sys.columns, roi CHI select cot co that; cot thieu tra NULL. Sai ten cot
+   khong con lam vo ca file xuat — chi la mot o trong.
+   ================================================================================================ */
+const __capCot = new Map();
+async function tapCot(pool, bang) {
+  if (__capCot.has(bang)) return __capCot.get(bang);
+  let set = new Set();
+  try {
+    const r = (await pool.request().input('b', sql.NVarChar, bang)
+      .query('SELECT c.name AS n FROM sys.columns c WHERE c.object_id = OBJECT_ID(@b)')).recordset;
+    set = new Set(r.map(x => x.n));
+  } catch (e) {
+    console.warn('[congno tapCot] khong doc duoc cot cua bang %s: %s', bang, e.message);
+  }
+  __capCot.set(bang, set);
+  return set;
+}
+/* Tra ve manh SQL an toan: co cot thi `alias.Ten`, khong co thi NULL (van dung ten cot lam alias
+   de tang code phia sau khong phai biet la thieu hay du). */
+function cotAT(set, alias, ten, kieu) {
+  return set.has(ten) ? `${alias}.${ten}` : `CAST(NULL AS ${kieu || 'NVARCHAR(50)'}) AS ${ten}`;
+}
+
 async function coCot(pool, bang, cot) {
   const r = (await pool.request().query(`SELECT COL_LENGTH('${bang}','${cot}') AS c`)).recordset[0] || {};
   return r.c != null;
@@ -1105,18 +1134,26 @@ function khongDau(s) {
    ================================================================================================ */
 async function sheetChiTietPBH(pool, wb, tienIch, khach) {
   const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
+  const cCT = await tapCot(pool, 'PhieuBanHangChiTiet');
+  const cP = await tapCot(pool, 'PhieuBanHang');
   const rq = pool.request();
   if (khach) rq.input('k', sql.NVarChar, khach);
   const rows = (await rq.query(`
-    SELECT p.SoPhieu, p.NgayBan, p.TenKhach, p.TrangThai,
-           ct.MaHangID, h.MaHang, h.TenHang, ms.TenMau,
-           ct.SoLuong, ct.DonVi, ct.SoLuongCai, ct.GiaBanLe, ct.PhanTramCKShop, ct.GiaBan, ct.ThanhTien,
-           p.PhanTramCKNPP, p.TongThanhToan
+    SELECT p.SoPhieu, p.NgayBan, p.TenKhach,
+           h.MaHang, h.TenHang, ms.TenMau,
+           ${cotAT(cCT, 'ct', 'SoLuong', 'DECIMAL(14,2)')},
+           ${cotAT(cCT, 'ct', 'DonVi', 'NVARCHAR(30)')},
+           ${cotAT(cCT, 'ct', 'SoLuongCai', 'INT')},
+           ${cotAT(cCT, 'ct', 'GiaBanLe', 'DECIMAL(14,2)')},
+           ${cotAT(cCT, 'ct', 'PhanTramCKShop', 'DECIMAL(5,2)')},
+           ${cotAT(cCT, 'ct', 'GiaBan', 'DECIMAL(14,2)')},
+           ${cotAT(cCT, 'ct', 'ThanhTien', 'DECIMAL(18,2)')}
     FROM PhieuBanHangChiTiet ct
     JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
     JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
-    LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-    WHERE p.TrangThai <> N'Đã hủy' ${khach ? 'AND LTRIM(RTRIM(p.TenKhach)) = @k' : ''}
+    LEFT JOIN MauSac ms ON ms.MauSacID = ${cCT.has('MauSacID') ? 'ct.MauSacID' : 'NULL'}
+    WHERE ${cP.has('TrangThai') ? "p.TrangThai <> N'Đã hủy'" : '1 = 1'}
+      ${khach ? 'AND LTRIM(RTRIM(p.TenKhach)) = @k' : ''}
     ORDER BY p.NgayBan DESC, p.PhieuBHID DESC, ct.ID`)).recordset;
   const ws = wb.addWorksheet('CT phiếu bán hàng');
   const cot = [
@@ -1151,22 +1188,28 @@ async function sheetChiTietPBH(pool, wb, tienIch, khach) {
 
 async function sheetPhieuThu(pool, wb, tienIch, khach) {
   const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
-  const coLoai = await coCotLoaiPhieu(pool);
+  const cT = await tapCot(pool, 'PhieuThu');
+  const cTK = await tapCot(pool, 'DanhMucTaiKhoan');
   const rq = pool.request();
   if (khach) rq.input('k', sql.NVarChar, khach);
+  /* Moi cot deu qua cotAT(): thieu cot nao thi o do trong, KHONG lam vo ca file. */
   const rows = (await rq.query(`
-    SELECT t.SoPhieu, t.NgayThu, t.LoaiDoiTuong, t.TenDoiTuong, t.SoTien, t.HinhThuc, t.DienGiai,
-           ${coLoai ? 't.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
-           -- Bang danh muc tai khoan la DanhMucTaiKhoan, cot ten la TenTK (KHONG phai TaiKhoan/
-           -- TenTaiKhoan: v7.32 doan sai nen ra loi "Invalid object name 'TaiKhoan'"). Doi chieu
-           -- voi cac route dang chay o tren cung file nay: GET /phieuthu, GET /phieuchi.
-           tk.MaTK, tk.TenTK, p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
+    SELECT ${cotAT(cT, 't', 'SoPhieu', 'NVARCHAR(30)')},
+           ${cotAT(cT, 't', 'NgayThu', 'DATE')},
+           ${cotAT(cT, 't', 'LoaiDoiTuong', 'NVARCHAR(30)')},
+           ${cotAT(cT, 't', 'TenDoiTuong', 'NVARCHAR(150)')},
+           ${cotAT(cT, 't', 'SoTien', 'DECIMAL(18,2)')},
+           ${cotAT(cT, 't', 'HinhThuc', 'NVARCHAR(30)')},
+           ${cotAT(cT, 't', 'DienGiai', 'NVARCHAR(500)')},
+           ${cotAT(cTK, 'tk', 'MaTK', 'NVARCHAR(30)')},
+           ${cotAT(cTK, 'tk', 'TenTK', 'NVARCHAR(150)')},
+           p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
     FROM PhieuThu t
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
-    LEFT JOIN PhieuBanHang p ON p.PhieuBHID = t.PhieuBHID
-    LEFT JOIN Users u ON u.UserID = t.NguoiTaoID
+    LEFT JOIN PhieuBanHang p ON p.PhieuBHID = ${cT.has('PhieuBHID') ? 't.PhieuBHID' : 'NULL'}
+    LEFT JOIN Users u ON u.UserID = ${cT.has('NguoiTaoID') ? 't.NguoiTaoID' : 'NULL'}
     ${khach ? "WHERE t.LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(t.TenDoiTuong,''))) = @k" : ''}
-    ORDER BY t.NgayThu DESC, t.PhieuThuID DESC`)).recordset;
+    ORDER BY ${cT.has('NgayThu') ? 't.NgayThu DESC,' : ''} t.PhieuThuID DESC`)).recordset;
   const ws = wb.addWorksheet('Phiếu thu');
   const cot = [
     { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
@@ -1197,19 +1240,27 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
 
 async function sheetPhieuChi(pool, wb, tienIch, nccId) {
   const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
-  const coLoai = await coCotLoaiPhieu(pool);
+  const cC = await tapCot(pool, 'PhieuChi');
+  const cTK = await tapCot(pool, 'DanhMucTaiKhoan');
   const rq = pool.request();
   if (nccId) rq.input('n', sql.Int, nccId);
   const rows = (await rq.query(`
-    SELECT c.SoPhieu, c.NgayChi, c.LoaiDoiTuong, c.NCC_ID, ncc.TenNCC, c.SoTien, c.HinhThuc, c.DienGiai,
-           ${coLoai ? 'c.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
-           tk.MaTK, tk.TenTK, u.HoTen AS NguoiTao
+    SELECT ${cotAT(cC, 'c', 'SoPhieu', 'NVARCHAR(30)')},
+           ${cotAT(cC, 'c', 'NgayChi', 'DATE')},
+           ${cotAT(cC, 'c', 'LoaiDoiTuong', 'NVARCHAR(30)')},
+           ${cotAT(cC, 'c', 'SoTien', 'DECIMAL(18,2)')},
+           ${cotAT(cC, 'c', 'HinhThuc', 'NVARCHAR(30)')},
+           ${cotAT(cC, 'c', 'DienGiai', 'NVARCHAR(500)')},
+           ${cotAT(cC, 'c', 'LoaiPhieu', 'NVARCHAR(30)')},
+           ${cotAT(cTK, 'tk', 'MaTK', 'NVARCHAR(30)')},
+           ${cotAT(cTK, 'tk', 'TenTK', 'NVARCHAR(150)')},
+           ncc.TenNCC, u.HoTen AS NguoiTao
     FROM PhieuChi c
-    LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
+    LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = ${cC.has('NCC_ID') ? 'c.NCC_ID' : 'NULL'}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
-    LEFT JOIN Users u ON u.UserID = c.NguoiTaoID
+    LEFT JOIN Users u ON u.UserID = ${cC.has('NguoiTaoID') ? 'c.NguoiTaoID' : 'NULL'}
     ${nccId ? 'WHERE c.NCC_ID = @n' : ''}
-    ORDER BY c.NgayChi DESC, c.PhieuChiID DESC`)).recordset;
+    ORDER BY ${cC.has('NgayChi') ? 'c.NgayChi DESC,' : ''} c.PhieuChiID DESC`)).recordset;
   const ws = wb.addWorksheet('Phiếu chi');
   const cot = [
     { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
