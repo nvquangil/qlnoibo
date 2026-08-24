@@ -20,6 +20,8 @@ const express = require('express');
 const ExcelJS = require('exceljs');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+/* v7.41: MOT ban cong thuc "cong no truoc chung tu" — dung chung voi routes/banhang.js. */
+const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 const { so, lam2, tien, laDonViGop, donViChinhLaGop, slSangCai, slSangDonViChinh,
         sinhSoPhieu, ghiXuatKho } = require('../utils/banHangCommon');
 
@@ -287,6 +289,26 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
   const pool = await getPool();
   const { h, ct } = await docPhieu(pool, req.params.id);
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập lại.' });
+  /* ============================================================================================
+     v7.41: CONG NO TRUOC PHIEU + CONG NO HIEN TAI, giong phieu ban hang (v6.24.3) de khach doi
+     chieu ngay tren phieu tra hang.
+     Dung CHUNG ham voi banhang.js (utils/congNoTruocChungTu.js) — hai phieu khong the noi hai con
+     so khac nhau cho cung mot khach.
+     ⚠️ KHAC DAU: phieu ban hang lam TANG no (CongNoTruoc + TongThanhToan), phieu nhap lai lam GIAM
+     no (CongNoTruoc - TongThanhToan). Nham dau la in ra so gap doi thuc te.
+     Boc try/catch: khoi cong no chi de DOI CHIEU, loi o day khong duoc lam mat ca phieu.
+     ============================================================================================ */
+  try {
+    const kqNo = await congNoTruocChungTu(pool, sql, {
+      tenKhach: h.TenKhach, ngay: h.NgayNhap, loai: 'PNL', id: h.PhieuNLID
+    });
+    h.CongNoTruoc = lam2(kqNo.congNoTruoc);
+    h.TongCongNo = lam2(kqNo.congNoTruoc - so(h.TongThanhToan));   // TRA HANG -> GIAM no
+  } catch (err) {
+    console.warn('[nhaplai GET /phieu/:id] khong tinh duoc cong no truoc phieu:', err.message);
+    h.CongNoTruoc = null;   // frontend hien dong do "(không lấy được)" thay vi im lang ra 0
+    h.TongCongNo = null;
+  }
   res.json({ success: true, data: { header: h, chiTiet: ct } });
 });
 

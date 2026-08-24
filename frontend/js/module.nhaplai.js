@@ -431,6 +431,35 @@
       </tbody></table>`;
   }
 
+  /* ================================================================================================
+     v7.41 — KHOI CONG NO cuoi phieu nhap lai, giong phieu ban hang (module.khohang.js v7.29/v7.30):
+         Công nợ trước phiếu <số>      (in cả khi = 0, ghi rõ "chưa phát sinh")
+         Hàng trả lại (trừ công nợ)    (in số ÂM — nhìn ra ngay đây là khoản GIẢM nợ)
+         CÔNG NỢ HIỆN TẠI
+     ⚠️ KHÁC DẤU với phiếu bán hàng: bán hàng thì TỔNG CÔNG NỢ = trước + tiền phiếu; trả hàng thì
+     CÔNG NỢ HIỆN TẠI = trước − tiền phiếu. Backend đã tính sẵn `TongCongNo` đúng dấu — ở đây KHÔNG
+     tính lại, chỉ in ra, để hai nơi không thể lệch nhau.
+     Thiếu dữ liệu thì IN DÒNG ĐỎ báo rõ chứ không bỏ mất khối — bài học v7.29: một dòng báo thiếu
+     còn hơn một phiếu sai im lặng (vụ PX26093 mất dòng công nợ mà không ai biết).
+     ================================================================================================ */
+  function khoiCongNoNhapLaiHtml(h) {
+    if (h.CongNoTruoc == null) {
+      console.warn('[phieu nhap lai] THIEU CongNoTruoc khi in phieu', h.SoPhieu,
+        '- goi /api/nhaplai/phieu/:id de lay du header.');
+      return `<table style="width:56%;margin-left:auto;margin-top:6px;">
+        <tr><td style="text-align:right;color:#a00;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}</td>
+          <td style="text-align:right;width:38%;color:#a00;">(không lấy được)</td></tr></table>`;
+    }
+    const khong = Number(h.CongNoTruoc) === 0;
+    return `<table style="width:56%;margin-left:auto;margin-top:6px;">
+      <tr><td style="text-align:right;">Công nợ trước phiếu ${escapeHtml(h.SoPhieu || '')}${khong ? ' <span style="font-weight:normal;">(chưa phát sinh)</span>' : ''}</td>
+        <td style="text-align:right;width:38%;">${fmtTien(h.CongNoTruoc)}</td></tr>
+      <tr><td style="text-align:right;">Hàng trả lại (trừ công nợ)</td>
+        <td style="text-align:right;color:#c0392b;">−${fmtTien(h.TongThanhToan)}</td></tr>
+      <tr style="font-weight:bold;background:#fff3e0;"><td style="text-align:right;">CÔNG NỢ HIỆN TẠI</td>
+        <td style="text-align:right;font-size:15px;">${fmtTien(h.TongCongNo)}</td></tr></table>`;
+  }
+
   async function xemPhieu(id) {
     const kq = await apiGet('/api/nhaplai/phieu/' + id);
     if (!kq.success) return toast(kq.message || 'Không mở được phiếu.', 'error');
@@ -441,6 +470,7 @@
       <div class="modal-body">
         ${dauPhieuHtml(h)}
         ${bangChiTietHtml(ct, h, false)}
+        ${khoiCongNoNhapLaiHtml(h) /* v7.41 */}
       </div>
       <div class="modal-foot">
         <button class="btn secondary" id="nlvDong">Đóng</button>
@@ -460,6 +490,7 @@
       ${phieuHeaderHtml('PHIẾU NHẬP LẠI HÀNG (KHÁCH TRẢ)', h.NgayNhap, h.SoPhieu)}
       ${dauPhieuHtml(h)}
       ${bangChiTietHtml(ct, h, true)}
+      ${khoiCongNoNhapLaiHtml(h) /* v7.41 */}
       <p style="margin-top:6px;"><i>Bằng chữ: ${escapeHtml(docSoTienBangChu(h.TongThanhToan))}</i></p>
       <table style="width:100%;margin-top:28px;text-align:center;">
         <tr><td><b>NGƯỜI TRẢ HÀNG</b><br><i>(Ký, ghi rõ họ tên)</i></td>

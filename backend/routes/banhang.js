@@ -22,6 +22,8 @@ const express = require('express');
 const ExcelJS = require('exceljs');   // v6.46: xuất Excel danh sách phiếu bán hàng
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+/* v7.41: MOT ban cong thuc "cong no truoc chung tu" — dung chung voi routes/nhaplai.js. */
+const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 
 const router = express.Router();
 
@@ -497,39 +499,13 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
     WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
 
   /* v6.24.3: CONG NO TRUOC PHIEU NAY + TONG CONG NO (in ra cuoi phieu cho khach doi chieu).
-     "Truoc phieu nay" = moi chung tu cua KHACH DO phat sinh TRUOC phieu nay:
-        + phieu ban hang (chua huy) ngay som hon, hoac CUNG ngay nhung lap truoc (PhieuBHID nho hon)
-        + dieu chinh cong no ngay som hon
-        - phieu thu ngay som hon
-     Cong no nhom theo TEN KHACH - dung khoa voi man hinh Cong no khach hang (routes/congno.js). */
-  const rqNo = pool.request()
-    .input('ten', sql.NVarChar, String(header.TenKhach || '').trim())
-    .input('ngay', sql.Date, header.NgayBan)
-    .input('id', sql.Int, header.PhieuBHID);
-  const no = (await rqNo.query(`
-    SELECT
-      ISNULL((SELECT SUM(TongThanhToan) FROM PhieuBanHang
-              WHERE LTRIM(RTRIM(TenKhach)) = @ten AND TrangThai <> N'Đã hủy'
-                AND (NgayBan < @ngay OR (NgayBan = @ngay AND PhieuBHID < @id))), 0) AS BanTruoc,
-      ISNULL((SELECT SUM(SoTien) FROM CongNoDieuChinh
-              WHERE LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(TenDoiTuong,''))) = @ten
-                AND Ngay < @ngay), 0) AS DieuChinhTruoc,
-      ISNULL((SELECT SUM(SoTien) FROM PhieuThu
-              WHERE LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(TenDoiTuong,''))) = @ten
-                AND NgayThu < @ngay), 0) AS ThuTruoc`)).recordset[0];
-  /* v6.66: hang khach TRA LAI truoc ngay nay cung lam GIAM cong no. Truy rieng + bat loi vi bang
-     PhieuNhapLai do migration_v676 tao - he thong chua chay migration se lam trang ca phieu in. */
-  let traLaiTruoc = 0;
-  try {
-    traLaiTruoc = so((await pool.request()
-      .input('ten', sql.NVarChar, String(header.TenKhach || '').trim())
-      .input('ngay', sql.Date, header.NgayBan)
-      .query(`SELECT ISNULL(SUM(TongThanhToan), 0) AS S FROM PhieuNhapLai
-              WHERE LTRIM(RTRIM(TenKhach)) = @ten AND TrangThai <> N'Đã hủy' AND NgayNhap < @ngay`)).recordset[0].S);
-  } catch (err) {
-    console.warn('[banhang cong no truoc phieu] chua co bang PhieuNhapLai (migration_v676):', err.message);
-  }
-  const congNoTruoc = tien(so(no.BanTruoc) + so(no.DieuChinhTruoc) - so(no.ThuTruoc) - traLaiTruoc);
+     v7.41: cong thuc DA CHUYEN sang utils/congNoTruocChungTu.js de PHIEU NHAP LAI dung CHUNG mot ban
+     — viet ban thu hai cho phieu nhap lai la chac chan troi khoi nhau (bai hoc v6.47). Ket qua khong
+     doi so voi ban cu: cung 4 nguon, cung moc "cung ngay thi ID nho hon". */
+  const kqNo = await congNoTruocChungTu(pool, sql, {
+    tenKhach: header.TenKhach, ngay: header.NgayBan, loai: 'PBH', id: header.PhieuBHID
+  });
+  const congNoTruoc = tien(kqNo.congNoTruoc);
   header.CongNoTruoc = congNoTruoc;
   header.TongCongNo = tien(congNoTruoc + so(header.TongThanhToan));
 
