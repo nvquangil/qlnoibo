@@ -676,6 +676,28 @@ async function coCotNguonDat(pool) {
 }
 const NGUON_PHIEU_BH = 'PhieuBH';
 
+/* ================================================================================================
+   v7.40 SUA LOI: "Invalid column name 'KhachHangID'" khi LUU PHIEU BAN HANG MOI
+   ------------------------------------------------------------------------------------------------
+   taoDonPhanChieu() (v7.22) chen cot `KhachHangID` vao `DonKhachDatHang`, nhung bang do KHONG CO cot
+   nay — khong co trong CREATE TABLE lan bat ky ALTER nao (CAI_DAT_DAY_DU.sql:478). Hai cot khac o
+   cung ham thi CO do (`NguonDat`, `DaTruTon`), rieng cot nay bi bo sot.
+   Loi chi no khi nguoi lap phieu CHON KHACH TU DANH MUC (`tt.khachHangId` co gia tri) — ban thang
+   khong chon danh muc thi nhanh do khong chay, nen no am tham cho den hom nay.
+   ⚠️ Cong no khach gom theo TEN KHACH (chuoi), khong theo KhachHangID — nen thieu cot nay KHONG lam
+   sai cong no. Vi vay do cot va BO QUA khi thieu la du; khong can them migration.
+   ================================================================================================ */
+let __coCotKhachHangIDDon = null;
+async function coCotKhachHangIDDon(pool) {
+  if (__coCotKhachHangIDDon === null) {
+    try {
+      const r = (await pool.request().query(`SELECT COL_LENGTH('DonKhachDatHang','KhachHangID') AS c`)).recordset[0] || {};
+      __coCotKhachHangIDDon = r.c != null;
+    } catch (e) { __coCotKhachHangIDDon = false; }
+  }
+  return __coCotKhachHangIDDon;
+}
+
 /* v7.24 (migration_v686 + v687): phieu ban hang co ShopID + NhanVienID (nhan vien kinh doanh) de
    tinh doanh so di tuyen. Do cot truoc vi ban chua chay migration van phai chay binh thuong. */
 let __coCotShopNV = null;
@@ -753,11 +775,15 @@ async function keThuaShopNVTuDon(pool, tran, phieuBHID, dong) {
 async function taoDonPhanChieu(pool, tran, phieuBHID, d, tt) {
   const coNguon = await coCotNguonDat(pool);
   const coDaTru = await coCotDaTruTon(pool);
+  const coKhachID = await coCotKhachHangIDDon(pool);   // v7.40: xem ghi chu o coCotKhachHangIDDon
   const cot = ['TenKhach', 'MaHangID', 'MauSacID', 'SoLuongDat', 'DonVi', 'TrangThai', 'PhieuBHID', 'NguoiTaoID'];
   const val = ['@tk', '@mh', '@ms', '@sl', '@dv', "N'Đã xuất hàng'", '@p', '@u'];
   if (coDaTru) { cot.push('DaTruTon'); val.push('0'); }
   if (coNguon) { cot.push('NguonDat'); val.push('@ng'); }
-  if (tt.khachHangId) { cot.push('KhachHangID'); val.push('@kh'); }
+  /* v7.40: chi chen KhachHangID khi bang THAT SU co cot do. Truoc day chi kiem `tt.khachHangId` (co
+     gia tri hay khong) ma khong kiem cot co ton tai -> chon khach tu danh muc la vo ca phieu. */
+  const chenKhachID = coKhachID && tt.khachHangId;
+  if (chenKhachID) { cot.push('KhachHangID'); val.push('@kh'); }
   const rq = new sql.Request(tran)
     .input('tk', sql.NVarChar, String(tt.tenKhach || '').trim())
     .input('mh', sql.Int, d.maHangId)
@@ -767,7 +793,7 @@ async function taoDonPhanChieu(pool, tran, phieuBHID, d, tt) {
     .input('p', sql.Int, phieuBHID)
     .input('u', sql.Int, tt.nguoiTaoID || null);
   if (coNguon) rq.input('ng', sql.NVarChar, NGUON_PHIEU_BH);
-  if (tt.khachHangId) rq.input('kh', sql.Int, tt.khachHangId);
+  if (chenKhachID) rq.input('kh', sql.Int, tt.khachHangId);
   const r = await rq.query(`INSERT INTO DonKhachDatHang (${cot.join(', ')})
                             OUTPUT INSERTED.DonID
                             VALUES (${val.join(', ')})`);

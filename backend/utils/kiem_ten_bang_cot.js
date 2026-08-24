@@ -145,14 +145,56 @@ function cotDuocBaoVe(src) {
   return t;
 }
 
+/* ------------------------------------------------------------------------------------------------
+   v7.40 — BAT COT NAM TRONG MANG JS (diem mu da lam lot loi that)
+   ------------------------------------------------------------------------------------------------
+   Loi "Invalid column name 'KhachHangID'" khi luu phieu ban hang LOT QUA ban truoc cua cong cu nay,
+   vi ten cot khong nam trong chuoi SQL ma nam trong MOT MANG JS:
+
+       const cot = ['TenKhach', 'MaHangID', ...];
+       if (coDaTru) { cot.push('DaTruTon'); ... }
+       if (tt.khachHangId) { cot.push('KhachHangID'); ... }     <-- cot nay KHONG co that
+       await rq.query(`INSERT INTO DonKhachDatHang (${cot.join(', ')}) VALUES (...)`);
+
+   Ham nay tim moi `INSERT INTO <Bang> (${<bien>.join`, roi thu VE NGUOC lai ten cot cua `<bien>`:
+   ca mang khai bao ban dau va moi `<bien>.push('Cot')` trong file. Khong phan biet duoc nhanh nao
+   chay, nen gom HET — bao nhieu con hon bo sot, vi moi ten trong do deu co the ra SQL that.
+   ------------------------------------------------------------------------------------------------ */
+function cotTuMangJS(src) {
+  const kq = [];
+  /* INSERT INTO <Bang> (${bien.join(...)})  — bien co the la 'cot', 'cols', 'dsCot'... */
+  const re = /INSERT\s+INTO\s+((?:dbo\.)?[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\$\{\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\.join/gi;
+  let m;
+  while ((m = re.exec(src))) {
+    const bang = m[1].replace(/^dbo\./i, ''), bien = m[2];
+    const ten = new Set();
+    /* (a) mang khai bao: const <bien> = [ 'A', 'B', ... ] */
+    const reKhai = new RegExp(`(?:const|let|var)\\s+${bien}\\s*=\\s*\\[([^\\]]*)\\]`, 'g');
+    let k;
+    while ((k = reKhai.exec(src))) {
+      [...k[1].matchAll(/'([A-Za-z_][A-Za-z0-9_]*)'/g)].forEach(x => ten.add(x[1]));
+    }
+    /* (b) moi lan push: <bien>.push('Cot')  — ke ca push nhieu tham so */
+    const rePush = new RegExp(`${bien}\\.push\\(([^)]*)\\)`, 'g');
+    while ((k = rePush.exec(src))) {
+      [...k[1].matchAll(/'([A-Za-z_][A-Za-z0-9_]*)'/g)].forEach(x => ten.add(x[1]));
+    }
+    ten.forEach(c => kq.push({ bang, cot: c, alias: bien + '[]' }));
+  }
+  return kq;
+}
+
 function docFile(duong) {
   const src = fs.readFileSync(duong, 'utf8');
   const baoVe = cotDuocBaoVe(src);
   const cauSQL = bocChuoiNguoc(src).filter(laSQL);
-  return { cauSQL: cauSQL.map(phanTichSQL), baoVe, soCau: cauSQL.length };
+  return {
+    cauSQL: cauSQL.map(phanTichSQL), baoVe, soCau: cauSQL.length,
+    cotMang: cotTuMangJS(src)          // v7.40
+  };
 }
 
-module.exports = { bocChuoiNguoc, lamSachSQL, phanTichSQL, cotDuocBaoVe, docFile };
+module.exports = { bocChuoiNguoc, lamSachSQL, phanTichSQL, cotDuocBaoVe, cotTuMangJS, docFile };
 
 /* ------------------------------------------------------------------------------------------------ */
 if (require.main === module) {
@@ -190,9 +232,21 @@ if (require.main === module) {
 
       let loiBang = 0, loiCot = 0, demBang = 0, demCot = 0, demCau = 0, boQuaAlias = 0;
       for (const f of files) {
-        const { cauSQL, baoVe } = docFile(f);
+        const { cauSQL, baoVe, cotMang } = docFile(f);
         demCau += cauSQL.length;
         const sai = new Map();                      // thong bao -> doan SQL dau tien
+        /* v7.40: cot nam trong MANG JS (INSERT INTO X (${cot.join(...)})) — diem mu cu */
+        for (const c of cotMang) {
+          if (!dsBangThat.has(c.bang)) continue;
+          if (baoVe.has(c.cot)) continue;
+          demCot++;
+          const set = await cotCua(c.bang);
+          if (set.size && !set.has(c.cot)) {
+            loiCot++;
+            sai.set(`COT khong ton tai: ${c.bang}.${c.cot}   (ten cot nam trong MANG JS "${c.alias}")`,
+              `INSERT INTO ${c.bang} (\${${c.alias.replace('[]', '')}.join(', ')}) — xem cac lenh push trong file`);
+          }
+        }
         for (const q of cauSQL) {
           q.bang.forEach(b => {
             demBang++;
