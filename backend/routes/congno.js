@@ -1157,9 +1157,12 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
   const rows = (await rq.query(`
     SELECT t.SoPhieu, t.NgayThu, t.LoaiDoiTuong, t.TenDoiTuong, t.SoTien, t.HinhThuc, t.DienGiai,
            ${coLoai ? 't.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
-           tk.TenTaiKhoan, p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
+           -- Bang danh muc tai khoan la DanhMucTaiKhoan, cot ten la TenTK (KHONG phai TaiKhoan/
+           -- TenTaiKhoan: v7.32 doan sai nen ra loi "Invalid object name 'TaiKhoan'"). Doi chieu
+           -- voi cac route dang chay o tren cung file nay: GET /phieuthu, GET /phieuchi.
+           tk.MaTK, tk.TenTK, p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
     FROM PhieuThu t
-    LEFT JOIN TaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
+    LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
     LEFT JOIN PhieuBanHang p ON p.PhieuBHID = t.PhieuBHID
     LEFT JOIN Users u ON u.UserID = t.NguoiTaoID
     ${khach ? "WHERE t.LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(t.TenDoiTuong,''))) = @k" : ''}
@@ -1182,7 +1185,7 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
   rows.forEach(r => ws.addRow({
     SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayThu), TenDoiTuong: r.TenDoiTuong || '',
     LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
-    TenTaiKhoan: r.TenTaiKhoan || '', SoPhieuBH: r.SoPhieuBH || '', DienGiai: r.DienGiai || '',
+    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), SoPhieuBH: r.SoPhieuBH || '', DienGiai: r.DienGiai || '',
     NguoiTao: r.NguoiTao || ''
   }));
   if (rows.length) {
@@ -1200,10 +1203,10 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId) {
   const rows = (await rq.query(`
     SELECT c.SoPhieu, c.NgayChi, c.LoaiDoiTuong, c.NCC_ID, ncc.TenNCC, c.SoTien, c.HinhThuc, c.DienGiai,
            ${coLoai ? 'c.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
-           tk.TenTaiKhoan, u.HoTen AS NguoiTao
+           tk.MaTK, tk.TenTK, u.HoTen AS NguoiTao
     FROM PhieuChi c
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
-    LEFT JOIN TaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
+    LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN Users u ON u.UserID = c.NguoiTaoID
     ${nccId ? 'WHERE c.NCC_ID = @n' : ''}
     ORDER BY c.NgayChi DESC, c.PhieuChiID DESC`)).recordset;
@@ -1225,7 +1228,7 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId) {
   rows.forEach(r => ws.addRow({
     SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayChi), TenNCC: r.TenNCC || '',
     LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
-    TenTaiKhoan: r.TenTaiKhoan || '', LoaiPhieu: r.LoaiPhieu || '', DienGiai: r.DienGiai || '',
+    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), LoaiPhieu: r.LoaiPhieu || '', DienGiai: r.DienGiai || '',
     NguoiTao: r.NguoiTao || ''
   }));
   if (rows.length) {
