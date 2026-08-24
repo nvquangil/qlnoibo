@@ -879,6 +879,25 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPh
    v7.17: TRA VE danh sach DonID vua go, de PUT biet don nao KHONG duoc gan lai (dong bi xoa khoi
    phieu) ma bao cho nguoi dung - truoc day don do quay ve 'Chờ xử lý' AM THAM, van GIU hang, nen
    "xoa mau do khoi phieu roi ma chi tiet dat hang van con". */
+/* ================================================================================================
+   v7.42 SUA LOI: "The DELETE statement conflicted with the REFERENCE constraint
+   FK__PhieuBanH__DonID__..., table dbo.PhieuBanHangChiTiet, column 'DonID'"
+   ------------------------------------------------------------------------------------------------
+   `PhieuBanHangChiTiet.DonID` la KHOA NGOAI tro toi `DonKhachDatHang.DonID`. Tu v7.22, khi xoa/sua
+   phieu ta XOA HAN don PHAN CHIEU (`NguonDat = 'PhieuBH'`) — nhung luc do dong PhieuBanHangChiTiet
+   VAN CON va DonID cua no van tro toi don dang bi xoa => khoa ngoai chan.
+   Hai cho cung mac loi nay, cung mot nguyen nhan la THU TU:
+       goChiTietPhieu()      : xoa don (dong 899) TRUOC khi DELETE chi tiet (dong 912)
+       DELETE /phieu/:id     : xoa don (dong 1166/1182) TRUOC khi DELETE phieu (chi tiet CASCADE)
+   Cach sua: GO `DonID` ve NULL TRUOC khi xoa don. Khong mat gi — ngay sau do chi tiet cung bi xoa
+   (PUT xoa tay, DELETE cascade). `DonIDs` la chuoi, khong co khoa ngoai nen khong can go.
+   Gom vao MOT ham de hai cho khong the lech nhau.
+   ================================================================================================ */
+async function goRangBuocDonTrenChiTiet(tran, phieuBHID) {
+  await new sql.Request(tran).input('id', sql.Int, phieuBHID)
+    .query('UPDATE PhieuBanHangChiTiet SET DonID = NULL WHERE PhieuBHID = @id AND DonID IS NOT NULL');
+}
+
 async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
   const dsDonGo = [];
   const coNguon = await coCotNguonDat(pool);   // v7.22
@@ -887,6 +906,9 @@ async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
            ${coDonIDs ? 'ct.DonIDs' : "CAST(NULL AS NVARCHAR(200)) AS DonIDs"}, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi
     FROM PhieuBanHangChiTiet ct JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
     WHERE ct.PhieuBHID = @id`)).recordset;
+  /* v7.42: da doc xong `ct` vao bo nho -> go DonID ngay, truoc khi xoa don phan chieu ben duoi.
+     Vong lap vẫn dung `d.DonID`/`d.DonIDs` cua ban da doc nen khong anh huong gi. */
+  await goRangBuocDonTrenChiTiet(tran, phieuBHID);
   for (const d of ct) {
     const slChinh = slSangDonViChinh(d.SoLuong, d.DonVi, d.DonViCoBan, d.LoaiRi, d);
     if (d.MauSacID) await ghiXuatKho(pool, tran, d.MaHangID, d.MauSacID, -slChinh);   // HOAN ton
@@ -1153,6 +1175,10 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
+    /* v7.42: GO `PhieuBanHangChiTiet.DonID` VE NULL NGAY DAU — moi lenh xoa don phan chieu ben duoi
+       deu bi khoa ngoai chan neu con dong chi tiet tro toi. `ct` da doc TRUOC transaction nen vong
+       lap ben duoi van co du DonID/DonIDs de xu ly. Xem ghi chu o goRangBuocDonTrenChiTiet. */
+    await goRangBuocDonTrenChiTiet(tran, req.params.id);
     /* Phiếu ĐÃ HỦY: tồn đã hoàn và đơn đã được đưa về 'Chờ xử lý' ngay lúc hủy — KHÔNG làm lại gì cả.
        (Làm lại sẽ hoàn tồn lần 2, và tệ hơn: reset mất liên kết của phiếu MỚI nếu đơn đó đã lên phiếu khác.) */
     if (p.TrangThai !== 'Đã hủy') {

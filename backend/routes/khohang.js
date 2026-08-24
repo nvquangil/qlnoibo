@@ -1191,6 +1191,12 @@ router.delete('/orders/:id', requireAuth, requirePermission('KHOHANG', 'delete')
       await pool.request().input('mh', sql.Int, cur.MaHangID).input('ms', sql.Int, cur.MauSacID).input('sl', sql.Int, slChinh)
         .query('UPDATE TheKhoChiTietMau SET XuatCai = XuatCai - @sl WHERE MaHangID=@mh AND MauSacID=@ms');
     }
+    /* v7.42: phieuBHDangChuaDon() o tren CO Y bo qua phieu DA HUY (phieu huy da hoan ton, khong co ly
+       gi giu don lai). Nhung dong `PhieuBanHangChiTiet` cua phieu huy VAN CON va DonID cua no van tro
+       toi don nay => khoa ngoai FK__PhieuBanH__DonID__... chan cau DELETE ben duoi, nguoi dung chi
+       thay nguyen van "REFERENCE constraint". Go ve NULL truoc khi xoa. */
+    await pool.request().input('id', sql.Int, req.params.id)
+      .query('UPDATE PhieuBanHangChiTiet SET DonID = NULL WHERE DonID = @id');
     await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM DonKhachDatHang WHERE DonID=@id');
     res.json({ success: true });
   } catch (err) {
