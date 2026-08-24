@@ -6,6 +6,8 @@ const { requireAuth, requirePermission, canUpdateStage, requireChucNang, require
 const { checkOverdueOrders } = require('../utils/checkOverdue');
 const { raSoatXoaDonHang, cauBaoChan } = require('../utils/donHangThamChieu');   // v7.11: xoa lenh SX
 const { conHangSQL } = require('../utils/tonVai');   // v7.36: "con hang" = con KG HOAC con MET
+/* v7.37: ba tang phong ve chong "lech ID trung ten" dung CHUNG mot ban chan doan. */
+const { chanDoanDon, danhMucTrungTen, timIdTheoTen } = require('../utils/chanDoanChiDinhVai');
 const { notifyStageUsers } = require('./notifications');
 
 const router = express.Router();
@@ -1399,23 +1401,100 @@ function slugMaMauQ(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
     .toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 26) || 'MAU';
 }
+/* ================================================================================================
+   v7.37 TANG 2a — BIT DUONG TAO BAN GHI DANH MUC TRUNG TEN
+   ------------------------------------------------------------------------------------------------
+   Ban cu so ten CHINH XAC (`WHERE TenLoaiVai=@t`) roi INSERT neu truot. Go them MOT khoang trang la
+   truot => tao ban thu hai cung ten khac ID. DAY CHINH LA CACH LoaiVaiID 2153 ra doi ben canh 2144
+   ("Thô karo Thắng Liên 6111"), lam cay vai tro 2144 ma chi dinh tro 2153 => khong xuat kho duoc.
+
+   ⚠️ Duong nay KHONG di qua utils/crudFactory.js, nen tang 1 (v7.36, chan trung ten o man Danh muc)
+   KHONG bit duoc. Phai chan rieng o day.
+
+   NAY: so theo ten CHUAN HOA (bo het khoang trang, khong phan biet hoa thuong) qua timIdTheoTen();
+   nhieu ban trung ten thi UU TIEN ban DANG CO CAY VAI. Chi INSERT khi that su chua co ten do.
+   ================================================================================================ */
 async function resolveLoaiVaiId(pool, name) {
-  const t = (name || '').trim(); if (!t) return null;
-  const f = (await pool.request().input('t', sql.NVarChar, t).query('SELECT LoaiVaiID FROM LoaiVai WHERE TenLoaiVai=@t')).recordset[0];
-  if (f) return f.LoaiVaiID;
-  const ins = await pool.request().input('t', sql.NVarChar, t).query('INSERT INTO LoaiVai (TenLoaiVai) OUTPUT INSERTED.LoaiVaiID VALUES (@t)');
+  const t = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const co = await timIdTheoTen(pool, sql, 'LoaiVai', 'LoaiVaiID', 'TenLoaiVai', 'LoaiVaiID', t);
+  if (co) return co;
+  const ins = await pool.request().input('t', sql.NVarChar, t)
+    .query('INSERT INTO LoaiVai (TenLoaiVai) OUTPUT INSERTED.LoaiVaiID VALUES (@t)');
   return ins.recordset[0].LoaiVaiID;
 }
 async function resolveMauSacIdQ(pool, name) {
-  const t = (name || '').trim(); if (!t) return null;
-  const f = (await pool.request().input('t', sql.NVarChar, t).query('SELECT MauSacID FROM MauSac WHERE TenMau=@t')).recordset[0];
-  if (f) return f.MauSacID;
+  const t = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const co = await timIdTheoTen(pool, sql, 'MauSac', 'MauSacID', 'TenMau', 'MauSacID', t);
+  if (co) return co;
   let base = slugMaMauQ(t), code = base, i = 1;
   while ((await pool.request().input('m', sql.NVarChar, code).query('SELECT 1 AS x FROM MauSac WHERE MaMau=@m')).recordset[0]) { i++; code = (base + i).slice(0, 30); }
   const ins = await pool.request().input('m', sql.NVarChar, code).input('t', sql.NVarChar, t)
     .query('INSERT INTO MauSac (MaMau, TenMau) OUTPUT INSERTED.MauSacID VALUES (@m, @t)');
   return ins.recordset[0].MauSacID;
 }
+/* ==================================================================================================
+   v7.37 TANG 3 — RA SOAT TOAN HE THONG
+   --------------------------------------------------------------------------------------------------
+   Tang 1 chan tao moi, tang 2 canh bao luc khai — nhung du lieu CU da lech thi khong tang nao thay.
+   Route nay quet mot luot: danh muc trung ten khac ID (chi ro ID nao dang co cay vai — ban "thật"
+   nen giu khi gop), va MOI dong chi dinh khong ghep duoc cay vai nao, nhom theo lenh SX.
+
+   ⚠️ Route CU THE phai dat TRUOC route co tham so (`/chidinhvaisx/:maDH`), khong thi Express se coi
+   'rasoat' la gia tri cua :maDH. Da tung mat nut "File mẫu" tu v5.38 vi dung loi nay
+   (`/nhanvien/template` bi `/nhanvien/:id` an mat) — xem memory v5.59/v5.60.
+   ================================================================================================== */
+router.get('/chidinhvaisx/rasoat', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'chidinhvaisx'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const trung = await danhMucTrungTen(pool);
+    /* Chi quet cac lenh SX CO dong chi dinh — don chua khai thi khong phai loi. */
+    const don = (await pool.request().query(`
+      SELECT d.DonHangID, d.MaDH, d.TenSanPham
+      FROM DonHangSanXuat d
+      WHERE EXISTS (SELECT 1 FROM ChiDinhVaiSX v WHERE v.DonHangID = d.DonHangID)
+      ORDER BY d.DonHangID DESC`)).recordset;
+    const dsLoi = [];
+    let tongDong = 0, tongXuatDuoc = 0;
+    for (const o of don) {
+      const cd = await chanDoanDon(pool, sql, o.DonHangID);
+      tongDong += cd.length;
+      tongXuatDuoc += cd.filter(x => x.xuatDuoc).length;
+      const loi = cd.filter(x => !x.xuatDuoc);
+      if (loi.length) {
+        dsLoi.push({
+          DonHangID: o.DonHangID, MaDH: o.MaDH, TenSanPham: o.TenSanPham,
+          dong: loi.map(x => ({
+            id: x.Id, tenPhieu: x.TenPhieu || '', kieu: x.Kieu,
+            loaiVaiID: x.LoaiVaiID, mauSacID: x.MauSacID,
+            tenLoaiVai: x.TenLoaiVai || '', tenMau: x.TenMau || '',
+            soKG: x.SoKGYeuCau, soMet: x.SoMet, nhan: x.nhan, lyDo: x.lyDo
+          }))
+        });
+      }
+    }
+    /* Gom so luong theo NHAN de biet benh nao la chinh, khong phai tu dem tay. */
+    const theoNhan = {};
+    dsLoi.forEach(d => d.dong.forEach(x => { theoNhan[x.nhan] = (theoNhan[x.nhan] || 0) + 1; }));
+    res.json({
+      success: true,
+      data: {
+        danhMucTrungTen: trung,
+        lenhSXLoi: dsLoi,
+        tong: {
+          soLenhSXQuet: don.length, soLenhSXCoLoi: dsLoi.length,
+          soDongChiDinh: tongDong, soDongXuatDuoc: tongXuatDuoc,
+          soDongLoi: tongDong - tongXuatDuoc, theoNhan
+        }
+      }
+    });
+  } catch (err) {
+    console.error('[qlsx GET /chidinhvaisx/rasoat] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi rà soát: ' + err.message });
+  }
+});
+
 router.get('/chidinhvaisx', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'chidinhvaisx'), async (req, res) => {
   const pool = await getPool();
   /* v5.70: thêm TÌNH TRẠNG XUẤT KHO để ngay tại màn Chỉ định vải SX biết đơn nào đã xuất vải.
@@ -1769,7 +1848,24 @@ router.put('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'edit')
         .query(`INSERT INTO ChiDinhVaiSX (DonHangID, TenPhieu, Kieu, LoaiVaiID, MauSacID, SoKGYeuCau, SoMet, DVTVaiYeuCau)
                 VALUES (@dh, @ten, @kieu, @lv, @ms, @kg, @met, @dvt)`);
     }
-    res.json({ success: true });
+    /* ============================================================================================
+       v7.37 TANG 2b — CANH BAO NGAY LUC KHAI, khong de nguoi khai tu phat hien luc di xuat kho.
+       Chan doan lai chinh cac dong vua luu: dong nao khong ghep duoc cay vai nao con hang thi tra
+       ve ly do cu the (LECH-ID / THIEU-ID / CHUA-NHAP / HET-THAT...). Dung CHUNG ham voi tang 3 va
+       CLI nen ba noi khong the ket luan khac nhau.
+       KHONG chan viec luu: chi dinh truoc - mua vai sau la nghiep vu that (xem ghi chu v5.47.2).
+       Chi bao de nguoi khai biet ngay. Bao loi o day cung khong duoc lam vo ket qua luu, nen boc
+       try/catch rieng.
+       ============================================================================================ */
+    let canhBao = [];
+    try {
+      const cd = await chanDoanDon(pool, sql, order.DonHangID);
+      canhBao = cd.filter(x => !x.xuatDuoc && (ten === '' ? true : String(x.TenPhieu || '') === ten))
+        .map(x => ({ id: x.Id, nhan: x.nhan, lyDo: x.lyDo, kieu: x.Kieu }));
+    } catch (e) {
+      console.warn('[qlsx PUT /chidinhvaisx] khong chan doan duoc:', e.message);
+    }
+    res.json({ success: true, canhBao });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: 'Lỗi khi lưu chỉ định vải SX: ' + err.message }); }
 });
 router.delete('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'chidinhvaisx'), async (req, res) => {

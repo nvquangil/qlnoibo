@@ -98,7 +98,13 @@ window.ModuleQLSX = (function () {
     const body = document.getElementById('qBody');
     const orders = (await apiGet('/api/qlsx/chidinhvaisx')).data || [];
     body.innerHTML = `
-      <h3 style="margin-top:0;">Chỉ định vải SX</h3>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <h3 style="margin:0;">Chỉ định vải SX</h3>
+        ${/* v7.37 TẦNG 3: rà soát toàn hệ thống — tìm dòng chỉ định không ghép được cây vải nào
+             (thường do danh mục có 2 bản trùng tên khác ID) mà không phải mở từng đơn. */''}
+        <button class="btn small secondary" id="btnRaSoatCdv"
+          title="Quét mọi lệnh SX: dòng chỉ định nào không ghép được cây vải nào trong kho, và danh mục nào bị trùng tên khác ID">🔍 Rà soát dữ liệu</button>
+      </div>
       <p class="empty-hint">Khai KG vải yêu cầu theo từng loại vải/màu của đơn. Chỉ đơn ĐÃ chỉ định mới được chọn khi lập Phiếu xuất kho vải.</p>
       <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Chỉ định</th><th>Xuất kho vải</th><th style="width:330px">Thao tác</th></tr></thead>
       <tbody>${orders.map(o => `<tr>
@@ -113,6 +119,108 @@ window.ModuleQLSX = (function () {
     body.querySelectorAll('.act-cdv-lenh').forEach(b => b.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(b.dataset.madh); }));   // v5.53: click Mã ĐH → In lệnh SX
     body.querySelectorAll('.act-cdv-xuat').forEach(b => b.addEventListener('click', () => xuatKhoTheoChiDinh(b.dataset.madh)));   // v5.69
     body.querySelectorAll('.act-xem-phieuxuat').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); xemPhieuXuatCuaDon(a.dataset.madh); }));   // v5.85
+    body.querySelector('#btnRaSoatCdv').addEventListener('click', () => moRaSoatChiDinh(perm));   // v7.37
+  }
+
+  /* ================================================================================================
+     v7.37 TẦNG 3 — MÀN RÀ SOÁT
+     Tầng 1 (Danh mục chặn tạo trùng tên) và tầng 2 (cảnh báo lúc khai) chỉ chặn từ nay trở đi. Dữ
+     liệu CŨ đã lệch thì không tầng nào thấy — nên cần một chỗ quét lại một lượt.
+     Nhãn nguyên nhân do backend gán (utils/chanDoanChiDinhVai.js), frontend chỉ hiển thị — không tự
+     suy diễn lại, tránh hai nơi kết luận khác nhau.
+     ================================================================================================ */
+  const NHAN_MO_TA = {
+    'LECH-ID': 'Lệch ID trùng tên — kho CÓ hàng đúng tên loại+màu nhưng bản ghi danh mục khác ID',
+    'THIEU-ID': 'Chưa chọn Loại vải / Màu từ danh mục (gõ tự do)',
+    'CON-MET-KG-0': 'Còn mét nhưng KG = 0 — máy chủ chưa cập nhật bản v7.36',
+    'LECH-MAU': 'Cùng tên loại vải nhưng khác màu — kiểm tra lại tên màu',
+    'LECH-LOAI': 'Cùng tên màu nhưng khác loại vải — kiểm tra lại tên loại vải',
+    'HET-THAT': 'Khớp đúng danh mục nhưng đã xuất hết (không phải lỗi)',
+    'CHUA-NHAP': 'Kho chưa có cây vải nào loại+màu này (không phải lỗi)'
+  };
+  const NHAN_MAU = { 'LECH-ID': '#c0392b', 'THIEU-ID': '#c0392b', 'CON-MET-KG-0': '#c0392b' };
+  const nhanMauCua = n => NHAN_MAU[n] || '#5f6368';
+
+  /* Bảng "dòng chỉ định không ghép được cây vải". Tách thành hàm riêng thay vì nhúng thẳng vào
+     template của modal: khối cũ lồng backtick 3 tầng (map trong map trong ternary) rất dễ sai một
+     dấu mà không ai thấy. 7 cột — đúng bằng số <th> khai bên dưới. */
+  function bangDongLoi(dsLenh) {
+    if (!dsLenh.length) return '<p class="empty-hint">Mọi dòng chỉ định đều ghép được cây vải trong kho.</p>';
+    const oDon = (o) => `<td rowspan="${o.dong.length}">`
+      + `<a href="#" class="act-rs-cdv" data-madh="${escapeHtml(o.MaDH)}"><b>${escapeHtml(o.MaDH)}</b></a>`
+      + `<div style="font-size:11px;color:#5f6368;">${escapeHtml(o.TenSanPham || '')}</div></td>`;
+    const oId = (id) => `<span style="color:#5f6368;">#${id == null ? 'NULL' : id}</span>`;
+    const motDong = (o, x, i) => '<tr>'
+      + (i === 0 ? oDon(o) : '')
+      + `<td>${escapeHtml(x.tenPhieu) || '<i style="color:#5f6368;">(không tên)</i>'}</td>`
+      + `<td>${escapeHtml(x.kieu || '')}</td>`
+      + `<td>${escapeHtml(x.tenLoaiVai) || '<i>—</i>'} ${oId(x.loaiVaiID)}</td>`
+      + `<td>${escapeHtml(x.tenMau) || '<i>—</i>'} ${oId(x.mauSacID)}</td>`
+      + `<td><b style="color:${nhanMauCua(x.nhan)};">${escapeHtml(x.nhan)}</b></td>`
+      + `<td style="font-size:12px;">${escapeHtml(x.lyDo)}</td></tr>`;
+    const than = dsLenh.map(o => o.dong.map((x, i) => motDong(o, x, i)).join('')).join('');
+    return '<table><thead><tr>'
+      + '<th>Mã ĐH</th><th>Bản</th><th>Kiểu</th><th>Loại vải (ID)</th><th>Màu (ID)</th><th>Nhãn</th><th>Lý do</th>'
+      + `</tr></thead><tbody>${than}</tbody></table>`;
+  }
+
+  async function moRaSoatChiDinh(perm) {
+    let d;
+    try { d = (await apiGet('/api/qlsx/chidinhvaisx/rasoat')).data; }
+    catch (err) { return toast('Không rà soát được: ' + err.message, 'error'); }
+    const t = d.tong || {};
+    const dsNhan = Object.keys(t.theoNhan || {}).sort((a, b) => t.theoNhan[b] - t.theoNhan[a]);
+    const dmL = (d.danhMucTrungTen && d.danhMucTrungTen.loaiVai) || [];
+    const dmM = (d.danhMucTrungTen && d.danhMucTrungTen.mauSac) || [];
+
+    /* Gộp các bản trùng tên thành nhóm theo TÊN để đọc được ngay "tên này có mấy ID". */
+    const nhomTheoTen = (ds) => {
+      const m = new Map();
+      ds.forEach(x => { if (!m.has(x.Ten)) m.set(x.Ten, []); m.get(x.Ten).push(x); });
+      return [...m.entries()];
+    };
+    const bangTrung = (ds, nhan) => {
+      const nhom = nhomTheoTen(ds);
+      if (!nhom.length) return `<p class="empty-hint">Không có ${nhan} nào trùng tên. Danh mục sạch.</p>`;
+      return `<table><thead><tr><th>Tên ${nhan}</th><th>Các ID trùng tên</th></tr></thead><tbody>${
+        nhom.map(([ten, ds2]) => `<tr>
+          <td><b>${escapeHtml(ten)}</b></td>
+          <td>${ds2.map(x => `<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 6px;border:1px solid ${x.SoCay > 0 ? '#137333' : '#ccc'};border-radius:4px;">
+              #${x.Id}${x.MaMau ? ' (' + escapeHtml(x.MaMau) + ')' : ''}
+              · ${x.SoCay} cây · ${x.SoMaVai} mã vải · ${x.SoChiDinh} chỉ định
+              ${x.SoCay > 0 ? '<b style="color:#137333;"> ← bản có hàng, GIỮ bản này</b>' : ''}
+            </span>`).join('')}</td></tr>`).join('')
+      }</tbody></table>`;
+    };
+
+    const md = openModal(`
+      <h3>Rà soát Chỉ định vải SX</h3>
+      <div style="margin-bottom:10px;">
+        Quét <b>${t.soLenhSXQuet || 0}</b> lệnh SX · <b>${t.soDongChiDinh || 0}</b> dòng chỉ định ·
+        xuất được <b style="color:#137333;">${t.soDongXuatDuoc || 0}</b> ·
+        <b style="color:#c0392b;">${t.soDongLoi || 0}</b> dòng không ghép được cây vải nào
+        (ở <b>${t.soLenhSXCoLoi || 0}</b> lệnh SX)
+      </div>
+      ${dsNhan.length ? '<div style="margin-bottom:10px;">' + dsNhan.map(n =>
+        `<div style="font-size:12px;color:${nhanMauCua(n)};"><b>${escapeHtml(n)}</b> × ${t.theoNhan[n]} — ${escapeHtml(NHAN_MO_TA[n] || '')}</div>`
+      ).join('') + '</div>' : ''}
+
+      <h4 style="margin:14px 0 6px;">1. Danh mục trùng tên khác ID</h4>
+      <p class="empty-hint" style="text-align:left;margin:0 0 6px;">Đây là gốc của lỗi "có tồn đúng loại đúng màu mà không xuất được": chỉ định trỏ bản này, cây vải trỏ bản kia.
+        Gộp bằng: <code>node utils/doi_ma_loai_vai.js --tu-id=&lt;bản không có hàng&gt; --den-id=&lt;bản có hàng&gt; --gop --ghi</code></p>
+      <div style="max-height:26vh;overflow:auto;">
+        ${bangTrung(dmL, 'loại vải')}
+        ${bangTrung(dmM, 'màu')}
+      </div>
+
+      <h4 style="margin:14px 0 6px;">2. Dòng chỉ định không ghép được cây vải</h4>
+      <div style="max-height:34vh;overflow:auto;">${bangDongLoi(d.lenhSXLoi || [])}</div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDongRS">Đóng</button></div>`);
+    md.querySelector('#btnDongRS').addEventListener('click', closeModal);
+    /* Bấm Mã ĐH -> mở luôn danh sách bản chỉ định của đơn đó để sửa ngay. */
+    md.querySelectorAll('.act-rs-cdv').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault(); openCdvBanList(a.dataset.madh, perm);
+    }));
   }
 
   /* ================================================================================================
@@ -364,9 +472,55 @@ window.ModuleQLSX = (function () {
         };
       });
       const tenMoi = (modal.querySelector('#cdvTen') ? modal.querySelector('#cdvTen').value : '').trim();   // v5.54: tên bản
-      try { await apiPut('/api/qlsx/chidinhvaisx/' + encodeURIComponent(maDH), { ten: tenMoi, oldTen: tenPhieu, items }); toast('Đã lưu chỉ định vải SX.', 'success'); closeModal(); if (onDone) onDone(); else render(container, currentUser); }
+      try {
+        const kq = await apiPut('/api/qlsx/chidinhvaisx/' + encodeURIComponent(maDH), { ten: tenMoi, oldTen: tenPhieu, items });
+        toast('Đã lưu chỉ định vải SX.', 'success');
+        closeModal();
+        /* v7.37 TẦNG 2: backend chẩn đoán ngay các dòng vừa lưu. Dòng nào không ghép được cây vải
+           nào trong kho thì hiện lý do LUÔN TẠI ĐÂY — trước đây phải đến lúc lập phiếu xuất mới
+           phát hiện, mà form xuất chỉ nói chung "Không tìm thấy cây vải phù hợp".
+           KHÔNG chặn lưu: chỉ định trước rồi mua vải sau là nghiệp vụ thật (v5.47.2). */
+        if (Array.isArray(kq.canhBao) && kq.canhBao.length) baoCanhBaoChiDinh(maDH, kq.canhBao, perm);
+        else if (onDone) onDone(); else render(container, currentUser);
+      }
       catch (err) { toast(err.message, 'error'); }
     });
+  }
+
+  /* ================================================================================================
+     v7.37 TẦNG 2 — POPUP CẢNH BÁO SAU KHI LƯU CHỈ ĐỊNH VẢI SX
+     Đã LƯU rồi mới báo (không chặn), vì "chỉ định trước - mua vải sau" là nghiệp vụ thật. Mục đích
+     là để người khai biết NGAY dòng nào sẽ không xuất kho được và vì sao, thay vì đến lúc thủ kho
+     lập phiếu xuất mới phát hiện.
+     Nhãn + lý do do backend gán (utils/chanDoanChiDinhVai.js) — frontend không tự suy diễn lại.
+     ================================================================================================ */
+  function baoCanhBaoChiDinh(maDH, canhBao, perm) {
+    const nang = canhBao.filter(x => NHAN_MAU[x.nhan]);       // LECH-ID / THIEU-ID / CON-MET-KG-0
+    const nhe = canhBao.filter(x => !NHAN_MAU[x.nhan]);       // HET-THAT / CHUA-NHAP: không phải lỗi
+    const md = openModal(`
+      <h3>Đã lưu — nhưng ${canhBao.length} dòng chưa xuất kho được</h3>
+      <p class="empty-hint" style="text-align:left;">Chỉ định đã lưu xong. Các dòng dưới đây hiện <b>không ghép được cây vải nào còn hàng</b> trong kho,
+        nên khi lập Phiếu xuất kho vải sẽ không thấy cây để chọn.</p>
+      ${nang.length ? `<div style="border-left:3px solid #c0392b;padding:8px 10px;margin-bottom:10px;background:#fdf3f2;">
+        <b style="color:#c0392b;">Cần xử lý (${nang.length})</b>
+        ${nang.map(x => `<div style="margin-top:6px;font-size:13px;">
+          <b>${escapeHtml(x.nhan)}</b> · ${escapeHtml(x.kieu || '')} — ${escapeHtml(x.lyDo)}</div>`).join('')}
+      </div>` : ''}
+      ${nhe.length ? `<div style="border-left:3px solid #bbb;padding:8px 10px;margin-bottom:10px;">
+        <b>Chỉ để biết (${nhe.length})</b> — chưa có hàng, không phải lỗi khai báo
+        ${nhe.map(x => `<div style="margin-top:6px;font-size:13px;color:#5f6368;">
+          <b>${escapeHtml(x.nhan)}</b> · ${escapeHtml(x.kieu || '')} — ${escapeHtml(x.lyDo)}</div>`).join('')}
+      </div>` : ''}
+      ${nang.some(x => x.nhan === 'LECH-ID') ? `<p class="empty-hint" style="text-align:left;">
+        <b>LECH-ID</b> nghĩa là danh mục đang có <b>hai bản ghi trùng tên khác ID</b> — hàng trong kho trỏ bản này,
+        chỉ định trỏ bản kia. Bấm <b>🔍 Rà soát dữ liệu</b> ở màn Chỉ định vải SX để xem bản nào đang giữ hàng, rồi gộp lại.</p>` : ''}
+      <div class="modal-actions">
+        <button type="button" class="btn small secondary" id="btnRSTuCanhBao">🔍 Rà soát dữ liệu</button>
+        <button type="button" class="btn secondary" id="btnDongCB">Đóng</button></div>`);
+    const dong = () => { closeModal(); render(container, currentUser); };
+    md.querySelector('#btnDongCB').addEventListener('click', dong);
+    md.querySelector('#btnRSTuCanhBao').addEventListener('click', () => { closeModal(); moRaSoatChiDinh(perm); });
+    void maDH;
   }
 
   // v5.51: bản Xem/In "Chỉ định vải SX" (dùng chung 1 HTML) — cột SL yêu cầu (kg) + (mét).
