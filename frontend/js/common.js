@@ -1274,18 +1274,40 @@ function printHtml(title, bodyHtml, opts) {
       let phan = tb.cloneNode(true);
       const thanMoi = () => { const t = phan.tBodies[0]; t.innerHTML = ''; return t; };
       let than2 = thanMoi();
+      const dsPhan = [phan];
       trang.appendChild(phan);
       dong.forEach(tr => {
-        than2.appendChild(tr.cloneNode(true));
-        if (trang.scrollHeight > dung) {           // dòng vừa thêm làm tràn -> trả lại, sang trang mới
-          than2.removeChild(than2.lastChild);
-          if (!than2.rows.length) return;          // 1 dòng cao hơn cả trang: đành để tràn, không mất dữ liệu
-          trang = trangMoi();
-          phan = tb.cloneNode(true);
-          than2 = thanMoi();
-          trang.appendChild(phan);
-          than2.appendChild(tr.cloneNode(true));
-        }
+        const them = () => than2.appendChild(tr.cloneNode(true));
+        them();
+        if (trang.scrollHeight <= dung) return;    // còn chỗ -> giữ nguyên
+        than2.removeChild(than2.lastChild);        // trả lại dòng vừa làm tràn
+
+        /* ================================================================================================
+           v7.31 — SỬA LỖI MẤT DỮ LIỆU KHI IN (bảng nhỏ ở cuối phiếu biến mất).
+           Bản cũ:  if (!than2.rows.length) return;   // "đành để tràn, không mất dữ liệu"
+           Nhưng ngay TRƯỚC dòng đó đã `removeChild` dòng vừa thêm, rồi `return` -> DÒNG BỊ MẤT HẲN.
+           Xảy ra khi trang hiện tại đã gần đầy: bảng mới vào chưa kịp có dòng nào thì đã tràn, nên
+           MỌI dòng của bảng đó đều rơi vào nhánh này và mất sạch — bảng in ra rỗng.
+           Đúng ca "khối công nợ cuối phiếu: xem phiếu thì có, in ra không có" (phiếu PX26093): trang 1
+           gần đầy nên bảng công nợ 2 dòng bị bỏ trắng, trong khi phiếu khác còn chỗ nên vẫn in đủ.
+           Nay: hết chỗ thì SANG TRANG MỚI rồi rót dòng vào đó. Chỉ khi đang ở TRANG MỚI CÒN TRỐNG mà
+           một dòng vẫn tràn (dòng cao hơn cả trang in) thì mới để nó tràn — vẫn KHÔNG bỏ dòng nào.
+           ================================================================================================ */
+        const trangDangTrong = !than2.rows.length && trang.children.length <= 1;
+        if (trangDangTrong) { them(); return; }    // dòng cao hơn cả trang: để tràn, KHÔNG bỏ
+
+        trang = trangMoi();
+        phan = tb.cloneNode(true);
+        than2 = thanMoi();
+        dsPhan.push(phan);
+        trang.appendChild(phan);
+        them();
+      });
+      /* Phần bảng nào không nhận được dòng nào (trang trước hết chỗ ngay từ đầu) thì gỡ đi, kẻo in ra
+         một bảng chỉ có tiêu đề cột trống. */
+      dsPhan.forEach(ph => {
+        const t = ph.tBodies[0];
+        if ((!t || !t.rows.length) && ph.parentNode) ph.parentNode.removeChild(ph);
       });
     }
 
