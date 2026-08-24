@@ -1090,10 +1090,158 @@ function khongDau(s) {
     .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'cong_no';
 }
 
+
+/* ================================================================================================
+   v7.32 — BA SHEET CHUNG TU KEM THEO FILE CONG NO
+   Yeu cau: "xuat chi tiet cong no ra excel: chi tiet phieu ban hang, phieu thu, phieu chi".
+   So chi tiet cong no chi co MOT DONG cho moi phieu (so phieu + so tien) — ke toan doi chieu voi
+   khach thi can biet phieu do gom nhung mat hang nao, thu bang hinh thuc gi, chi cho viec gi.
+   Nen file Excel cong no gio kem THEM cac sheet:
+       "CT phiếu bán hàng"  -> MOI DONG HANG cua tung phieu (ma hang, mau, SL, gia, thanh tien)
+       "Phiếu thu"          -> tung phieu thu (hinh thuc, tai khoan, gan phieu ban hang nao)
+       "Phiếu chi"          -> tung phieu chi (cho NCC / chi khac)
+   Loc theo DUNG doi tuong dang xem (1 khach / 1 NCC) hoac lay tat ca khi xuat tong hop — cung mot
+   ham, khong viet hai ban.
+   ================================================================================================ */
+async function sheetChiTietPBH(pool, wb, tienIch, khach) {
+  const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
+  const rq = pool.request();
+  if (khach) rq.input('k', sql.NVarChar, khach);
+  const rows = (await rq.query(`
+    SELECT p.SoPhieu, p.NgayBan, p.TenKhach, p.TrangThai,
+           ct.MaHangID, h.MaHang, h.TenHang, ms.TenMau,
+           ct.SoLuong, ct.DonVi, ct.SoLuongCai, ct.GiaBanLe, ct.PhanTramCKShop, ct.GiaBan, ct.ThanhTien,
+           p.PhanTramCKNPP, p.TongThanhToan
+    FROM PhieuBanHangChiTiet ct
+    JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+    JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+    LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+    WHERE p.TrangThai <> N'Đã hủy' ${khach ? 'AND LTRIM(RTRIM(p.TenKhach)) = @k' : ''}
+    ORDER BY p.NgayBan DESC, p.PhieuBHID DESC, ct.ID`)).recordset;
+  const ws = wb.addWorksheet('CT phiếu bán hàng');
+  const cot = [
+    { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
+    { header: 'Ngày', key: 'Ngay', width: 11 },
+    ...(khach ? [] : [{ header: 'Khách hàng', key: 'TenKhach', width: 26 }]),
+    { header: 'Mã hàng', key: 'MaHang', width: 14 },
+    { header: 'Tên hàng', key: 'TenHang', width: 34 },
+    { header: 'Màu', key: 'TenMau', width: 16 },
+    { header: 'SL', key: 'SoLuong', width: 8 },
+    { header: 'ĐVT', key: 'DonVi', width: 8 },
+    { header: 'SL (cái)', key: 'SoLuongCai', width: 9 },
+    { header: 'Giá bán lẻ', key: 'GiaBanLe', width: 13 },
+    { header: '% CK shop', key: 'CK', width: 10 },
+    { header: 'Giá bán', key: 'GiaBan', width: 13 },
+    { header: 'Thành tiền', key: 'ThanhTien', width: 15 }
+  ];
+  dauTrang(ws, cot.length, 'CHI TIẾT PHIẾU BÁN HÀNG', khach ? 'Khách hàng: ' + khach : null);
+  const dongTD = dongTieuDeCot(ws, cot).number;
+  rows.forEach(r => ws.addRow({
+    SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayBan), TenKhach: r.TenKhach,
+    MaHang: r.MaHang, TenHang: r.TenHang, TenMau: r.TenMau || '',
+    SoLuong: so(r.SoLuong), DonVi: r.DonVi || '', SoLuongCai: so(r.SoLuongCai),
+    GiaBanLe: so(r.GiaBanLe), CK: so(r.PhanTramCKShop), GiaBan: so(r.GiaBan), ThanhTien: so(r.ThanhTien)
+  }));
+  if (rows.length) {
+    const t = ws.addRow({ TenHang: 'TỔNG CỘNG', ThanhTien: rows.reduce((a, r) => a + so(r.ThanhTien), 0) });
+    t.font = { bold: true };
+  } else ws.addRow(['(không có dòng hàng nào)']);
+  ketBang(ws, cot.length, dongTD);
+}
+
+async function sheetPhieuThu(pool, wb, tienIch, khach) {
+  const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
+  const coLoai = await coCotLoaiPhieu(pool);
+  const rq = pool.request();
+  if (khach) rq.input('k', sql.NVarChar, khach);
+  const rows = (await rq.query(`
+    SELECT t.SoPhieu, t.NgayThu, t.LoaiDoiTuong, t.TenDoiTuong, t.SoTien, t.HinhThuc, t.DienGiai,
+           ${coLoai ? 't.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
+           tk.TenTaiKhoan, p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
+    FROM PhieuThu t
+    LEFT JOIN TaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
+    LEFT JOIN PhieuBanHang p ON p.PhieuBHID = t.PhieuBHID
+    LEFT JOIN Users u ON u.UserID = t.NguoiTaoID
+    ${khach ? "WHERE t.LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(t.TenDoiTuong,''))) = @k" : ''}
+    ORDER BY t.NgayThu DESC, t.PhieuThuID DESC`)).recordset;
+  const ws = wb.addWorksheet('Phiếu thu');
+  const cot = [
+    { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
+    { header: 'Ngày thu', key: 'Ngay', width: 11 },
+    ...(khach ? [] : [{ header: 'Đối tượng', key: 'TenDoiTuong', width: 26 },
+                      { header: 'Loại đối tượng', key: 'LoaiDoiTuong', width: 14 }]),
+    { header: 'Số tiền', key: 'SoTien', width: 16 },
+    { header: 'Hình thức', key: 'HinhThuc', width: 14 },
+    { header: 'Tài khoản', key: 'TenTaiKhoan', width: 22 },
+    { header: 'Thu cho phiếu BH', key: 'SoPhieuBH', width: 16 },
+    { header: 'Diễn giải', key: 'DienGiai', width: 34 },
+    { header: 'Người lập', key: 'NguoiTao', width: 16 }
+  ];
+  dauTrang(ws, cot.length, 'CHI TIẾT PHIẾU THU', khach ? 'Khách hàng: ' + khach : null);
+  const dongTD = dongTieuDeCot(ws, cot).number;
+  rows.forEach(r => ws.addRow({
+    SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayThu), TenDoiTuong: r.TenDoiTuong || '',
+    LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
+    TenTaiKhoan: r.TenTaiKhoan || '', SoPhieuBH: r.SoPhieuBH || '', DienGiai: r.DienGiai || '',
+    NguoiTao: r.NguoiTao || ''
+  }));
+  if (rows.length) {
+    const t = ws.addRow({ HinhThuc: 'TỔNG THU', SoTien: rows.reduce((a, r) => a + so(r.SoTien), 0) });
+    t.font = { bold: true };
+  } else ws.addRow(['(không có phiếu thu nào)']);
+  ketBang(ws, cot.length, dongTD);
+}
+
+async function sheetPhieuChi(pool, wb, tienIch, nccId) {
+  const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
+  const coLoai = await coCotLoaiPhieu(pool);
+  const rq = pool.request();
+  if (nccId) rq.input('n', sql.Int, nccId);
+  const rows = (await rq.query(`
+    SELECT c.SoPhieu, c.NgayChi, c.LoaiDoiTuong, c.NCC_ID, ncc.TenNCC, c.SoTien, c.HinhThuc, c.DienGiai,
+           ${coLoai ? 'c.LoaiPhieu' : "CAST(NULL AS NVARCHAR(30)) AS LoaiPhieu"},
+           tk.TenTaiKhoan, u.HoTen AS NguoiTao
+    FROM PhieuChi c
+    LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
+    LEFT JOIN TaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
+    LEFT JOIN Users u ON u.UserID = c.NguoiTaoID
+    ${nccId ? 'WHERE c.NCC_ID = @n' : ''}
+    ORDER BY c.NgayChi DESC, c.PhieuChiID DESC`)).recordset;
+  const ws = wb.addWorksheet('Phiếu chi');
+  const cot = [
+    { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
+    { header: 'Ngày chi', key: 'Ngay', width: 11 },
+    ...(nccId ? [] : [{ header: 'Nhà cung cấp', key: 'TenNCC', width: 26 },
+                      { header: 'Loại đối tượng', key: 'LoaiDoiTuong', width: 14 }]),
+    { header: 'Số tiền', key: 'SoTien', width: 16 },
+    { header: 'Hình thức', key: 'HinhThuc', width: 14 },
+    { header: 'Tài khoản', key: 'TenTaiKhoan', width: 22 },
+    { header: 'Loại phiếu', key: 'LoaiPhieu', width: 16 },
+    { header: 'Diễn giải', key: 'DienGiai', width: 34 },
+    { header: 'Người lập', key: 'NguoiTao', width: 16 }
+  ];
+  dauTrang(ws, cot.length, 'CHI TIẾT PHIẾU CHI', nccId ? 'Nhà cung cấp: ' + ((rows[0] || {}).TenNCC || '') : null);
+  const dongTD = dongTieuDeCot(ws, cot).number;
+  rows.forEach(r => ws.addRow({
+    SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayChi), TenNCC: r.TenNCC || '',
+    LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
+    TenTaiKhoan: r.TenTaiKhoan || '', LoaiPhieu: r.LoaiPhieu || '', DienGiai: r.DienGiai || '',
+    NguoiTao: r.NguoiTao || ''
+  }));
+  if (rows.length) {
+    const t = ws.addRow({ HinhThuc: 'TỔNG CHI', SoTien: rows.reduce((a, r) => a + so(r.SoTien), 0) });
+    t.font = { bold: true };
+  } else ws.addRow(['(không có phiếu chi nào)']);
+  ketBang(ws, cot.length, dongTD);
+}
+
 router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (req, res) => {
   try {
     const pool = await getPool();
-    const loai = req.query.loai === 'ncc' ? 'ncc' : 'kh';
+    /* v7.32: them 2 nhanh 'phieuthu' / 'phieuchi' — xuat THANG danh sach chung tu, khong kem cong no.
+       ⚠️ Phai nhan dien TRUOC khi rot xuong nhanh 'kh': de nguyen 3 dong cu thi loai=phieuthu se bi
+       coi la 'kh' va tra ve file cong no khach hang — nguoi dung bam nut nay lai ra file khac. */
+    const loai = ['ncc', 'phieuthu', 'phieuchi'].indexOf(req.query.loai) !== -1 ? req.query.loai : 'kh';
     const wb = new ExcelJS.Workbook();
 
     /* v6.47: XUẤT SỔ CHI TIẾT.
@@ -1158,6 +1306,14 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
 
     const khachMot = String(req.query.khach || '').trim();
     const nccMot = parseInt(req.query.nccId, 10) || 0;
+    /* v7.32: gom cac helper cuc bo lai de 3 ham sheet chung tu dung CHUNG dinh dang (dau trang, ke
+       bang, dinh dang so) — khong viet lai lan hai, khong the lech nhau ve hinh thuc. */
+    const tienIch = { dauTrang, dongTieuDeCot, ketBang, ngayVN };
+    /* Hai nut "Xuat Excel" o tab Phieu thu / Phieu chi: chi mot sheet chung tu, khong co so cong no. */
+    if (loai === 'phieuthu') { await sheetPhieuThu(pool, wb, tienIch, null); return await guiFile(res, wb, 'phieu_thu.xlsx'); }
+    if (loai === 'phieuchi') { await sheetPhieuChi(pool, wb, tienIch, null); return await guiFile(res, wb, 'phieu_chi.xlsx'); }
+    /* `?chungTu=0` de bo qua 3 sheet chung tu khi chi can so tong hop (file nho, tai nhanh). */
+    const kemChungTu = String(req.query.chungTu || '1') !== '0';
 
     if (loai === 'kh' && khachMot) {
       const d = await soChiTietKH(pool, khachMot);
@@ -1170,6 +1326,10 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       const r = ws.addRow({ Loai: 'CÒN NỢ', LuyKe: d.conNo });
       r.font = { bold: true };
       ketBang(ws, cot.length, dongTD);   // v6.53: kẻ bảng + định dạng số
+      if (kemChungTu) {                  // v7.32: chi tiết phiếu bán hàng + phiếu thu CỦA KHÁCH NÀY
+        await sheetChiTietPBH(pool, wb, tienIch, khachMot);
+        await sheetPhieuThu(pool, wb, tienIch, khachMot);
+      }
       return await guiFile(res, wb, `cong_no_${khongDau(khachMot)}.xlsx`);
     }
     if (loai === 'ncc' && nccMot) {
@@ -1183,6 +1343,7 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       const r = ws.addRow({ Loai: 'CÒN NỢ', LuyKe: d.conNo });
       r.font = { bold: true };
       ketBang(ws, cot.length, dongTD);   // v6.53: kẻ bảng + định dạng số
+      if (kemChungTu) await sheetPhieuChi(pool, wb, tienIch, nccMot);   // v7.32
       return await guiFile(res, wb, `cong_no_${khongDau(d.tenNCC || ('ncc' + nccMot))}.xlsx`);
     }
 
@@ -1262,6 +1423,12 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       }
     }
     ketBang(ws2, cot2.length, dongTD2);   // v6.53
+    /* v7.32: xuat TONG HOP thi kem luon chung tu cua TOAN BO doi tuong — ke toan mo mot file la co
+       du: tong hop, so chi tiet, va tung dong hang / tung phieu thu (hoac phieu chi). */
+    if (kemChungTu) {
+      if (loai === 'kh') { await sheetChiTietPBH(pool, wb, tienIch, null); await sheetPhieuThu(pool, wb, tienIch, null); }
+      else { await sheetPhieuChi(pool, wb, tienIch, null); }
+    }
     await guiFile(res, wb, `cong_no_${loai}.xlsx`);
   } catch (err) {
     console.error('[congno GET /export] ', err);

@@ -201,6 +201,9 @@ window.ModuleCongNo = (function () {
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
         ${perm.canCreate ? '<button class="btn" id="btnAddThu">+ Tạo phiếu thu</button>' : ''}
+        ${/* v7.32: xuất chi tiết PHIẾU THU ra Excel. Dùng CHUNG route /api/congno/export của công nợ
+             (chỉ khác tham số) nên định dạng file, đầu trang, kẻ bảng đồng nhất với các file kia. */''}
+        <button class="btn small secondary" id="btnXuatThu">⬇️ Xuất Excel</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã thu: <b>${fmtTien(tong)}</b> đ · ${rows.length} phiếu · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Người/Khách nộp</th><th>Phiếu bán hàng</th><th>Tài khoản</th>
@@ -217,6 +220,8 @@ window.ModuleCongNo = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuThuID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuThuID}">Xóa</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có phiếu thu nào</td></tr>'}</tbody></table>`;
     wireTableSearch(body);
+    body.querySelector('#btnXuatThu').addEventListener('click', () =>
+      taiFile('/api/congno/export?loai=phieuthu', 'phieu_thu.xlsx'));
     const btn = body.querySelector('#btnAddThu');
     if (btn) btn.addEventListener('click', () => formPhieuThu(null, perm));
     body.querySelectorAll('.act-in').forEach(b => b.addEventListener('click', () =>
@@ -359,6 +364,7 @@ window.ModuleCongNo = (function () {
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
         ${perm.canCreate ? '<button class="btn" id="btnAddChi">+ Tạo phiếu chi</button>' : ''}
+        <button class="btn small secondary" id="btnXuatChi">⬇️ Xuất Excel</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã chi: <b>${fmtTien(tong)}</b> đ (trong đó tính chi phí KD: <b>${fmtTien(tongCPKD)}</b> đ) · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Đối tượng nhận</th><th>Tài khoản</th><th>Tính CPKD</th>
@@ -376,6 +382,8 @@ window.ModuleCongNo = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuChiID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuChiID}">Xóa</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có phiếu chi nào</td></tr>'}</tbody></table>`;
     wireTableSearch(body);
+    body.querySelector('#btnXuatChi').addEventListener('click', () =>
+      taiFile('/api/congno/export?loai=phieuchi', 'phieu_chi.xlsx'));
     const btn = body.querySelector('#btnAddChi');
     if (btn) btn.addEventListener('click', () => formPhieuChi(null, perm));
     body.querySelectorAll('.act-in').forEach(b => b.addEventListener('click', () =>
@@ -511,7 +519,7 @@ window.ModuleCongNo = (function () {
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
       ${/* v6.47: xuất riêng sổ của khách này. */''}
       <div class="modal-actions">
-        <button type="button" class="btn small secondary" id="btnXuatCT">⬇️ Xuất Excel sổ này</button>
+        <button type="button" class="btn small secondary" id="btnXuatCT" title="File gồm: sổ chi tiết + chi tiết từng dòng hàng của phiếu bán hàng + danh sách phiếu thu">⬇️ Xuất Excel sổ này (kèm chứng từ)</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
     modal.querySelector('#btnXuatCT').addEventListener('click', () =>
