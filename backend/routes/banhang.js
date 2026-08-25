@@ -24,6 +24,8 @@ const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 /* v7.41: MOT ban cong thuc "cong no truoc chung tu" — dung chung voi routes/nhaplai.js. */
 const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
+/* v7.43: xuat hoa don GTGT nap vao VietInvoice (boc thue 8% khoi gia da gom thue). */
+const { taoWorkbookHoaDon } = require('../utils/hoaDonVietInvoice');
 
 const router = express.Router();
 
@@ -480,6 +482,59 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
   } catch (err) {
     console.error('[banhang GET /phieu/:id/export] ', err);
     res.status(400).json({ success: false, message: 'Lỗi khi xuất Excel: ' + err.message });
+  }
+});
+
+/* ================================================================================================
+   v7.43 — XUAT HOA DON GTGT (file nap vao VietInvoice)
+   ------------------------------------------------------------------------------------------------
+   Gia tren phieu la GIA DA GOM THUE; hoa don can gia TRUOC THUE nen chia 1.08 (thue 8%).
+   Toan bo phep tinh + ghi file nam o utils/hoaDonVietInvoice.js — doc ghi chu dau file do TRUOC KHI
+   SUA, dac biet doan noi ve "phieu da tach thue thi KHONG boc lan hai".
+   `?thue=` cho phep doi % thue khi chinh sach doi (mac dinh 8).
+   ================================================================================================ */
+router.get('/phieu/:id/hoadon', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const h = (await pool.request().input('id', sql.Int, req.params.id).query(`
+      SELECT * FROM PhieuBanHang WHERE PhieuBHID = @id`)).recordset[0];
+    if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu bán hàng.' });
+    if (h.TrangThai === 'Đã hủy') {
+      return res.status(400).json({ success: false, message: 'Phiếu này ĐÃ HỦY — không xuất hóa đơn.' });
+    }
+    const ct = (await pool.request().input('id', sql.Int, req.params.id).query(`
+      SELECT ct.*, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, ms.TenMau
+      FROM PhieuBanHangChiTiet ct
+      JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+      LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+      WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
+    if (!ct.length) return res.status(400).json({ success: false, message: 'Phiếu không có dòng hàng nào.' });
+
+    /* Email khach (cot H) — chi lay khi phieu co gan KhachHangID. Bang KhachHang KHONG co cot MST
+       nen cot F de trong, ke toan tu dien (nguoi dung da chon phuong an nay). */
+    let kh = null;
+    if (h.KhachHangID) {
+      kh = (await pool.request().input('k', sql.Int, h.KhachHangID)
+        .query('SELECT TenKhachHang, DiaChi, Email FROM KhachHang WHERE KhachHangID = @k')).recordset[0] || null;
+    }
+    const thue = /^\d+(\.\d+)?$/.test(String(req.query.thue || '')) ? Number(req.query.thue) : undefined;
+    const { wb, kq } = await taoWorkbookHoaDon(h, ct, kh, thue == null ? {} : { thue });
+
+    const boDau = new RegExp('[\\u0300-\\u036f]', 'g');
+    const sach = (s) => String(s || '').normalize('NFD').replace(boDau, '')
+      .replace(new RegExp('đ', 'g'), 'd').replace(new RegExp('Đ', 'g'), 'D')
+      .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const ten = [sach(h.SoPhieu || h.PhieuBHID), sach(h.TenKhach)].filter(Boolean).join('_') || 'phieu';
+    /* Canh bao (neu co) di theo HEADER de frontend hien duoc — khong the nhet vao body vi body la file.
+       Phai bo dau: header HTTP chi nhan ASCII. */
+    if (kq.canhBao.length) res.setHeader('X-Canh-Bao', sach(kq.canhBao.join(' | ')).slice(0, 400));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="HoaDon_${ten}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('[banhang GET /phieu/:id/hoadon] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi xuất hóa đơn: ' + err.message });
   }
 });
 

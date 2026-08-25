@@ -2714,6 +2714,9 @@ window.ModuleKhoHang = (function () {
         ${/* v6.47: xuất riêng 1 phiếu ra Excel (bố cục giống bản in). */''}
         <td><button class="btn small secondary act-in" data-id="${r.PhieuBHID}">🖨️ In</button>
           <button class="btn small secondary act-xls" data-id="${r.PhieuBHID}" data-sp="${escapeHtml(r.SoPhieu || '')}" title="Xuất phiếu này ra Excel">⬇️ Excel</button>
+          ${/* v7.43: xuất file hóa đơn GTGT để nạp vào VietInvoice. Giá trên phiếu là giá ĐÃ gồm
+               thuế nên backend bóc 1.08 ra giá trước thuế. Phiếu đã hủy thì không cho xuất. */''}
+          ${String(r.TrangThai || '') !== 'Đã hủy' ? `<button class="btn small secondary act-hoadon" data-id="${r.PhieuBHID}" data-sp="${escapeHtml(r.SoPhieu || '')}" title="Xuất file hóa đơn GTGT (nạp vào VietInvoice) — giá trước thuế 8%">🧾 Hóa đơn</button>` : ''}
           ${perm.canEdit && r.TrangThai !== 'Đã hủy' && !Number(r.DaThu) ? `<button class="btn small secondary act-sua" data-id="${r.PhieuBHID}" title="Sửa phiếu (hoàn tồn cũ, trừ lại theo số mới)">Sửa</button>` : ''}
           ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary act-huy" data-id="${r.PhieuBHID}" title="Hủy phiếu và HOÀN TỒN KHO">Hủy</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuBHID}">Xóa</button>` : ''}</td>
@@ -2768,31 +2771,13 @@ window.ModuleKhoHang = (function () {
       printPhieuBanHang(d.header, d.chiTiet);
     }));
     // v6.47: xuất 1 phiếu ra Excel — cùng cách tải (fetch + Blob, dò content-type) với nút xuất danh sách.
-    body.querySelectorAll('.act-xls').forEach(b => b.addEventListener('click', async () => {
-      b.disabled = true;
-      try {
-        const r = await fetch('/api/banhang/phieu/' + b.dataset.id + '/export', { credentials: 'same-origin' });
-        const kieu = r.headers.get('content-type') || '';
-        if (!r.ok || kieu.includes('application/json')) {
-          let msg = 'HTTP ' + r.status;
-          try { const j = await r.json(); if (j && j.message) msg = j.message; } catch (e) { /* không phải JSON */ }
-          throw new Error(msg);
-        }
-        const blob = await r.blob();
-        /* v6.64: LẤY TÊN FILE DO SERVER ĐẶT (đã gồm số phiếu + tên khách). Trước đây gán đè ở đây
-           nên tên khách server đặt bị vứt đi. Không đọc được header thì mới tự dựng. */
-        const cd = r.headers.get('content-disposition') || '';
-        const khop = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = khop ? decodeURIComponent(khop[1])
-          : 'PhieuBanHang_' + String(b.dataset.sp || b.dataset.id).replace(/[^A-Za-z0-9_-]+/g, '_') + '.xlsx';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-      } catch (err) {
-        toast('Xuất Excel lỗi: ' + err.message, 'error');
-      } finally { b.disabled = false; }
-    }));
+    // v7.43: đường tải gom vào taiFileXlsx() để nút Hóa đơn dùng CHUNG, không copy lần hai.
+    body.querySelectorAll('.act-xls').forEach(b => b.addEventListener('click',
+      () => taiFileXlsx(b, '/api/banhang/phieu/' + b.dataset.id + '/export', 'PhieuBanHang_', 'Xuất Excel lỗi: ')));
+    /* v7.43: XUẤT HÓA ĐƠN GTGT (file nạp vào VietInvoice). Backend bóc thuế 8% khỏi giá đã gồm thuế
+       và trả cảnh báo qua header `X-Canh-Bao` nếu số liệu phiếu có chỗ đáng ngờ. */
+    body.querySelectorAll('.act-hoadon').forEach(b => b.addEventListener('click',
+      () => taiFileXlsx(b, '/api/banhang/phieu/' + b.dataset.id + '/hoadon', 'HoaDon_', 'Xuất hóa đơn lỗi: ')));
     body.querySelectorAll('.act-sua').forEach(b => b.addEventListener('click', async () => {
       try {
         const d = (await apiGet('/api/banhang/phieu/' + b.dataset.id)).data;
@@ -2829,9 +2814,14 @@ window.ModuleKhoHang = (function () {
         ${khoiCongNoHtml(h)}</div>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnDong">Đóng</button>
+        ${/* v7.43: xuất hóa đơn GTGT ngay trong popup xem phiếu — không phải đóng ra danh sách. */''}
+        ${String(h.TrangThai || '') !== 'Đã hủy' ? `<button type="button" class="btn small secondary" id="btnHoaDon" data-id="${h.PhieuBHID}" data-sp="${escapeHtml(h.SoPhieu || '')}" title="Xuất file hóa đơn GTGT (nạp vào VietInvoice) — giá trước thuế 8%">🧾 Hóa đơn</button>` : ''}
         <button type="button" class="btn" id="btnIn">🖨️ In phiếu</button>
       </div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    const btnHD = modal.querySelector('#btnHoaDon');
+    if (btnHD) btnHD.addEventListener('click',
+      () => taiFileXlsx(btnHD, '/api/banhang/phieu/' + h.PhieuBHID + '/hoadon', 'HoaDon_', 'Xuất hóa đơn lỗi: '));
     modal.querySelector('#btnIn').addEventListener('click', () => inPhieuBanHangDayDu(h, d.chiTiet)
       .catch(err => toast('Không in được: ' + err.message, 'error')));
   }
@@ -2969,6 +2959,42 @@ window.ModuleKhoHang = (function () {
   }
 
   /* v6.24.5: 2 dòng công nợ đặt DƯỚI dòng "Số tiền bằng chữ" (theo yêu cầu), không nằm trong bảng. */
+  /* ================================================================================================
+     v7.43 — TẢI FILE .xlsx TỪ API (dùng chung cho nút ⬇️ Excel và 🧾 Hóa đơn)
+     Vì sao không dùng `taiFile()` của common.js: đường này cần (a) dò content-type để biến lỗi JSON
+     thành thông báo đọc được thay vì tải về một file rác, (b) lấy TÊN FILE do server đặt (đã gồm số
+     phiếu + tên khách), (c) đọc header `X-Canh-Bao` để hiện cảnh báo của backend.
+     ================================================================================================ */
+  async function taiFileXlsx(btn, url, tenDuPhong, nhanLoi) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      const kieu = r.headers.get('content-type') || '';
+      if (!r.ok || kieu.includes('application/json')) {
+        let msg = 'HTTP ' + r.status;
+        try { const j = await r.json(); if (j && j.message) msg = j.message; } catch (e) { /* không phải JSON */ }
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      /* v6.64: LẤY TÊN FILE DO SERVER ĐẶT (đã gồm số phiếu + tên khách). Trước đây gán đè ở đây
+         nên tên khách server đặt bị vứt đi. Không đọc được header thì mới tự dựng. */
+      const cd = r.headers.get('content-disposition') || '';
+      const khop = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = khop ? decodeURIComponent(khop[1])
+        : tenDuPhong + String((btn && btn.dataset.sp) || (btn && btn.dataset.id) || '').replace(/[^A-Za-z0-9_-]+/g, '_') + '.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      /* Cảnh báo của backend đi qua header (body là file nên không nhét được vào JSON). Hiện lâu hơn
+         toast thường vì đây là thứ người dùng cần đọc trước khi nạp vào phần mềm hóa đơn. */
+      const cb = r.headers.get('X-Canh-Bao');
+      if (cb) toast('Đã tải file — CẦN KIỂM: ' + cb, 'info');
+    } catch (err) {
+      toast(nhanLoi + err.message, 'error');
+    } finally { if (btn) btn.disabled = false; }
+  }
+
   function khoiCongNoHtml(h) {
     /* v7.29 — TRUOC DAY: thieu `CongNoTruoc` thi IM LANG bo ca khoi cong no. Ket qua: phieu PX26093
        in ra KHONG co dong "Công nợ trước phiếu" trong khi phieu khac co — khach doi chieu khong hieu,
