@@ -133,14 +133,30 @@
       </div>
       ${bieuDoThang()}
       ${bangKhach(rows)}`;
+    /* ============================================================================================
+       v7.44: BẤM TÊN KHÁCH -> MỞ SỔ CHI TIẾT CÔNG NỢ CỦA CHÍNH KHÁCH ĐÓ.
+       Trước đây chỉ đặt `location.hash = '#CONGNO/congnokh'` rồi reload, tức bấm khách NÀO cũng ra
+       DANH SÁCH công nợ tất cả khách — mất luôn cái tên vừa bấm, người dùng phải tự tìm lại trong
+       bảng. Nay gọi lại ĐÚNG popup sổ chi tiết của phân hệ Công nợ (ModuleCongNo.soChiTietKH), mở
+       ĐÈ LÊN dashboard: không reload, không rời màn, đóng popup là về đúng chỗ đang xem.
+       Tên khách khớp được vì CẢ HAI backend đều nhóm theo LTRIM(RTRIM(TenKhach)).
+       ============================================================================================ */
     body.querySelectorAll('.db-congno').forEach(a => a.onclick = (e) => {
       e.preventDefault();
-      /* Bấm tên khách -> mở thẳng SỔ CHI TIẾT công nợ của khách đó ở phân hệ Công nợ.
-         Chỉ mở khi người dùng CÓ quyền vào đó, không thì báo rõ thay vì đưa vào màn trắng. */
+      const khach = a.dataset.khach || '';
+      /* Chỉ mở khi người dùng CÓ quyền vào phân hệ Công nợ, không thì báo rõ thay vì màn trắng. */
       const coQuyen = currentUser.isAdmin || (currentUser.permissions.CONGNO && currentUser.permissions.CONGNO.canView);
       if (!coQuyen) return toast('Tài khoản của bạn chưa được cấp quyền xem phân hệ Công nợ.', 'error');
-      location.hash = '#CONGNO/congnokh';
-      location.reload();
+      if (!khach) return toast('Dòng này không có tên khách để mở sổ.', 'error');
+      /* Trình duyệt còn giữ module.congno.js CŨ trong cache (chưa Ctrl+F5) thì chưa có hàm này —
+         lùi về cách cũ thay vì im lặng không phản ứng. */
+      if (!window.ModuleCongNo || typeof window.ModuleCongNo.soChiTietKH !== 'function') {
+        toast('Đang mở danh sách công nợ (bấm Ctrl+F5 một lần để mở trực tiếp sổ từng khách).', 'info');
+        location.hash = '#CONGNO/congnokh';
+        location.reload();
+        return;
+      }
+      window.ModuleCongNo.soChiTietKH(khach);
     });
   }
 
@@ -249,7 +265,9 @@
       </tr></thead><tbody>
         ${rows.map((r, i) => `<tr>
           <td>${i + 1}</td>
-          <td><a href="#" class="db-congno"><b>${escapeHtml(r.TenKhach)}</b></a></td>
+          ${/* v7.44: data-khach để handler biết bấm vào KHÁCH NÀO (trước đây không mang tên đi nên
+                bấm ai cũng ra danh sách chung). */''}
+          <td><a href="#" class="db-congno" data-khach="${escapeHtml(r.TenKhach)}" title="Xem sổ chi tiết công nợ của ${escapeHtml(r.TenKhach)}"><b>${escapeHtml(r.TenKhach)}</b></a></td>
           <td class="num">${fmtNumber(r.SoPhieu)}</td>
           <td class="num">${fmtTien(r.DoanhThu)}</td>
           <td class="num">${r.TraLai ? fmtTien(r.TraLai) : ''}</td>

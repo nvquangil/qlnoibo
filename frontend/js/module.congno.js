@@ -502,8 +502,15 @@ window.ModuleCongNo = (function () {
     body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietKH(a.dataset.khach)));
   }
 
+  /* Mở SỔ CHI TIẾT công nợ của MỘT khách. Gọi từ 2 chỗ: bảng "Công nợ khách hàng" ở đây và
+     Dashboard kinh doanh (bấm tên khách) — xem `window.ModuleCongNo.soChiTietKH` ở cuối file.
+     v7.44: BỌC try/catch. Route /congnokh/chitiet còn chặn thêm requireChucNang('CONGNO','congnokh'),
+     nên tài khoản có quyền xem phân hệ Công nợ mà KHÔNG được cấp chức năng này sẽ bị 403; không bắt
+     lỗi thì apiGet throw giữa hàm và người dùng thấy "bấm mà không có gì xảy ra". */
   async function soChiTietKH(khach) {
-    const d = (await apiGet('/api/congno/congnokh/chitiet?khach=' + encodeURIComponent(khach))).data;
+    let d;
+    try { d = (await apiGet('/api/congno/congnokh/chitiet?khach=' + encodeURIComponent(khach))).data; }
+    catch (err) { toast('Không mở được sổ công nợ của "' + khach + '": ' + err.message, 'error'); return; }
     const modal = openModal(`
       <h3>Sổ công nợ: ${escapeHtml(khach)}</h3>
       <div style="margin-bottom:8px;">Còn nợ: <b style="color:#c0392b;font-size:16px;">${fmtNumber(d.conNo)}</b> đ</div>
@@ -895,5 +902,11 @@ window.ModuleCongNo = (function () {
     noiDaySoPhieu(modal);
   }
 
-  return { render, getTabs };
+  /* v7.44: MỞ RA cho module khác gọi lại ĐÚNG popup sổ chi tiết này (Dashboard kinh doanh bấm tên
+     khách). Một nghiệp vụ = một form: không dựng lại bảng sổ ở dashboard, cũng không nhảy sang tab
+     "Công nợ khách hàng" rồi để người dùng tự tìm lại tên khách.
+     Chuỗi hàm này (soChiTietKH -> oSoPhieu/noiDaySoPhieu -> xemChungTu) KHÔNG dùng `dm`, `container`
+     hay `currentUser`, nên gọi được khi render() của phân hệ Công nợ chưa từng chạy. Thêm gì vào
+     popup mà cần `dm` thì phải nạp danh mục trước, kẻo dashboard gọi ra popup rỗng. */
+  return { render, getTabs, soChiTietKH };
 })();
