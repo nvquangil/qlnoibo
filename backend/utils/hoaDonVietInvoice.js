@@ -111,7 +111,9 @@ function tinhHoaDon(header, chiTiet, { thue = THUE_MAC_DINH } = {}) {
      Ma hang trong (du lieu cu) thi lay TEN HANG lam khoa, khong de dong nao roi ra ngoai.
 
      TEN + DON GIA sau khi gop:
-       · ten     = TenHang (BO phan mau)
+       · ten     = TenHoaDon cua ma hang (v7.46, migration_v690), lui ve TenHang neu chua khai.
+                   TenHang la ten NOI BO (thuong kem ma hang, viet tat) — khong phai ten viet hoa don.
+                   BO phan mau.
        · thanhTien = round(tong ThanhTien cua ca nhom / chia) — boc thue MOT LAN tren tong nhom,
                      khong boc tung mau roi cong (cong nhieu so da lam tron se lech them vai dong)
        · donGia  = thanhTien / tong SL  -> SL x Don gia = Thanh tien, VietInvoice tinh lai khong lech
@@ -125,7 +127,8 @@ function tinhHoaDon(header, chiTiet, { thue = THUE_MAC_DINH } = {}) {
     const sl = so(d.SoLuongCai) || so(d.SoLuong);
     const dvt = d.DonVi || d.DonViCoBan || 'Cái';
     const ma = String(d.MaHang || '').trim();
-    const ten = d.TenHang || ma;
+    /* v7.46: uu tien TEN VIET HOA DON cua ma hang; chua khai thi lui ve ten noi bo. */
+    const ten = String(d.TenHoaDon || '').trim() || d.TenHang || ma;
     const khoa = (ma || ten) + '||' + dvt;
     const g = nhom.get(khoa) || {
       ten, maHang: ma, dvt, soLuong: 0, tongTienGomThue: 0, giaBanDau: so(d.GiaBan), soMau: 0

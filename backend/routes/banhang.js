@@ -26,6 +26,8 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 /* v7.43: xuat hoa don GTGT nap vao VietInvoice (boc thue 8% khoi gia da gom thue). */
 const { taoWorkbookHoaDon } = require('../utils/hoaDonVietInvoice');
+/* v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690). */
+const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 
 const router = express.Router();
 
@@ -502,8 +504,12 @@ router.get('/phieu/:id/hoadon', requireAuth, requirePermission('KHOHANG', 'view'
     if (h.TrangThai === 'Đã hủy') {
       return res.status(400).json({ success: false, message: 'Phiếu này ĐÃ HỦY — không xuất hóa đơn.' });
     }
+    /* v7.46: TenHoaDon cua MA HANG (migration_v690) — hoa don ghi ten theo giay to, khong ghi ten
+       noi bo. Do COL_LENGTH: chua chay migration thi lui ve TenHang nhu cu. */
+    const cotTenHDHang = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
     const ct = (await pool.request().input('id', sql.Int, req.params.id).query(`
-      SELECT ct.*, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, ms.TenMau
+      SELECT ct.*, h.MaHang, h.TenHang, ${cotTenHDHang} AS TenHoaDon,
+             h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, ms.TenMau
       FROM PhieuBanHangChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID

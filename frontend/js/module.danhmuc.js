@@ -139,7 +139,9 @@ window.ModuleDanhMuc = (function () {
       const optDV = dsDV.map(v => ({ value: v, label: v }));
       return renderSimpleWithSelect(body, tab, rows, perm, [
         { name: 'MaHang', label: 'Mã hàng', type: 'text', required: true },
-        { name: 'TenHang', label: 'Tên hàng', type: 'text', required: true },
+        { name: 'TenHang', label: 'Tên hàng (nội bộ)', type: 'text', required: true },
+        /* v7.46 (migration_v690): tên ghi trên HÓA ĐƠN GTGT. Để trống = hóa đơn lấy Tên hàng. */
+        { name: 'TenHoaDon', label: 'Tên viết hóa đơn (trống = lấy Tên hàng)', type: 'text' },
         { name: 'DonViCoBan', label: 'ĐVT chính', options: optDV },
         { name: 'DonViQuyDoi', label: 'ĐVT quy đổi', options: optDV },
         { name: 'LoaiRi', label: 'Tỷ lệ (1 ĐVT quy đổi = ? ĐVT chính)', type: 'number' },

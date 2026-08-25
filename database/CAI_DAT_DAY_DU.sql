@@ -422,7 +422,10 @@ GO
 CREATE TABLE TheKhoHangHoa (
     MaHangID          INT IDENTITY(1,1) PRIMARY KEY,
     MaHang            NVARCHAR(50) NOT NULL UNIQUE,
-    TenHang           NVARCHAR(150) NOT NULL,
+    TenHang           NVARCHAR(150) NOT NULL,   -- ten NOI BO (hien khap the kho/phieu/catalogue)
+    /* v7.46 (migration_v690): ten ghi tren HOA DON GTGT. Tach khoi TenHang vi ten noi bo thuong kem
+       ma hang / viet tat, con hoa don can ten thuong mai sach. De trong = hoa don lay TenHang. */
+    TenHoaDon         NVARCHAR(255) NULL,
     GiaBan            DECIMAL(14,2) NULL,
     LoaiRi            INT NOT NULL DEFAULT 1,        -- ty le quy doi DonViCoBan -> DonViQuyDoi (vd 5 Cai = 1 Ri); cong thuc SoCatCai/NhapCai/XuatCai KHONG doi, chi doi nhan hien thi
     TheKhoDanhMucID   INT NULL FOREIGN KEY REFERENCES TheKhoDanhMuc(TheKhoDanhMucID),

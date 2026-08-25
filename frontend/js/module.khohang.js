@@ -587,6 +587,14 @@ window.ModuleKhoHang = (function () {
             <input name="tenHang" id="inpTenHang" value="${escapeHtml(row ? row.TenHang : '')}" required>
             <div class="empty-hint" style="margin-top:2px;">Mã đã có trong danh mục thì ô này tự điền — sửa tên ở <b>Danh mục → Hàng hóa (mã hàng)</b> để cả hệ thống thấy.</div>
           </div>
+          ${/* v7.46 (migration_v690): TÊN VIẾT HÓA ĐƠN. Tách khỏi "Tên hàng" vì tên hàng là tên NỘI BỘ
+               (thường kèm mã hàng, viết tắt) hiện khắp thẻ kho/phiếu/catalogue — đổi cho đẹp hóa đơn
+               là làm khó người trong xưởng tìm hàng. Để trống thì hóa đơn lấy Tên hàng như cũ. */''}
+          <div class="form-row"><label>Tên viết hóa đơn</label>
+            <input name="tenHoaDon" id="inpTenHoaDon" value="${escapeHtml(row && row.TenHoaDon ? row.TenHoaDon : '')}"
+                   placeholder="Để trống = hóa đơn lấy Tên hàng ở trên">
+            <div class="empty-hint" style="margin-top:2px;">Tên ghi trên <b>hóa đơn GTGT</b> (file xuất từ phiếu bán hàng). Hóa đơn gộp các màu thành 1 dòng nên tên này <b>không kèm màu</b>.</div>
+          </div>
           <div class="form-row"><label>Giá bán</label><input name="giaBan" id="inpGiaBan" type="number" value="${row ? row.GiaBan : 0}">
             ${/* v6.21: KHÔNG nhập % ở đây nữa (tỷ lệ đánh chung ở đầu tab Thẻ kho) — chỉ hiện giá tính ra. */''}
             <div class="empty-hint" id="ttGiaCK" style="margin-top:2px;"></div>
@@ -849,6 +857,7 @@ window.ModuleKhoHang = (function () {
         if (oMaHang.tagName === 'SELECT') oMaHang.dispatchEvent(new Event('change'));
       }
       dat('#inpTenHang', d2.TenHang);
+      dat('#inpTenHoaDon', d2.TenHoaDon);   // v7.46: mã có sẵn thì điền luôn tên viết hóa đơn đã khai
       const oDvcb = modal.querySelector('[name="donViCoBan"]');
       if (oDvcb && d2.DonViCoBan) oDvcb.value = d2.DonViCoBan;
       const oDvqd = modal.querySelector('[name="donViQuyDoi"]');
@@ -977,6 +986,7 @@ window.ModuleKhoHang = (function () {
         if (!mh) return;
         const dat = (sel, v) => { const el = modal.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
         dat('#inpTenHang', mh.TenHang);
+        dat('#inpTenHoaDon', mh.TenHoaDon);   // v7.46
         const oCb = modal.querySelector('[name="donViCoBan"]');
         const oQd = modal.querySelector('[name="donViQuyDoi"]');
         /* ⚠️ Gán vào <select> mà giá trị không khớp option nào thì trình duyệt IM LẶNG về rỗng.
@@ -1059,6 +1069,9 @@ window.ModuleKhoHang = (function () {
         const loaiHangVal = fd.get('loaiHang');
         const body = {
           maHang: fd.get('maHang'), tenHang: fd.get('tenHang'), giaBan: fd.get('giaBan'),
+          /* v7.46: GỬI CẢ KHI RỖNG — backend phân biệt "gửi rỗng = xóa" với "không gửi = giữ nguyên",
+             nên form này (form CÓ ô đó) phải luôn gửi, kẻo xóa trắng ô rồi lưu mà không xóa được. */
+          tenHoaDon: fd.get('tenHoaDon') || '',
           loaiRi: fd.get('loaiRi'), theKhoDanhMucId: fd.get('theKhoDanhMucId') || null,
           anhDaiDien, colors: colorsPayload,
           loaiHang: loaiHangVal,

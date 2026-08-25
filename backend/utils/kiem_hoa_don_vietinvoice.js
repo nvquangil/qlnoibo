@@ -361,6 +361,53 @@ const dongHang = [
     'khachHang = null -> C van co ten khach cua phieu');
 
   console.log('');
+  console.log('=== 16. TEN VIET HOA DON cua MA HANG (v7.46, migration_v690) ===');
+  const coTenHD = [
+    { MaHang: 'BD26C0501', TenHang: 'Bộ dài tay bé gái BD26C0501', TenHoaDon: 'Bộ quần áo trẻ em',
+      TenMau: 'Hồng', DonVi: 'Cái', SoLuongCai: 10, GiaBan: 108000, ThanhTien: 1080000 },
+    { MaHang: 'BD26C0501', TenHang: 'Bộ dài tay bé gái BD26C0501', TenHoaDon: 'Bộ quần áo trẻ em',
+      TenMau: 'Xanh', DonVi: 'Cái', SoLuongCai: 5, GiaBan: 108000, ThanhTien: 540000 },
+    /* Ma KHAC nhung TenHoaDon GIONG -> phai la 2 DONG (gop theo MA, khong gop theo ten). */
+    { MaHang: 'BD26C0502', TenHang: 'Bộ dài tay bé trai BD26C0502', TenHoaDon: 'Bộ quần áo trẻ em',
+      TenMau: 'Ghi', DonVi: 'Cái', SoLuongCai: 5, GiaBan: 108000, ThanhTien: 540000 },
+    /* Chua khai TenHoaDon -> lui ve TenHang. */
+    { MaHang: 'AT26C012', TenHang: 'Áo thu bé gái AT26C012', TenHoaDon: null,
+      TenMau: 'Kem', DonVi: 'Cái', SoLuongCai: 5, GiaBan: 108000, ThanhTien: 540000 }
+  ];
+  const hHD = phieu();
+  hHD.TongTienHang = 2700000; hHD.TienTruocVAT = 2700000; hHD.TongThanhToan = 2700000;
+  const kHD = HD.tinhHoaDon(hHD, coTenHD);
+  ok(kHD.dong.length === 3, '2 mau cung ma gop lai -> 3 dong', String(kHD.dong.length));
+  const d0501 = kHD.dong.find(x => x.maHang === 'BD26C0501');
+  ok(d0501 && d0501.ten === 'Bộ quần áo trẻ em',
+    'S lay TEN VIET HOA DON, khong lay ten noi bo', d0501 && d0501.ten);
+  ok(d0501 && d0501.soLuong === 15, 'Gop 2 mau: SL 10 + 5 = 15', d0501 && String(d0501.soLuong));
+  const dAT = kHD.dong.find(x => x.maHang === 'AT26C012');
+  ok(dAT && dAT.ten === 'Áo thu bé gái AT26C012',
+    'Chua khai TenHoaDon -> LUI VE TenHang', dAT && dAT.ten);
+  ok(kHD.dong.filter(x => x.ten === 'Bộ quần áo trẻ em').length === 2,
+    'Hai MA khac nhau trung TenHoaDon van la HAI DONG (gop theo ma, khong theo ten)');
+  /* TenHoaDon co khoang trang thua -> khong duoc coi la "da khai" mot cach nua voi. */
+  const kTrang = HD.tinhHoaDon(phieu(), [
+    { MaHang: 'X1', TenHang: 'Ten noi bo X1', TenHoaDon: '   ', DonVi: 'Cái',
+      SoLuongCai: 1, GiaBan: 1080, ThanhTien: 1080 }
+  ]);
+  ok(kTrang.dong[0].ten === 'Ten noi bo X1',
+    'TenHoaDon chi co khoang trang -> coi nhu chua khai', kTrang.dong[0].ten);
+  /* Ghi ra file that: cot S phai la ten hoa don. */
+  const { wb: wbHD } = await HD.taoWorkbookHoaDon(hHD, coTenHD, null);
+  const duongHD = path.join(os.tmpdir(), 'kiem_hoa_don_tenhd.xlsx');
+  await wbHD.xlsx.writeFile(duongHD);
+  const wbHD2 = new ExcelJS.Workbook(); await wbHD2.xlsx.readFile(duongHD);
+  const wsHD = wbHD2.worksheets[0];
+  const tenTrenFile = [13, 14, 15].map(r => String(wsHD.getRow(r).getCell(19).value || ''));
+  ok(tenTrenFile.filter(t => t === 'Bộ quần áo trẻ em').length === 2
+    && tenTrenFile.includes('Áo thu bé gái AT26C012'),
+    'File that: cot S ghi ten hoa don (2 dong) + 1 dong lui ve ten noi bo', tenTrenFile.join(' / '));
+  ok(!tenTrenFile.some(t => /BD26C0501|BD26C0502/.test(t)),
+    'Ten noi bo (co ma hang trong ten) KHONG con tren hoa don', tenTrenFile.join(' / '));
+
+  console.log('');
   console.log(`KET QUA: ${dat} dat / ${truot} truot`);
   console.log('File mau de mo xem: ' + duong);
   console.log(truot ? '>> CO MUC KHONG DAT - phai sua truoc khi giao.' : '>> DAT TAT CA.');

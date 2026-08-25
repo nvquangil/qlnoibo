@@ -12,6 +12,8 @@ const { layHangDangGiu } = require('./banhang');
 /* v7.38: nguon "nhap lai" (hang khach tra) — chi de HIEN THI, khong duoc cong vao ton.
    Doc ghi chu dau utils/nhapLaiHangHoa.js truoc khi sua. */
 const nhapLai = require('../utils/nhapLaiHangHoa');
+// v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) dung chung cho moi route.
+const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 
 const router = express.Router();
 
@@ -306,8 +308,12 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
   const lanLuu = coUpdatedAt ? 'ISNULL(h.UpdatedAt, h.CreatedAt)' : 'h.CreatedAt';
   // v6.71: cột CongKhai (migration_v679) — chưa chạy migration thì trả 1 (hiện) để giao diện chạy như cũ.
   const cotCongKhai = (await coCotCongKhaiTheKho(pool)) ? 'ISNULL(h.CongKhai, 1)' : 'CAST(1 AS BIT)';
+  /* v7.46: TenHoaDon (migration_v690) — form Sửa thẻ kho điền lại từ đây; chưa chạy migration thì
+     trả NULL để giao diện chạy như cũ. KHÔNG thêm vào view vw_TonKhoHangHoa: view đó là phép tính
+     tồn kho, nhét thông tin danh mục vào là phải sửa view mỗi lần thêm một ô. */
+  const cotTenHD = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
   const tongHop = await pool.request().query(`
-    SELECT v.*, h.CreatedAt, ${lanLuu} AS LanLuuCuoi, ${cotCongKhai} AS CongKhai
+    SELECT v.*, h.CreatedAt, ${lanLuu} AS LanLuuCuoi, ${cotCongKhai} AS CongKhai, ${cotTenHD} AS TenHoaDon
     FROM vw_TonKhoHangHoa v
     JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
     ORDER BY CASE WHEN ISNULL(v.TongTon, 0) <= 0 THEN 1 ELSE 0 END,
@@ -500,6 +506,8 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
     const {
       maHang, tenHang, giaBan, loaiRi, theKhoDanhMucId, anhDaiDien, ghiChu, colors,
       loaiHang, donHangId, donViCoBan, donViQuyDoi, nhomSanPhamId,
+      // v7.46: ten ghi tren HOA DON GTGT (migration_v690). De trong = hoa don lay tenHang.
+      tenHoaDon,
       // v5.17 (muc 1.1): 2 truong moi phuc vu chuc nang "Báo giá Aloha" - xem migration_v517.sql.
       giaAloha, maBarcode,
       // v6.71: cong tac HIEN ma hang nay tren catalogue cong khai. Khong gui = HIEN (giu thoi quen cu).
@@ -524,10 +532,12 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
     // LoaiHang chi nhan 2 gia tri hop le; DonHangID chi luu khi la Nha san xuat (theo dung schema v4.0)
     const loaiHangVal = loaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai';
     const coCongKhai = await coCotCongKhaiTheKho(pool);   // v6.71
+    const coTenHD = await coCotTenHoaDon(pool);            // v7.46
 
     const result = await pool.request()
       .input('MaHang', sql.NVarChar, maChuan)
       .input('TenHang', sql.NVarChar, tenHang)
+      .input('TenHoaDon', sql.NVarChar, String(tenHoaDon || '').trim() || null)
       .input('GiaBan', sql.Decimal(14, 2), giaBan || 0)
       .input('LoaiRi', sql.Int, loaiRi || 1)
       .input('TheKhoDanhMucID', sql.Int, theKhoDanhMucId || null)
@@ -541,9 +551,9 @@ router.post('/items', requireAuth, requirePermission('KHOHANG', 'create'), requi
       .input('GiaAloha', sql.Decimal(14, 2), giaAloha || null)
       .input('MaBarcode', sql.NVarChar, maBarcode || null)
       .input('CongKhai', sql.Bit, congKhai === undefined || congKhai === null ? 1 : (congKhai ? 1 : 0))
-      .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, GiaBan, LoaiRi, TheKhoDanhMucID, AnhDaiDien, GhiChu, LoaiHang, DonHangID, DonViCoBan, DonViQuyDoi, NhomSanPhamID, GiaAloha, MaBarcode${coCongKhai ? ', CongKhai' : ''})
+      .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, GiaBan, LoaiRi, TheKhoDanhMucID, AnhDaiDien, GhiChu, LoaiHang, DonHangID, DonViCoBan, DonViQuyDoi, NhomSanPhamID, GiaAloha, MaBarcode${coCongKhai ? ', CongKhai' : ''}${coTenHD ? ', TenHoaDon' : ''})
               OUTPUT INSERTED.MaHangID
-              VALUES (@MaHang, @TenHang, @GiaBan, @LoaiRi, @TheKhoDanhMucID, @AnhDaiDien, @GhiChu, @LoaiHang, @DonHangID, @DonViCoBan, @DonViQuyDoi, @NhomSanPhamID, @GiaAloha, @MaBarcode${coCongKhai ? ', @CongKhai' : ''})`);
+              VALUES (@MaHang, @TenHang, @GiaBan, @LoaiRi, @TheKhoDanhMucID, @AnhDaiDien, @GhiChu, @LoaiHang, @DonHangID, @DonViCoBan, @DonViQuyDoi, @NhomSanPhamID, @GiaAloha, @MaBarcode${coCongKhai ? ', @CongKhai' : ''}${coTenHD ? ', @TenHoaDon' : ''})`);
     const maHangId = result.recordset[0].MaHangID;
 
     // v5.9.1: DA XOA phep nhan "* (loaiRi || 1)" o day - BUG, khong phai thiet ke. schema.sql tu ghi ro
@@ -603,6 +613,7 @@ router.put('/items/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     const {
       maHang, tenHang, giaBan, loaiRi, theKhoDanhMucId, anhDaiDien, ghiChu, colors,
       loaiHang, donHangId, donViCoBan, donViQuyDoi, nhomSanPhamId,
+      tenHoaDon,   // v7.46: ten ghi tren hoa don GTGT (gui '' = xoa, khong gui = giu nguyen)
       // v5.17 (muc 1.1): xem migration_v517.sql
       giaAloha, maBarcode,
       congKhai   // v6.71: không gửi = giữ nguyên trạng thái hiện/ẩn trên catalogue
@@ -624,8 +635,13 @@ router.put('/items/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     // Chưa chạy migration -> bỏ qua, không làm hỏng thao tác lưu.
     const capNhatLanLuu = (await coCotUpdatedAtTheKho(pool)) ? ', UpdatedAt=SYSDATETIME()' : '';
     const coCongKhai = await coCotCongKhaiTheKho(pool);   // v6.71
+    /* v7.46: TenHoaDon — KHONG boc ISNULL vi day la o phai XOA duoc (khai sai roi muon bo trong de
+       hoa don lay lai TenHang). Chi ghi khi form CO gui truong nay. */
+    const guiTenHD = Object.prototype.hasOwnProperty.call(req.body, 'tenHoaDon');
+    const coTenHD = guiTenHD && await coCotTenHoaDon(pool);
 
     await pool.request()
+      .input('TenHoaDon', sql.NVarChar, guiTenHD ? (String(tenHoaDon || '').trim() || null) : null)
       /* Không gửi `congKhai` = GIỮ NGUYÊN giá trị cũ (ISNULL trong câu UPDATE), không mặc định bật lại.
          Các màn khác cũng gọi PUT này mà không biết đến cờ công khai — mặc định bật là chúng vô tình
          bỏ ẩn những mã người dùng đã cố ý giấu. */
@@ -650,6 +666,7 @@ router.put('/items/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
               LoaiHang=@LoaiHang, DonHangID=@DonHangID, DonViCoBan=@DonViCoBan, DonViQuyDoi=@DonViQuyDoi,
               NhomSanPhamID=ISNULL(@NhomSanPhamID, NhomSanPhamID), GiaAloha=ISNULL(@GiaAloha, GiaAloha), MaBarcode=ISNULL(@MaBarcode, MaBarcode)
               ${coCongKhai ? ', CongKhai=ISNULL(@CongKhai, CongKhai)' : ''}
+              ${coTenHD ? ', TenHoaDon=@TenHoaDon' : ''}
               ${capNhatLanLuu}
               WHERE MaHangID=@id`);
 

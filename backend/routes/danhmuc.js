@@ -414,14 +414,16 @@ router.put('/cauhinh', requireAuth, requirePermission('DANHMUC', 'edit'), async 
    truong la ghi NULL. O day con phai chuan hoa MaHang, kiem trung, va chan xoa co giai thich.
    ================================================================================================ */
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
-const { capNhatMaHang } = require('../utils/maHangCapNhat');
+const { capNhatMaHang, coCotTenHoaDon } = require('../utils/maHangCapNhat');
 
 const chuanMaHang = (x) => String(x == null ? '' : x).trim().toUpperCase();
 
 router.get('/hanghoa', requireAuth, requirePermission('DANHMUC', 'view'), async (req, res) => {
   const pool = await getPool();
+  /* v7.46: TenHoaDon den tu migration_v690 — chua chay thi tra NULL de man hinh chay nhu cu. */
+  const cotTenHD = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255)) AS TenHoaDon';
   const rows = (await pool.request().query(`
-    SELECT h.MaHangID, h.MaHang, h.TenHang, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan,
+    SELECT h.MaHangID, h.MaHang, h.TenHang, ${cotTenHD}, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan,
            nsp.TenNhom, tk.TenTheKho,
            -- de man hinh biet ma nao dang duoc dung (khong xoa duoc) ma khong phai bam thu
            (SELECT COUNT(*) FROM PhieuNhapKhoHangChiTiet ct WHERE ct.MaHangID = h.MaHangID) AS SoDongNhapKho
@@ -442,16 +444,18 @@ router.post('/hanghoa', requireAuth, requirePermission('DANHMUC', 'create'), asy
     .query('SELECT MaHangID FROM TheKhoHangHoa WHERE MaHang = @m')).recordset[0];
   if (trung) return res.status(400).json({ success: false, message: `Mã hàng "${ma}" đã có trong danh mục.` });
   const he = Math.max(1, parseInt(b.LoaiRi, 10) || 1);
+  const coTenHD = await coCotTenHoaDon(pool);   // v7.46 (migration_v690)
   const r = await pool.request()
     .input('MaHang', sql.NVarChar, ma)
     .input('TenHang', sql.NVarChar, ten)
+    .input('TenHoaDon', sql.NVarChar, String(b.TenHoaDon || '').trim() || null)
     .input('DonViCoBan', sql.NVarChar, String(b.DonViCoBan || '').trim() || null)
     .input('DonViQuyDoi', sql.NVarChar, String(b.DonViQuyDoi || '').trim() || null)
     .input('LoaiRi', sql.Int, he)
     .input('GiaBan', sql.Decimal(14, 2), b.GiaBan === '' || b.GiaBan == null ? 0 : b.GiaBan)
-    .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, DonViCoBan, DonViQuyDoi, LoaiRi, GiaBan, LoaiHang)
+    .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, DonViCoBan, DonViQuyDoi, LoaiRi, GiaBan, LoaiHang${coTenHD ? ', TenHoaDon' : ''})
             OUTPUT INSERTED.MaHangID, INSERTED.MaHang, INSERTED.TenHang
-            VALUES (@MaHang, @TenHang, @DonViCoBan, @DonViQuyDoi, @LoaiRi, @GiaBan, N'DatNgoai')`);
+            VALUES (@MaHang, @TenHang, @DonViCoBan, @DonViQuyDoi, @LoaiRi, @GiaBan, N'DatNgoai'${coTenHD ? ', @TenHoaDon' : ''})`);
   res.json({ success: true, data: r.recordset[0] });
 });
 
@@ -466,7 +470,10 @@ router.put('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'edit'), as
       maHang: b.MaHang, tenHang: b.TenHang,
       donViCoBan: b.DonViCoBan, donViQuyDoi: b.DonViQuyDoi, loaiRi: b.LoaiRi,
       giaBan: b.GiaBan, nhomSanPhamId: b.NhomSanPhamID,
-      theKhoDanhMucId: b.TheKhoDanhMucID, maBarcode: b.MaBarcode
+      theKhoDanhMucId: b.TheKhoDanhMucID, maBarcode: b.MaBarcode,
+      /* v7.46: chi truyen khoa `tenHoaDon` khi form CO gui — util phan biet "gui rong = xoa" voi
+         "khong gui = giu nguyen" bang hasOwnProperty, nen dat san undefined la thanh "xoa". */
+      ...(Object.prototype.hasOwnProperty.call(b, 'TenHoaDon') ? { tenHoaDon: b.TenHoaDon } : {})
     });
     const tin = [];
     if (kq.doiMa) {

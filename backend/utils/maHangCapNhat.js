@@ -16,6 +16,22 @@ const { sql } = require('../db');
 
 const chuanMaHang = (x) => String(x == null ? '' : x).trim().toUpperCase();
 
+/* ------------------------------------------------------------------------------------------------
+   v7.46: TheKhoHangHoa.TenHoaDon (migration_v690). MOT ban do cot duy nhat, dung chung cho moi noi
+   doc/ghi cot nay (khohang.js, danhmuc.js, nhapkho.js, banhang.js) — moi file tu viet mot ham do la
+   som muon co file quen, ra "Invalid column name" o dung mot duong it ai di.
+   Cache theo pool: cot khong bien mat giua cac request, do lai moi lan la them mot vong SQL vo ich.
+   ------------------------------------------------------------------------------------------------ */
+const __capTenHoaDon = new WeakMap();
+async function coCotTenHoaDon(pool) {
+  if (__capTenHoaDon.has(pool)) return __capTenHoaDon.get(pool);
+  const r = (await pool.request().query(
+    "SELECT CASE WHEN COL_LENGTH('TheKhoHangHoa', 'TenHoaDon') IS NULL THEN 0 ELSE 1 END AS co")).recordset[0];
+  const co = r && r.co === 1;
+  __capTenHoaDon.set(pool, co);
+  return co;
+}
+
 /* `f` = { maHang, tenHang, donViCoBan, donViQuyDoi, loaiRi, giaBan, nhomSanPhamId,
            theKhoDanhMucId, maBarcode }  — truong nao khong gui / rong thi GIU NGUYEN gia tri cu.
    Tra ve { doiMa: <ma moi neu co doi> } de ben goi bao lai cho nguoi dung. */
@@ -48,7 +64,13 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
   if (f.donViQuyDoi && khac(f.donViQuyDoi, cuDayDu.DonViQuyDoi)) doiDonVi.push(`ĐVT quy đổi ${cuDayDu.DonViQuyDoi} → ${f.donViQuyDoi}`);
 
   const soHay = (v) => (v === '' || v === null || v === undefined) ? null : v;
+  /* v7.46: TenHoaDon — KHONG boc ISNULL nhu cac truong khac, vi day la o nguoi dung phai XOA duoc
+     (khai sai ten hoa don roi muon bo trong de hoa don lay lai TenHang). Chi ghi khi form CO gui
+     truong nay: gui '' = xoa, khong gui = giu nguyen. */
+  const guiTenHD = Object.prototype.hasOwnProperty.call(f, 'tenHoaDon');
+  const coTenHD = guiTenHD && !!pool && await coCotTenHoaDon(pool).catch(() => false);
   await rq()
+    .input('TenHoaDon', sql.NVarChar, guiTenHD ? (String(f.tenHoaDon || '').trim() || null) : null)
     .input('id', sql.Int, maHangId)
     .input('MaHang', sql.NVarChar, ma || null)
     .input('TenHang', sql.NVarChar, String(f.tenHang || '').trim() || null)
@@ -69,6 +91,7 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
               NhomSanPhamID   = ISNULL(@NhomSanPhamID, NhomSanPhamID),
               TheKhoDanhMucID = ISNULL(@TheKhoDanhMucID, TheKhoDanhMucID),
               MaBarcode       = ISNULL(@MaBarcode, MaBarcode)
+              ${coTenHD ? ', TenHoaDon = @TenHoaDon' : ''}
             WHERE MaHangID = @id`);
 
   return {
@@ -77,4 +100,4 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
   };
 }
 
-module.exports = { capNhatMaHang, chuanMaHang };
+module.exports = { capNhatMaHang, chuanMaHang, coCotTenHoaDon };
