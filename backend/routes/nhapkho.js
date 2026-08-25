@@ -31,6 +31,8 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 const { damBaoDongMau, capNhatAnhDaiDien } = require('../utils/theKhoMau');
+// v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) — dung chung, khong tu viet lai.
+const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 
 const router = express.Router();
 
@@ -99,8 +101,11 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
        "Ri" la doan sai. */
     q('SELECT TenDonVi, LaDonViGop FROM DanhMucDonViTinh ORDER BY ISNULL(ThuTu, 999), TenDonVi').catch(() => [])
   ]);
+  /* v7.46: TenHoaDon (migration_v690) — de go trung ma da co thi dong khai dien lai duoc ten da khai,
+     khong de trong roi ghi de. Chua chay migration thi tra NULL. */
+  const cotTenHDdm = (await coCotTenHoaDon(pool)) ? 'TenHoaDon' : 'CAST(NULL AS NVARCHAR(255)) AS TenHoaDon';
   const hang = await q(`
-    SELECT MaHangID, MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi, GiaBan
+    SELECT MaHangID, MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi, GiaBan, ${cotTenHDdm}
     FROM TheKhoHangHoa ORDER BY MaHang`);
   res.json({ success: true, data: { ncc, donHang, theKho, nhom, mauSac, donVi, hang } });
 });
@@ -267,10 +272,12 @@ async function docPhieu(pool, id) {
   /* LEFT JOIN chu khong INNER: neu vi ly do nao do ma hang bi xoa khoi danh muc thi dong phieu van
      phai hien ra (voi ma trong) chu khong duoc BIEN MAT khoi man xem va ban in — phieu in thieu hang
      ma khong ai biet la kieu loi te nhat. */
+  // v7.46: TenHoaDon (migration_v690) — chua chay migration thi tra NULL, form chay nhu cu.
+  const cotTenHD = (await coCotTenHoaDon(pool)) ? 'hh.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255)) AS TenHoaDon';
   const ct = (await pool.request().input('id', sql.Int, id).query(`
     SELECT ct.*, hh.MaHang, hh.TenHang, hh.LoaiRi, hh.DonViCoBan, hh.DonViQuyDoi, ms.TenMau,
            -- v6.98: cac truong CAP MA HANG de form Sua phieu dien san dong khai (khoi sang man khac)
-           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode
+           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode, ${cotTenHD}
     FROM PhieuNhapKhoHangChiTiet ct
     LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
@@ -338,7 +345,21 @@ async function timHoacTaoMaHang(pool, tran, d) {
   if (!ma) throw new Error('Dòng hàng chưa có mã hàng.');
   const co = (await rq().input('m', sql.NVarChar, ma)
     .query('SELECT MaHangID, MaHang, LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHang=@m')).recordset[0];
-  if (co) return co;
+  if (co) {
+    /* v7.46: MA DA CO nhung nguoi dung GO TAY ma (khong chon tu danh sach) nen dong khai van hien —
+       go "Ten viet hoa don" o day thi GHI LUON, khoi phai sang Danh muc sua lai.
+       ⚠️ CHI GHI KHI CO GIA TRI. O nay tren phieu nhap KHONG the dung de XOA: go tay ma thi form
+       khong biet ten hoa don dang luu la gi nen o de trong; coi "trong = xoa" la moi lan nhap kho lai
+       xoa mat ten da khai. Muon xoa thi vao Danh muc -> Hang hoa (o do form co dien san gia tri cu).
+       KHONG dung den truong nao khac cua ma da co: dong phieu nhap khong phai cho sua ca cap ma hang. */
+    const tenHD = String(d.tenHoaDon || '').trim();
+    if (tenHD && await coCotTenHoaDon(pool)) {
+      await rq().input('id', sql.Int, co.MaHangID)
+        .input('TenHoaDon', sql.NVarChar, tenHD)
+        .query('UPDATE TheKhoHangHoa SET TenHoaDon = @TenHoaDon WHERE MaHangID = @id');
+    }
+    return co;
+  }
 
   // ---- Ma moi: bat khai du thong tin TOI THIEU de ton kho quy doi dung ----
   const tenHang = String(d.tenHang || '').trim();
@@ -352,9 +373,11 @@ async function timHoacTaoMaHang(pool, tran, d) {
   if (!(heSo >= 1)) {
     throw new Error(`Mã mới "${ma}" phải khai tỷ lệ quy đổi (1 ${dvQuyDoi} = ? ${dvChinh}).`);
   }
+  const coTenHD = await coCotTenHoaDon(pool);   // v7.46 (migration_v690)
   const id = (await rq()
     .input('MaHang', sql.NVarChar, ma)
     .input('TenHang', sql.NVarChar, tenHang)
+    .input('TenHoaDon', sql.NVarChar, String(d.tenHoaDon || '').trim() || null)
     .input('GiaBan', sql.Decimal(14, 2), so(d.giaBan) || 0)
     .input('LoaiRi', sql.Int, heSo)
     .input('TheKhoDanhMucID', sql.Int, d.theKhoDanhMucId || null)
@@ -364,10 +387,10 @@ async function timHoacTaoMaHang(pool, tran, d) {
     .input('LoaiHang', sql.NVarChar, d.loaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai')
     .input('MaBarcode', sql.NVarChar, String(d.maBarcode || '').trim() || null)
     .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, GiaBan, LoaiRi, TheKhoDanhMucID, NhomSanPhamID,
-              DonViCoBan, DonViQuyDoi, LoaiHang, MaBarcode)
+              DonViCoBan, DonViQuyDoi, LoaiHang, MaBarcode${coTenHD ? ', TenHoaDon' : ''})
             OUTPUT INSERTED.MaHangID
             VALUES (@MaHang, @TenHang, @GiaBan, @LoaiRi, @TheKhoDanhMucID, @NhomSanPhamID,
-              @DonViCoBan, @DonViQuyDoi, @LoaiHang, @MaBarcode)`)).recordset[0].MaHangID;
+              @DonViCoBan, @DonViQuyDoi, @LoaiHang, @MaBarcode${coTenHD ? ', @TenHoaDon' : ''})`)).recordset[0].MaHangID;
   return { MaHangID: id, MaHang: ma, LoaiRi: heSo, DonViCoBan: dvChinh, DonViQuyDoi: dvQuyDoi, laMoi: true };
 }
 

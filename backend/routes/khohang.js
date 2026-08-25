@@ -440,10 +440,14 @@ async function resolveMauSacId(pool, c) {
 async function boSungTheKhoChoMaDaCo(req, res, pool, maHangId) {
   const b = req.body || {};
   const coCongKhai = await coCotCongKhaiTheKho(pool);
+  /* v7.46: TenHoaDon — KHONG boc ISNULL (o nay phai XOA duoc), chi ghi khi form CO gui truong. */
+  const guiTenHD = Object.prototype.hasOwnProperty.call(b, 'tenHoaDon');
+  const coTenHD = guiTenHD && await coCotTenHoaDon(pool);
   /* ISNULL o MOI truong: form co the khong gui het (vd khong doi anh, khong khai lai DVT). Khong boc
      ISNULL la gui thieu mot truong = xoa trang truong do — dung loi da tung co o PUT /items/:id. */
   await pool.request()
     .input('id', sql.Int, maHangId)
+    .input('TenHoaDon', sql.NVarChar, guiTenHD ? (String(b.tenHoaDon || '').trim() || null) : null)
     .input('TenHang', sql.NVarChar, b.tenHang || null)
     .input('GiaBan', sql.Decimal(14, 2), b.giaBan === undefined || b.giaBan === null || b.giaBan === '' ? null : b.giaBan)
     .input('LoaiRi', sql.Int, b.loaiRi || null)
@@ -467,6 +471,7 @@ async function boSungTheKhoChoMaDaCo(req, res, pool, maHangId) {
               NhomSanPhamID   = ISNULL(@NhomSanPhamID, NhomSanPhamID),
               MaBarcode       = ISNULL(@MaBarcode, MaBarcode)
               ${coCongKhai ? ', CongKhai = ISNULL(@CongKhai, CongKhai)' : ''}
+              ${coTenHD ? ', TenHoaDon = @TenHoaDon' : ''}
             WHERE MaHangID = @id`);
 
   let themMau = 0;

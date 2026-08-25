@@ -193,7 +193,8 @@
       loaiRi: r.LoaiRi, donViCoBan: r.DonViCoBan, donViQuyDoi: r.DonViQuyDoi,
       // v6.98: điền sẵn thông tin cấp mã hàng để dòng khai sửa được ngay khi Sửa phiếu
       giaBan: r.GiaBan, nhomSanPhamId: r.NhomSanPhamID,
-      theKhoDanhMucId: r.TheKhoDanhMucID, maBarcode: r.MaBarcode
+      theKhoDanhMucId: r.TheKhoDanhMucID, maBarcode: r.MaBarcode,
+      tenHoaDon: r.TenHoaDon || ''   // v7.46
     })) : [{ idx: 0 }];
 
     const modal = openModal(`
@@ -288,7 +289,8 @@
         donViCoBan: cuoi.donViCoBan, donViQuyDoi: cuoi.donViQuyDoi, loaiRi: cuoi.loaiRi,
         donVi: cuoi.donVi, anhDaiDien: cuoi.anhDaiDien || null,
         giaBan: cuoi.giaBan, nhomSanPhamId: cuoi.nhomSanPhamId,
-        theKhoDanhMucId: cuoi.theKhoDanhMucId, maBarcode: cuoi.maBarcode
+        theKhoDanhMucId: cuoi.theKhoDanhMucId, maBarcode: cuoi.maBarcode,
+        tenHoaDon: cuoi.tenHoaDon || ''   // v7.46
       });
       veDong();
     };
@@ -351,6 +353,7 @@
         d.nhomSanPhamId = g.nhomSanPhamId;
         d.theKhoDanhMucId = g.theKhoDanhMucId;
         d.maBarcode = g.maBarcode;
+        d.tenHoaDon = g.tenHoaDon;   // v7.46: tên viết hóa đơn là của MÃ HÀNG, không phải của màu
       });
     }
 
@@ -509,6 +512,14 @@
               ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}"${String(d.theKhoDanhMucId) === String(x.TheKhoDanhMucID) ? ' selected' : ''}>${escapeHtml(x.TenTheKho)}</option>`).join('')}
             </select></div>
             <div class="form-row" style="margin-bottom:0;"><label>Mã Barcode</label><input type="text" class="nk-barcode" value="${escapeHtml(d.maBarcode || '')}" style="max-width:70%;"></div>
+            ${/* v7.46: TÊN VIẾT HÓA ĐƠN khai luôn tại đây, khỏi phải sang Danh mục sửa lại.
+                 Để trống = hóa đơn lấy Tên hàng. Ô này KHÔNG dùng để xóa: gõ tay mã đã có thì form
+                 không biết tên đang lưu, coi "trống = xóa" là mỗi lần nhập kho lại xóa mất tên đã khai
+                 (xóa ở Danh mục → Hàng hóa, form ở đó điền sẵn giá trị cũ). */''}
+            <div class="form-row" style="margin-bottom:0;grid-column:span 2;"><label>Tên viết hóa đơn</label>
+              <input type="text" class="nk-tenhd" value="${escapeHtml(d.tenHoaDon || '')}"
+                     placeholder="Để trống = hóa đơn lấy Tên hàng">
+              <div class="empty-hint" style="margin-top:2px;">Tên ghi trên <b>hóa đơn GTGT</b>, không kèm màu.</div></div>
             <div class="form-row" style="margin-bottom:0;"><label>Ảnh đại diện mã hàng</label>
               <div style="display:flex;align-items:center;gap:6px;">
                 ${d.anhDaiDien
@@ -546,6 +557,7 @@
         if (g('.nk-nhom')) g('.nk-nhom').onchange = (e) => { d.nhomSanPhamId = e.target.value || null; };
         if (g('.nk-dmthekho')) g('.nk-dmthekho').onchange = (e) => { d.theKhoDanhMucId = e.target.value || null; };
         if (g('.nk-barcode')) g('.nk-barcode').oninput = (e) => { d.maBarcode = e.target.value; };
+        if (g('.nk-tenhd')) g('.nk-tenhd').oninput = (e) => { d.tenHoaDon = e.target.value; };   // v7.46
         /* Ảnh đại diện của MÃ HÀNG. Tải lên ngay khi chọn file (không đợi bấm Lưu) để nếu upload lỗi
            thì người dùng biết luôn, chứ không phải mất cả phiếu đã gõ. */
         const oAdd = tr.querySelector('.nk-anhdd');
@@ -567,6 +579,9 @@
           if (mh) {
             d.maHangId = mh.MaHangID; d.tenHang = mh.TenHang; d.loaiRi = mh.LoaiRi;
             d.donViCoBan = mh.DonViCoBan; d.donViQuyDoi = mh.DonViQuyDoi;
+            /* v7.46: điền lại tên viết hóa đơn ĐÃ KHAI của mã này. `dm.hang` chưa có trường (bản
+               frontend cũ trong cache) thì giữ nguyên chứ không xóa trắng. */
+            if (mh.TenHoaDon !== undefined) d.tenHoaDon = mh.TenHoaDon || '';
             /* v7.00: ĐVT của SỐ LƯỢNG cũng NHẢY THEO mã hàng vừa chọn.
                Ô ĐVT chỉ liệt kê 2 đơn vị của mã; nếu `d.donVi` còn giữ đơn vị của mã TRƯỚC ĐÓ (hoặc
                mặc định cũ) thì nó không khớp option nào và <select> âm thầm nhảy về option đầu —
@@ -662,7 +677,8 @@
            mới có quyền ghi vào TheKhoHangHoa (các dòng sau chỉ là màu khác của cùng mã). */
         laDongKhai: idxKhaiMoi(d) === d.idx,
         giaBan: d.giaBan, nhomSanPhamId: d.nhomSanPhamId,
-        theKhoDanhMucId: d.theKhoDanhMucId, maBarcode: d.maBarcode
+        theKhoDanhMucId: d.theKhoDanhMucId, maBarcode: d.maBarcode,
+        tenHoaDon: d.tenHoaDon || ''   // v7.46
       }));
       if (!dong.length) return toast('Chưa có dòng nào có số lượng > 0.', 'error');
       if (!sx && !$('#nkfNcc').value) return toast('Nhập từ nhà cung cấp thì phải chọn nhà cung cấp.', 'error');
