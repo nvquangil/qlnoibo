@@ -12,8 +12,19 @@ window.ModuleDanhMuc = (function () {
     { key: 'nhagiacong', label: 'Nhà gia công / In thêu', api: '/api/danhmuc/nhagiacong', idCol: 'NhaGiaCongID', custom: 'nhagiacong' },
     { key: 'nhacungcap', label: 'Nhà cung cấp', api: '/api/danhmuc/nhacungcap', idCol: 'NCC_ID',
       fields: [{ name: 'TenNCC', label: 'Tên nhà cung cấp', required: true }, { name: 'DiaChi', label: 'Địa chỉ' }, { name: 'SDT', label: 'SĐT' }, { name: 'MaSoThue', label: 'Mã số thuế' }] },
+    /* v7.45: thêm 4 ô THÔNG TIN XUẤT HÓA ĐƠN (migration_v689). Hóa đơn GTGT xuất từ phiếu bán hàng
+       đọc thẳng từ đây, để trống thì tự lùi về tên/địa chỉ của phiếu.
+       ⚠️ "Tên khách hàng" KHÔNG dùng cho hóa đơn: nó là khóa gom công nợ (congno.js gom theo chuỗi
+       tên), nên tên pháp nhân phải khai riêng ở ô "Tên viết hóa đơn". */
     { key: 'khachhang', label: 'Khách hàng', api: '/api/danhmuc/khachhang', idCol: 'KhachHangID',
-      fields: [{ name: 'TenKhachHang', label: 'Tên khách hàng', required: true }, { name: 'DiaChi', label: 'Địa chỉ' }, { name: 'SDT', label: 'SĐT' }, { name: 'Email', label: 'Email' }] },
+      fields: [{ name: 'TenKhachHang', label: 'Tên khách hàng (tên gọi hàng ngày)', required: true },
+               { name: 'DiaChi', label: 'Địa chỉ giao hàng' },
+               { name: 'SDT', label: 'SĐT' },
+               { name: 'Email', label: 'Email liên lạc' },
+               { name: 'TenHoaDon', label: 'Tên viết hóa đơn (tên pháp nhân)' },
+               { name: 'MaSoThue', label: 'Mã số thuế (chỉ nhập số)' },
+               { name: 'DiaChiHoaDon', label: 'Địa chỉ hóa đơn' },
+               { name: 'EmailHoaDon', label: 'Email nhận hóa đơn' }] },
     // v5.62: có thêm CÔNG KHAI theo từng danh mục (link riêng gửi khách xem) -> dùng renderer riêng.
     { key: 'thekhodanhmuc', label: 'Danh mục thẻ kho', api: '/api/danhmuc/thekhodanhmuc', idCol: 'TheKhoDanhMucID',
       custom: 'thekhodanhmuc',

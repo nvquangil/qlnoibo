@@ -510,12 +510,21 @@ router.get('/phieu/:id/hoadon', requireAuth, requirePermission('KHOHANG', 'view'
       WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
     if (!ct.length) return res.status(400).json({ success: false, message: 'Phiếu không có dòng hàng nào.' });
 
-    /* Email khach (cot H) — chi lay khi phieu co gan KhachHangID. Bang KhachHang KHONG co cot MST
-       nen cot F de trong, ke toan tu dien (nguoi dung da chon phuong an nay). */
+    /* THONG TIN XUAT HOA DON cua khach (ten phap nhan / MST / dia chi hoa don / email nhan hoa don)
+       — chi lay duoc khi phieu co gan KhachHangID.
+       v7.45: 4 cot moi den tu migration_v689. DO COL_LENGTH truoc khi SELECT: chua chay migration thi
+       route van xuat duoc hoa don (lui ve ten/dia chi cua phieu) thay vi bao "Invalid column name". */
     let kh = null;
     if (h.KhachHangID) {
-      kh = (await pool.request().input('k', sql.Int, h.KhachHangID)
-        .query('SELECT TenKhachHang, DiaChi, Email FROM KhachHang WHERE KhachHangID = @k')).recordset[0] || null;
+      const coHD = (await pool.request().query(`
+        SELECT CASE WHEN COL_LENGTH('KhachHang', 'TenHoaDon') IS NOT NULL
+                     AND COL_LENGTH('KhachHang', 'MaSoThue') IS NOT NULL
+                     AND COL_LENGTH('KhachHang', 'DiaChiHoaDon') IS NOT NULL
+                     AND COL_LENGTH('KhachHang', 'EmailHoaDon') IS NOT NULL
+                    THEN 1 ELSE 0 END AS co`)).recordset[0].co === 1;
+      const cotHD = coHD ? ', TenHoaDon, MaSoThue, DiaChiHoaDon, EmailHoaDon' : '';
+      kh = (await pool.request().input('k', sql.Int, h.KhachHangID).query(
+        `SELECT TenKhachHang, DiaChi, Email, GhiChu${cotHD} FROM KhachHang WHERE KhachHangID = @k`)).recordset[0] || null;
     }
     const thue = /^\d+(\.\d+)?$/.test(String(req.query.thue || '')) ? Number(req.query.thue) : undefined;
     const { wb, kq } = await taoWorkbookHoaDon(h, ct, kh, thue == null ? {} : { thue });

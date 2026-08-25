@@ -140,7 +140,16 @@ router.put('/khachhang/:id', requireAuth, requirePermission('DANHMUC', 'edit'), 
       .input('sdt', sql.NVarChar, (req.body.SDT || null))
       .input('email', sql.NVarChar, (req.body.Email || null))
       .input('ghiChu', sql.NVarChar, (req.body.GhiChu || null))
-      .query(`UPDATE KhachHang SET TenKhachHang=@ten, DiaChi=@diaChi, SDT=@sdt, Email=@email, GhiChu=@ghiChu
+      /* ⚠️ v7.45: DANH SACH COT O DAY PHAI KHOP voi buildCrudRouter('/khachhang') ben duoi.
+         Day la duong luu THU HAI cua cung mot form (chi chay khi NGUOI DUNG DOI TEN khach). Thieu
+         cot nao la sua ten kem thong tin hoa don thi thong tin hoa don bi xoa trang — im lang.
+         Them cot moi vao danh muc khach hang => phai them o CA HAI cho. */
+      .input('tenHD', sql.NVarChar, (req.body.TenHoaDon || null))
+      .input('mst', sql.NVarChar, (req.body.MaSoThue || null))
+      .input('diaChiHD', sql.NVarChar, (req.body.DiaChiHoaDon || null))
+      .input('emailHD', sql.NVarChar, (req.body.EmailHoaDon || null))
+      .query(`UPDATE KhachHang SET TenKhachHang=@ten, DiaChi=@diaChi, SDT=@sdt, Email=@email, GhiChu=@ghiChu,
+                     TenHoaDon=@tenHD, MaSoThue=@mst, DiaChiHoaDon=@diaChiHD, EmailHoaDon=@emailHD
               WHERE KhachHangID=@id`);
     let tongDong = 0;
     const chiTiet = [];
@@ -180,7 +189,14 @@ router.use('/khachhang', buildCrudRouter({
     { name: 'DiaChi', sqlType: sql.NVarChar },
     { name: 'SDT', sqlType: sql.NVarChar },
     { name: 'Email', sqlType: sql.NVarChar },
-    { name: 'GhiChu', sqlType: sql.NVarChar }
+    { name: 'GhiChu', sqlType: sql.NVarChar },
+    /* v7.45 (migration_v689): thong tin XUAT HOA DON — hoa don GTGT doc tu day.
+       CHUA CHAY migration_v689 thi them/sua khach hang se loi "Invalid column name" (crudFactory
+       khong do cot), nen migration phai chay TRUOC khi restart pm2. */
+    { name: 'TenHoaDon', sqlType: sql.NVarChar },
+    { name: 'MaSoThue', sqlType: sql.NVarChar },
+    { name: 'DiaChiHoaDon', sqlType: sql.NVarChar },
+    { name: 'EmailHoaDon', sqlType: sql.NVarChar }
   ]
 }));
 

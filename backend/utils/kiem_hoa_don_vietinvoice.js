@@ -186,6 +186,181 @@ const dongHang = [
   ok(kRong.canhBao.some(c => /không có dòng hàng/.test(c)), 'Canh bao khi phieu khong co dong hang');
 
   console.log('');
+  console.log('=== 7. GOP DONG THEO MA HANG — hoa don KHONG chi tiet mau (v7.45) ===');
+  /* Cung mot ma hang ban 3 mau. Hoa don phai ra MOT dong: SL = tong, ten KHONG kem mau. */
+  const nhieuMau = [
+    { MaHang: 'QD26CT091', TenHang: 'Quần dài bé trai QD26CT091', TenMau: 'Đen',
+      DonVi: 'Cái', SoLuongCai: 10, GiaBan: 108000, ThanhTien: 1080000 },
+    { MaHang: 'QD26CT091', TenHang: 'Quần dài bé trai QD26CT091', TenMau: 'Ghi',
+      DonVi: 'Cái', SoLuongCai: 6, GiaBan: 108000, ThanhTien: 648000 },
+    { MaHang: 'QD26CT091', TenHang: 'Quần dài bé trai QD26CT091', TenMau: 'Navy',
+      DonVi: 'Cái', SoLuongCai: 4, GiaBan: 108000, ThanhTien: 432000 },
+    { MaHang: 'AT26C012', TenHang: 'Áo thu bé gái AT26C012', TenMau: 'Hồng',
+      DonVi: 'Cái', SoLuongCai: 5, GiaBan: 216000, ThanhTien: 1080000 }
+  ];
+  const hG = phieu();
+  hG.TongTienHang = 3240000; hG.TienTruocVAT = 3240000; hG.TongThanhToan = 3240000;
+  const kG = HD.tinhHoaDon(hG, nhieuMau);
+  ok(kG.dong.length === 2, '4 dong hang (3 mau cung ma) -> 2 dong hoa don', String(kG.dong.length));
+  const gQD = kG.dong.find(x => x.maHang === 'QD26CT091');
+  ok(!!gQD && gQD.soLuong === 20, 'SL gop = 10 + 6 + 4 = 20', gQD && String(gQD.soLuong));
+  ok(gQD && gQD.ten === 'Quần dài bé trai QD26CT091', 'Ten hang KHONG kem mau', gQD && gQD.ten);
+  ok(gQD && !/Đen|Ghi|Navy| - /.test(gQD.ten), 'Ten khong con dau vet mau nao', gQD && gQD.ten);
+  ok(gQD && gQD.soMauDaGop === 3, 'Ghi lai da gop 3 dong (de canh bao/soi khi can)',
+    gQD && String(gQD.soMauDaGop));
+  /* Boc thue MOT LAN tren tong nhom, khong boc tung mau roi cong. */
+  ok(gQD && gQD.thanhTien === Math.round(2160000 / 1.08),
+    `Thanh tien gop = round(2.160.000 / 1.08) = ${Math.round(2160000 / 1.08)}`,
+    gQD && String(gQD.thanhTien));
+  /* Van phai giu bat bien SL x DonGia = ThanhTien sau khi gop. */
+  kG.dong.forEach((x, i) => {
+    ok(Math.round(x.soLuong * x.donGia) === x.thanhTien,
+      `Dong gop ${i + 1}: SL ${x.soLuong} x ${x.donGia} = ${x.thanhTien}`,
+      String(Math.round(x.soLuong * x.donGia)));
+  });
+  ok(kG.tongHoaDon === 3240000, 'Gop dong KHONG lam lech tong hoa don', String(kG.tongHoaDon));
+  ok(kG.canhBao.length === 0, 'Gop dong khong sinh canh bao', kG.canhBao.join(' | '));
+
+  console.log('');
+  console.log('=== 8. KHOA GOP PHAI CO DON VI (bai hoc gop don khach v6.21) ===');
+  /* Cung ma hang ma ban theo 2 don vi: gop lai la cong nham hai loai so luong. */
+  const haiDonVi = [
+    { MaHang: 'BD26C047', TenHang: 'Bộ dài tay BD26C047', TenMau: 'Ghi',
+      DonVi: 'Cái', SoLuongCai: 12, GiaBan: 100000, ThanhTien: 1200000 },
+    { MaHang: 'BD26C047', TenHang: 'Bộ dài tay BD26C047', TenMau: 'Ghi',
+      DonVi: 'Bộ', SoLuongCai: 3, GiaBan: 400000, ThanhTien: 1200000 }
+  ];
+  const hDV = phieu();
+  hDV.TongTienHang = 2400000; hDV.TienTruocVAT = 2400000; hDV.TongThanhToan = 2400000;
+  const kDV = HD.tinhHoaDon(hDV, haiDonVi);
+  ok(kDV.dong.length === 2, 'Cung ma nhung khac DVT -> KHONG gop (2 dong)', String(kDV.dong.length));
+  ok(kDV.dong.every(x => x.soLuong !== 15), 'KHONG cong 12 Cai + 3 Bo thanh 15');
+  ok(kDV.dong.map(x => x.dvt).sort().join(',') === 'Bộ,Cái', 'Giu ca hai DVT',
+    kDV.dong.map(x => x.dvt).join(','));
+
+  console.log('');
+  console.log('=== 9. Ma hang TRONG (du lieu cu) van ra dong, khong roi ra ngoai ===');
+  const khongMa = [
+    { MaHang: '', TenHang: 'Hàng lẻ không mã', TenMau: 'Đỏ', DonVi: 'Cái',
+      SoLuongCai: 2, GiaBan: 54000, ThanhTien: 108000 },
+    { MaHang: '', TenHang: 'Hàng lẻ không mã', TenMau: 'Xanh', DonVi: 'Cái',
+      SoLuongCai: 3, GiaBan: 54000, ThanhTien: 162000 }
+  ];
+  const hKM = phieu();
+  hKM.TongTienHang = 270000; hKM.TienTruocVAT = 270000; hKM.TongThanhToan = 270000;
+  const kKM = HD.tinhHoaDon(hKM, khongMa);
+  ok(kKM.dong.length === 1, 'Khong co ma -> gop theo TEN HANG (1 dong)', String(kKM.dong.length));
+  ok(kKM.dong[0].soLuong === 5, 'SL gop = 2 + 3 = 5', String(kKM.dong[0].soLuong));
+
+  console.log('');
+  console.log('=== 10. FILE THAT sau khi gop: dung so dong, khong ghi tran ===');
+  const { wb: wbG } = await HD.taoWorkbookHoaDon(hG, nhieuMau, null);
+  const duongG = path.join(os.tmpdir(), 'kiem_hoa_don_gop.xlsx');
+  await wbG.xlsx.writeFile(duongG);
+  const wbG2 = new ExcelJS.Workbook();
+  await wbG2.xlsx.readFile(duongG);
+  const wsG = wbG2.worksheets[0];
+  ok(String(wsG.getRow(13).getCell(19).value || '') === 'Quần dài bé trai QD26CT091'
+    || String(wsG.getRow(14).getCell(19).value || '') === 'Quần dài bé trai QD26CT091',
+    'S ghi ten hang KHONG kem mau');
+  ok(Number(wsG.getRow(13).getCell(22).value) + Number(wsG.getRow(14).getCell(22).value) === 25,
+    'Tong SL 2 dong = 20 + 5 = 25 (khong mat hang nao khi gop)');
+  ok(String(wsG.getRow(15).getCell(19).value || '') === '' && !wsG.getRow(15).getCell(26).value,
+    'Dong 15 TRONG — 4 dong hang chi ghi 2 dong, khong con vet dong cu');
+
+  console.log('');
+  console.log('=== 11. THONG TIN KHACH lay tu 4 o HOA DON cua danh muc (v7.45) ===');
+  const khDayDu = {
+    TenKhachHang: 'NPP Vĩnh Phúc - A Chung',
+    DiaChi: 'Kho Vĩnh Phúc, giao giờ hành chính',
+    Email: 'chung@example.com',
+    TenHoaDon: 'Công ty TNHH Thương mại A Chung',
+    MaSoThue: '0123456789',
+    DiaChiHoaDon: 'Số 1 Đường B, P.C, TP Vĩnh Yên, Vĩnh Phúc',
+    EmailHoaDon: 'ketoan@achung.vn'
+  };
+  const { wb: wbK } = await HD.taoWorkbookHoaDon(phieu(), dongHang, khDayDu);
+  const duongK = path.join(os.tmpdir(), 'kiem_hoa_don_khach.xlsx');
+  await wbK.xlsx.writeFile(duongK);
+  const wbK2 = new ExcelJS.Workbook();
+  await wbK2.xlsx.readFile(duongK);
+  const rK = wbK2.worksheets[0].getRow(13);
+  ok(String(rK.getCell(3).value) === khDayDu.TenHoaDon,
+    'C = TenHoaDon (ten phap nhan), KHONG phai ten goi hang ngay', String(rK.getCell(3).value));
+  ok(String(rK.getCell(5).value) === khDayDu.DiaChiHoaDon,
+    'E = DiaChiHoaDon, khong phai dia chi giao hang', String(rK.getCell(5).value));
+  ok(String(rK.getCell(6).value) === '0123456789', 'F = MaSoThue', String(rK.getCell(6).value));
+  ok(String(rK.getCell(8).value) === 'ketoan@achung.vn',
+    'H = EmailHoaDon (uu tien hon email lien lac)', String(rK.getCell(8).value));
+
+  console.log('');
+  console.log('=== 12. Chua khai o hoa don -> LUI VE du lieu cu, khong de trong tho ===');
+  const hL = phieu();
+  const { kq: kqL } = await HD.taoWorkbookHoaDon(hL, dongHang,
+    { TenKhachHang: 'X', DiaChi: 'Kho Vĩnh Phúc', Email: 'a@b.vn' });
+  const { wb: wbL } = await HD.taoWorkbookHoaDon(hL, dongHang,
+    { TenKhachHang: 'X', DiaChi: 'Kho Vĩnh Phúc', Email: 'a@b.vn' });
+  const duongL = path.join(os.tmpdir(), 'kiem_hoa_don_lui.xlsx');
+  await wbL.xlsx.writeFile(duongL);
+  const wbL2 = new ExcelJS.Workbook(); await wbL2.xlsx.readFile(duongL);
+  const rL = wbL2.worksheets[0].getRow(13);
+  ok(String(rL.getCell(3).value) === hL.TenKhach, 'C lui ve TenKhach cua phieu', String(rL.getCell(3).value));
+  ok(String(rL.getCell(5).value) === hL.DiaChi, 'E lui ve DiaChi cua phieu', String(rL.getCell(5).value));
+  ok(String(rL.getCell(8).value) === 'a@b.vn', 'H lui ve Email lien lac (vi la email thuc)');
+  ok(kqL.canhBao.some(c => /CHƯA khai Mã số thuế/.test(c)),
+    'Canh bao khi khach chua khai MST', kqL.canhBao.join(' | '));
+
+  console.log('');
+  console.log('=== 13. DU LIEU CU: MST bi go vao o Email -> F lay SO, H DE TRONG ===');
+  const { wb: wbM, kq: kqM } = await HD.taoWorkbookHoaDon(phieu(), dongHang,
+    { TenKhachHang: 'Y', DiaChi: 'Hà Nội', Email: 'MST: 0123657890' });
+  const duongM = path.join(os.tmpdir(), 'kiem_hoa_don_mst.xlsx');
+  await wbM.xlsx.writeFile(duongM);
+  const wbM2 = new ExcelJS.Workbook(); await wbM2.xlsx.readFile(duongM);
+  const rM = wbM2.worksheets[0].getRow(13);
+  ok(String(rM.getCell(6).value) === '0123657890',
+    'F chi lay PHAN SO, BO chu "MST:" (day la loi nguoi dung bao)', String(rM.getCell(6).value));
+  ok(String(rM.getCell(8).value || '') === '',
+    'H DE TRONG — khong do chuoi "MST: ..." vao cot Email nua', String(rM.getCell(8).value));
+  ok(kqM.canhBao.some(c => /không phải email/.test(c)), 'Canh bao o Email dang chua thu khac',
+    kqM.canhBao.join(' | '));
+  /* MST 13 so (co ma don vi truc thuoc) van nhan. */
+  const { wb: wb13 } = await HD.taoWorkbookHoaDon(phieu(), dongHang,
+    { TenKhachHang: 'Y', Email: 'MST: 0123657890-001' });
+  const duong13 = path.join(os.tmpdir(), 'kiem_hoa_don_mst13.xlsx');
+  await wb13.xlsx.writeFile(duong13);
+  const wb13b = new ExcelJS.Workbook(); await wb13b.xlsx.readFile(duong13);
+  ok(String(wb13b.worksheets[0].getRow(13).getCell(6).value) === '0123657890-001',
+    'MST 10+3 (don vi truc thuoc) nhan nguyen ca ma nhanh',
+    String(wb13b.worksheets[0].getRow(13).getCell(6).value));
+  /* ⚠️ Go THUA/THIEU mot chu so -> KHONG duoc cat bua 10 so dau thanh mot MST sai. */
+  const { kq: kq11 } = await HD.taoWorkbookHoaDon(phieu(), dongHang,
+    { TenKhachHang: 'Y', Email: 'MST: 01236578901' });
+  ok(kq11.canhBao.some(c => /CHƯA khai Mã số thuế/.test(c)),
+    'MST 11 so (go sai) -> KHONG cat 10 so dau, bao chua khai de go tay', kq11.canhBao.join(' | '));
+
+  console.log('');
+  console.log('=== 14. KHONG nham SO DIEN THOAI (cung 10 so) thanh MST ===');
+  const { kq: kqSDT } = await HD.taoWorkbookHoaDon(phieu(), dongHang,
+    { TenKhachHang: 'Z', DiaChi: 'Số 25 ngõ 187 phố Hoa', SDT: '0912345678', Email: '', GhiChu: 'Giao trước 5h' });
+  ok(kqSDT.canhBao.some(c => /CHƯA khai Mã số thuế/.test(c)),
+    'Khong co MST that -> bao chua khai, KHONG nhat so nha/SDT lam MST', kqSDT.canhBao.join(' | '));
+  /* Ghi chu la day so tron thi moi nhan — do la truong hop nguoi dung co tinh go MST vao day. */
+  const { kq: kqGC } = await HD.taoWorkbookHoaDon(phieu(), dongHang,
+    { TenKhachHang: 'Z', GhiChu: '0123456789' });
+  ok(!kqGC.canhBao.some(c => /CHƯA khai Mã số thuế/.test(c)),
+    'Ghi chu chi la 10 chu so tron -> nhan la MST');
+
+  console.log('');
+  console.log('=== 15. Khach chua gan (khachHang = null) van xuat duoc ===');
+  const { wb: wbN } = await HD.taoWorkbookHoaDon(phieu(), dongHang, null);
+  const duongN = path.join(os.tmpdir(), 'kiem_hoa_don_null.xlsx');
+  await wbN.xlsx.writeFile(duongN);
+  const wbN2 = new ExcelJS.Workbook(); await wbN2.xlsx.readFile(duongN);
+  ok(String(wbN2.worksheets[0].getRow(13).getCell(3).value) === phieu().TenKhach,
+    'khachHang = null -> C van co ten khach cua phieu');
+
+  console.log('');
   console.log(`KET QUA: ${dat} dat / ${truot} truot`);
   console.log('File mau de mo xem: ' + duong);
   console.log(truot ? '>> CO MUC KHONG DAT - phai sua truoc khi giao.' : '>> DAT TAT CA.');

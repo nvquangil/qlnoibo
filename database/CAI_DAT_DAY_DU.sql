@@ -188,11 +188,18 @@ GO
 
 CREATE TABLE KhachHang (
     KhachHangID    INT IDENTITY(1,1) PRIMARY KEY,
-    TenKhachHang   NVARCHAR(150) NOT NULL,
-    DiaChi         NVARCHAR(255) NULL,
+    TenKhachHang   NVARCHAR(150) NOT NULL,   -- ten goi hang ngay = KHOA GOM CONG NO (dung doi tuy tien)
+    DiaChi         NVARCHAR(255) NULL,       -- dia chi GIAO HANG
     SDT            NVARCHAR(30) NULL,
     Email          NVARCHAR(100) NULL,
-    GhiChu         NVARCHAR(255) NULL
+    GhiChu         NVARCHAR(255) NULL,
+    /* v7.45 (migration_v689): THONG TIN XUAT HOA DON GTGT. Tach khoi 4 cot tren vi ten/dia chi tren
+       giay to thuong khac ten goi hang ngay, va TenKhachHang con la khoa gom cong no nen khong duoc
+       sua theo hoa don. De trong thi hoa don tu lui ve TenKhach/DiaChi cua phieu. */
+    TenHoaDon      NVARCHAR(255) NULL,       -- ten phap nhan tren hoa don
+    MaSoThue       NVARCHAR(30) NULL,
+    DiaChiHoaDon   NVARCHAR(255) NULL,       -- dia chi tren hoa don
+    EmailHoaDon    NVARCHAR(150) NULL        -- mail nhan hoa don dien tu
 );
 GO
 
