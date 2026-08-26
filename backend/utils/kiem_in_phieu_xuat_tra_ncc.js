@@ -1,5 +1,5 @@
 /* ================================================================================================
-   KIEM CHUNG v7.49 — Ban in phieu XUAT KHO VAI: phieu TRA NCC phai ghi ro NCC + phieu nhap/ngay
+   KIEM CHUNG v7.49/v7.50 — Ban in phieu XUAT KHO VAI: phieu TRA NCC phai ghi ro NCC + phieu nhap/ngay
    ------------------------------------------------------------------------------------------------
    Yeu cau: "in phieu xuat kho vai, neu tra nha cung cap thi them dong nha cung cap, phieu nhap ngay".
 
@@ -42,13 +42,17 @@ function catHam(src, ten) {
   }
   return sau === 0 ? src.slice(moc, i) : null;
 }
+const mNhan = catHam(sFe, 'nhanPhieuNhapCuaDong');
 const mDs = catHam(sFe, 'dsPhieuNhapCuaPhieuXuat');
+const mLa = catHam(sFe, 'laTraNCC');
 const mKhoi = catHam(sFe, 'khoiTraNCCHtml');
 
-console.log('\n=== 1. Cat duoc 2 ham tu file that ===');
+console.log('\n=== 1. Cat duoc cac ham tu file that ===');
+kiem(!!mNhan, 'cat duoc nhanPhieuNhapCuaDong()');
 kiem(!!mDs, 'cat duoc dsPhieuNhapCuaPhieuXuat()');
+kiem(!!mLa, 'cat duoc laTraNCC()');
 kiem(!!mKhoi, 'cat duoc khoiTraNCCHtml()');
-if (!mDs || !mKhoi) { console.log('\nDUNG: khong cat duoc ham.'); process.exit(1); }
+if (!mNhan || !mDs || !mLa || !mKhoi) { console.log('\nDUNG: khong cat duoc ham.'); process.exit(1); }
 
 const escapeHtml = (s) => (s == null ? '' : String(s).replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
@@ -59,8 +63,10 @@ const fmtDate = (d) => {
   return `${h(x.getDate())}/${h(x.getMonth() + 1)}/${x.getFullYear()}`;
 };
 const moi = new Function('escapeHtml', 'fmtDate',
-  `${mDs}\n${mKhoi}\nreturn { dsPhieuNhapCuaPhieuXuat, khoiTraNCCHtml };`)(escapeHtml, fmtDate);
-const { dsPhieuNhapCuaPhieuXuat: dsPN, khoiTraNCCHtml: khoi } = moi;
+  `${mNhan}\n${mDs}\n${mLa}\n${mKhoi}
+   return { nhanPhieuNhapCuaDong, dsPhieuNhapCuaPhieuXuat, laTraNCC, khoiTraNCCHtml };`)(escapeHtml, fmtDate);
+const { nhanPhieuNhapCuaDong: nhan, dsPhieuNhapCuaPhieuXuat: dsPN,
+        laTraNCC: laTra, khoiTraNCCHtml: khoi } = moi;
 
 const dong = (id, ngay, hd) => ({ PhieuNhapID: id, NgayPhieuNhap: ngay, SoHoaDonNhap: hd || null });
 
@@ -70,35 +76,54 @@ const ds2 = dsPN(lines2);
 kiem(ds2.length === 2, '3 dong thuoc 2 phieu nhap -> 2 nhan (gop trung)', String(ds2.length));
 kiem(ds2[0] === 'NKV-00012 (12/08/2026)', 'nhan 1 dung dinh dang NKV-##### (dd/mm/yyyy)', ds2[0]);
 kiem(ds2[1] === 'NKV-00015 (20/08/2026)', 'nhan 2 dung', ds2[1]);
-const html2 = khoi({ LaTraNCC: 1, TenNCC: 'Cty Dệt Phong Phú' }, lines2);
-kiem(/Trả nhà cung cấp:<\/b> Cty Dệt Phong Phú/.test(html2), 'ban in co dong "Tra nha cung cap"');
+const html2 = khoi({ LaTraNCC: 1, TenNCC: 'Cty Dệt Phong Phú' }, lines2, true);
+kiem(/Trả nhà cung cấp:<\/b> Cty Dệt Phong Phú/.test(html2), 'co dong "Tra nha cung cap"');
 kiem(/Theo phiếu nhập:<\/b> NKV-00012 \(12\/08\/2026\) · NKV-00015 \(20\/08\/2026\)/.test(html2),
-  'ban in liet ke DU CA HAI phieu nhap', html2.replace(/\s+/g, ' '));
+  'dong tom tat liet ke DU CA HAI phieu nhap', html2.replace(/\s+/g, ' '));
+
+console.log('\n=== 2b. v7.50: cot GHI CHU tung cay + bo dong tom tat tren BAN IN ===');
+kiem(nhan(dong(9136, '2026-08-17')) === 'NKV-09136 (17/08/2026)',
+  'nhan cua MOT dong dung dinh dang', nhan(dong(9136, '2026-08-17')));
+kiem(nhan({ PhieuNhapID: null }) === '' && nhan(null) === '',
+  'dong khong biet phieu nhap -> nhan rong (o Ghi chu de trong)');
+/* Ban in truyen keDanhSach = false: KHONG in lai danh sach gop o dau phieu (moi dong da co). */
+const htmlIn = khoi({ LaTraNCC: 1, TenNCC: 'Cty A' }, lines2, false);
+kiem(/Trả nhà cung cấp/.test(htmlIn), 'ban in VAN co dong nha cung cap');
+kiem(!/Theo phiếu nhập/.test(htmlIn), 'ban in KHONG con dong tom tat (tranh noi hai lan)');
+/* Popup xem truyen true (bang tren man hinh khong co cot Ghi chu). */
+kiem(/Theo phiếu nhập/.test(khoi({ LaTraNCC: 1, TenNCC: 'Cty A' }, lines2, true)),
+  'popup xem VAN co dong tom tat');
+/* Doc chinh file: o Ghi chu tung dong phai dien nhan, va CHI khi la phieu tra NCC. */
+kiem(/laTraNCC\(header\) \? escapeHtml\(nhanPhieuNhapCuaDong\(r\)\) : ''/.test(sFe),
+  'cot Ghi chu tung dong = nhan phieu nhap cua CHINH cay do, chi khi la phieu tra NCC');
+kiem(/khoiTraNCCHtml\(header, lines, false\)/.test(sFe), 'ban in goi voi keDanhSach = false');
+kiem(/khoiTraNCCHtml\(header, lines, true\)/.test(sFe), 'popup xem goi voi keDanhSach = true');
+kiem(laTra({ LaTraNCC: 1 }) && laTra({ LaTraNCC: true }) && !laTra({}) && !laTra(null),
+  'laTraNCC() nhan ca Bit 1 va boolean true, phieu cu -> false');
 
 console.log('\n=== 3. KHONG phai phieu tra NCC -> KHONG hien gi ===');
-kiem(khoi({ LaTraNCC: 0, TenNCC: 'X' }, lines2) === '', 'LaTraNCC = 0 -> chuoi rong');
-kiem(khoi({}, lines2) === '', 'phieu cu / chua chay migration (khong co cot) -> chuoi rong');
-kiem(khoi(null, lines2) === '', 'header null -> khong vang');
-kiem(khoi({ LaTraNCC: true }, lines2) !== '', 'LaTraNCC = true (kieu Bit tra ve boolean) van hien');
+kiem(khoi({ LaTraNCC: 0, TenNCC: 'X' }, lines2, true) === '', 'LaTraNCC = 0 -> chuoi rong');
+kiem(khoi({}, lines2, true) === '', 'phieu cu / chua chay migration (khong co cot) -> chuoi rong');
+kiem(khoi(null, lines2, true) === '', 'header null -> khong vang');
+kiem(khoi({ LaTraNCC: true }, lines2, true) !== '', 'LaTraNCC = true (kieu Bit tra ve boolean) van hien');
 
 console.log('\n=== 4. Cac canh du lieu thieu ===');
-kiem(/chưa khai nhà cung cấp/.test(khoi({ LaTraNCC: 1 }, lines2)),
+kiem(/chưa khai nhà cung cấp/.test(khoi({ LaTraNCC: 1 }, lines2, true)),
   'thieu TenNCC -> ghi ro "(chua khai nha cung cap)" chu khong de trang');
-const htmlKhongPN = khoi({ LaTraNCC: 1, TenNCC: 'A' }, [{ PhieuNhapID: null }]);
+const htmlKhongPN = khoi({ LaTraNCC: 1, TenNCC: 'A' }, [{ PhieuNhapID: null }], true);
 kiem(!/Theo phiếu nhập/.test(htmlKhongPN), 'khong biet phieu nhap -> BO dong do, khong in dong rong');
 const dsKhongNgay = dsPN([dong(7, null)]);
 kiem(dsKhongNgay[0] === 'NKV-00007', 'thieu ngay -> chi ghi so phieu', dsKhongNgay[0]);
 const dsHD = dsPN([dong(7, '2026-08-01', 'HD123')]);
 kiem(dsHD[0] === 'NKV-00007 (01/08/2026 HĐ HD123)', 'co so hoa don thi ghi kem', dsHD[0]);
 kiem(dsPN([]).length === 0 && dsPN(null).length === 0, 'lines rong / null -> mang rong');
-kiem(/&lt;script&gt;/.test(khoi({ LaTraNCC: 1, TenNCC: '<script>x</script>' }, [])),
+kiem(/&lt;script&gt;/.test(khoi({ LaTraNCC: 1, TenNCC: '<script>x</script>' }, [], true)),
   'ten NCC duoc escape (khong nhung HTML tho vao ban in)');
 
 console.log('\n=== 5. Dung CHUNG cho ban in va popup xem (khong hai ban) ===');
 /* TRU dong DINH NGHIA: `function khoiTraNCCHtml(header, lines)` cung khop mau goi ham. Dem ca dong
    dinh nghia la con so lech 1 ma van "xanh" o lan sau — dung bay da mac o kiem_cong_no_truoc.js. */
-const soGoi = (sFe.match(/khoiTraNCCHtml\(header, lines\)/g) || []).length
-  - (sFe.match(/function khoiTraNCCHtml\(header, lines\)/g) || []).length;
+const soGoi = (sFe.match(/khoiTraNCCHtml\(header, lines,\s*(?:true|false)\)/g) || []).length;
 kiem(soGoi === 2,
   'khoiTraNCCHtml() duoc goi o DUNG 2 cho: printPhieuXuatFromData + openXuatDetailModal',
   String(soGoi));
@@ -134,7 +159,10 @@ kiem(/LEFT JOIN PhieuNhapVai pnv ON pnv\.PhieuNhapID = v\.PhieuNhapID/.test(rout
   'join PhieuNhapVai (LEFT: cay mat phieu nhap thi dong van hien)');
 
 console.log('\n=== 7. Bump ?v= ===');
-kiem(/module\.khovai\.js\?v=7\.49/.test(sIndex), 'index.html: module.khovai.js?v=7.49');
+/* Khong ghim dung mot so: ban sau sua tiep file nay se bump len 7.51, 7.52... — ghim so la test cu
+   do oan mot thay doi hoan toan dung (da sua cung loi o kiem_chungtu_congno_ncc.js). */
+const vKhoVai = (sIndex.match(/module\.khovai\.js\?v=([\d.]+)/) || [])[1] || '';
+kiem(parseFloat(vKhoVai) >= 7.50, 'index.html: module.khovai.js da bump >= 7.50', 'dang la ' + vKhoVai);
 
 console.log(`\n================ KET QUA: ${dat} dat / ${truot} sai ================`);
 process.exit(truot ? 1 : 0);
