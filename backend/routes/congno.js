@@ -1055,7 +1055,10 @@ router.get('/chungtu', requireAuth, requirePermission('CONGNO', 'view'), async (
       const soPN = 'NKV-' + String(id).padStart(5, '0');   // v6.57
       return res.json({ success: true, data: { tieuDe: 'Phiếu nhập vải ' + soPN + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''), header: h, dong } });
     }
-    if (loai === 'PNPK') {
+    /* v7.48: PNPK (nhập) va PXPK (tra phu kien ve NCC) dung CUNG hai bang — chi khac tien to so phieu
+       va nhan tieu de. Viet hai nhanh rieng la som muon lech mot ben. */
+    if (loai === 'PNPK' || loai === 'PXPK') {
+      const laTra = loai === 'PXPK';
       const h = (await rq().query(`
         SELECT p.*, ncc.TenNCC FROM PhieuPhuKien p
         LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID WHERE p.PhieuID = @id`)).recordset[0];
@@ -1065,10 +1068,87 @@ router.get('/chungtu', requireAuth, requirePermission('CONGNO', 'view'), async (
                ct.DonGia, (ISNULL(ct.SoLuong,0) * ISNULL(ct.DonGia,0)) AS ThanhTien
         FROM PhieuPhuKienChiTiet ct LEFT JOIN DanhMucPhuKien pk ON pk.PhuKienID = ct.PhuKienID
         WHERE ct.PhieuID = @id ORDER BY ct.ID`)).recordset;
-      const soPK = 'NPK-' + String(id).padStart(5, '0');   // v6.56.2
-      return res.json({ success: true, data: { tieuDe: 'Phiếu nhập phụ kiện ' + soPK + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''), header: h, dong } });
+      // v6.56.2: so phieu dem 5 chu so, GIONG chuoi so cong no dang hien (NPK-/XPK-).
+      const soPK = (laTra ? 'XPK-' : 'NPK-') + String(id).padStart(5, '0');
+      const nhan = laTra ? 'Phiếu trả phụ kiện NCC ' : 'Phiếu nhập phụ kiện ';
+      return res.json({ success: true, data: { tieuDe: nhan + soPK + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''), header: h, dong } });
     }
-    return res.status(400).json({ success: false, message: 'Loại chứng từ không hỗ trợ xem chi tiết.' });
+    /* ============================================================================================
+       v7.48 — BA loai chung tu CO trong so cong no NCC nhung TRUOC DAY khong mo duoc:
+         PNKH = Phieu nhap kho hang hoa (dong "Nhập kho hàng hóa" — nguoi dung bam vao bao
+                "Loại chứng từ không hỗ trợ xem chi tiết")
+         PXV  = Phieu xuat vai TRA NCC        PXPK = Phieu xuat phu kien TRA NCC (o nhanh tren)
+       Goc loi: soChiTietNCC() sinh 7 CtLoai (PNV, PNPK, PC, PXV, PXPK, PNKH) ma route /chungtu chi
+       xu ly 4. Sinh o mot ben, doc o ben kia, hai danh sach khong ai buoc phai khop nhau.
+       ============================================================================================ */
+    if (loai === 'PNKH') {
+      const h = (await rq().query(`
+        SELECT p.*, ncc.TenNCC, u.HoTen AS NguoiTao FROM PhieuNhapKhoHang p
+        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
+        LEFT JOIN Users u ON u.UserID = p.NguoiTaoID WHERE p.PhieuNKID = @id`)).recordset[0];
+      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho hàng hóa.' });
+      const dong = (await rq().query(`
+        SELECT hh.MaHang AS MaCay,
+               LTRIM(RTRIM(ISNULL(hh.TenHang, '') + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
+               ct.SoLuong, ct.DonVi, ct.DonGia, ct.ThanhTien
+        FROM PhieuNhapKhoHangChiTiet ct
+        LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
+        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+        WHERE ct.PhieuNKID = @id ORDER BY ct.ID`)).recordset;
+      return res.json({ success: true, data: {
+        tieuDe: 'Phiếu nhập kho hàng hóa ' + (h.SoPhieu || '') + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''),
+        header: h, dong } });
+    }
+    /* PNL = phieu NHAP LAI (hang khach tra). Xuat hien o so cong no KHACH HANG (dong "Phiếu nhập lại")
+       va truoc day cung KHONG mo duoc — cung mot goc loi voi PNKH, phat hien khi doi chieu danh sach
+       CtLoai sinh ra vs doc duoc (xem utils/kiem_chungtu_congno_ncc.js muc 1). */
+    if (loai === 'PNL') {
+      const h = (await rq().query(`
+        SELECT p.*, p.TenKhach AS TenDoiTuong, p.TongThanhToan AS SoTien, u.HoTen AS NguoiTao
+        FROM PhieuNhapLai p LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
+        WHERE p.PhieuNLID = @id`)).recordset[0];
+      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập lại.' });
+      /* TenDoiTuong / SoTien la BUT DANH cho modal xem chung tu dung chung (no doc 2 ten nay) —
+         khong phai cot that cua bang. Doi ten o modal thi phai doi ca o day. */
+      const dong = (await rq().query(`
+        SELECT hh.MaHang AS MaCay,
+               LTRIM(RTRIM(ISNULL(hh.TenHang, '') + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
+               ct.SoLuong, ct.DonVi, ct.GiaBan AS DonGia, ct.ThanhTien
+        FROM PhieuNhapLaiChiTiet ct
+        LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
+        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+        WHERE ct.PhieuNLID = @id ORDER BY ct.ID`)).recordset;
+      return res.json({ success: true, data: {
+        tieuDe: 'Phiếu nhập lại (khách trả) ' + (h.SoPhieu || ''), header: h, dong } });
+    }
+    if (loai === 'PXV') {
+      /* NCC_ID / LaTraNCC den tu migration_v6.66 — do cot truoc khi JOIN, khong thi CSDL chua chay
+         migration se bao "Invalid column name" thay vi mo duoc phieu. */
+      const coNCC = await coCot(pool, 'PhieuXuatVai', 'NCC_ID');
+      const h = (await rq().query(`
+        SELECT px.*${coNCC ? ', ncc.TenNCC' : ''} FROM PhieuXuatVai px
+        ${coNCC ? 'LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = px.NCC_ID' : ''}
+        WHERE px.PhieuXuatID = @id`)).recordset[0];
+      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu xuất vải.' });
+      const coGia = await coCot(pool, 'VaiCay', 'DonGiaNhap');
+      const cotGia = coGia ? 'vc.DonGiaNhap' : 'CAST(NULL AS DECIMAL(14,2))';
+      const dong = (await rq().query(`
+        SELECT vc.MaCay,
+               LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
+               ct.KGXuat AS SoLuong, N'Kg' AS DonVi, ${cotGia} AS DonGia,
+               (ISNULL(ct.KGXuat,0) * ISNULL(${cotGia}, 0)) AS ThanhTien
+        FROM PhieuXuatVaiChiTiet ct
+        JOIN VaiCay vc ON vc.CayID = ct.CayID
+        LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+        LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
+        LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
+        WHERE ct.PhieuXuatID = @id ORDER BY ct.ID`)).recordset;
+      // Chuoi so phieu GIONG so cong no dang hien (XKV-#####), de doi chieu khong phai doan.
+      const soPX = 'XKV-' + String(id).padStart(5, '0');
+      return res.json({ success: true, data: { tieuDe: 'Phiếu trả vải NCC ' + soPX, header: h, dong } });
+    }
+    return res.status(400).json({ success: false,
+      message: `Loại chứng từ "${loai || '(trống)'}" không hỗ trợ xem chi tiết.` });
   } catch (err) {
     console.error('[congno GET /chungtu] ', err);
     res.status(400).json({ success: false, message: 'Lỗi khi đọc chứng từ: ' + err.message });

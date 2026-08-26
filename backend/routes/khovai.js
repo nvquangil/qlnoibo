@@ -161,6 +161,26 @@ router.get('/ncc/:nccId/phieunhap', requireAuth, requirePermission('KHOVAI', 'vi
   res.json({ success: true, data: rs });
 });
 
+/* ==================================================================================================
+   v7.48 — CAY VAI CON TON CUA MOT NCC (moi phieu nhap cua NCC do).
+   Vi sao can: mot lan tra hang co the gom cay cua NHIEU PHIEU NHAP khac nhau (nguoi dung bao). Bat
+   chon dung MOT phieu nhap thi phai lap 2 phieu tra cho cung mot lan tra — sai thuc te.
+   Van GIU khoanh vung theo NCC: don gia giam no lay theo VaiCay.DonGiaNhap cua tung cay, cho chon tu
+   do toan kho la tra nham cay cua NCC khac -> cong no sai ngay ma khong co gi chan.
+   `vw_TonCayVai` KHONG co PhieuNhapID/NCC nen join VaiCay + PhieuNhapVai de lay, khong sua view.
+   ================================================================================================== */
+router.get('/ncc/:nccId/cay', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'xuat'), async (req, res) => {
+  const pool = await getPool();
+  const rs = (await pool.request().input('ncc', sql.Int, req.params.nccId).query(`
+    SELECT t.*, vc.DonGiaNhap, vc.PhieuNhapID
+    FROM vw_TonCayVai t
+    JOIN VaiCay vc ON vc.CayID = t.CayID
+    JOIN PhieuNhapVai pn ON pn.PhieuNhapID = vc.PhieuNhapID
+    WHERE pn.NCC_ID = @ncc AND ${conHangSQL('t')}
+    ORDER BY t.MaCay`)).recordset;
+  res.json({ success: true, data: rs });
+});
+
 router.get('/phieunhap/:id/cay', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'xuat'), async (req, res) => {
   const pool = await getPool();
   // Trả về ĐÚNG khuôn vw_TonCayVai để form xuất dùng lại nguyên bộ dòng, không phải đổi mẫu hiển thị.

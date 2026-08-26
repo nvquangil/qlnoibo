@@ -925,16 +925,19 @@ window.ModuleKhoVai = (function () {
             <label>Nhà cung cấp nhận lại <span style="color:#c62828;">*</span></label>
             <select name="nccId" id="xNccId"><option value="">-- Chọn nhà cung cấp --</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC')}</select>
           </div>
-          ${/* v6.66.4: chọn NCC -> chỉ ra PHIẾU NHẬP của chính NCC đó; chọn phiếu nhập -> danh sách cây
-                vải bên dưới chỉ còn cây của phiếu đó. Trả hàng là trả đúng lô đã nhập. */''}
+          ${/* v6.66.4: chọn NCC -> chỉ ra PHIẾU NHẬP của chính NCC đó.
+                v7.48: ô này KHÔNG CÒN BẮT BUỘC — một lần trả có thể gồm cây của NHIỀU phiếu nhập khác
+                nhau, bắt chọn đúng một phiếu thì phải lập 2 phiếu trả cho cùng một lần trả.
+                Bỏ trống = hiện MỌI cây còn tồn của NCC đó; chọn một phiếu = lọc hẹp lại cho dễ tìm. */''}
           <div class="form-row" id="xNhapWrap" style="display:none;">
-            <label>Phiếu nhập của NCC <span style="color:#c62828;">*</span></label>
+            <label>Phiếu nhập của NCC <span class="empty-hint" style="padding:0;">(không bắt buộc)</span></label>
             <select id="xPhieuNhapId"><option value="">-- Chọn nhà cung cấp trước --</option></select>
           </div>
         </div>
         <div class="empty-hint" id="xTraNCCHint" style="display:none;color:#e65100;">
-          Chỉ chọn được cây vải thuộc phiếu nhập đã chọn. Phiếu này sẽ <b>giảm công nợ phải trả</b> cho
-          nhà cung cấp, tính theo <b>đơn giá nhập của từng cây</b> — không phải gõ giá.
+          Chỉ chọn được cây vải <b>của nhà cung cấp đã chọn</b> (mọi phiếu nhập). Muốn thu hẹp cho dễ tìm
+          thì chọn thêm một phiếu nhập — không bắt buộc, một phiếu trả gộp được cây của nhiều phiếu nhập.
+          Phiếu này sẽ <b>giảm công nợ phải trả</b>, tính theo <b>đơn giá nhập của từng cây</b> — không phải gõ giá.
         </div>
         <!-- v5.19 (muc 3.1, yeu cau "nếu theo đơn hàng thì hiển thị tổng số lượng theo chỉ định vải SX
              để tham khảo xuất hàng"): chi THAM KHAO (khong chan/khoa gi) - xem applyOrderFilter(). -->
@@ -1131,6 +1134,17 @@ window.ModuleKhoVai = (function () {
       if (oTra) {
         const selNcc = modal.querySelector('#xNccId');
         const selNhap = modal.querySelector('#xPhieuNhapId');
+        /* v7.48: nạp cây của CẢ NCC (mọi phiếu nhập). Dùng chung cho 3 lối: vừa chọn NCC, bỏ chọn
+           phiếu nhập về "-- Tất cả phiếu nhập --", và tích lại ô Trả NCC khi đã chọn NCC.
+           Khai TRƯỚC doiHien() vì doiHien gọi nó — `const` không được hoisted, đảo thứ tự là văng
+           ReferenceError giữa handler (đúng kiểu lỗi "bấm mà không có gì xảy ra"). */
+        const napCayCuaNCC = async () => {
+          if (!selNcc.value) { currentRolls = []; veLaiDongTheoRolls(); return; }
+          const ds = (await apiGet(`/api/khovai/ncc/${selNcc.value}/cay`)).data || [];
+          currentRolls = ds;
+          if (!ds.length) toast('Nhà cung cấp này không còn cây vải nào tồn để trả.', 'error');
+          veLaiDongTheoRolls();
+        };
         const doiHien = () => {
           const b = oTra.checked;
           modal.querySelector('#xNccWrap').style.display = b ? '' : 'none';
@@ -1142,23 +1156,31 @@ window.ModuleKhoVai = (function () {
             currentRolls = availableRolls;          // bỏ tích -> quay lại toàn kho như cũ
             veLaiDongTheoRolls();
           }
+          /* v7.48: tích lại mà ĐÃ chọn NCC từ trước -> nạp lại cây của NCC đó, không để trống. */
+          if (b && selNcc.value) napCayCuaNCC();
         };
         oTra.addEventListener('change', doiHien);
         /* Chọn NCC -> nạp danh sách phiếu nhập CỦA CHÍNH NCC ĐÓ. Đổi NCC thì xóa luôn phiếu đang chọn,
            không thì còn sót phiếu của NCC cũ trong ô mà nhìn như đã đổi. */
         selNcc.addEventListener('change', async () => {
-          selNhap.innerHTML = '<option value="">-- Chọn phiếu nhập --</option>';
-          currentRolls = [];
-          veLaiDongTheoRolls();
-          if (!selNcc.value) { selNhap.innerHTML = '<option value="">-- Chọn nhà cung cấp trước --</option>'; return; }
+          selNhap.innerHTML = '<option value="">-- Tất cả phiếu nhập --</option>';
+          if (!selNcc.value) {
+            selNhap.innerHTML = '<option value="">-- Chọn nhà cung cấp trước --</option>';
+            currentRolls = []; veLaiDongTheoRolls();
+            return;
+          }
+          /* Nạp cây TRƯỚC danh sách phiếu nhập: chọn NCC là đã chọn được cây ngay, không phải đợi
+             bấm thêm ô nào. Danh sách phiếu nhập chỉ là bộ lọc thu hẹp. */
+          await napCayCuaNCC();
           const ds = (await apiGet(`/api/khovai/ncc/${selNcc.value}/phieunhap`)).data || [];
           if (!ds.length) { toast('Nhà cung cấp này chưa có phiếu nhập vải nào.', 'error'); return; }
-          selNhap.innerHTML = '<option value="">-- Chọn phiếu nhập --</option>' + ds.map(p =>
+          selNhap.innerHTML = '<option value="">-- Tất cả phiếu nhập --</option>' + ds.map(p =>
             `<option value="${p.PhieuNhapID}">NKV-${String(p.PhieuNhapID).padStart(5, '0')} — ${fmtDate(p.NgayNhap)}`
             + `${p.SoHoaDon ? ' — HĐ ' + escapeHtml(p.SoHoaDon) : ''} — ${p.SoCay} cây / ${fmtNumber(p.TongKGNhap)} KG</option>`).join('');
         });
         selNhap.addEventListener('change', async () => {
-          if (!selNhap.value) { currentRolls = []; veLaiDongTheoRolls(); return; }
+          // Bỏ chọn phiếu nhập -> QUAY LẠI toàn bộ cây của NCC, không để danh sách trống.
+          if (!selNhap.value) return napCayCuaNCC();
           const ds = (await apiGet(`/api/khovai/phieunhap/${selNhap.value}/cay`)).data || [];
           currentRolls = ds;
           if (!ds.length) toast('Phiếu nhập này không còn cây vải nào tồn để trả.', 'error');
