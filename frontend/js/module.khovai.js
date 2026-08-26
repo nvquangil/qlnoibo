@@ -635,11 +635,13 @@ window.ModuleKhoVai = (function () {
      ================================================================================================ */
   /* v7.50: MỘT chỗ dựng nhãn phiếu nhập của MỘT dòng — dùng cho cả cột Ghi chú từng cây (bản in) và
      dòng tóm tắt trên đầu phiếu (popup xem). Hai chỗ định dạng riêng thì sớm muộn lệch nhau. */
-  function nhanPhieuNhapCuaDong(r) {
+  /* `kemHoaDon = false` khi bảng ĐÃ CÓ cột "Số HĐ NCC" riêng (bản in phiếu trả, v7.51) — nhắc lại số
+     hóa đơn trong ô Ghi chú là lặp. Dòng tóm tắt ở popup xem thì truyền true (không có cột nào). */
+  function nhanPhieuNhapCuaDong(r, kemHoaDon) {
     if (!r || r.PhieuNhapID == null) return '';
     const so = 'NKV-' + String(r.PhieuNhapID).padStart(5, '0');
     const ngay = r.NgayPhieuNhap ? fmtDate(r.NgayPhieuNhap) : '';
-    const hd = r.SoHoaDonNhap ? ` HĐ ${r.SoHoaDonNhap}` : '';
+    const hd = (kemHoaDon !== false && r.SoHoaDonNhap) ? ` HĐ ${r.SoHoaDonNhap}` : '';
     return so + (ngay ? ` (${ngay}${hd})` : (hd ? ` (${hd.trim()})` : ''));
   }
   function dsPhieuNhapCuaPhieuXuat(lines) {
@@ -682,14 +684,47 @@ window.ModuleKhoVai = (function () {
       ${header.NguoiNhan ? `<p class="p-meta"><b>Người nhận:</b> ${escapeHtml(header.NguoiNhan)}</p>` : ''}
       ${header.MucDich ? `<p class="p-meta"><b>Mục đích:</b> ${escapeHtml(header.MucDich)}</p>` : ''}
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
-      <table><thead><tr><th style="width:38px;">STT</th><th>Mã vải</th><th>Loại vải</th><th>Mầu</th><th>Kiểu</th><th>Mã cây</th><th>Khổ vải</th><th>Kg chỉ định</th><th>SL xuất thực tế</th><th>Số mét</th><th>Ghi chú</th></tr></thead>
-      ${/* v5.93: + dòng TỔNG CỘNG (kg xuất thực tế / số mét) ở cuối bảng */''}
-      ${/* v7.50: PHIẾU TRẢ NCC — cột Ghi chú của TỪNG DÒNG điền phiếu nhập của CHÍNH cây đó
-             ("NKV-09136 (17/08/2026)"), theo yêu cầu. Mỗi cây có thể thuộc một phiếu nhập khác nhau
-             nên đây mới là chỗ đặt đúng; dòng tóm tắt gộp ở đầu phiếu đã bỏ (xem khoiTraNCCHtml).
-             Phiếu xuất cho SẢN XUẤT thì cột này vẫn để TRỐNG như cũ — chỗ ghi tay sau khi in. */''}
-      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${escapeHtml(r.KieuVai || 'Chính')}</td><td>${escapeHtml(r.MaCay)}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td>${r.SLTheoChiDinh != null ? fmtNumber(r.SLTheoChiDinh) : ''}</td><td>${fmtNumber(r.KGXuat)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${laTraNCC(header) ? escapeHtml(nhanPhieuNhapCuaDong(r)) : ''}</td></tr>`).join('')}
-        ${dongTongKgMet(lines, 'KGXuat', 'SoMet', 8, 1)}</tbody></table>
+      ${/* ==========================================================================================
+             v7.51 — BẢNG CÓ HAI DẠNG, vì đây thực chất là HAI CHỨNG TỪ khác nhau:
+               · Xuất cho SẢN XUẤT : ... | Kg chỉ định | SL xuất | Số mét | Ghi chú
+                 "Kg chỉ định" là số bộ phận cắt đối chiếu với SL xuất thực tế -> GIỮ.
+               · TRẢ NHÀ CUNG CẤP  : ... | SL xuất | Số mét | Đơn giá | Số HĐ NCC | Ngày HĐ | Ghi chú
+                 BỎ "Kg chỉ định" (phiếu trả không gắn đơn hàng nên cột này LUÔN rỗng), thêm 3 cột lấy
+                 từ phiếu nhập gốc: VaiCay.DonGiaNhap + PhieuNhapVai.SoHoaDon/NgayHoaDon.
+             Cột "SL xuất thực tế" và "Số mét" phải là HAI CỘT CUỐI TRƯỚC phần đuôi, vì dòng TỔNG CỘNG
+             (dongTongKgMet) đặt 2 ô tổng ngay sau `soCotTruoc` — đổi thứ tự cột mà quên 2 tham số
+             đếm cột là dòng tổng rơi lệch sang cột khác, Excel/giấy không báo gì.
+             ========================================================================================== */''}
+      ${(() => {
+        const laTra = laTraNCC(header);
+        const dauTT = 7;                        // số cột TRƯỚC "SL xuất thực tế" (STT..Khổ vải)
+        const soCotTruoc = laTra ? dauTT : dauTT + 1;   // xuất SX có thêm "Kg chỉ định"
+        const soCotSau = laTra ? 4 : 1;         // trả NCC: Đơn giá, Số HĐ, Ngày HĐ, Ghi chú
+        const tieuDe = ['STT', 'Mã vải', 'Loại vải', 'Mầu', 'Kiểu', 'Mã cây', 'Khổ vải']
+          .concat(laTra ? [] : ['Kg chỉ định'])
+          .concat(['SL xuất thực tế', 'Số mét'])
+          .concat(laTra ? ['Đơn giá', 'Số HĐ NCC', 'Ngày HĐ'] : [])
+          .concat(['Ghi chú']);
+        const oDau = (t, i) => `<th${i === 0 ? ' style="width:38px;"' : ''}>${t}</th>`;
+        /* v7.50: cột Ghi chú của TỪNG DÒNG mang phiếu nhập của CHÍNH cây đó ("NKV-09136 (17/08/2026)") —
+           mỗi cây có thể thuộc một phiếu nhập khác nhau. Phiếu xuất SX để TRỐNG như cũ (ghi tay). */
+        const oDong = (r, i) => `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
+          <td>${escapeHtml(r.KieuVai || 'Chính')}</td><td>${escapeHtml(r.MaCay)}</td>
+          <td>${fmtNumber(r.KhoVaiThucTe)}</td>
+          ${laTra ? '' : `<td>${r.SLTheoChiDinh != null ? fmtNumber(r.SLTheoChiDinh) : ''}</td>`}
+          <td>${fmtNumber(r.KGXuat)}</td>
+          <td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>
+          ${laTra ? `<td style="text-align:right;">${r.DonGiaNhap != null ? fmtTien(r.DonGiaNhap) : ''}</td>
+          <td>${escapeHtml(r.SoHoaDonNhap || '')}</td>
+          <td>${r.NgayHoaDonNhap ? fmtDate(r.NgayHoaDonNhap) : ''}</td>` : ''}
+          <td>${laTra ? escapeHtml(nhanPhieuNhapCuaDong(r, false)) : ''}</td></tr>`;
+        return `<table><thead><tr>${tieuDe.map(oDau).join('')}</tr></thead>
+          ${/* v5.93: + dòng TỔNG CỘNG (kg xuất thực tế / số mét) ở cuối bảng */''}
+          <tbody>${lines.map(oDong).join('')}
+            ${dongTongKgMet(lines, 'KGXuat', 'SoMet', soCotTruoc, soCotSau)}</tbody></table>`;
+      })()}
       <div class="p-sign"><div><div class="line">Người lập</div></div><div><div class="line">Bộ phận cắt</div></div><div><div class="line">NV chỉ định NPL</div></div><div><div class="line">Thủ kho</div></div></div>`);
   }
 

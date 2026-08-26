@@ -827,7 +827,10 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
                 CAY (co the lech khi nhap bu), con doi chieu voi NCC thi phai theo NGAY CUA PHIEU.
                 Tu v7.48 mot phieu tra gom cay cua NHIEU phieu nhap -> tra theo TUNG DONG, frontend gop
                 lai thanh danh sach khong trung. */''}
-           v.PhieuNhapID, pnv.NgayNhap AS NgayPhieuNhap, pnv.SoHoaDon AS SoHoaDonNhap,
+           ${/* v7.51: + NgayHoaDon cua phieu nhap (cot co tu migration_v54) va DonGiaNhap cua cay —
+                ban in phieu TRA NCC can Don gia + So HD + Ngay HD cua NCC. */''}
+           v.PhieuNhapID, v.DonGiaNhap, pnv.NgayNhap AS NgayPhieuNhap,
+           pnv.SoHoaDon AS SoHoaDonNhap, pnv.NgayHoaDon AS NgayHoaDonNhap,
            ISNULL((SELECT SUM(KGXuat) FROM PhieuXuatVaiChiTiet WHERE CayID = ct.CayID AND PhieuXuatID <> @id), 0) AS OtherXuat,
            (SELECT SUM(dhv.SoKGYeuCau) FROM DonHangChiTietVai dhv
             WHERE dhv.DonHangID = p.DonHangID AND dhv.LoaiVaiID = dv.LoaiVaiID AND dhv.MauSacID = dv.MauSacID) AS SLTheoChiDinh

@@ -94,7 +94,10 @@ kiem(!/Theo phiếu nhập/.test(htmlIn), 'ban in KHONG con dong tom tat (tranh 
 kiem(/Theo phiếu nhập/.test(khoi({ LaTraNCC: 1, TenNCC: 'Cty A' }, lines2, true)),
   'popup xem VAN co dong tom tat');
 /* Doc chinh file: o Ghi chu tung dong phai dien nhan, va CHI khi la phieu tra NCC. */
-kiem(/laTraNCC\(header\) \? escapeHtml\(nhanPhieuNhapCuaDong\(r\)\) : ''/.test(sFe),
+/* Muc 6b da CHAY THAT doan dung bang nen kiem duoc hanh vi; o day chi can chac o Ghi chu co goi
+   nhanPhieuNhapCuaDong va CO dieu kien theo phieu tra NCC (khong ghim nguyen van cau lenh — ghim la
+   moi lan tinh chinh cu phap lai do oan mot thay doi dung). */
+kiem(/laTra \?[^]*?nhanPhieuNhapCuaDong\(r,\s*false\)/.test(sFe),
   'cot Ghi chu tung dong = nhan phieu nhap cua CHINH cay do, chi khi la phieu tra NCC');
 kiem(/khoiTraNCCHtml\(header, lines, false\)/.test(sFe), 'ban in goi voi keDanhSach = false');
 kiem(/khoiTraNCCHtml\(header, lines, true\)/.test(sFe), 'popup xem goi voi keDanhSach = true');
@@ -153,10 +156,95 @@ HAM_DUNG.forEach(h => {
 kiem(/LEFT JOIN NhaCungCap ncc ON ncc\.NCC_ID = p\.NCC_ID/.test(routeXem), 'join lay TenNCC');
 kiem(/CAST\(NULL AS NVARCHAR\(150\)\) AS TenNCC/.test(routeXem),
   'chua co cot -> tra NULL, route khong sap');
-kiem(/v\.PhieuNhapID, pnv\.NgayNhap AS NgayPhieuNhap, pnv\.SoHoaDon AS SoHoaDonNhap/.test(routeXem),
+kiem(/v\.PhieuNhapID/.test(routeXem) && /pnv\.NgayNhap AS NgayPhieuNhap/.test(routeXem)
+  && /pnv\.SoHoaDon AS SoHoaDonNhap/.test(routeXem),
   'moi DONG mang theo phieu nhap goc + ngay cua PHIEU (khong dung v.NgayNhap cua cay)');
 kiem(/LEFT JOIN PhieuNhapVai pnv ON pnv\.PhieuNhapID = v\.PhieuNhapID/.test(routeXem),
   'join PhieuNhapVai (LEFT: cay mat phieu nhap thi dong van hien)');
+
+/* ------------------------------------------------------------------------------------------------
+   6b. v7.51 — BANG CO HAI DANG. Cat NGUYEN doan dung bang (IIFE trong printPhieuXuatFromData) tu file
+   that roi CHAY voi ca hai loai phieu, dem tung o. Loi im lang o day la "dong TONG CONG roi lech cot"
+   khi doi thu tu/so cot ma quen 2 tham so dem cot cua dongTongKgMet.
+   ------------------------------------------------------------------------------------------------ */
+console.log('\n=== 6b. Bang co HAI DANG (tra NCC / xuat SX) ===');
+const mocBang = sFe.indexOf('const laTra = laTraNCC(header);');
+const dauIIFE = sFe.lastIndexOf('${(() => {', mocBang);
+let sauNgoac = 0, j = sFe.indexOf('{', dauIIFE + 4), batDau = j, chuoiJ = null;
+for (sauNgoac = 1, j = batDau + 1; j < sFe.length && sauNgoac > 0; j++) {
+  const c = sFe[j];
+  if (chuoiJ) { if (c === chuoiJ && sFe[j - 1] !== '\\') chuoiJ = null; continue; }
+  if (c === "'" || c === '"' || c === '`') { chuoiJ = c; continue; }
+  if (c === '{') sauNgoac++; else if (c === '}') sauNgoac--;
+}
+const thanBang = dauIIFE >= 0 && sauNgoac === 0 ? sFe.slice(batDau + 1, j - 1) : null;
+kiem(!!thanBang, 'cat duoc doan dung bang tu printPhieuXuatFromData()');
+if (thanBang) {
+  const dongTongKgMet = (ls, fKg, fMet, truoc, sau) =>
+    `<tr data-tong><td colspan="${truoc}">TỔNG CỘNG</td><td>kg</td><td>met</td>`
+    + (sau > 0 ? `<td colspan="${sau}"></td>` : '') + '</tr>';
+  const veBang = (header, lines) => new Function(
+    'header', 'lines', 'laTraNCC', 'nhanPhieuNhapCuaDong', 'dongTongKgMet',
+    'escapeHtml', 'fmtNumber', 'fmtTien', 'fmtDate', thanBang
+  )(header, lines, laTra, nhan, dongTongKgMet, escapeHtml,
+    v => String(v == null ? '' : v), v => 'T' + String(v), fmtDate);
+
+  const dongDayDu = {
+    MaVai: 'V01', TenLoaiVai: 'Cotton', TenMau: 'Đen', KieuVai: 'Chính', MaCay: 'TK-A01',
+    KhoVaiThucTe: 1.5, SLTheoChiDinh: 40, KGXuat: 30, SoMet: 120,
+    DonGiaNhap: 85000, PhieuNhapID: 9136, NgayPhieuNhap: '2026-08-17',
+    SoHoaDonNhap: 'HD-771', NgayHoaDonNhap: '2026-08-16'
+  };
+  /* `<th[\s>]` chu KHONG phai `<th` — `<thead>` cung chua "<th", dem la lech 1 (da mac dung bay nay
+     ngay khi viet test). O du lieu: chi dem trong phan TRUOC dong TONG CONG. */
+  const demTh = (html) => (html.match(/<th[\s>]/g) || []).length;
+  const demO = (html) => ((html.split('<tr data-tong>')[0] || '').match(/<td/g) || []).length;
+
+  const bangTra = veBang({ LaTraNCC: 1, TenNCC: 'A' }, [dongDayDu]);
+  const bangSX = veBang({ LaTraNCC: 0 }, [dongDayDu]);
+  kiem(demTh(bangTra) === 13, 'phieu TRA NCC: 13 cot (bo Kg chi dinh, them Don gia/So HD/Ngay HD)', String(demTh(bangTra)));
+  kiem(demTh(bangSX) === 11, 'phieu xuat SX: 11 cot nhu cu (VAN co Kg chi dinh)', String(demTh(bangSX)));
+  kiem(demO(bangTra) === 13, 'so O du lieu = so cot (tra NCC) — khong lech cot', String(demO(bangTra)));
+  kiem(demO(bangSX) === 11, 'so O du lieu = so cot (xuat SX)', String(demO(bangSX)));
+  kiem(!/Kg chỉ định/.test(bangTra), 'tra NCC: KHONG con cot "Kg chi dinh"');
+  kiem(/Kg chỉ định/.test(bangSX), 'xuat SX: VAN giu cot "Kg chi dinh"');
+  ['Đơn giá', 'Số HĐ NCC', 'Ngày HĐ'].forEach(t =>
+    kiem(bangTra.includes(t) && !bangSX.includes(t), `"${t}" chi co o phieu tra NCC`));
+  kiem(/T85000/.test(bangTra), 'don gia lay tu VaiCay.DonGiaNhap (qua fmtTien)');
+  kiem(/HD-771/.test(bangTra), 'so hoa don NCC lay tu phieu nhap');
+  kiem(/16\/08\/2026/.test(bangTra), 'ngay hoa don NCC lay tu phieu nhap (khong phai ngay nhap)');
+  kiem(/NKV-09136 \(17\/08\/2026\)/.test(bangTra), 'cot Ghi chu van co phieu nhap cua chinh cay do');
+  kiem(!/17\/08\/2026 HĐ/.test(bangTra),
+    'o Ghi chu KHONG nhac lai so HD (da co cot "So HD NCC" rieng)');
+  kiem(/NKV-00012 \(12\/08\/2026 HĐ/.test(khoi({ LaTraNCC: 1, TenNCC: 'A' },
+    [dong(12, '2026-08-12', 'HD-1')], true)),
+    'dong tom tat o popup VAN kem so HD (bang o day khong co cot nao)');
+  /* Dong TONG CONG: 2 o tong phai roi DUNG vao cot "SL xuat thuc te" va "So met". */
+  const tongTra = (bangTra.match(/<tr data-tong>.*?<\/tr>/s) || [''])[0];
+  const tongSX = (bangSX.match(/<tr data-tong>.*?<\/tr>/s) || [''])[0];
+  kiem(/colspan="7">TỔNG CỘNG/.test(tongTra), 'tra NCC: TONG CONG chiem 7 cot dau (den "Kho vai")', tongTra);
+  kiem(/colspan="8">TỔNG CỘNG/.test(tongSX), 'xuat SX: TONG CONG chiem 8 cot dau (co Kg chi dinh)', tongSX);
+  kiem(/colspan="4"><\/td>/.test(tongTra), 'tra NCC: duoi dong tong chiem 4 cot (Don gia/So HD/Ngay HD/Ghi chu)');
+  kiem(/colspan="1"><\/td>/.test(tongSX), 'xuat SX: duoi dong tong chiem 1 cot (Ghi chu)');
+  /* Bat bien that su: colspanTruoc + 2 + colspanSau === so cot cua tieu de. */
+  const kiemBatBien = (bang, tong, ten) => {
+    const t = (tong.match(/colspan="(\d+)">TỔNG/) || [])[1];
+    const s = (tong.match(/colspan="(\d+)"><\/td>/) || [])[1] || '0';
+    kiem(Number(t) + 2 + Number(s) === demTh(bang),
+      `${ten}: dong TONG CONG phu dung so cot cua tieu de (${t}+2+${s} = ${demTh(bang)})`);
+  };
+  kiemBatBien(bangTra, tongTra, 'tra NCC');
+  kiemBatBien(bangSX, tongSX, 'xuat SX');
+}
+
+console.log('\n=== 6c. Backend tra du 3 truong moi ===');
+kiem(/v\.DonGiaNhap/.test(routeXem), 'lines co DonGiaNhap (don gia nhap cua chinh cay)');
+kiem(/pnv\.NgayHoaDon AS NgayHoaDonNhap/.test(routeXem), 'lines co NgayHoaDon cua phieu nhap');
+const schemaPNV = doc('../database/CAI_DAT_DAY_DU.sql');
+kiem(/ALTER TABLE PhieuNhapVai ADD NgayHoaDon DATE NULL/.test(schemaPNV),
+  'PhieuNhapVai.NgayHoaDon co that trong schema (migration_v54)');
+kiem(/ALTER TABLE VaiCay ADD DonGiaNhap DECIMAL\(14,2\) NULL/.test(schemaPNV),
+  'VaiCay.DonGiaNhap co that trong schema');
 
 console.log('\n=== 7. Bump ?v= ===');
 /* Khong ghim dung mot so: ban sau sua tiep file nay se bump len 7.51, 7.52... — ghim so la test cu
