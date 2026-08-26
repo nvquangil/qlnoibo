@@ -414,13 +414,26 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
 
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Phiếu bán hàng');
+    /* ================================================================================================
+       v7.47: CỘT "SL QUY ĐỔI" LẤY `ct.SoLuongQuyDoi`, KHÔNG LẤY `SoLuongCai`.
+       Lỗi cũ: ô này ghi `SoLuongCai` — tức SỐ CÁI, đúng bằng cột "SL" khi khách đặt theo Cái, nên
+       nhìn vào tưởng phần mềm không quy đổi. `SoLuongQuyDoi` + `DonViQuyDoi` là 2 cột CÓ SẴN trên
+       PhieuBanHangChiTiet, ghi lúc lưu phiếu (xem chỗ tính `soLuongQuyDoi` ở taoDong):
+           · đặt theo đơn vị GỘP (Ri) -> SoLuongQuyDoi = số CÁI,  DonViQuyDoi = ĐVT chính
+           · đặt theo đơn vị GỐC (Cái) -> SoLuongQuyDoi = số RI,   DonViQuyDoi = ĐVT quy đổi
+           · mã KHÔNG có quy đổi (tỷ lệ 1) -> cả hai NULL  => để TRỐNG, không bịa số
+       Bản xuất DANH SÁCH phiếu (/phieu/export) đã đọc đúng 2 cột này từ trước — chỉ bản xuất MỘT
+       phiếu là lệch. Nay hai bản dùng cùng một nguồn.
+       THÊM cột "ĐVT quy đổi" để con số có đơn vị: 5 mà không biết 5 Ri hay 5 Cái thì vô nghĩa.
+       ================================================================================================ */
     ws.columns = [
       { key: 'STT', width: 6 }, { key: 'MaHang', width: 16 }, { key: 'TenHang', width: 32 },
       { key: 'TenMau', width: 14 }, { key: 'SoLuong', width: 9 }, { key: 'DonVi', width: 9 },
-      { key: 'SoLuongCai', width: 12 }, { key: 'GiaBanLe', width: 13 },
+      { key: 'SoLuongQuyDoi', width: 12 }, { key: 'DonViQuyDoi', width: 12 },
+      { key: 'GiaBanLe', width: 13 },
       { key: 'CKShop', width: 10 }, { key: 'GiaBan', width: 13 }, { key: 'ThanhTien', width: 15 }
     ];
-    const SO_COT = 11;
+    const SO_COT = ws.columns.length;   // đổi số cột là mọi merge/SUM dưới đây tự theo
     const dongTieuDe = (chu) => {
       const r = ws.addRow([chu]);
       ws.mergeCells(r.number, 1, r.number, SO_COT);
@@ -442,12 +455,15 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
     if (h.TrangThai === 'Đã hủy') dongThongTin('Trạng thái:', 'PHIẾU ĐÃ HỦY');
     ws.addRow([]);
 
-    const rTitle = ws.addRow(['STT', 'Mã hàng', 'Tên hàng', 'Màu', 'SL', 'Đơn vị', 'SL quy đổi', 'Giá bán lẻ', '% CK shop', 'Giá bán', 'Thành tiền']);
+    const rTitle = ws.addRow(['STT', 'Mã hàng', 'Tên hàng', 'Màu', 'SL', 'Đơn vị',
+      'SL quy đổi', 'ĐVT quy đổi', 'Giá bán lẻ', '% CK shop', 'Giá bán', 'Thành tiền']);
     rTitle.font = { bold: true };
     const dongDau = ws.rowCount + 1;
     ct.forEach((c, i) => ws.addRow([
       i + 1, c.MaHang, c.TenHang, c.TenMau || '', so(c.SoLuong), c.DonVi || '',
-      so(c.SoLuongCai), so(c.GiaBanLe), so(c.PhanTramCKShop), so(c.GiaBan), so(c.ThanhTien)
+      /* NULL = mã không có quy đổi -> để TRỐNG. Ghi 0 là người đọc tưởng quy đổi ra 0. */
+      c.SoLuongQuyDoi == null ? '' : so(c.SoLuongQuyDoi), c.DonViQuyDoi || '',
+      so(c.GiaBanLe), so(c.PhanTramCKShop), so(c.GiaBan), so(c.ThanhTien)
     ]));
     const dongCuoi = ws.rowCount;
 
@@ -461,7 +477,10 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
       if (dam) { r.getCell(1).font = { bold: true }; r.getCell(SO_COT).font = { bold: true }; }
       return r;
     };
-    dongTong('Tổng cộng', ct.length ? { formula: `SUM(K${dongDau}:K${dongCuoi})` } : 0, true);
+    /* v7.47: lấy CHỮ CÁI cột Thành tiền qua getColumn().letter. Viết cứng 'K' như trước là thêm một
+       cột (đúng lần này) thì công thức SUM trỏ sang cột khác mà Excel không báo gì. */
+    const cotTT = ws.getColumn(SO_COT).letter;
+    dongTong('Tổng cộng', ct.length ? { formula: `SUM(${cotTT}${dongDau}:${cotTT}${dongCuoi})` } : 0, true);
     if (so(h.TienCKNPP)) dongTong(`Chiết khấu NPP (${so(h.PhanTramCKNPP)}%)`, -so(h.TienCKNPP));
     dongTong('Tổng tiền thanh toán', so(h.TongTienHang) - so(h.TienCKNPP));
     if (so(h.TienVAT)) dongTong(`Thuế GTGT (${so(h.PhanTramVAT)}%)`, so(h.TienVAT));
