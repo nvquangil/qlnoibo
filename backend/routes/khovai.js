@@ -788,8 +788,12 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // v5.94: + MaRap (gộp từ các sơ đồ của đơn hàng gắn kèm) để BẢN IN phiếu xuất vải có Mã rập.
   /* v7.49: TEN NHA CUNG CAP cho phieu TRA NCC — ban in phai ghi ro tra cho ai.
      NCC_ID den tu migration v6.66: DO COT truoc khi JOIN, chua chay migration thi route van chay
-     (khong bao "Invalid column name"). LaTraNCC/NCC_ID da co san trong `p.*` khi cot ton tai. */
-  const coNCCXuat = await coCot(pool, 'PhieuXuatVai', 'NCC_ID');
+     (khong bao "Invalid column name"). LaTraNCC/NCC_ID da co san trong `p.*` khi cot ton tai.
+     ⚠️ v7.49.1: DUNG `coCotTraNCCVai()` — ham do cot DA CO SAN trong chinh file nay (dong ~752, do
+     ca LaTraNCC va NCC_ID, co cache). Ban v7.49 goi `coCot(pool, ...)` la ham KHONG TON TAI trong
+     file nay (no o congno.js) -> ReferenceError -> KHONG MO/IN duoc phieu xuat kho vai. `node --check`
+     khong bat duoc loi nay vi cu phap dung; chi chay that hoac grep ten ham moi thay. */
+  const coNCCXuat = await coCotTraNCCVai(pool);
   const headResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT p.*, d.MaDH, d.TenSanPham, d.AnhSanPham, u.HoTen AS NguoiTao,
       ${coNCCXuat ? 'ncc.TenNCC' : "CAST(NULL AS NVARCHAR(150)) AS TenNCC"},

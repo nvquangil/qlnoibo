@@ -107,8 +107,24 @@ kiem((sFe.match(/Trả nhà cung cấp:<\/b>/g) || []).length === 1,
 
 console.log('\n=== 6. Backend cap du du lieu ===');
 const routeXem = sBe.slice(sBe.indexOf("router.get('/xuat/:id'"), sBe.indexOf("router.put('/xuat/:id'"));
-kiem(/coCot\(pool, 'PhieuXuatVai', 'NCC_ID'\)/.test(routeXem),
-  'DO COT NCC_ID truoc khi JOIN (migration v6.66 co the chua chay)');
+kiem(/coCotTraNCCVai\(pool\)/.test(routeXem),
+  'DO COT truoc khi JOIN (migration v6.66 co the chua chay)');
+/* ⚠️ v7.49.1 — BAI HOC: ban v7.49 goi `coCot(pool, ...)`, ham do CO THAT nhung o congno.js, con trong
+   khovai.js thi KHONG TON TAI -> ReferenceError -> khong mo/in duoc phieu. `node --check` khong bat
+   duoc (cu phap dung), va assertion cu chi grep chuoi "coCot(pool, 'PhieuXuatVai', 'NCC_ID')" nen
+   thay co -> bao OK. Nen tu day: HAM NAO DUOC GOI THI PHAI KIEM NO CO KHAI TRONG FILE. */
+/* BO COMMENT truoc khi quet: chinh ghi chu cua ban sua nay co nhac ten `coCot(pool, ...)` de giai
+   thich loi cu -> khong bo comment la test tu bao oan chinh ghi chu cua no. */
+const routeXemSach = routeXem.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+const HAM_DUNG = [...new Set((routeXemSach.match(/(?:^|[^\w$.])(co[A-Z][\w$]*|conHang[\w$]*)\s*\(/g) || [])
+  .map(s => s.replace(/[^\w$]/g, '')))];
+console.log('     ham do cot dung trong route: ' + (HAM_DUNG.join(', ') || '(khong co)'));
+HAM_DUNG.forEach(h => {
+  const khai = new RegExp(`(?:async\\s+)?function\\s+${h}\\s*\\(`).test(sBe)
+    || new RegExp(`(?:const|let|var)\\s+${h}\\s*=`).test(sBe)
+    || new RegExp(`\\{[^}]*\\b${h}\\b[^}]*\\}\\s*=\\s*require\\(`).test(sBe);
+  kiem(khai, `${h}() CO khai/nhap trong khovai.js (khong goi ham cua file khac)`);
+});
 kiem(/LEFT JOIN NhaCungCap ncc ON ncc\.NCC_ID = p\.NCC_ID/.test(routeXem), 'join lay TenNCC');
 kiem(/CAST\(NULL AS NVARCHAR\(150\)\) AS TenNCC/.test(routeXem),
   'chua co cot -> tra NULL, route khong sap');
