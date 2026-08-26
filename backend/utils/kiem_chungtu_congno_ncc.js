@@ -131,7 +131,10 @@ kiem(!/xPhieuNhapId'\) \|\| \{\}\)\.value \|\| ''\)\s*return toast/.test(sFeKhoV
   'KHONG co doan chan thieu phieu nhap luc submit');
 
 console.log('\n=== 8. Bump ?v= de trinh duyet khong chay file cu ===');
-kiem(/module\.khovai\.js\?v=7\.48/.test(sIndex), 'index.html: module.khovai.js?v=7.48');
+/* Chi kiem "DA bump khoi ban truoc (7.36)", khong ghim dung mot so: ban sau sua tiep file nay se bump
+   len 7.49, 7.50... — ghim so la test cu do oan mot thay doi hoan toan dung. */
+const vKhoVai = (sIndex.match(/module\.khovai\.js\?v=([\d.]+)/) || [])[1] || '';
+kiem(parseFloat(vKhoVai) >= 7.48, 'index.html: module.khovai.js da bump >= 7.48', 'dang la ' + vKhoVai);
 
 console.log(`\n================ KET QUA: ${dat} dat / ${truot} sai ================`);
 process.exit(truot ? 1 : 0);

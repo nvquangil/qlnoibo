@@ -786,14 +786,20 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // v5.7: them d.AnhSanPham - yeu cau v5.7 "thêm Ảnh sản phẩm vào các bản in" (xem printPhieuXuatFromData
   // trong module.khovai.js).
   // v5.94: + MaRap (gộp từ các sơ đồ của đơn hàng gắn kèm) để BẢN IN phiếu xuất vải có Mã rập.
+  /* v7.49: TEN NHA CUNG CAP cho phieu TRA NCC — ban in phai ghi ro tra cho ai.
+     NCC_ID den tu migration v6.66: DO COT truoc khi JOIN, chua chay migration thi route van chay
+     (khong bao "Invalid column name"). LaTraNCC/NCC_ID da co san trong `p.*` khi cot ton tai. */
+  const coNCCXuat = await coCot(pool, 'PhieuXuatVai', 'NCC_ID');
   const headResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT p.*, d.MaDH, d.TenSanPham, d.AnhSanPham, u.HoTen AS NguoiTao,
+      ${coNCCXuat ? 'ncc.TenNCC' : "CAST(NULL AS NVARCHAR(150)) AS TenNCC"},
       STUFF((SELECT DISTINCT ', ' + sd.MaRap FROM DonHangChiTietSoDo sd
              WHERE sd.DonHangID = p.DonHangID AND sd.MaRap IS NOT NULL AND LTRIM(RTRIM(sd.MaRap)) <> ''
              FOR XML PATH('')), 1, 2, '') AS MaRap
     FROM PhieuXuatVai p
     LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
     LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
+    ${coNCCXuat ? 'LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID' : ''}
     WHERE p.PhieuXuatID = @id`);
   if (!headResult.recordset.length) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu xuất.' });
   // v5.3 (muc 3): them KGNhap + OtherXuat (tong KG da xuat tu CAC PHIEU KHAC cho cung cay) de frontend
@@ -812,6 +818,12 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // (labelForRoll trong openXuatEditModal) hien DAY DU thong tin cay vai, khong chi ma/loai/mau/KG con.
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT ct.ID, ct.CayID, ct.KGXuat, ct.SoMet, ct.KieuVai, v.MaCay, v.KGNhap, v.KhoVaiThucTe, v.ViTriKho, v.NgayNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau,
+           ${/* v7.49: PHIEU NHAP GOC cua tung cay — ban in phieu TRA NCC phai ghi "tra theo phieu nhap
+                nao, ngay nao". Lay tu PhieuNhapVai chu khong dung `v.NgayNhap`: v.NgayNhap la ngay cua
+                CAY (co the lech khi nhap bu), con doi chieu voi NCC thi phai theo NGAY CUA PHIEU.
+                Tu v7.48 mot phieu tra gom cay cua NHIEU phieu nhap -> tra theo TUNG DONG, frontend gop
+                lai thanh danh sach khong trung. */''}
+           v.PhieuNhapID, pnv.NgayNhap AS NgayPhieuNhap, pnv.SoHoaDon AS SoHoaDonNhap,
            ISNULL((SELECT SUM(KGXuat) FROM PhieuXuatVaiChiTiet WHERE CayID = ct.CayID AND PhieuXuatID <> @id), 0) AS OtherXuat,
            (SELECT SUM(dhv.SoKGYeuCau) FROM DonHangChiTietVai dhv
             WHERE dhv.DonHangID = p.DonHangID AND dhv.LoaiVaiID = dv.LoaiVaiID AND dhv.MauSacID = dv.MauSacID) AS SLTheoChiDinh
@@ -819,6 +831,7 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
     JOIN VaiCay v ON v.CayID = ct.CayID
     JOIN DanhMucVai dv ON dv.VaiID = v.VaiID
     JOIN PhieuXuatVai p ON p.PhieuXuatID = ct.PhieuXuatID
+    LEFT JOIN PhieuNhapVai pnv ON pnv.PhieuNhapID = v.PhieuNhapID
     LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
     WHERE ct.PhieuXuatID = @id ORDER BY ct.ID`);

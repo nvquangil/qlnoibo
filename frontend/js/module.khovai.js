@@ -624,6 +624,36 @@ window.ModuleKhoVai = (function () {
   // v5.4: rebuild dung theo mau_phieu.docx - cot bang them "SL theo chi dinh" (r.SLTheoChiDinh, xem
   // backend GET /xuat/:id) va cot "Ghi chu" (de TRONG - phieu giay danh cho ghi chu tay sau khi in,
   // khong co truong luu rieng trong CSDL), 4 vai ky: Nguoi lap, Bo phan cat, NV chi dinh NPL, Thu kho.
+  /* ================================================================================================
+     v7.49 — KHỐI "TRẢ NHÀ CUNG CẤP" trên phiếu xuất kho vải (bản in + popup xem).
+     Chỉ hiện khi phiếu có tích "Trả nhà cung cấp". Hai dòng:
+         Trả nhà cung cấp : <tên NCC>
+         Theo phiếu nhập  : NKV-00012 (12/08/2026) · NKV-00015 (20/08/2026)
+     Từ v7.48 một phiếu trả GỘP ĐƯỢC cây của NHIỀU phiếu nhập, nên phải liệt kê TẤT CẢ phiếu nhập có
+     mặt trong phiếu (gộp trùng, giữ thứ tự xuất hiện) — ghi một phiếu là bản in nói sai.
+     Dùng CHUNG cho bản in và popup xem: hai bản riêng thì sớm muộn lệch nhau.
+     ================================================================================================ */
+  function dsPhieuNhapCuaPhieuXuat(lines) {
+    const map = new Map();   // PhieuNhapID -> nhãn (Map giữ đúng thứ tự chèn)
+    (lines || []).forEach(r => {
+      const id = r.PhieuNhapID;
+      if (id == null || map.has(id)) return;
+      const so = 'NKV-' + String(id).padStart(5, '0');
+      const ngay = r.NgayPhieuNhap ? fmtDate(r.NgayPhieuNhap) : '';
+      const hd = r.SoHoaDonNhap ? ` HĐ ${r.SoHoaDonNhap}` : '';
+      map.set(id, so + (ngay ? ` (${ngay}${hd})` : (hd ? ` (${hd.trim()})` : '')));
+    });
+    return [...map.values()];
+  }
+  function khoiTraNCCHtml(header, lines) {
+    // Cột LaTraNCC có từ migration v6.66; phiếu cũ / CSDL chưa chạy migration -> không hiện gì.
+    if (!header || !(header.LaTraNCC === true || Number(header.LaTraNCC) === 1)) return '';
+    const ds = dsPhieuNhapCuaPhieuXuat(lines);
+    return `
+      <p class="p-meta"><b>Trả nhà cung cấp:</b> ${escapeHtml(header.TenNCC || '(chưa khai nhà cung cấp)')}</p>
+      ${ds.length ? `<p class="p-meta"><b>Theo phiếu nhập:</b> ${escapeHtml(ds.join(' · '))}</p>` : ''}`;
+  }
+
   function printPhieuXuatFromData(header, lines) {
     // v5.7: them Anh san pham (header.AnhSanPham - backend da bo sung join, xem GET /xuat/:id trong
     // khovai.js) - yeu cau v5.7 "thêm Ảnh sản phẩm vào các bản in".
@@ -632,7 +662,10 @@ window.ModuleKhoVai = (function () {
       ${phieuHeaderHtml('PHIẾU XUẤT KHO VẢI', header.NgayXuat, header.PhieuXuatID)}
       ${anhSpHtml}
       ${/* v5.94: + Mã rập (gộp từ sơ đồ của đơn hàng gắn kèm) trên bản in */''}
-      <p class="p-meta"><b>Đơn hàng:</b> ${escapeHtml(header.MaDH || header.MaDon || '')}${header.MaRap ? ` &nbsp; <b>Mã rập:</b> ${escapeHtml(header.MaRap)}` : ''}${header.TenSanPham ? ` &nbsp; <b>Tên SP:</b> ${escapeHtml(header.TenSanPham)}` : ''}</p>
+      ${khoiTraNCCHtml(header, lines)}
+      ${/* Phiếu trả NCC thường KHÔNG gắn đơn hàng — dòng "Đơn hàng" trống thì bỏ hẳn cho gọn. */''}
+      ${(header.MaDH || header.MaDon || header.MaRap || header.TenSanPham)
+        ? `<p class="p-meta"><b>Đơn hàng:</b> ${escapeHtml(header.MaDH || header.MaDon || '')}${header.MaRap ? ` &nbsp; <b>Mã rập:</b> ${escapeHtml(header.MaRap)}` : ''}${header.TenSanPham ? ` &nbsp; <b>Tên SP:</b> ${escapeHtml(header.TenSanPham)}` : ''}</p>` : ''}
       ${header.Chuyen ? `<p class="p-meta"><b>Chuyền:</b> ${escapeHtml(header.Chuyen)}</p>` : ''}
       ${header.NguoiNhan ? `<p class="p-meta"><b>Người nhận:</b> ${escapeHtml(header.NguoiNhan)}</p>` : ''}
       ${header.MucDich ? `<p class="p-meta"><b>Mục đích:</b> ${escapeHtml(header.MucDich)}</p>` : ''}
@@ -651,6 +684,7 @@ window.ModuleKhoVai = (function () {
       <h3>Phiếu xuất kho #${header.PhieuXuatID}</h3>
       <p class="p-meta"><b>Ngày xuất:</b> ${fmtDate(header.NgayXuat)} &nbsp; <b>Mã đơn:</b> ${escapeHtml(header.MaDH || header.MaDon || '')}${header.MaRap ? ` &nbsp; <b>Mã rập:</b> ${escapeHtml(header.MaRap)}` : ''} &nbsp; <b>Chuyền:</b> ${escapeHtml(header.Chuyen || '')}</p>
       <p class="p-meta"><b>Người nhận:</b> ${escapeHtml(header.NguoiNhan || '')} &nbsp; <b>Mục đích:</b> ${escapeHtml(header.MucDich || '')}</p>
+      ${khoiTraNCCHtml(header, lines)}
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
       <table><thead><tr><th style="width:38px;">STT</th><th>Kiểu</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG xuất</th><th>Số mét</th></tr></thead>
       ${/* v6.13: Mã cây bấm được -> xem lịch sử nhập/xuất của chính cây đó (modal xếp chồng). */''}
