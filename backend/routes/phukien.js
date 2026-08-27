@@ -522,10 +522,17 @@ router.get('/thekho', requireAuth, requirePermission('PHUKIEN', 'view'), require
   const pool = await getPool();
   const { maPhuKien, loaiPhuKien } = req.query;
 
+  /* v7.52: + ẢNH phụ kiện cho màn Thẻ kho / Tồn kho. Cột DanhMucPhuKien.AnhDaiDien có từ v5.87
+     (migration_v660) — dò cột bằng `coCotPK` ĐÃ CÓ SẴN trong file này, chưa chạy migration thì trả
+     NULL để màn hình chạy như cũ. */
+  const coAnhTK = await coCotPK(pool, 'DanhMucPhuKien', 'AnhDaiDien');
+  const cotAnhTK = (alias) => (coAnhTK ? `${alias}.AnhDaiDien` : "CAST(NULL AS NVARCHAR(500))");
+
   if (maPhuKien) {
     // v6.13: trả thêm PhieuID để bấm vào dòng lịch sử là mở đúng phiếu nhập/xuất ra xem/sửa.
     const result = await pool.request().input('m', sql.NVarChar, maPhuKien).query(`
-      SELECT p.PhieuID, p.Ngay, p.LoaiPhieu, p.MaDon, d.MaDH AS MaDonHang, ct.SoLuong, ct.DonVi
+      SELECT p.PhieuID, p.Ngay, p.LoaiPhieu, p.MaDon, d.MaDH AS MaDonHang, ct.SoLuong, ct.DonVi,
+             ${cotAnhTK('dm')} AS AnhDaiDien
       FROM PhieuPhuKienChiTiet ct
       JOIN PhieuPhuKien p ON p.PhieuID = ct.PhieuID
       JOIN DanhMucPhuKien dm ON dm.PhuKienID = ct.PhuKienID
@@ -540,14 +547,20 @@ router.get('/thekho', requireAuth, requirePermission('PHUKIEN', 'view'), require
       tonCuoi += nhap - xuat;
       return {
         loaiBaoCao: 'chitiet', phieuId: r.PhieuID, ngay: r.Ngay, loaiPhieu: r.LoaiPhieu,   // v6.13: + phieuId
-        donHang: r.MaDonHang || r.MaDon || '', nhap, xuat, ton: tonCuoi, dvt: r.DonVi
+        donHang: r.MaDonHang || r.MaDon || '', nhap, xuat, ton: tonCuoi, dvt: r.DonVi,
+        AnhDaiDien: r.AnhDaiDien || null   // v7.52: mọi dòng cùng 1 mã nên ảnh giống nhau — hiện 1 lần ở đầu bảng
       };
     });
     return res.json({ success: true, data: rows });
   }
 
   // v6.32: + ĐVT quy đổi/tỷ lệ cho cột "Tồn quy đổi" (xem ghi chú ở route /thekho).
-  let query = `SELECT v.*, dm2.DonViQuyDoi, dm2.TyLeQuyDoi, N'tonghop' AS loaiBaoCao FROM vw_TonKhoPhuKien v JOIN DanhMucPhuKien dm2 ON dm2.PhuKienID = v.PhuKienID`;
+  /* v7.52: + AnhDaiDien. KHÔNG thêm vào view `vw_TonKhoPhuKien`: view đó là phép tính tồn từ 3 nguồn
+     phiếu, nhét thông tin danh mục vào là mỗi lần thêm một ô lại phải sửa view (và view đang được
+     nhiều màn dùng chung). Join danh mục ở đây là đủ. */
+  let query = `SELECT v.*, dm2.DonViQuyDoi, dm2.TyLeQuyDoi, ${cotAnhTK('dm2')} AS AnhDaiDien,
+                      N'tonghop' AS loaiBaoCao
+               FROM vw_TonKhoPhuKien v JOIN DanhMucPhuKien dm2 ON dm2.PhuKienID = v.PhuKienID`;
   const request = pool.request();
   if (loaiPhuKien) {
     query += ' WHERE v.TenLoai = @loai';

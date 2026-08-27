@@ -33,6 +33,12 @@ window.ModulePhuKien = (function () {
     const url = d && (d.AnhDaiDien || d.AnhPhuKien);
     return url ? `<img src="${escapeHtml(url)}" style="max-width:70px;max-height:70px;object-fit:contain;">` : '';
   }
+  /* v7.52: ảnh hiện MỘT LẦN phía trên bảng — dùng cho lịch sử/thẻ kho của MỘT mã phụ kiện, nơi thêm
+     hẳn một cột ảnh là lặp lại cùng một tấm ảnh xuống mọi dòng. Không có ảnh thì không chiếm chỗ. */
+  function anhPKMotLanHtml(d) {
+    const anh = anhPKThumbHtml(d);
+    return anh ? `<div style="margin-bottom:8px;">${anh}</div>` : '';
+  }
 
   /* v5.94 — DÒNG TỔNG CỘNG SỐ LƯỢNG cho phiếu NPL. Lưu ý nghiệp vụ: 1 phiếu có thể gồm nhiều ĐVT
      khác nhau (cái / mét / kg) nên con số tổng chỉ để ĐỐI CHIẾU NHANH, không phải số liệu kế toán. */
@@ -1105,13 +1111,18 @@ window.ModulePhuKien = (function () {
       if (!rows.length) { resultEl.innerHTML = '<div class="empty-hint">Không có dữ liệu</div>'; return; }
 
       if (rows[0].loaiBaoCao === 'chitiet') {
-        resultEl.innerHTML = chiTietTableHtml(rows);
+        /* v7.52: bảng chi tiết là lịch sử của MỘT mã nên ảnh giống nhau ở mọi dòng — hiện MỘT LẦN
+           phía trên bảng, không thêm cột lặp lại cùng một tấm ảnh xuống mấy chục dòng. */
+        resultEl.innerHTML = anhPKMotLanHtml(rows[0]) + chiTietTableHtml(rows);
         wireChiTietPhieuClick(resultEl);   // v6.13: bấm số phiếu -> mở phiếu
       } else {
         // v6.13: bấm Mã PK ở bảng tổng hợp -> xem ngay lịch sử nhập/xuất của mã đó (không phải gõ tìm lại).
         // v6.32: + cột "Tồn quy đổi" theo ĐVT quy đổi khai ở Danh mục phụ kiện.
-        resultEl.innerHTML = `<table><thead><tr><th>Mã PK</th><th>Tên phụ kiện</th><th>Loại</th><th>Tổng nhập</th><th>Tổng xuất</th><th>Tồn kho</th><th>ĐVT</th><th>Tồn quy đổi</th></tr></thead>
-          <tbody>${rows.map(r => `<tr><td><a href="javascript:void(0)" class="act-ls-pk" data-ma="${escapeHtml(r.MaPhuKien)}" title="Xem lịch sử nhập/xuất của mã này">${escapeHtml(r.MaPhuKien)}</a></td><td>${escapeHtml(r.TenPhuKien)}</td><td>${escapeHtml(r.TenLoai || '')}</td>
+        /* v7.52: + cột ẢNH (DanhMucPhuKien.AnhDaiDien) — dùng lại anhPKThumbHtml() đã có sẵn cho mọi
+           phiếu NPL, để ảnh ở đây và ở phiếu luôn hiện giống nhau. Đặt SAU Mã PK: mắt tìm theo mã
+           trước, ảnh là để xác nhận lại. */
+        resultEl.innerHTML = `<table><thead><tr><th>Mã PK</th><th style="width:56px;">Ảnh</th><th>Tên phụ kiện</th><th>Loại</th><th>Tổng nhập</th><th>Tổng xuất</th><th>Tồn kho</th><th>ĐVT</th><th>Tồn quy đổi</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td><a href="javascript:void(0)" class="act-ls-pk" data-ma="${escapeHtml(r.MaPhuKien)}" title="Xem lịch sử nhập/xuất của mã này">${escapeHtml(r.MaPhuKien)}</a></td><td>${anhPKThumbHtml(r)}</td><td>${escapeHtml(r.TenPhuKien)}</td><td>${escapeHtml(r.TenLoai || '')}</td>
             <td style="color:green;font-weight:bold;">${fmtNumber(r.TongNhap)}</td><td style="color:#c0392b;font-weight:bold;">${fmtNumber(r.TongXuat)}</td>
             <td style="font-weight:bold;background:#e8f5e9;">${fmtNumber(r.TonKho)} ${Number(r.TonKho) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
             <td>${escapeHtml(r.DonViCoBan || '')}</td>
@@ -1132,6 +1143,9 @@ window.ModulePhuKien = (function () {
     const modal = openModal(`
       <h3>Lịch sử nhập / xuất — ${escapeHtml(maPhuKien)}</h3>
       <p class="empty-hint">${escapeHtml(it.TenPhuKien || '')}${it.TenLoai ? ' · ' + escapeHtml(it.TenLoai) : ''} — bấm vào <b>số phiếu</b> để mở phiếu (xem / in / sửa).</p>
+      ${/* v7.52: ảnh lấy từ chính dòng dữ liệu trả về; `dm.phuKien` (danh mục nạp lúc mở phân hệ) có
+             thể chưa có ảnh nếu vừa khai xong nên ưu tiên rows[0]. */''}
+      ${anhPKMotLanHtml((rows[0] && rows[0].AnhDaiDien) ? rows[0] : it)}
       <div style="max-height:60vh;overflow:auto;">${chiTietTableHtml(rows)}</div>
       <div class="modal-actions"><button type="button" class="btn" id="lsDong">Đóng</button></div>`);
     wireChiTietPhieuClick(modal);
