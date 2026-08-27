@@ -3635,7 +3635,11 @@ window.ModuleQLSX = (function () {
       return soDoList.map(s => `<tr data-id="${s.ID}">
         <td>${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) : ''}</td><td>${s.KhoVaiSoDo != null ? fmtNumber(s.KhoVaiSoDo) : ''}</td>
         <td>${escapeHtml(s.MaRap || '')}</td><td>${escapeHtml(s.GhiChu || '')}</td>
-        <td><button type="button" class="btn small danger sd-del" data-id="${s.ID}">Xóa</button></td></tr>`).join('')
+        ${/* v7.53: + nút SỬA. Trước chỉ có Xóa — mà gõ sai xong thì xóa KHÔNG được nếu sơ đồ đã dùng ở
+              Ghi tiến độ Cắt (khóa ngoại), nên dòng sai nằm vĩnh viễn trên đơn. Dùng CHUNG pattern
+              sửa-tại-dòng của "Nhà gia công chi tiết" (ngc-edit) ngay dưới, không mở popup riêng. */''}
+        <td><button type="button" class="btn small secondary sd-edit" data-id="${s.ID}">Sửa</button>
+            <button type="button" class="btn small danger sd-del" data-id="${s.ID}">Xóa</button></td></tr>`).join('')
         || '<tr><td colspan="5" class="empty-hint">Chưa khai báo sơ đồ nào</td></tr>';
     }
     function sdAddRowHtml() {
@@ -3672,6 +3676,46 @@ window.ModuleQLSX = (function () {
         box.querySelector('#sdAddRows').insertAdjacentHTML('beforeend', sdAddRowHtml());
         wireSdRemove(box.querySelector('#sdAddRows').lastElementChild);
       });
+      /* v7.53: SỬA ngay tại dòng (giống ngc-edit). Sơ đồ ĐÃ dùng ở Ghi tiến độ Cắt thì HỎI trước:
+         Mét/Khổ vải sơ đồ CÓ vào phép tính (sổ cắt, lương trải vải cắt), sửa là diễn giải lại số cũ. */
+      box.querySelectorAll('.sd-edit').forEach(btn => btn.addEventListener('click', () => {
+        const row = soDoList.find(s => String(s.ID) === String(btn.dataset.id));
+        if (!row) return;
+        const tr = btn.closest('tr');
+        const so = v => (v == null ? '' : v);
+        tr.innerHTML = `
+          <td><input class="sd-e-met" type="number" step="0.01" min="0" value="${so(row.MetSoDoDai)}" style="width:90px;"></td>
+          <td><input class="sd-e-kho" type="number" step="0.01" min="0" value="${so(row.KhoVaiSoDo)}" style="width:90px;"></td>
+          <td><input class="sd-e-marap" value="${escapeHtml(row.MaRap || '')}"></td>
+          <td><input class="sd-e-ghichu" value="${escapeHtml(row.GhiChu || '')}"></td>
+          <td><button type="button" class="btn small sd-e-save">Lưu</button>
+              <button type="button" class="btn small secondary sd-e-cancel">Hủy</button></td>`;
+        tr.querySelector('.sd-e-cancel').addEventListener('click', () => renderSoDoBox(box));
+        tr.querySelector('.sd-e-save').addEventListener('click', async () => {
+          const body = {
+            metSoDoDai: tr.querySelector('.sd-e-met').value || null,
+            khoVaiSoDo: tr.querySelector('.sd-e-kho').value || null,
+            maRap: tr.querySelector('.sd-e-marap').value || null,
+            ghiChu: tr.querySelector('.sd-e-ghichu').value || null
+          };
+          try {
+            /* Cảnh báo TRƯỚC khi ghi, và chỉ khi số liệu vào phép tính thật sự đổi. */
+            const doiSo = String(so(row.MetSoDoDai)) !== String(body.metSoDoDai == null ? '' : body.metSoDoDai)
+                       || String(so(row.KhoVaiSoDo)) !== String(body.khoVaiSoDo == null ? '' : body.khoVaiSoDo);
+            if (doiSo) {
+              const kt = await apiGet(`/api/qlsx/orders/${maDH}/sodo/${row.ID}/soluongcat`).catch(() => null);
+              const n = kt && kt.data ? Number(kt.data.soLanCat) || 0 : 0;
+              if (n > 0 && !confirm(`Sơ đồ này đã được dùng ở ${n} lần Ghi tiến độ Cắt.\n\n`
+                + 'Mét sơ đồ / Khổ vải sơ đồ CÓ vào phép tính (sổ cắt, lương trải vải cắt) nên sửa là '
+                + 'diễn giải lại các số đã ghi.\n\nVẫn sửa?')) return;
+            }
+            await apiPut(`/api/qlsx/orders/${maDH}/sodo/${row.ID}`, body);
+            const fresh = await apiGet(`/api/qlsx/orders/${maDH}/sodo`);
+            soDoList = fresh.data || [];
+            toast('Đã cập nhật sơ đồ.', 'success'); renderSoDoBox(box);
+          } catch (err) { toast(err.message, 'error'); }
+        });
+      }));
       box.querySelectorAll('.sd-del').forEach(btn => btn.addEventListener('click', async () => {
         try {
           await apiDelete(`/api/qlsx/orders/${maDH}/sodo/${btn.dataset.id}`);

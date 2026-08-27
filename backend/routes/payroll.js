@@ -981,65 +981,13 @@ router.get('/luongmay/cuatoi', requireAuth, async (req, res) => {
 // Gia công: SoLuongNhan × đơn giá hạng mục (DonHangHangMucGiaCong.DonGia, fallback HangMucGiaCong.DonGiaMacDinh).
 // In thêu:  SoLuongNhan × TỔNG đơn giá in thêu của đơn (SUM DonHangDonGiaInThe.DonGia). Lọc theo tháng tạo
 // dòng giao (CreatedAt) vì SL nhận không có cột ngày riêng. Tổng hợp theo từng Nhà (gia công / in thêu).
-async function loadGiaCong(pool, nam, thang) {
-  return (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
-    SELECT ncc.NhaGiaCongID, ncc.TenNha, d.MaDH, d.TenSanPham, hm.TenHangMuc,
-           ISNULL(ct.SoLuongNhan,0) AS SoLuongNhan,
-           ISNULL(dhg.DonGia, hm.DonGiaMacDinh) AS DonGia,
-           ISNULL(ct.SoLuongNhan,0) * ISNULL(ISNULL(dhg.DonGia, hm.DonGiaMacDinh),0) AS ThanhTien
-    FROM DonHangChiTietNhaGiaCong ct
-    JOIN NhaGiaCong ncc ON ncc.NhaGiaCongID = ct.NhaGiaCongID
-    JOIN DonHangSanXuat d ON d.DonHangID = ct.DonHangID
-    LEFT JOIN HangMucGiaCong hm ON hm.HangMucGiaCongID = ct.HangMucGiaCongID
-    -- v5.56: đơn giá gia công có thể có NHIỀU BẢN (TenPhieu) → PHẢI lấy TOP 1 (bản đầu tiên: không tên trước,
-    -- rồi theo tên) thay vì LEFT JOIN; nếu JOIN thẳng, mỗi bản sẽ nhân thành 1 dòng lương -> TÍNH TIỀN SAI (gấp n).
-    OUTER APPLY (SELECT TOP 1 x.DonGia FROM DonHangHangMucGiaCong x
-                 WHERE x.HangMucGiaCongID = ct.HangMucGiaCongID AND x.DonHangID = ct.DonHangID
-                 ORDER BY ISNULL(x.TenPhieu, N''), x.ID) dhg
-    WHERE ISNULL(ct.SoLuongNhan,0) > 0 AND YEAR(ct.CreatedAt)=@n AND MONTH(ct.CreatedAt)=@t
-    ORDER BY ncc.TenNha, d.MaDH`)).recordset;
-}
-/* v6.01 — CỘT HẠNG MỤC IN THÊU + đơn giá theo ĐÚNG hạng mục.
-   Dòng giao in thêu (DonHangNhaInTheu) nay chọn được 1 hạng mục (tên, lấy từ Đơn giá in thêu của đơn —
-   xem qlsx.js getHangMucInTheList). Quy tắc tính đơn giá (người dùng đã chốt):
-     - Dòng ĐÃ chọn hạng mục   -> đơn giá = đơn giá CỦA hạng mục đó (khớp theo TÊN, bản đơn giá đầu tiên).
-     - Dòng để TRỐNG (dữ liệu cũ) -> giữ NGUYÊN cách cũ = TỔNG đơn giá in thêu của đơn.
-     - Đã chọn hạng mục nhưng KHÔNG còn trong Đơn giá in thêu (bị xóa/đổi tên) -> đơn giá 0 kèm cờ
-       ThieuDonGia=1 để bảng lương hiện dấu cảnh báo. CỐ Ý không tự dùng tổng đơn giá thay thế:
-       lấy tổng lúc đó sẽ ra một số SAI mà không ai biết. */
-async function loadInThe(pool, nam, thang) {
-  const coHM = (await pool.request().query("SELECT COL_LENGTH('DonHangNhaInTheu','HangMucInThe') AS c")).recordset[0].c != null;
-  const hmCol = coHM ? 'it.HangMucInThe' : "CAST(NULL AS NVARCHAR(200))";
-  return (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
-    SELECT ncc.NhaGiaCongID, ncc.TenNha, d.MaDH, d.TenSanPham,
-           ${hmCol} AS HangMucInThe,
-           ISNULL(it.SoLuongNhan,0) AS SoLuongNhan,
-           CASE WHEN LTRIM(RTRIM(ISNULL(${hmCol}, N''))) <> N'' THEN ISNULL(hm.DonGia, 0)
-                ELSE ISNULL(dg.TongDonGia, 0) END AS DonGia,
-           ISNULL(it.SoLuongNhan,0) *
-             CASE WHEN LTRIM(RTRIM(ISNULL(${hmCol}, N''))) <> N'' THEN ISNULL(hm.DonGia, 0)
-                  ELSE ISNULL(dg.TongDonGia, 0) END AS ThanhTien,
-           CASE WHEN LTRIM(RTRIM(ISNULL(${hmCol}, N''))) <> N'' AND hm.DonGia IS NULL THEN 1 ELSE 0 END AS ThieuDonGia
-    FROM DonHangNhaInTheu it
-    JOIN NhaGiaCong ncc ON ncc.NhaGiaCongID = it.NhaInID
-    JOIN DonHangSanXuat d ON d.DonHangID = it.DonHangID
-    -- v5.56: chỉ TỔNG trong 1 BẢN (bản đầu tiên) — nhiều bản mà SUM hết sẽ cộng trùng -> tiền in thêu SAI.
-    OUTER APPLY (SELECT SUM(x.DonGia) AS TongDonGia FROM DonHangDonGiaInThe x
-                 WHERE x.DonHangID = it.DonHangID
-                   AND ISNULL(x.TenPhieu, N'') = (SELECT MIN(ISNULL(y.TenPhieu, N'')) FROM DonHangDonGiaInThe y WHERE y.DonHangID = it.DonHangID)) dg
-    -- v6.01: đơn giá của ĐÚNG hạng mục đã chọn (khớp theo tên, bỏ khoảng trắng 2 đầu).
-    OUTER APPLY (SELECT TOP 1 x.DonGia FROM DonHangDonGiaInThe x
-                 WHERE x.DonHangID = it.DonHangID
-                   AND LTRIM(RTRIM(ISNULL(x.Ten, N''))) = LTRIM(RTRIM(ISNULL(${hmCol}, N'')))
-                 ORDER BY ISNULL(x.TenPhieu, N''), x.ID) hm
-    WHERE ISNULL(it.SoLuongNhan,0) > 0 AND YEAR(it.CreatedAt)=@n AND MONTH(it.CreatedAt)=@t
-    ORDER BY ncc.TenNha, d.MaDH`)).recordset;
-}
-function tongHopTheoNha(rows) {
-  const m = {};
-  rows.forEach(r => { const k = r.NhaGiaCongID; if (!m[k]) m[k] = { NhaGiaCongID: k, TenNha: r.TenNha, SoLuongNhan: 0, ThanhTien: 0 }; m[k].SoLuongNhan += Number(r.SoLuongNhan) || 0; m[k].ThanhTien += Number(r.ThanhTien) || 0; });
-  return Object.values(m);
-}
+/* v7.53 — HAI CAU SQL NAY DA CHUYEN sang utils/luongGiaCongInThe.js.
+   Ly do: SO CONG NO NHA GIA CONG (routes/congno.js) phai dung DUNG con so cua bang luong. Giu ban thu
+   hai la Bang luong va So cong no ra HAI CON SO cho cung mot viec ma khong ai biet ben nao dung.
+   Doc ghi chu dau file util TRUOC KHI SUA cong thuc (moc "SL NHAN", bay nhieu-ban-don-gia). */
+const { loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha } = require('../utils/luongGiaCongInThe');
+const loadGiaCong = (pool, nam, thang) => __loadGiaCong(pool, sql, { nam, thang });
+const loadInThe = (pool, nam, thang) => __loadInThe(pool, sql, { nam, thang });
 router.get('/giacong-inthe', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luonggcinthe'), async (req, res) => {
   try {
     const pool = await getPool();

@@ -10,6 +10,8 @@ window.ModuleCongNo = (function () {
       { key: 'phieuchi', label: 'Phiếu chi' },
       { key: 'congnokh', label: 'Công nợ khách hàng' },
       { key: 'congnoncc', label: 'Công nợ nhà cung cấp' },
+      // v7.53 (migration_v691): phải trả lấy từ chính Bảng lương gia công / in thêu (SL NHẬN × đơn giá).
+      { key: 'congnogiacong', label: 'Công nợ nhà gia công / in thêu' },
       { key: 'dieuchinh', label: 'Điều chỉnh công nợ' },
       { key: 'soquy', label: 'Sổ quỹ' }
     ];
@@ -39,6 +41,7 @@ window.ModuleCongNo = (function () {
     if (activeTab === 'phieuchi') return renderPhieuChi(perm);
     if (activeTab === 'congnokh') return renderCongNoKH(perm);
     if (activeTab === 'congnoncc') return renderCongNoNCC(perm);
+    if (activeTab === 'congnogiacong') return renderCongNoGiaCong(perm);   // v7.53
     if (activeTab === 'soquy') return renderSoQuy(perm);
     return renderDieuChinh(perm);
   }
@@ -732,6 +735,74 @@ window.ModuleCongNo = (function () {
     noiDaySoPhieu(modal, () => soChiTietNCC(nccId));   // v6.55
   }
 
+  /* ============================== 4b. CÔNG NỢ NHÀ GIA CÔNG / IN THÊU (v7.53) ==============================
+     Một nhà có thể làm CẢ gia công VÀ in thêu (dùng chung danh mục NhaGiaCong, và phiếu chi cũng chỉ
+     có một loại đối tượng 'Nhà gia công / in thêu') → GỘP THEO NHÀ, tách 2 cột tiền để vẫn thấy rõ
+     phần nào là gia công, phần nào là in thêu.
+     ⚠️ Số ở đây LẤY TỪ CHÍNH Bảng lương gia công / in thêu (SL NHẬN × đơn giá hạng mục) — nếu thấy
+     lệch với bảng lương thì là LỖI, không phải "hai cách tính". Xem utils/luongGiaCongInThe.js. */
+  async function renderCongNoGiaCong(perm) {
+    const body = document.getElementById('cnBody');
+    const rows = (await apiGet('/api/congno/congnogiacong')).data || [];
+    const t = rows.reduce((a, r) => ({
+      TienGiaCong: a.TienGiaCong + Number(r.TienGiaCong || 0), TienInThe: a.TienInThe + Number(r.TienInThe || 0),
+      DieuChinh: a.DieuChinh + Number(r.DieuChinh || 0), PhaiTra: a.PhaiTra + Number(r.PhaiTra || 0),
+      DaTra: a.DaTra + Number(r.DaTra || 0), ConNo: a.ConNo + Number(r.ConNo || 0)
+    }), { TienGiaCong: 0, TienInThe: 0, DieuChinh: 0, PhaiTra: 0, DaTra: 0, ConNo: 0 });
+    body.innerHTML = `
+      <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        ${searchBoxHtml()}
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} nhà</span>
+      </div>
+      <div class="empty-hint" style="text-align:left;">
+        Phải trả = <b>tiền gia công + tiền in thêu</b> (đúng số của <b>Bảng lương gia công / in thêu</b>:
+        SL <b>đã nhận</b> × đơn giá hạng mục) + điều chỉnh · Đã trả = tổng <b>phiếu chi</b> có loại đối tượng
+        <b>Nhà gia công / in thêu</b> · Bấm tên nhà để xem sổ chi tiết.
+      </div>
+      <table><thead><tr><th>Nhà gia công / in thêu</th><th>Tiền gia công</th><th>Tiền in thêu</th><th>Điều chỉnh</th>
+        <th>Phải trả</th><th>Đã trả</th><th>Còn nợ</th><th>Số phiếu chi</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td><a href="javascript:void(0)" class="act-ct-gc" data-id="${r.NhaGiaCongID}"><b>${escapeHtml(r.TenNha || '(chưa có tên)')}</b></a></td>
+        <td style="text-align:right;">${r.TienGiaCong ? fmtNumber(r.TienGiaCong) : ''}</td>
+        <td style="text-align:right;">${r.TienInThe ? fmtNumber(r.TienInThe) : ''}</td>
+        <td style="text-align:right;">${r.DieuChinh ? fmtNumber(r.DieuChinh) : ''}</td>
+        <td style="text-align:right;">${fmtNumber(r.PhaiTra)}</td>
+        <td style="text-align:right;">${fmtNumber(r.DaTra)}</td>
+        <td style="text-align:right;"><b style="color:${Number(r.ConNo) > 0 ? '#c0392b' : '#137333'};">${fmtNumber(r.ConNo)}</b></td>
+        <td style="text-align:center;">${r.SoPhieuChi || 0}</td></tr>`).join('')
+        || '<tr><td colspan="8" class="empty-hint">Chưa có phát sinh gia công / in thêu nào</td></tr>'}
+        ${rows.length ? `<tr data-tong style="font-weight:bold;background:#f1f3f4;"><td>TỔNG</td>
+          <td style="text-align:right;">${fmtNumber(t.TienGiaCong)}</td><td style="text-align:right;">${fmtNumber(t.TienInThe)}</td>
+          <td style="text-align:right;">${fmtNumber(t.DieuChinh)}</td><td style="text-align:right;">${fmtNumber(t.PhaiTra)}</td>
+          <td style="text-align:right;">${fmtNumber(t.DaTra)}</td><td style="text-align:right;">${fmtNumber(t.ConNo)}</td>
+          <td></td></tr>` : ''}</tbody></table>`;
+    wireTableSearch(body);
+    wireTableSort(body);
+    body.querySelectorAll('.act-ct-gc').forEach(a => a.addEventListener('click', () => soChiTietGiaCong(a.dataset.id)));
+  }
+
+  async function soChiTietGiaCong(nhaId) {
+    let d;
+    try { d = (await apiGet('/api/congno/congnogiacong/chitiet?nhaGiaCongId=' + encodeURIComponent(nhaId))).data; }
+    catch (err) { toast('Không mở được sổ công nợ: ' + err.message, 'error'); return; }
+    const modal = openModal(`
+      <h3>Sổ công nợ nhà gia công / in thêu: ${escapeHtml(d.tenNha || '')}</h3>
+      <div style="margin-bottom:8px;">Còn nợ: <b style="color:#c0392b;font-size:16px;">${fmtNumber(d.conNo)}</b> đ</div>
+      <div style="max-height:60vh;overflow:auto;">
+      <table><thead><tr><th>Ngày</th><th>Loại</th><th>Lệnh SX / Số phiếu</th><th>Phát sinh</th><th>Đã trả</th><th>Còn nợ lũy kế</th><th>Diễn giải</th></tr></thead>
+      ${/* Dòng gia công / in thêu KHÔNG phải chứng từ riêng (nó là ghi nhận trên lệnh SX) nên backend
+             để CtLoai = null -> oSoPhieu() hiện chữ thường, không giả vờ bấm được. */''}
+      <tbody>${(d.rows || []).map(r => `<tr>
+        <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.Loai)}</td><td>${oSoPhieu(r)}</td>
+        <td style="text-align:right;">${Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''}</td>
+        <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
+        <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
+        || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
+    modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    noiDaySoPhieu(modal, () => soChiTietGiaCong(nhaId));   // phiếu chi bấm được
+  }
+
   /* ============================== 5. ĐIỀU CHỈNH CÔNG NỢ ============================== */
   async function renderDieuChinh(perm) {
     const body = document.getElementById('cnBody');
@@ -745,15 +816,18 @@ window.ModuleCongNo = (function () {
         Số tiền <b>dương = tăng nợ</b>, <b>âm = giảm nợ</b>.</div>
       <table><thead><tr><th>Ngày</th><th>Loại</th><th>Đối tượng</th><th>Số tiền</th><th>Diễn giải</th><th>Người tạo</th><th style="width:80px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
-        <td>${fmtDate(r.Ngay)}</td><td>${r.LoaiDoiTuong === 'KhachHang' ? 'Khách hàng' : 'Nhà cung cấp'}</td>
+        ${/* v7.53: 3 loại — tra bảng thay vì if/else lồng, thêm loại thứ tư sau này chỉ sửa 1 chỗ. */''}
+        <td>${fmtDate(r.Ngay)}</td><td>${({ KhachHang: 'Khách hàng', NhaCungCap: 'Nhà cung cấp', NhaGiaCong: 'Nhà gia công / in thêu' })[r.LoaiDoiTuong] || escapeHtml(r.LoaiDoiTuong || '')}</td>
         ${/* v6.69: KHÁCH HÀNG phải hiện ĐÚNG CHUỖI TenDoiTuong đã lưu trên bút toán.
              Trước đây ưu tiên r.TenKhachHang (tên HIỆN TẠI trong danh mục, join theo KhachHangID) —
              trong khi màn Công nợ khách hàng lại gom theo TenDoiTuong (tên LÚC LẬP). Cùng một bút
              toán mà hai tab hiện hai tên khác nhau, đối chiếu là loạn ngay.
              NCC thì giữ TenNCC vì công nợ NCC gom theo NCC_ID, không theo tên. */''}
+        ${/* v7.53: nhà gia công gom theo NhaGiaCongID (không theo tên) nên ưu tiên tên danh mục,
+             giống cách xử lý NCC. */''}
         <td>${escapeHtml(r.LoaiDoiTuong === 'KhachHang'
               ? (r.TenDoiTuong || r.TenKhachHang || '')
-              : (r.TenNCC || r.TenDoiTuong || ''))}</td>
+              : (r.TenNCC || r.TenNhaGiaCong || r.TenDoiTuong || ''))}</td>
         <td style="text-align:right;"><b style="color:${Number(r.SoTien) < 0 ? '#137333' : '#c0392b'};">${fmtNumber(r.SoTien)}</b></td>
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         ${/* v6.45: thêm nút Sửa — trước chỉ có Xóa, gõ sai 1 con số là phải xóa rồi nhập lại. */''}
@@ -787,11 +861,15 @@ window.ModuleCongNo = (function () {
             <select name="loaiDoiTuong" id="dcLoai">
               <option value="NhaCungCap" ${loaiHT === 'NhaCungCap' ? 'selected' : ''}>Nhà cung cấp (nợ phải trả)</option>
               <option value="KhachHang" ${loaiHT === 'KhachHang' ? 'selected' : ''}>Khách hàng (nợ phải thu)</option>
+              ${/* v7.53: loại thứ ba — nhà gia công / in thêu (nợ phải trả). */''}
+              <option value="NhaGiaCong" ${loaiHT === 'NhaGiaCong' ? 'selected' : ''}>Nhà gia công / in thêu (nợ phải trả)</option>
             </select></div>
           <div class="form-row" id="oNCC" style="${loaiHT === 'NhaCungCap' ? '' : 'display:none;'}"><label>Nhà cung cấp</label>
             <select name="nccId" id="dcNCC"><option value="">-- không chọn --</option>${opt(dm.ncc, 'NCC_ID', 'TenNCC', row ? (row.NCC_ID || '') : '')}</select></div>
           <div class="form-row" id="oKH" style="${loaiHT === 'KhachHang' ? '' : 'display:none;'}"><label>Khách hàng</label>
             <select name="khachHangId" id="dcKH"><option value="">-- không chọn --</option>${opt(dm.khachHang, 'KhachHangID', 'TenKhachHang', row ? (row.KhachHangID || '') : '')}</select></div>
+          <div class="form-row" id="oNGC" style="${loaiHT === 'NhaGiaCong' ? '' : 'display:none;'}"><label>Nhà gia công / in thêu</label>
+            <select name="nhaGiaCongId" id="dcNGC"><option value="">-- không chọn --</option>${opt(dm.nhaGiaCong, 'NhaGiaCongID', 'TenNha', row ? (row.NhaGiaCongID || '') : '')}</select></div>
           <div class="form-row"><label>Tên đối tượng *</label><input name="tenDoiTuong" id="dcTen" required value="${row ? escapeHtml(row.TenDoiTuong || '') : ''}">
             <div class="empty-hint" style="margin-top:2px;">Với khách hàng: phải gõ <b>đúng tên</b> như trên phiếu bán hàng (công nợ nhóm theo tên).</div></div>
           <div class="form-row"><label>Số tiền * (âm = giảm nợ)</label><input type="number" name="soTien" step="0.01" required placeholder="VD: 5000000 hoặc -200000" value="${row && row.SoTien != null ? escapeHtml(String(row.SoTien)) : ''}"></div>
@@ -803,10 +881,15 @@ window.ModuleCongNo = (function () {
     const dongBo = () => {
       const l = modal.querySelector('#dcLoai').value;
       const oNCC = modal.querySelector('#oNCC'), oKH = modal.querySelector('#oKH');
+      const oNGC = modal.querySelector('#oNGC');
       oNCC.style.display = l === 'NhaCungCap' ? '' : 'none';
       oKH.style.display = l === 'KhachHang' ? '' : 'none';
+      oNGC.style.display = l === 'NhaGiaCong' ? '' : 'none';
+      /* Dọn khóa nối của loại KHÔNG được chọn: đổi loại mà còn dính đối tượng cũ thì dòng điều chỉnh
+         sẽ hiện ở CẢ HAI sổ công nợ. */
       if (l !== 'NhaCungCap') oNCC.querySelector('select').value = '';
       if (l !== 'KhachHang') oKH.querySelector('select').value = '';
+      if (l !== 'NhaGiaCong') oNGC.querySelector('select').value = '';
     };
     modal.querySelector('#dcLoai').addEventListener('change', dongBo);
     modal.querySelector('#dcNCC').addEventListener('change', (e) => {
@@ -817,12 +900,17 @@ window.ModuleCongNo = (function () {
       const k = dm.khachHang.find(x => String(x.KhachHangID) === e.target.value);
       if (k) modal.querySelector('#dcTen').value = k.TenKhachHang;
     });
+    modal.querySelector('#dcNGC').addEventListener('change', (e) => {
+      const n = dm.nhaGiaCong.find(x => String(x.NhaGiaCongID) === e.target.value);
+      if (n) modal.querySelector('#dcTen').value = n.TenNha;
+    });
     modal.querySelector('#fDC').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const payload = {
         ngay: fd.get('ngay'), loaiDoiTuong: fd.get('loaiDoiTuong'),
         nccId: fd.get('nccId') || null, khachHangId: fd.get('khachHangId') || null,
+        nhaGiaCongId: fd.get('nhaGiaCongId') || null,   // v7.53
         tenDoiTuong: fd.get('tenDoiTuong'), soTien: fd.get('soTien'), dienGiai: fd.get('dienGiai') || null
       };
       try {

@@ -1268,6 +1268,56 @@ router.post('/orders/:maDH/sodo', requireAuth, requirePermission('QLSX', 'edit')
   }
 });
 
+/* ================================================================================================
+   v7.53 — SUA 1 dong "So do da khai bao" (truoc day chi co Xoa).
+   Vi sao can: go sai met/kho vai/ma rap thi phai XOA roi KHAI LAI — ma xoa se KHONG duoc neu so do da
+   duoc dung o Ghi tien do Cat (rang buoc khoa ngoai, xem thong bao loi cua DELETE ben duoi). Ket qua:
+   dong sai nam vinh vien tren don hang.
+   ⚠️ Cac o nay CO VAO PHEP TINH: so cat / luong trai vai cat doc MetSoDoDai/KhoVaiSoDo qua
+   DonHangChiTietSoDo (xem v5.89 "So cat in du"). Sua so lieu cua so do DA CAT nghia la doi lai y nghia
+   cua so cu, nen tra ve `soLanCat` de frontend canh bao TRUOC khi luu, khong sua im lang.
+   ================================================================================================ */
+router.put('/orders/:maDH/sodo/:id', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    const b = req.body || {};
+    const kq = await pool.request()
+      .input('id', sql.Int, req.params.id)
+      .input('donHangId', sql.Int, order.DonHangID)
+      .input('MetSoDoDai', sql.Decimal(10, 2), b.metSoDoDai === '' || b.metSoDoDai == null ? null : b.metSoDoDai)
+      .input('KhoVaiSoDo', sql.Decimal(10, 2), b.khoVaiSoDo === '' || b.khoVaiSoDo == null ? null : b.khoVaiSoDo)
+      .input('MaRap', sql.NVarChar, b.maRap || null)
+      .input('GhiChu', sql.NVarChar, b.ghiChu || null)
+      /* KHONG boc ISNULL: form Sua luon gui DU 4 o (dien san gia tri cu), nen bo trong o nao la CO Y
+         xoa o do. Boc ISNULL o day la nguoi dung khong bao gio xoa duoc mot o da go sai. */
+      .query(`UPDATE DonHangChiTietSoDo
+              SET MetSoDoDai=@MetSoDoDai, KhoVaiSoDo=@KhoVaiSoDo, MaRap=@MaRap, GhiChu=@GhiChu
+              WHERE ID=@id AND DonHangID=@donHangId`);
+    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy sơ đồ này trong đơn hàng.' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[qlsx PUT /orders/:maDH/sodo/:id] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi sửa sơ đồ: ' + err.message });
+  }
+});
+
+/* Dem so lan Ghi tien do Cat da dung so do nay — de form Sua canh bao truoc khi doi so lieu. */
+router.get('/orders/:maDH/sodo/:id/soluongcat', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  /* ⚠️ Cot la `TienDoSanXuat.SoDoID` (migration v6.x, xem CAI_DAT_DAY_DU dong ~2089) — KHONG phai
+     TienDoCatChiTietCay: bang chi tiet cay chi co TienDoID/CayID/SoLuongLop, khong giu so do.
+     Do COL_LENGTH truoc: CSDL chua chay migration do thi tra 0 thay vi lam sap route. */
+  const co = (await pool.request().query("SELECT COL_LENGTH('TienDoSanXuat','SoDoID') AS c")).recordset[0].c != null;
+  if (!co) return res.json({ success: true, data: { soLanCat: 0 } });
+  const r = (await pool.request().input('id', sql.Int, req.params.id).query(`
+    SELECT COUNT(*) AS n FROM TienDoSanXuat WHERE SoDoID = @id`)).recordset[0];
+  res.json({ success: true, data: { soLanCat: Number(r.n) || 0 } });
+});
+
 router.delete('/orders/:maDH/sodo/:id', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
   try {
     const pool = await getPool();

@@ -21,6 +21,9 @@ const express = require('express');
 const ExcelJS = require('exceljs');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+/* v7.53: MOT ban cong thuc luong gia cong / in theu — dung CHUNG voi routes/payroll.js. So cong no
+   nha gia cong phai ra DUNG con so cua bang luong; doc ghi chu dau file util truoc khi sua. */
+const { loadGiaCong, loadInThe } = require('../utils/luongGiaCongInThe');
 
 const router = express.Router();
 ['get', 'post', 'put', 'delete'].forEach(method => {
@@ -31,6 +34,8 @@ const router = express.Router();
 });
 
 function so(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+// v7.53: lam tron 2 so le — dung dung quy tac `Math.round(x*100)/100` da dung khap file nay.
+function lam2(v) { return Math.round(so(v) * 100) / 100; }
 /* Chuan hoa 1 phieu THU: neu gan vao phieu ban hang thi BAT BUOC la khoan thu cua KHACH do va lay
    DUNG TenKhach cua phieu (cong no khach nhom theo TEN, go lech dau/khoang trang la mat tien). */
 async function chuanHoaPhieuThu(pool, b) {
@@ -589,31 +594,61 @@ router.delete('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'delete'
    ================================================================================================ */
 router.get('/dieuchinh', requireAuth, requirePermission('CONGNO', 'view'), async (req, res) => {
   const pool = await getPool();
+  /* v7.53: + nha gia cong. Cot NhaGiaCongID den tu migration_v691 -> DO COT truoc khi JOIN, chua
+     chay migration thi tra NULL de man Dieu chinh khong sap. */
+  const coNGC = await coCot(pool, 'CongNoDieuChinh', 'NhaGiaCongID');
   const rows = (await pool.request().query(`
-    SELECT d.*, ncc.TenNCC, kh.TenKhachHang, u.HoTen AS NguoiTao
+    SELECT d.*, ncc.TenNCC, kh.TenKhachHang, u.HoTen AS NguoiTao,
+           ${coNGC ? 'ngc.TenNha AS TenNhaGiaCong' : "CAST(NULL AS NVARCHAR(150)) AS TenNhaGiaCong"}
     FROM CongNoDieuChinh d
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = d.NCC_ID
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
+    ${coNGC ? 'LEFT JOIN NhaGiaCong ngc ON ngc.NhaGiaCongID = d.NhaGiaCongID' : ''}
     LEFT JOIN Users u ON u.UserID = d.NguoiTaoID
     ORDER BY d.Ngay DESC, d.ID DESC`)).recordset;
   res.json({ success: true, data: rows });
 });
+/* ================================================================================================
+   v7.53 — BA LOAI DOI TUONG cua dieu chinh cong no: KhachHang / NhaCungCap / NhaGiaCong.
+   Gom vao MOT ham dung chung boi POST va PUT: truoc day moi ben tu viet `b.loaiDoiTuong === 'KhachHang'
+   ? ... : 'NhaCungCap'`, them loai thu ba ma sua mot ben la ben kia am tham ghi sai loai.
+   Cac khoa nói cua loai KHONG duoc chon phai ve NULL — doi loai ma con dinh doi tuong cu thi dong
+   dieu chinh se hien o CA HAI so cong no.
+   `NhaGiaCongID` chi ghi khi CSDL da co cot (migration_v691), keo INSERT/UPDATE bao Invalid column.
+   ================================================================================================ */
+const LOAI_DC = ['KhachHang', 'NhaCungCap', 'NhaGiaCong'];
+async function dungLoaiDieuChinh(pool, b) {
+  const loai = LOAI_DC.includes(b.loaiDoiTuong) ? b.loaiDoiTuong : 'NhaCungCap';
+  const coNGC = await coCot(pool, 'CongNoDieuChinh', 'NhaGiaCongID');
+  if (loai === 'NhaGiaCong' && !coNGC) {
+    const e = new Error('Chưa chạy migration_v691 nên chưa điều chỉnh được công nợ nhà gia công.');
+    e.__khongHopLe = true;
+    throw e;
+  }
+  return {
+    loai, coNGC,
+    khachHangId: loai === 'KhachHang' ? (b.khachHangId || null) : null,
+    nccId: loai === 'NhaCungCap' ? (b.nccId || null) : null,
+    nhaGiaCongId: loai === 'NhaGiaCong' ? (b.nhaGiaCongId || null) : null
+  };
+}
 router.post('/dieuchinh', requireAuth, requirePermission('CONGNO', 'create'), async (req, res) => {
   const pool = await getPool();
   const b = req.body || {};
   if (!so(b.soTien)) return res.status(400).json({ success: false, message: 'Số tiền phải khác 0 (dương = tăng nợ, âm = giảm nợ).' });
-  const loai = b.loaiDoiTuong === 'KhachHang' ? 'KhachHang' : 'NhaCungCap';
+  const dt = await dungLoaiDieuChinh(pool, b);
   await pool.request()
     .input('Ngay', sql.Date, b.ngay || new Date())
-    .input('Loai', sql.NVarChar, loai)
-    .input('KhachHangID', sql.Int, loai === 'KhachHang' ? (b.khachHangId || null) : null)
-    .input('NCC_ID', sql.Int, loai === 'NhaCungCap' ? (b.nccId || null) : null)
+    .input('Loai', sql.NVarChar, dt.loai)
+    .input('KhachHangID', sql.Int, dt.khachHangId)
+    .input('NCC_ID', sql.Int, dt.nccId)
+    .input('NhaGiaCongID', sql.Int, dt.nhaGiaCongId)
     .input('Ten', sql.NVarChar, (b.tenDoiTuong || '').trim() || null)
     .input('SoTien', sql.Decimal(18, 2), so(b.soTien))
     .input('DienGiai', sql.NVarChar, b.dienGiai || null)
     .input('NguoiTaoID', sql.Int, req.session.user.userId)
-    .query(`INSERT INTO CongNoDieuChinh (Ngay, LoaiDoiTuong, KhachHangID, NCC_ID, TenDoiTuong, SoTien, DienGiai, NguoiTaoID)
-            VALUES (@Ngay, @Loai, @KhachHangID, @NCC_ID, @Ten, @SoTien, @DienGiai, @NguoiTaoID)`);
+    .query(`INSERT INTO CongNoDieuChinh (Ngay, LoaiDoiTuong, KhachHangID, NCC_ID, TenDoiTuong, SoTien, DienGiai, NguoiTaoID${dt.coNGC ? ', NhaGiaCongID' : ''})
+            VALUES (@Ngay, @Loai, @KhachHangID, @NCC_ID, @Ten, @SoTien, @DienGiai, @NguoiTaoID${dt.coNGC ? ', @NhaGiaCongID' : ''})`);
   res.json({ success: true });
 });
 /* v6.45: SỬA điều chỉnh. Trước chỉ có Thêm/Xóa — gõ sai một con số là phải xóa rồi nhập lại, mất
@@ -623,19 +658,20 @@ router.put('/dieuchinh/:id', requireAuth, requirePermission('CONGNO', 'edit'), a
   const pool = await getPool();
   const b = req.body || {};
   if (!so(b.soTien)) return res.status(400).json({ success: false, message: 'Số tiền phải khác 0 (dương = tăng nợ, âm = giảm nợ).' });
-  const loai = b.loaiDoiTuong === 'KhachHang' ? 'KhachHang' : 'NhaCungCap';
+  const dt = await dungLoaiDieuChinh(pool, b);
   const r = await pool.request()
     .input('id', sql.Int, req.params.id)
     .input('Ngay', sql.Date, b.ngay || new Date())
-    .input('Loai', sql.NVarChar, loai)
-    .input('KhachHangID', sql.Int, loai === 'KhachHang' ? (b.khachHangId || null) : null)
-    .input('NCC_ID', sql.Int, loai === 'NhaCungCap' ? (b.nccId || null) : null)
+    .input('Loai', sql.NVarChar, dt.loai)
+    .input('KhachHangID', sql.Int, dt.khachHangId)
+    .input('NCC_ID', sql.Int, dt.nccId)
+    .input('NhaGiaCongID', sql.Int, dt.nhaGiaCongId)
     .input('Ten', sql.NVarChar, (b.tenDoiTuong || '').trim() || null)
     .input('SoTien', sql.Decimal(18, 2), so(b.soTien))
     .input('DienGiai', sql.NVarChar, b.dienGiai || null)
     .query(`UPDATE CongNoDieuChinh
                SET Ngay=@Ngay, LoaiDoiTuong=@Loai, KhachHangID=@KhachHangID, NCC_ID=@NCC_ID,
-                   TenDoiTuong=@Ten, SoTien=@SoTien, DienGiai=@DienGiai
+                   TenDoiTuong=@Ten, SoTien=@SoTien, DienGiai=@DienGiai${dt.coNGC ? ', NhaGiaCongID=@NhaGiaCongID' : ''}
              WHERE ID=@id`);
   if (!r.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy điều chỉnh này (có thể vừa bị xóa).' });
   res.json({ success: true });
@@ -999,6 +1035,117 @@ router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), r
   let luy = dauKy;
   rows.forEach(r => { luy += so(r.Thu) - so(r.Chi); r.SoDu = Math.round(luy * 100) / 100; });
   res.json({ success: true, data: { ten, dauKy, rows, soDu: Math.round(luy * 100) / 100 } });
+});
+
+/* ================================================================================================
+   7b. CONG NO NHA GIA CONG / IN THEU   (v7.53, migration_v691)
+   ------------------------------------------------------------------------------------------------
+   PHAI TRA lay tu CHINH so lieu Bang luong gia cong / in theu (utils/luongGiaCongInThe.js):
+       SL NHAN x don gia hang muc.  MOC = da NHAN hang ve (nguoi dung da chot).
+   ⚠️ KHONG viet lai cau SQL tinh tien o day. Bang luong va So cong no phai ra CUNG MOT con so; hai
+   ban song song la som muon lech va khong ai biet ben nao dung (bai hoc v6.47).
+
+   DA TRA  = PhieuChi co LoaiDoiTuong = N'NhaGiaCong' (bang PhieuChi da co NhaGiaCongID tu dau).
+   DIEU CHINH = CongNoDieuChinh.NhaGiaCongID (cot moi cua migration_v691).
+
+   GOP THEO NHA (nguoi dung da chot): mot nha co the lam CA gia cong VA in theu — hai viec dung chung
+   bang danh muc `NhaGiaCong`, va phieu chi cung chi co MOT loai doi tuong 'NhaGiaCong'. Tach hai so du
+   thi tien chi phai tu phan bo cho tung ben — khong co du lieu nao noi phan bo the nao.
+   ================================================================================================ */
+async function congNoNhaGiaCong(pool) {
+  const gc = await loadGiaCong(pool, sql);      // khong truyen ky -> LAY TAT CA (cong no la luy ke)
+  const it = await loadInThe(pool, sql);
+  const chi = (await pool.request().query(`
+    SELECT NhaGiaCongID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuChi
+    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL
+    GROUP BY NhaGiaCongID`)).recordset;
+  /* Cot NhaGiaCongID cua CongNoDieuChinh den tu migration_v691 -> do cot, chua chay thi coi nhu chua
+     co dieu chinh nao (khong lam sap ca man hinh). */
+  const coDC = await coCot(pool, 'CongNoDieuChinh', 'NhaGiaCongID');
+  const dc = coDC ? (await pool.request().query(`
+    SELECT NhaGiaCongID, SUM(SoTien) AS Tien FROM CongNoDieuChinh
+    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL
+    GROUP BY NhaGiaCongID`)).recordset : [];
+
+  const nha = (await pool.request().query('SELECT NhaGiaCongID, TenNha FROM NhaGiaCong')).recordset;
+  const map = new Map();
+  const lay = (id, ten) => {
+    if (!map.has(id)) {
+      map.set(id, {
+        NhaGiaCongID: id, TenNha: ten || '', TienGiaCong: 0, TienInThe: 0,
+        SoLuongGiaCong: 0, SoLuongInThe: 0, DieuChinh: 0, DaTra: 0, SoPhieuChi: 0
+      });
+    }
+    const g = map.get(id);
+    if (!g.TenNha && ten) g.TenNha = ten;
+    return g;
+  };
+  gc.forEach(r => { const g = lay(r.NhaGiaCongID, r.TenNha); g.TienGiaCong += so(r.ThanhTien); g.SoLuongGiaCong += so(r.SoLuongNhan); });
+  it.forEach(r => { const g = lay(r.NhaGiaCongID, r.TenNha); g.TienInThe += so(r.ThanhTien); g.SoLuongInThe += so(r.SoLuongNhan); });
+  chi.forEach(r => { const g = lay(r.NhaGiaCongID, null); g.DaTra += so(r.Tien); g.SoPhieuChi += Number(r.SoPhieu) || 0; });
+  dc.forEach(r => { const g = lay(r.NhaGiaCongID, null); g.DieuChinh += so(r.Tien); });
+  /* Ten nha: dong den tu phieu chi/dieu chinh khong mang ten -> lay tu danh muc. */
+  const tenTheoId = new Map(nha.map(n => [n.NhaGiaCongID, n.TenNha]));
+  const rows = [...map.values()].map(g => {
+    if (!g.TenNha) g.TenNha = tenTheoId.get(g.NhaGiaCongID) || '';
+    g.PhaiTra = lam2(g.TienGiaCong + g.TienInThe + g.DieuChinh);
+    g.TienGiaCong = lam2(g.TienGiaCong);
+    g.TienInThe = lam2(g.TienInThe);
+    g.DieuChinh = lam2(g.DieuChinh);
+    g.DaTra = lam2(g.DaTra);
+    g.ConNo = lam2(g.PhaiTra - g.DaTra);
+    return g;
+  });
+  /* Bo cac nha khong co phat sinh gi (0 het) — danh sach dai vo ich. */
+  return rows.filter(r => r.PhaiTra || r.DaTra)
+    .sort((a, b) => String(a.TenNha).localeCompare(String(b.TenNha), 'vi'));
+}
+router.get('/congnogiacong', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnogiacong'), async (req, res) => {
+  const pool = await getPool();
+  res.json({ success: true, data: await congNoNhaGiaCong(pool) });
+});
+
+/* So chi tiet cua MOT nha: tung dong gia cong / in theu + phieu chi + dieu chinh, luy ke theo ngay. */
+async function soChiTietNhaGiaCong(pool, id) {
+  const gc = (await loadGiaCong(pool, sql)).filter(r => String(r.NhaGiaCongID) === String(id));
+  const it = (await loadInThe(pool, sql)).filter(r => String(r.NhaGiaCongID) === String(id));
+  const dongGC = gc.map(r => ({
+    Ngay: r.Ngay, SoPhieu: r.MaDH || '', Loai: 'Gia công',
+    PhatSinh: so(r.ThanhTien), ThanhToan: 0,
+    DienGiai: [r.TenHangMuc, r.TenSanPham, `SL nhận ${so(r.SoLuongNhan)} × ${so(r.DonGia)}`].filter(Boolean).join(' · '),
+    /* KHONG co CtLoai/CtID: day khong phai chung tu rieng, no la dong ghi nhan tren LENH SX.
+       Dat CtLoai bua se lam o so phieu bam duoc roi bao "khong mo duoc chung tu". */
+    CtLoai: null, CtID: null
+  }));
+  const dongIT = it.map(r => ({
+    Ngay: r.Ngay, SoPhieu: r.MaDH || '', Loai: 'In thêu',
+    PhatSinh: so(r.ThanhTien), ThanhToan: 0,
+    DienGiai: [r.HangMucInThe, r.TenSanPham, `SL nhận ${so(r.SoLuongNhan)} × ${so(r.DonGia)}`].filter(Boolean).join(' · ')
+      + (Number(r.ThieuDonGia) === 1 ? ' — ⚠️ THIẾU ĐƠN GIÁ hạng mục' : ''),
+    CtLoai: null, CtID: null
+  }));
+  const chi = (await pool.request().input('id', sql.Int, id).query(`
+    SELECT NgayChi AS Ngay, SoPhieu, 0 AS PhatSinh, SoTien AS ThanhToan, N'Phiếu chi' AS Loai, DienGiai,
+           N'PC' AS CtLoai, PhieuChiID AS CtID
+    FROM PhieuChi WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID = @id`)).recordset;
+  const coDC = await coCot(pool, 'CongNoDieuChinh', 'NhaGiaCongID');
+  const dc = coDC ? (await pool.request().input('id', sql.Int, id).query(`
+    SELECT Ngay, N'' AS SoPhieu, SoTien AS PhatSinh, 0 AS ThanhToan, N'Điều chỉnh' AS Loai, DienGiai,
+           NULL AS CtLoai, NULL AS CtID
+    FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID = @id`)).recordset : [];
+
+  const rows = [...dongGC, ...dongIT, ...chi, ...dc].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
+  let luy = 0;
+  rows.forEach(r => { luy += so(r.PhatSinh) - so(r.ThanhToan); r.LuyKe = lam2(luy); });
+  const ten = (await pool.request().input('id', sql.Int, id)
+    .query('SELECT TenNha FROM NhaGiaCong WHERE NhaGiaCongID=@id')).recordset[0] || {};
+  return { nhaGiaCongId: Number(id), tenNha: ten.TenNha || '', rows: rows.slice().reverse(), conNo: lam2(luy) };
+}
+router.get('/congnogiacong/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnogiacong'), async (req, res) => {
+  const pool = await getPool();
+  const id = parseInt(req.query.nhaGiaCongId, 10);
+  if (!id) return res.status(400).json({ success: false, message: 'Thiếu nhà gia công.' });
+  res.json({ success: true, data: await soChiTietNhaGiaCong(pool, id) });
 });
 
 /* ================================================================================================

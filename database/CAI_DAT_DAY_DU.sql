@@ -6641,9 +6641,11 @@ BEGIN
     CREATE TABLE CongNoDieuChinh (
         ID           INT IDENTITY(1,1) PRIMARY KEY,
         Ngay         DATE NOT NULL,
-        LoaiDoiTuong NVARCHAR(20) NOT NULL,               -- KhachHang / NhaCungCap
+        LoaiDoiTuong NVARCHAR(20) NOT NULL,               -- KhachHang / NhaCungCap / NhaGiaCong (v7.53)
         KhachHangID  INT NULL FOREIGN KEY REFERENCES KhachHang(KhachHangID),
         NCC_ID       INT NULL FOREIGN KEY REFERENCES NhaCungCap(NCC_ID),
+        -- v7.53 (migration_v691): điều chỉnh công nợ cho NHÀ GIA CÔNG / IN THÊU
+        NhaGiaCongID INT NULL FOREIGN KEY REFERENCES NhaGiaCong(NhaGiaCongID),
         TenDoiTuong  NVARCHAR(150) NULL,
         SoTien       DECIMAL(18,2) NOT NULL,              -- DUONG = tang no phai tra/phai thu; AM = giam
         DienGiai     NVARCHAR(500) NULL,
@@ -6684,6 +6686,9 @@ USING (VALUES
     ('CONGNO','congnokh',  N'Công nợ khách hàng', 3),
     ('CONGNO','congnoncc', N'Công nợ nhà cung cấp', 4),
     ('CONGNO','dieuchinh', N'Điều chỉnh công nợ', 5),
+    /* v7.53 (migration_v691): công nợ nhà gia công / in thêu. Phải trả lấy từ chính số liệu Bảng lương
+       gia công / in thêu (SL NHẬN × đơn giá hạng mục) — không có bảng phải-trả riêng. */
+    ('CONGNO','congnogiacong', N'Công nợ nhà gia công / in thêu', 6),
     ('KHOHANG','banhang',  N'Phiếu bán hàng', 5),
     ('DANHMUC','loaitaikhoan', N'Loại tài khoản', 20),
     ('DANHMUC','taikhoan',     N'Danh mục tài khoản', 21)
