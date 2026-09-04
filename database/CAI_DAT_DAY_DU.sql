@@ -2093,6 +2093,17 @@ BEGIN
 END ELSE PRINT 'Cot TienDoSanXuat.SoDoID da ton tai, bo qua.';
 GO
 
+/* v7.56 (migration_v692): CO danh dau lan ghi KHO NHAP thuoc che do CONG DON.
+   Cong doan Kho nhap ghi duoc NHIEU DOT va cac dot CONG DON — nhung CHI voi cac lan ghi co co nay = 1.
+   Cac lan ghi CU (= NULL) van chi tinh LAN GAN NHAT, vi truoc v7.56 "ghi lai" nghia la GHI LAI DE SUA;
+   cong don ca du lieu cu se lam moi lenh tung ghi lai bi cong gap len. Xem effectiveTienDoIds(). */
+IF COL_LENGTH('TienDoSanXuat', 'CongDonKN') IS NULL
+BEGIN
+    ALTER TABLE TienDoSanXuat ADD CongDonKN BIT NULL;
+    PRINT 'Da them cot TienDoSanXuat.CongDonKN.';
+END ELSE PRINT 'Cot TienDoSanXuat.CongDonKN da ton tai, bo qua.';
+GO
+
 IF OBJECT_ID('DonHangChiTietNhaGiaCong') IS NULL
 BEGIN
     CREATE TABLE DonHangChiTietNhaGiaCong (

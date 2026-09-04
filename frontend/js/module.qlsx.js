@@ -2120,6 +2120,131 @@ window.ModuleQLSX = (function () {
   }
 
   /* ================================================================================================
+     v7.56 — "KHO NHẬP ĐÃ GHI": xem / sửa / xóa TỪNG ĐỢT nhập kho.
+     Từ v7.56 các đợt Kho nhập CỘNG DỒN (nhập nhiều đợt cho đủ số sổ cắt), nên bắt buộc phải có đường
+     sửa/xóa từng đợt — gõ sai một đợt mà không sửa được thì con số sai vĩnh viễn (trước đây ghi lại là
+     thay thế nên không cần). Dùng ĐÚNG khuôn "Ghi nhận May đã gửi" ngay dưới.
+     `dangTinh` = các đợt hệ thống ĐANG CỘNG vào tổng. Lệnh CŨ (ghi trước v7.56) chỉ đợt cuối được
+     tính — phải đánh dấu rõ, không thì người dùng cộng tay lại không khớp và tưởng hệ thống sai.
+     ================================================================================================ */
+  async function renderKhoNhapDaGhi(box, maDH, perm) {
+    if (!box) return;
+    let data;
+    try { data = (await apiGet('/api/qlsx/orders/' + encodeURIComponent(maDH) + '/ghinhankhonhap')).data; }
+    catch (e) { return; }
+    const recs = (data && data.records) || [];
+    if (!recs.length) return;
+    const mauTheoTienDo = new Map();
+    ((data && data.mau) || []).forEach(m => {
+      if (!mauTheoTienDo.has(m.TienDoID)) mauTheoTienDo.set(m.TienDoID, []);
+      mauTheoTienDo.get(m.TienDoID).push(m);
+    });
+    const dangTinh = new Set(((data && data.dangTinh) || []).map(String));
+    const tongCua = (r) => (mauTheoTienDo.get(r.TienDoID) || []).reduce((s, m) => s + (Number(m.SoLuongLuyKe) || 0), 0);
+    const tongDangTinh = recs.filter(r => dangTinh.has(String(r.TienDoID))).reduce((s, r) => s + tongCua(r), 0);
+    const nhan = (r, i) => `Đợt ${i + 1} · ${fmtDate(r.NgayGhiNhan)} · ${fmtNumber(tongCua(r))}`
+      + ` · ${(mauTheoTienDo.get(r.TienDoID) || []).length} màu`
+      + (dangTinh.has(String(r.TienDoID)) ? '' : ' · KHÔNG được tính (đợt cũ đã bị đợt sau thay thế)');
+
+    const wrap = document.createElement('div');
+    wrap.className = 'form-row';
+    wrap.innerHTML = `<label>Kho nhập đã ghi (${recs.length} đợt · đang tính <b>${fmtNumber(tongDangTinh)}</b>) &nbsp;
+        ${(!perm || perm.canEdit) ? '<button type="button" class="btn small secondary" id="btnSuaKN">✏️ Sửa đợt đang chọn</button>' : ''}
+        ${(perm && perm.canDelete) ? '<button type="button" class="btn small danger" id="btnXoaKN">🗑️ Xóa đợt này</button>' : ''}</label>
+      ${recs.length > 1 ? `<select id="knPicker" style="margin-bottom:6px;">${recs.map((r, i) => `<option value="${r.TienDoID}">${escapeHtml(nhan(r, i))}</option>`).join('')}</select>` : ''}
+      <div id="knXem" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;background:#fafafa;max-height:260px;overflow:auto;"></div>`;
+    box.innerHTML = '';
+    box.appendChild(wrap);
+
+    const picker = wrap.querySelector('#knPicker');
+    const chonHienTai = () => {
+      const id = picker ? picker.value : String(recs[recs.length - 1].TienDoID);
+      const i = Math.max(0, recs.findIndex(r => String(r.TienDoID) === String(id)));
+      return Object.assign({}, recs[i], { __lan: i + 1, mau: mauTheoTienDo.get(recs[i].TienDoID) || [] });
+    };
+    const veXem = () => {
+      const r = chonHienTai();
+      const duocTinh = dangTinh.has(String(r.TienDoID));
+      wrap.querySelector('#knXem').innerHTML = `
+        <div style="font-size:13px;margin-bottom:4px;">Đợt ${r.__lan} · Ngày ${fmtDate(r.NgayGhiNhan)}${r.NguoiCapNhat ? ' · ' + escapeHtml(r.NguoiCapNhat) : ''}${r.GhiChu ? ' · ' + escapeHtml(r.GhiChu) : ''}</div>
+        ${duocTinh ? '' : '<div class="empty-hint" style="color:#c0392b;text-align:left;">Đợt này <b>KHÔNG</b> được cộng vào tổng: nó ghi TRƯỚC bản v7.56, khi đó "ghi lại" nghĩa là <b>thay thế</b> nên chỉ đợt cũ cuối cùng được tính. Muốn tính cả thì xóa đợt cũ rồi ghi lại thành đợt mới.</div>'}
+        <table style="width:100%;border-collapse:collapse;font-size:13px;" border="1" cellpadding="4">
+          <thead><tr><th style="width:38px;">STT</th><th>Màu</th><th style="width:150px;">SL nhập đợt này</th></tr></thead>
+          <tbody>${(r.mau || []).map((m, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(m.TenMau || '')}</td><td style="text-align:right;">${fmtNumber(m.SoLuongLuyKe)}</td></tr>`).join('')
+            || '<tr><td colspan="3" style="text-align:center;">(đợt này không có dòng màu nào)</td></tr>'}
+            <tr style="font-weight:bold;"><td colspan="2" style="text-align:right;">Tổng đợt này</td><td style="text-align:right;">${fmtNumber(tongCua(r))}</td></tr></tbody>
+        </table>`;
+    };
+    if (picker) { picker.value = String(recs[recs.length - 1].TienDoID); picker.addEventListener('change', veXem); }
+    veXem();
+
+    const lamMoi = () => renderKhoNhapDaGhi(box, maDH, perm);
+    const bSua = wrap.querySelector('#btnSuaKN');
+    if (bSua) bSua.addEventListener('click', () => openSuaDotKhoNhapModal(maDH, chonHienTai(), lamMoi));
+    const bXoa = wrap.querySelector('#btnXoaKN');
+    if (bXoa) bXoa.addEventListener('click', async () => {
+      const r = chonHienTai();
+      /* Nói rõ HỆ QUẢ: các con số phía sau đọc theo SL nhập kho (SL hoàn thành, giá thành, báo cáo
+         năng suất) sẽ đổi theo — giống hộp xác nhận xóa sổ cắt (v5.99). */
+      if (!confirm(`XÓA đợt nhập kho ${r.__lan} ngày ${fmtDate(r.NgayGhiNhan)}?\n\n`
+        + `Đợt này có ${fmtNumber(tongCua(r))} (${(r.mau || []).length} màu).\n`
+        + 'Tổng SL nhập kho của lệnh sẽ GIẢM đúng phần này -> đổi "SL hoàn thành", giá thành và báo cáo năng suất.\n'
+        + 'Công đoạn hiện tại của đơn KHÔNG bị kéo lùi. Thao tác này KHÔNG hoàn lại được.')) return;
+      try {
+        await apiDelete(`/api/qlsx/orders/${encodeURIComponent(maDH)}/ghinhankhonhap/${r.TienDoID}`);
+        toast('Đã xóa đợt nhập kho.', 'success');
+        lamMoi();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+  // Sửa 1 đợt nhập kho: SL theo từng màu CỦA ĐÚNG ĐỢT NÀY + ngày + ghi chú (không tạo đợt mới).
+  function openSuaDotKhoNhapModal(maDH, rec, onDone) {
+    const rows = rec.mau || [];
+    const modal = openModal(`
+      <h3>Sửa đợt nhập kho — ${escapeHtml(maDH)} · đợt ${rec.__lan}</h3>
+      <p class="empty-hint">Sửa SL của <b>đúng đợt này</b>. Các đợt khác không đổi, nên tổng lũy kế của
+        lệnh chỉ thay đổi đúng phần chênh của đợt này.</p>
+      <div class="form-grid">
+        <div class="form-row"><label>Ngày ghi nhận</label><input type="date" id="knNgay" value="${rec.NgayGhiNhan ? String(rec.NgayGhiNhan).slice(0, 10) : ''}"></div>
+        <div class="form-row"><label>Ghi chú</label><input id="knGhiChu" value="${escapeHtml(rec.GhiChu || '')}"></div>
+      </div>
+      <div class="lap-wrap"><table class="lap-table">
+        <colgroup><col><col style="width:170px"></colgroup>
+        <thead><tr><th style="width:38px;">STT</th><th>Màu</th><th>SL nhập đợt này</th></tr></thead>
+        <tbody>${rows.map((m, __i) => `<tr data-knrow data-mau="${m.MauSacID}"><td style="text-align:center;">${__i + 1}</td>
+          <td>${escapeHtml(m.TenMau || '')}</td>
+          <td class="col-so"><input class="kn-sl" type="number" min="0" value="${m.SoLuongLuyKe != null ? m.SoLuongLuyKe : ''}"></td></tr>`).join('')
+          || '<tr><td colspan="3" class="empty-hint">Đợt này không có dòng màu nào.</td></tr>'}</tbody></table></div>
+      <div class="toolbar" style="margin-top:6px;"><span class="empty-hint" style="padding:0;">Tổng đợt này: <b id="knTong">0</b></span></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="knHuy">Hủy</button>
+        <button type="button" class="btn" id="knLuu">💾 Lưu</button>
+      </div>`);
+    const tinhLai = () => {
+      let t = 0;
+      modal.querySelectorAll('[data-knrow]').forEach(r => { t += Number(r.querySelector('.kn-sl').value) || 0; });
+      modal.querySelector('#knTong').textContent = fmtNumber(t);
+    };
+    modal.querySelectorAll('.kn-sl').forEach(i => i.addEventListener('input', tinhLai));
+    tinhLai();
+    modal.querySelector('#knHuy').addEventListener('click', closeModal);
+    modal.querySelector('#knLuu').addEventListener('click', async () => {
+      const chiTietMau = Array.from(modal.querySelectorAll('[data-knrow]')).map(r => ({
+        mauSacId: Number(r.dataset.mau), soLuong: Number(r.querySelector('.kn-sl').value) || 0
+      }));
+      try {
+        await apiPut(`/api/qlsx/orders/${encodeURIComponent(maDH)}/ghinhankhonhap/${rec.TienDoID}`, {
+          chiTietMau, ngayGhiNhan: modal.querySelector('#knNgay').value || null,
+          ghiChu: modal.querySelector('#knGhiChu').value || null
+        });
+        closeModal();
+        toast('Đã lưu đợt nhập kho.', 'success');
+        if (onDone) onDone();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  /* ================================================================================================
      v6.12 — GHI NHẬN MAY ĐÃ GỬI: XEM / SỬA / XÓA (làm giống khối "Sổ cắt đã ghi nhận" ở công đoạn Cắt)
      Trước đây bấm "Gửi" ở May là xong, gõ nhầm SL thì phải ghi thêm 1 lần "bù" -> lịch sử rối, luỹ kế sai.
      ================================================================================================ */
@@ -4274,12 +4399,21 @@ window.ModuleQLSX = (function () {
         // v6.12: khối "Ghi nhận May đã gửi" — xem/sửa/xóa từng lần đã Gửi (giống sổ cắt ở công đoạn Cắt).
         renderMayDaGhi(box, maDH, perm);
       } else if (stageCode === 'KN') {
+        /* v7.56: NHẬP NHIỀU ĐỢT. Các đợt CỘNG DỒN (xem effectiveTienDoIds ở backend), nên form phải
+           hiện "đã nhập lũy kế" và "còn lại so với sổ cắt" — không thì người dùng không biết đợt này
+           nên nhập bao nhiêu, và dễ nhập lại cả số đã nhập rồi. Số lũy kế lấy từ backend
+           (detail.slKhoNhapTheoMau), CÙNG hàm với con số hệ thống đang tính. */
+        const daNhapTheoMau = detail.slKhoNhapTheoMau || {};
+        const conLaiCua = (ct) => Math.max(0, (Number(ct.SoLuong) || 0) - (Number(daNhapTheoMau[ct.MauSacID]) || 0));
         box.innerHTML = `<div class="form-row"><label>Số lượng thực tế nhập kho theo màu</label>
+          <div class="empty-hint" style="text-align:left;">Nhập được <b>nhiều đợt</b>: mỗi lần Gửi là một đợt, các đợt <b>cộng dồn</b>. Ô "SL nhập đợt này" chỉ điền phần <b>nhập thêm lần này</b>, không điền lại số đã nhập.</div>
           <div class="row-repeater">${catMauList.map(ct => `
-            <div class="row-item" style="grid-template-columns:140px 1fr 140px 110px;">
+            <div class="row-item" style="grid-template-columns:140px 1fr 1fr 1fr 140px 110px;">
               <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
               <div class="form-row"><label>SL tổng từ Cắt</label><div class="readonly-fact">${fmtNumber(ct.SoLuong || 0)}</div></div>
-              <div class="form-row"><label>SL thực tế nhập kho</label><input type="number" min="0" class="kho-qty" data-mausac="${ct.MauSacID}"></div>
+              <div class="form-row"><label>Đã nhập (lũy kế)</label><div class="readonly-fact">${fmtNumber(daNhapTheoMau[ct.MauSacID] || 0)}</div></div>
+              <div class="form-row"><label>Còn lại</label><div class="readonly-fact" style="color:${conLaiCua(ct) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct))}</div></div>
+              <div class="form-row"><label>SL nhập đợt này</label><input type="number" min="0" class="kho-qty" data-mausac="${ct.MauSacID}" data-conlai="${conLaiCua(ct)}" data-tenmau="${escapeHtml(ct.TenMau)}"></div>
               ${/* v6.31: CHỈ hiện ô đơn vị quy đổi khi mã hàng THẬT SỰ có khai ĐVT quy đổi.
                    Trước đây thiếu thì vẫn hiện "Ri", nhưng backend (qlsx.js ~3187) chỉ nhân hệ số khi
                    DonViQuyDoi khác rỗng -> chọn "Ri" là ghi vào kho THIẾU đúng <tỷ lệ> lần, im lặng. */''}
@@ -4289,7 +4423,10 @@ window.ModuleQLSX = (function () {
               }</select>${!String(theKho.DonViQuyDoi || '').trim() && Number(theKho.LoaiRi) > 1
                 ? '<div class="empty-hint" style="color:#b26a00;">Mã này có tỷ lệ quy đổi nhưng CHƯA khai "ĐVT quy đổi" ở Thẻ kho — chỉ nhập được theo đơn vị chính.</div>' : ''}</div>
             </div>`).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>'}</div>
-          </div>`;
+          </div>
+          <div id="knDaGhi"></div>`;
+        // v7.56: khối "Kho nhập đã ghi" — xem/sửa/xóa từng đợt (giống "Ghi nhận May đã gửi").
+        renderKhoNhapDaGhi(box.querySelector('#knDaGhi'), maDH, perm);
       } else if (stageCode === 'GIT') {
         // v5.32: Giao in theu - hien tong SL ban cat mau chinh (tham khao) + chon NHIEU nha in theu + SL giao.
         box.innerHTML = `<div class="form-row"><label>Tổng SL bàn cắt (màu chính)</label><div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái</div></div>
@@ -4451,6 +4588,22 @@ window.ModuleQLSX = (function () {
           const donViDaChon = modal.querySelector(`.kho-donvi[data-mausac="${mauSacId}"]`).value;
           return { mauSacId, soLuong: i.value, donViDaChon };
         });
+        /* v7.56: CẢNH BÁO (không chặn) khi đợt này làm tổng vượt SL cắt. Không chặn vì nhập bù /
+           hàng làm thêm là có thật; nhưng im lặng thì gõ thừa một số 0 là tồn kho sai mà không ai biết.
+           So ở đơn vị của Ô ĐANG NHẬP: chọn ĐVT quy đổi (Ri) thì 1 = nhiều cái, nên phải nhân hệ số
+           trước khi so với "còn lại" (đang tính theo đơn vị chính) — không nhân là cảnh báo sai hết. */
+        const heSo = Math.max(1, Number(theKho.LoaiRi) || 1);
+        const dvQuyDoi = String(theKho.DonViQuyDoi || '').trim().toLowerCase();
+        const vuot = Array.from(modal.querySelectorAll('.kho-qty')).filter(i => i.value !== '').map(i => {
+          const dv = String(modal.querySelector(`.kho-donvi[data-mausac="${i.dataset.mausac}"]`).value || '').trim().toLowerCase();
+          const nhanHeSo = dvQuyDoi && dv === dvQuyDoi ? heSo : 1;
+          const themCai = (Number(i.value) || 0) * nhanHeSo;
+          const conLai = Number(i.dataset.conlai) || 0;
+          return themCai > conLai ? { ten: i.dataset.tenmau, themCai, conLai } : null;
+        }).filter(Boolean);
+        if (vuot.length && !confirm('Các màu sau nhập VƯỢT phần còn lại so với sổ cắt:\n\n'
+          + vuot.map(v => `• ${v.ten}: nhập ${fmtNumber(v.themCai)} / còn lại ${fmtNumber(v.conLai)}`).join('\n')
+          + '\n\nSố nhập kho sẽ lớn hơn số đã cắt. Vẫn ghi?')) return;
       } else if (stageCode === 'GIT' || stageCode === 'NIT') {
         // v5.32: in theu (giao/nhan) da luu ngay qua nut instant-save - "Gửi" chi ghi nhan + chuyen cong doan.
       } else if (stageCode === 'NGC') {

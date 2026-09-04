@@ -302,7 +302,12 @@ router.get('/orders/:maDH', requireAuth, requirePermission('QLSX', 'view'), requ
   const soDoList = await getSoDoList(pool, order.DonHangID);
   const nhaGiaCongChiTiet = await getNhaGiaCongChiTiet(pool, order.DonHangID);
 
-  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet } });
+  /* v7.56: SL ĐÃ NHẬP KHO LŨY KẾ theo màu — form Kho nhập cần hiện "đã nhập / còn lại" để nhập
+     nhiều đợt. Dùng CHÍNH getStageActualQtyByColor + effectiveTienDoIds (quy tắc cộng dồn ở đó), nên
+     con số trên form luôn khớp con số hệ thống đang tính. */
+  const knStageIdForm = await getKhoNhapStageId(pool);
+  const slKhoNhapTheoMau = knStageIdForm ? await getStageActualQtyByColor(pool, order.DonHangID, knStageIdForm) : {};
+  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet } });
 });
 
 // v5.0: chi tiet vai LONG NHAU - moi dong "Chính" mang theo mang "phoi" cua chinh no (loc theo
@@ -473,6 +478,30 @@ async function effectiveTienDoIds(pool, donHangId, stageId) {
                               WHERE t2.DonHangID=t.DonHangID AND t2.StageID=t.StageID AND t2.SoDoID=t.SoDoID))`);
     return r.recordset.map(x => x.TienDoID);
   }
+  /* ================================================================================================
+     v7.56 — KHO NHAP GHI NHIEU DOT, CONG DON (migration_v692).
+     Hang khong hoan thien mot luc: nhap 100 hom nay, mai nhap tiep 50 -> tong phai la 150. Truoc day
+     nhanh nay chi lay LAN GHI GAN NHAT nen ghi lan 2 la THAY THE lan 1.
+
+     ⚠️ CHI cong don cac lan ghi CO CO `CongDonKN = 1` (tuc ghi tu ban nay tro di) + CONG THEM lan ghi
+     CU gan nhat. Ly do nguoi dung da chot: truoc ban nay, "ghi lai" duoc hieu la GHI LAI DE SUA, nen
+     cong don ca du lieu cu se lam moi lenh tung ghi lai bi CONG GAP LEN — doi "SL hoan thanh", gia
+     thanh, bao cao nang suat ma khong ai biet.
+     Giu lan CU gan nhat lam DIEM BAT DAU: do dung la con so ma he thong dang hien truoc khi nang cap,
+     nen lenh dang nhap do (1 lan cu + cac dot moi) khong bi mat phan da nhap.
+     ================================================================================================ */
+  const knId = await getKhoNhapStageId(pool);
+  if (knId && Number(stageId) === Number(knId) && await coCotCongDonKN(pool)) {
+    const r = await pool.request().input('id', sql.Int, donHangId).input('stage', sql.Int, stageId).query(`
+      SELECT TienDoID FROM TienDoSanXuat
+      WHERE DonHangID=@id AND StageID=@stage AND ISNULL(CongDonKN, 0) = 1
+      UNION
+      SELECT TOP 1 TienDoID FROM TienDoSanXuat
+      WHERE DonHangID=@id AND StageID=@stage AND CongDonKN IS NULL
+      ORDER BY TienDoID DESC`);
+    return r.recordset.map(x => x.TienDoID);
+  }
+
   const latest = await pool.request().input('id', sql.Int, donHangId).input('stage', sql.Int, stageId)
     .query('SELECT TOP 1 TienDoID, NhomTienDoID FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@stage ORDER BY TienDoID DESC');
   if (!latest.recordset.length) return [];
@@ -480,6 +509,17 @@ async function effectiveTienDoIds(pool, donHangId, stageId) {
   const r = await pool.request().input('b', sql.Int, batchTag)
     .query('SELECT TienDoID FROM TienDoSanXuat WHERE TienDoID=@b OR NhomTienDoID=@b');
   return r.recordset.map(x => x.TienDoID);
+}
+/* v7.56: mot ban do cot CongDonKN (cache — cot khong bien mat giua cac request). */
+let __coCongDonKN = null;
+async function coCotCongDonKN(pool) {
+  if (__coCongDonKN === null) {
+    try {
+      const r = (await pool.request().query("SELECT COL_LENGTH('TienDoSanXuat','CongDonKN') AS c")).recordset[0] || {};
+      __coCongDonKN = r.c != null;
+    } catch (e) { __coCongDonKN = false; }
+  }
+  return __coCongDonKN;
 }
 async function getStageBanCount(pool, donHangId, stageId) {
   const ids = await effectiveTienDoIds(pool, donHangId, stageId);
@@ -1761,6 +1801,104 @@ router.delete('/orders/:maDH/ghinhanmay/:tienDoId', requireAuth, requirePermissi
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Không xóa được ghi nhận May: ' + err.message });
+  }
+});
+
+/* ==================================================================================================
+   v7.56 — KHO NHẬP ĐÃ GHI: xem / sửa / xóa TỪNG ĐỢT.
+   Từ v7.56 các đợt Kho nhập CỘNG DỒN, nên phải có đường sửa/xóa từng đợt: gõ sai một đợt mà không
+   sửa được thì con số sai vĩnh viễn (trước đây ghi lại là thay thế nên không cần).
+   Dùng ĐÚNG khuôn của "Ghi nhận May đã gửi" (GET/PUT/DELETE ghinhanmay) — hai màn cùng việc thì
+   cùng một cách làm, không phải học lại.
+   ⚠️ XÓA một đợt làm TỔNG SL nhập kho của đơn GIẢM đúng phần đó -> đổi "SL hoàn thành", giá thành,
+   báo cáo năng suất. Frontend phải nói rõ trong hộp xác nhận (giống xóa sổ cắt v5.99).
+   ================================================================================================== */
+async function timTienDoKhoNhap(pool, tienDoId, donHangId) {
+  const td = (await pool.request().input('id', sql.Int, tienDoId).query(`
+    SELECT td.TienDoID, td.DonHangID, c.MaCongDoan FROM TienDoSanXuat td
+    JOIN CongDoanSanXuat c ON c.StageID = td.StageID WHERE td.TienDoID=@id`)).recordset[0];
+  if (!td || td.DonHangID !== donHangId) return { loi: 'Không tìm thấy ghi nhận của đơn hàng này.' };
+  if (td.MaCongDoan !== 'KN') return { loi: 'Bản ghi này không phải công đoạn Kho nhập — không sửa ở đây.' };
+  return { td };
+}
+router.get('/orders/:maDH/ghinhankhonhap', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const knId = await getKhoNhapStageId(pool);
+  if (!knId) return res.json({ success: true, data: { records: [], mau: [], dangTinh: [] } });
+  /* `dangTinh` = danh sách TienDoID mà hệ thống ĐANG CỘNG vào tổng (theo quy tắc ở effectiveTienDoIds).
+     Trả kèm để màn hình đánh dấu rõ đợt nào đang được tính — lệnh cũ có 2 đợt thì chỉ đợt cuối được
+     tính, không nói ra thì người dùng cộng tay lại không khớp và tưởng hệ thống sai. */
+  const dangTinh = await effectiveTienDoIds(pool, order.DonHangID, knId);
+  const coCongDon = await coCotCongDonKN(pool);
+  const recs = (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, knId).query(`
+    SELECT td.TienDoID, td.NgayGhiNhan, td.ThoiGianNhap, td.GhiChu, u.HoTen AS NguoiCapNhat,
+           ${coCongDon ? 'ISNULL(td.CongDonKN, 0)' : 'CAST(0 AS BIT)'} AS CongDonKN,
+           ISNULL((SELECT SUM(ct.SoLuongLuyKe) FROM TienDoChiTietMau ct WHERE ct.TienDoID = td.TienDoID), 0) AS TongSL
+    FROM TienDoSanXuat td
+    LEFT JOIN Users u ON u.UserID = td.NguoiCapNhatID
+    WHERE td.DonHangID = @id AND td.StageID = @s
+    ORDER BY td.TienDoID`)).recordset;
+  const mau = recs.length ? (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, knId).query(`
+    SELECT ct.TienDoID, ct.MauSacID, ms.TenMau, ct.SoLuongLuyKe
+    FROM TienDoChiTietMau ct
+    JOIN TienDoSanXuat td ON td.TienDoID = ct.TienDoID
+    LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+    WHERE td.DonHangID = @id AND td.StageID = @s
+    ORDER BY ms.TenMau`)).recordset : [];
+  res.json({ success: true, data: { records: recs, mau, dangTinh } });
+});
+router.put('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    const { loi } = await timTienDoKhoNhap(pool, Number(req.params.tienDoId), order.DonHangID);
+    if (loi) return res.status(400).json({ success: false, message: loi });
+    const id = Number(req.params.tienDoId);
+    const b = req.body || {};
+    if (Array.isArray(b.chiTietMau)) {
+      /* Ghi lại TOÀN BỘ dòng màu của ĐỢT NÀY (xóa rồi chèn) — giống PUT ghinhanmay. Đợt khác không
+         bị đụng tới, nên tổng cộng dồn của đơn chỉ đổi đúng phần của đợt này. */
+      const hopLe = b.chiTietMau.filter(m => m.mauSacId != null && Number(m.soLuong) >= 0);
+      await pool.request().input('id', sql.Int, id).query('DELETE FROM TienDoChiTietMau WHERE TienDoID=@id');
+      for (const m of hopLe) {
+        await pool.request().input('TienDoID', sql.Int, id).input('MauSacID', sql.Int, m.mauSacId)
+          .input('SoLuongLuyKe', sql.Int, Math.round(Number(m.soLuong) || 0))
+          .query('INSERT INTO TienDoChiTietMau (TienDoID, MauSacID, SoLuongLuyKe) VALUES (@TienDoID, @MauSacID, @SoLuongLuyKe)');
+      }
+    }
+    const co = (k) => Object.prototype.hasOwnProperty.call(b, k);
+    if (co('ngayGhiNhan') || co('ghiChu')) {
+      const rq = pool.request().input('id', sql.Int, id);
+      const dat = [];
+      if (co('ngayGhiNhan') && b.ngayGhiNhan) { rq.input('ng', sql.Date, b.ngayGhiNhan); dat.push('NgayGhiNhan=@ng'); }
+      if (co('ghiChu')) { rq.input('gc', sql.NVarChar, b.ghiChu || null); dat.push('GhiChu=@gc'); }
+      if (dat.length) await rq.query(`UPDATE TienDoSanXuat SET ${dat.join(', ')} WHERE TienDoID=@id`);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[qlsx PUT /ghinhankhonhap] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi sửa đợt nhập kho: ' + err.message });
+  }
+});
+router.delete('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    const { loi } = await timTienDoKhoNhap(pool, Number(req.params.tienDoId), order.DonHangID);
+    if (loi) return res.status(400).json({ success: false, message: loi });
+    const id = Number(req.params.tienDoId);
+    try { await pool.request().input('id', sql.Int, id).query('DELETE FROM TienDoChiTietMau WHERE TienDoID=@id'); }
+    catch (e) { /* bảng có thể chưa có ở DB rất cũ */ }
+    const kq = await pool.request().input('id', sql.Int, id).query('DELETE FROM TienDoSanXuat WHERE TienDoID=@id');
+    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Đợt nhập kho đã bị xóa trước đó.' });
+    res.json({ success: true });   // KHÔNG kéo lùi công đoạn hiện tại của đơn (giống xóa sổ cắt v5.99)
+  } catch (err) {
+    console.error('[qlsx DELETE /ghinhankhonhap] ', err);
+    res.status(400).json({ success: false, message: 'Không xóa được đợt nhập kho: ' + err.message });
   }
 });
 
@@ -3135,6 +3273,8 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
     // dinh, da duoc KHOA cho 8 cong doan he thong qua cot LaHeThong - xem migration_v59.sql +
     // backend/routes/danhmuc.js). 'KN' = Kho nhập (xem migration_v59.sql cho toan bo bang ma).
     const isKhoNhap = stage.MaCongDoan === 'KN';
+    // v7.56: chua chay migration_v692 thi khong ghi cot -> he thong chay y nhu truoc (lan gan nhat).
+    const coCongDon = await coCotCongDonKN(pool);
 
     // v5.24 (sua tiep v5.23 - checkbox doc lap thay radio): ghi 2 co DaGiaoNhaLam/DaGiaoGiaCong - nguon
     // THAT SU cho tinhNextStage() (May) va frontend showGiaoViec (module.qlsx.js), thay cho cot don gia
@@ -3274,9 +3414,13 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
         // v5.13 (muc 1.2.2.1): chi co y nghia o cong doan Cat (frontend chi gui khi don co > 1 so do) -
         // NULL cho moi cong doan khac hoac don chua khai bao/chi co 1 so do.
         .input('SoDoID', sql.Int, stage.MaCongDoan === 'CAT' ? (soDoId || null) : null)
-        .query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu, MetSoDoDai, KhoVaiSoDo, MaRap, SttSoCat, NhanVienTraiVaiID, NhanVienCatID, TenNhaGiaCongTaiThoiDiem, SoDoID)
+        /* v7.56: danh dau lan ghi KHO NHAP thuoc che do CONG DON (migration_v692). Chi dat = 1 cho
+           dung cong doan 'KN'; moi cong doan khac de NULL. Cac lan ghi CU (= NULL) van chi tinh lan
+           gan nhat -> so cua lenh cu KHONG doi. Xem quy tac doc o effectiveTienDoIds(). */
+        .input('CongDonKN', sql.Bit, isKhoNhap ? 1 : null)
+        .query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu, MetSoDoDai, KhoVaiSoDo, MaRap, SttSoCat, NhanVienTraiVaiID, NhanVienCatID, TenNhaGiaCongTaiThoiDiem, SoDoID${coCongDon ? ', CongDonKN' : ''})
                 OUTPUT INSERTED.TienDoID
-                VALUES (@DonHangID, @NgayGhiNhan, @StageID, @NguoiCapNhatID, @GhiChu, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @SttSoCat, @NhanVienTraiVaiID, @NhanVienCatID, @TenNhaGiaCongTaiThoiDiem, @SoDoID)`);
+                VALUES (@DonHangID, @NgayGhiNhan, @StageID, @NguoiCapNhatID, @GhiChu, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @SttSoCat, @NhanVienTraiVaiID, @NhanVienCatID, @TenNhaGiaCongTaiThoiDiem, @SoDoID${coCongDon ? ', @CongDonKN' : ''})`);
       tienDoId = tdResult.recordset[0].TienDoID;
 
       // v5.2: luu DAY DU danh sach nhan vien trai vai (cho phep toi da 2 nguoi, xem TienDoTraiVai trong
