@@ -132,8 +132,12 @@ kiem(/if \(activeTab === 'congnogiacong'\) return renderCongNoGiaCong\(perm\)/.t
 ['renderCongNoGiaCong', 'soChiTietGiaCong'].forEach(h =>
   kiem(new RegExp(`async function ${h}\\s*\\(`).test(sFeCongNo), `co khai ${h}()`));
 kiem(/Tiền gia công<\/th><th>Tiền in thêu/.test(sFeCongNo), 'bang tach 2 cot tien (gia cong / in theu)');
-kiem(/module\.congno\.js\?v=7\.53/.test(sIndex) && /module\.qlsx\.js\?v=7\.53/.test(sIndex),
-  'index.html bump congno + qlsx');
+/* Khong ghim dung mot so: ban sau sua tiep 2 file nay se bump len 7.54, 7.55... — ghim so la test
+   cu do oan mot thay doi hoan toan dung (da mac 3 lan, xem kiem_chungtu_congno_ncc muc 8). */
+const vCongNo = parseFloat((sIndex.match(/module\.congno\.js\?v=([\d.]+)/) || [])[1] || 0);
+const vQlsx = parseFloat((sIndex.match(/module\.qlsx\.js\?v=([\d.]+)/) || [])[1] || 0);
+kiem(vCongNo >= 7.53 && vQlsx >= 7.53,
+  'index.html bump congno + qlsx (>= 7.53)', `congno=${vCongNo} qlsx=${vQlsx}`);
 
 /* ================================ B7: MO PHONG SO TIEN ================================ */
 console.log('\n=== B7. MO PHONG: tong tren so cong no = tong cua chinh 2 ham luong ===');

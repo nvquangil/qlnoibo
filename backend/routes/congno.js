@@ -1465,12 +1465,18 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
   ketBang(ws, cot.length, dongTD);
 }
 
-async function sheetPhieuChi(pool, wb, tienIch, nccId) {
+/* v7.54: + tham so `nhaGiaCongId` de sheet nay loc duoc phieu chi cua NHA GIA CONG (tab cong no
+   gia cong / in theu). Mot ham cho ca hai loai doi tuong; viet sheet thu hai la hai dinh dang phieu
+   chi khac nhau trong cung mot he thong. */
+async function sheetPhieuChi(pool, wb, tienIch, nccId, nhaGiaCongId) {
   const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
   const cC = await tapCot(pool, 'PhieuChi');
   const cTK = await tapCot(pool, 'DanhMucTaiKhoan');
   const rq = pool.request();
   if (nccId) rq.input('n', sql.Int, nccId);
+  if (nhaGiaCongId) rq.input('ngc', sql.Int, nhaGiaCongId);
+  /* Cot NhaGiaCongID cua PhieuChi co tu dau, nhung van do de dong bo voi cach lam cua ca file. */
+  const locNGC = nhaGiaCongId && cC.has('NhaGiaCongID');
   const rows = (await rq.query(`
     SELECT ${cotAT(cC, 'c', 'SoPhieu', 'NVARCHAR(30)')},
            ${cotAT(cC, 'c', 'NgayChi', 'DATE')},
@@ -1481,19 +1487,20 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId) {
            ${cotAT(cC, 'c', 'LoaiPhieu', 'NVARCHAR(30)')},
            ${cotAT(cTK, 'tk', 'MaTK', 'NVARCHAR(30)')},
            ${cotAT(cTK, 'tk', 'TenTK', 'NVARCHAR(150)')},
-           ncc.TenNCC, u.HoTen AS NguoiTao
+           ncc.TenNCC, ${cC.has('NhaGiaCongID') ? 'ngc.TenNha AS TenNhaGiaCong' : "CAST(NULL AS NVARCHAR(150)) AS TenNhaGiaCong"}, u.HoTen AS NguoiTao
     FROM PhieuChi c
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = ${cC.has('NCC_ID') ? 'c.NCC_ID' : 'NULL'}
+    ${cC.has('NhaGiaCongID') ? 'LEFT JOIN NhaGiaCong ngc ON ngc.NhaGiaCongID = c.NhaGiaCongID' : ''}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN Users u ON u.UserID = ${cC.has('NguoiTaoID') ? 'c.NguoiTaoID' : 'NULL'}
-    ${nccId ? 'WHERE c.NCC_ID = @n' : ''}
+    ${locNGC ? 'WHERE c.NhaGiaCongID = @ngc' : (nccId ? 'WHERE c.NCC_ID = @n' : '')}
     ORDER BY ${cC.has('NgayChi') ? 'c.NgayChi DESC,' : ''} c.PhieuChiID DESC`)).recordset;
   const ws = wb.addWorksheet('Phiếu chi');
   const cot = [
     { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
     { header: 'Ngày chi', key: 'Ngay', width: 11 },
-    ...(nccId ? [] : [{ header: 'Nhà cung cấp', key: 'TenNCC', width: 26 },
-                      { header: 'Loại đối tượng', key: 'LoaiDoiTuong', width: 14 }]),
+    ...((nccId || locNGC) ? [] : [{ header: 'Đối tượng', key: 'TenNCC', width: 26 },
+                                 { header: 'Loại đối tượng', key: 'LoaiDoiTuong', width: 14 }]),
     { header: 'Số tiền', key: 'SoTien', width: 16 },
     { header: 'Hình thức', key: 'HinhThuc', width: 14 },
     { header: 'Tài khoản', key: 'TenTaiKhoan', width: 22 },
@@ -1501,10 +1508,13 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId) {
     { header: 'Diễn giải', key: 'DienGiai', width: 34 },
     { header: 'Người lập', key: 'NguoiTao', width: 16 }
   ];
-  dauTrang(ws, cot.length, 'CHI TIẾT PHIẾU CHI', nccId ? 'Nhà cung cấp: ' + ((rows[0] || {}).TenNCC || '') : null);
+  dauTrang(ws, cot.length, 'CHI TIẾT PHIẾU CHI',
+    locNGC ? 'Nhà gia công / in thêu: ' + ((rows[0] || {}).TenNhaGiaCong || '')
+           : (nccId ? 'Nhà cung cấp: ' + ((rows[0] || {}).TenNCC || '') : null));
   const dongTD = dongTieuDeCot(ws, cot).number;
   rows.forEach(r => ws.addRow({
-    SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayChi), TenNCC: r.TenNCC || '',
+    /* Cot "Doi tuong" gom ca NCC va nha gia cong — mot phieu chi chi thuoc mot trong hai. */
+    SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayChi), TenNCC: r.TenNCC || r.TenNhaGiaCong || '',
     LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
     TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), LoaiPhieu: r.LoaiPhieu || '', DienGiai: r.DienGiai || '',
     NguoiTao: r.NguoiTao || ''
@@ -1851,7 +1861,9 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
     /* v7.32: them 2 nhanh 'phieuthu' / 'phieuchi' — xuat THANG danh sach chung tu, khong kem cong no.
        ⚠️ Phai nhan dien TRUOC khi rot xuong nhanh 'kh': de nguyen 3 dong cu thi loai=phieuthu se bi
        coi la 'kh' va tra ve file cong no khach hang — nguoi dung bam nut nay lai ra file khac. */
-    const loai = ['ncc', 'phieuthu', 'phieuchi'].indexOf(req.query.loai) !== -1 ? req.query.loai : 'kh';
+    /* v7.54: + 'gc' = cong no NHA GIA CONG / IN THEU. Phai nam trong danh sach nhan dien nay, keo
+       ?loai=gc bi coi la 'kh' va tra ve file cong no khach hang — dung cai bay da mac o v7.32. */
+    const loai = ['ncc', 'gc', 'phieuthu', 'phieuchi'].indexOf(req.query.loai) !== -1 ? req.query.loai : 'kh';
     const wb = new ExcelJS.Workbook();
 
     /* v6.47: XUẤT SỔ CHI TIẾT.
@@ -1914,6 +1926,72 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
         else await sheetPhieuChi(pool, wb, tienIch, nccMot);
       }
       return await guiFile(res, wb, `so_chi_tiet_cong_no_${khongDau(kq.tenDoiTuong || loai)}.xlsx`);
+    }
+
+    /* ============================================================================================
+       v7.54 — XUAT EXCEL cong no NHA GIA CONG / IN THEU.
+         ?loai=gc&nhaGiaCongId=<id> -> so chi tiet cua 1 nha (+ sheet phieu chi cua nha do)
+         ?loai=gc                   -> bang tong hop + so chi tiet cua TAT CA nha
+       Dung CHUNG moi helper (cotSo/doSo/dauTrang/ketBang) va CHUNG ham so chi tiet voi man hinh xem,
+       nen so lieu file Excel khong the lech so tren giao dien.
+       ============================================================================================ */
+    const nhaMot = parseInt(req.query.nhaGiaCongId, 10) || 0;
+    if (loai === 'gc' && nhaMot) {
+      const d = await soChiTietNhaGiaCong(pool, nhaMot);
+      const ws = wb.addWorksheet('Sổ chi tiết');
+      const cot = cotSo(false);
+      dauTrang(ws, cot.length, 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', 'Nhà: ' + (d.tenNha || ''));
+      const dongTD = dongTieuDeCot(ws, cot).number;
+      ghiChuThuTu(ws, cot.length);
+      doSo(ws, d.rows, null);
+      const r = ws.addRow({ Loai: 'CÒN NỢ', LuyKe: d.conNo });
+      r.font = { bold: true };
+      ketBang(ws, cot.length, dongTD);
+      /* Phieu chi cua nha gia cong dung CHUNG sheetPhieuChi (bang PhieuChi, loc theo doi tuong). */
+      if (kemChungTu) await sheetPhieuChi(pool, wb, tienIch, null, nhaMot);
+      return await guiFile(res, wb, `cong_no_gia_cong_${khongDau(d.tenNha || ('nha' + nhaMot))}.xlsx`);
+    }
+    if (loai === 'gc') {
+      const rows = await congNoNhaGiaCong(pool);
+      const ws = wb.addWorksheet('Công nợ gia công - in thêu');
+      const cot = [
+        { header: 'Nhà gia công / in thêu', key: 'TenNha', width: 30 },
+        { header: 'Tiền gia công', key: 'TienGiaCong', width: 18 },
+        { header: 'Tiền in thêu', key: 'TienInThe', width: 18 },
+        { header: 'Điều chỉnh', key: 'DieuChinh', width: 14 },
+        { header: 'Phải trả', key: 'PhaiTra', width: 16 },
+        { header: 'Đã trả', key: 'DaTra', width: 16 },
+        { header: 'Còn nợ', key: 'ConNo', width: 16 },
+        { header: 'Số phiếu chi', key: 'SoPhieuChi', width: 12 }
+      ];
+      dauTrang(ws, cot.length, 'BẢNG TỔNG HỢP CÔNG NỢ NHÀ GIA CÔNG / IN THÊU',
+        'Phải trả = tiền gia công + tiền in thêu (SL đã nhận × đơn giá hạng mục) + điều chỉnh');
+      const dongTDgc = dongTieuDeCot(ws, cot).number;
+      const dongDau = ws.rowCount + 1;
+      rows.forEach(r => ws.addRow(r));
+      if (rows.length) {
+        const c = k => ws.getColumn(k).letter, n = ws.rowCount;
+        const tong = k => ({ formula: `SUM(${c(k)}${dongDau}:${c(k)}${n})` });
+        const t = ws.addRow({
+          TenNha: 'TỔNG', TienGiaCong: tong('TienGiaCong'), TienInThe: tong('TienInThe'),
+          DieuChinh: tong('DieuChinh'), PhaiTra: tong('PhaiTra'), DaTra: tong('DaTra'), ConNo: tong('ConNo')
+        });
+        t.font = { bold: true };
+      }
+      ketBang(ws, cot.length, dongTDgc);
+
+      const ws2gc = wb.addWorksheet('Sổ chi tiết (tất cả)');
+      const cot2gc = cotSo(true, 'Nhà gia công / in thêu');
+      dauTrang(ws2gc, cot2gc.length, 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', 'Toàn bộ đối tượng');
+      const dongTD2gc = dongTieuDeCot(ws2gc, cot2gc).number;
+      ghiChuThuTu(ws2gc, cot2gc.length);
+      for (const n of rows) {
+        const d = await soChiTietNhaGiaCong(pool, n.NhaGiaCongID);
+        doSo(ws2gc, d.rows, n.TenNha);
+      }
+      ketBang(ws2gc, cot2gc.length, dongTD2gc);
+      if (kemChungTu) await sheetPhieuChi(pool, wb, tienIch, null);
+      return await guiFile(res, wb, 'cong_no_gia_cong_in_theu.xlsx');
     }
 
     if (loai === 'kh' && khachMot) {

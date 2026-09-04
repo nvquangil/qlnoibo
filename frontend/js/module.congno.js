@@ -752,6 +752,8 @@ window.ModuleCongNo = (function () {
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
+        ${/* v7.54: xuất Excel — dùng CHUNG route /congno/export (loai=gc) với 2 tab cũ. */''}
+        <button class="btn small secondary" id="btnXuatGC" title="Bảng tổng hợp + sổ chi tiết của tất cả nhà + sheet phiếu chi">⬇️ Xuất tổng hợp (Excel)</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} nhà</span>
       </div>
       <div class="empty-hint" style="text-align:left;">
@@ -778,6 +780,8 @@ window.ModuleCongNo = (function () {
           <td></td></tr>` : ''}</tbody></table>`;
     wireTableSearch(body);
     wireTableSort(body);
+    body.querySelector('#btnXuatGC').addEventListener('click', () =>
+      taiFile('/api/congno/export?loai=gc', 'cong_no_gia_cong_in_theu.xlsx'));
     body.querySelectorAll('.act-ct-gc').forEach(a => a.addEventListener('click', () => soChiTietGiaCong(a.dataset.id)));
   }
 
@@ -798,8 +802,12 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
-      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
+      <div class="modal-actions">
+        <button type="button" class="btn small secondary" id="btnXuatCTGC" title="Sổ chi tiết của nhà này + sheet phiếu chi">⬇️ Xuất Excel sổ này</button>
+        <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    modal.querySelector('#btnXuatCTGC').addEventListener('click', () =>
+      taiFile('/api/congno/export?loai=gc&nhaGiaCongId=' + encodeURIComponent(nhaId), 'cong_no_gia_cong.xlsx'));
     noiDaySoPhieu(modal, () => soChiTietGiaCong(nhaId));   // phiếu chi bấm được
   }
 

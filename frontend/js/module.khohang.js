@@ -2519,7 +2519,8 @@ window.ModuleKhoHang = (function () {
     function itemsTableHtml() {
       return `<table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>Mã Barcode</th><th>Giá trước VAT</th><th>% VAT</th><th>Sau VAT</th><th>Số mầu</th><th>Số cái/1 ri</th></tr></thead>
         <tbody>${items.map(it => `<tr>
-          <td>${escapeHtml(it.MaHang)}</td><td>${escapeHtml(it.TenHang)}</td><td>${escapeHtml(it.MaBarcode || '')}</td>
+          ${/* v7.54: tên trên báo giá = tenBaoGia() (Tên viết hóa đơn, lùi về Tên hàng). */''}
+          <td>${escapeHtml(it.MaHang)}</td><td>${escapeHtml(tenBaoGia(it))}</td><td>${escapeHtml(it.MaBarcode || '')}</td>
           ${/* v6.62: cột "Giá trước VAT" = giá bán CHIA cho (1+VAT), không phải chính giá bán. */''}
           <td>${baoGiaTruocVat(it) != null ? fmtNumber(Math.round(baoGiaTruocVat(it))) : ''}</td><td>${it.PhanTramVAT != null ? fmtNumber(Number(it.PhanTramVAT) * 100) + '%' : ''}</td>
           <td>${baoGiaSauVat(it) != null ? fmtNumber(Math.round(baoGiaSauVat(it))) : ''}</td>
@@ -2552,7 +2553,7 @@ window.ModuleKhoHang = (function () {
       <p class="p-meta"><b>Mã NCC:</b> ${escapeHtml(header.MaNCC || '')} &nbsp; <b>Tên NCC:</b> ${escapeHtml(header.TenNCC || '')}</p>
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
       <table><thead><tr><th>STT</th><th>Mã hàng</th><th>Tên hàng</th><th>Mã Barcode</th><th>Giá trước VAT</th><th>% VAT</th><th>Sau VAT</th><th>Số mầu</th><th>Số cái/1 ri</th></tr></thead>
-      <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(it.MaHang)}</td><td>${escapeHtml(it.TenHang)}</td><td>${escapeHtml(it.MaBarcode || '')}</td>
+      <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(it.MaHang)}</td><td>${escapeHtml(tenBaoGia(it))}</td><td>${escapeHtml(it.MaBarcode || '')}</td>
         ${/* v6.62: xem ghi chú ở baoGiaTruocVat(). */''}
         <td>${baoGiaTruocVat(it) != null ? fmtNumber(Math.round(baoGiaTruocVat(it))) : ''}</td><td>${it.PhanTramVAT != null ? fmtNumber(Number(it.PhanTramVAT) * 100) + '%' : ''}</td>
         <td>${baoGiaSauVat(it) != null ? fmtNumber(Math.round(baoGiaSauVat(it))) : ''}</td><td>${it.SoMau}</td><td>${fmtNumber(it.LoaiRi)}</td></tr>`).join('')}</tbody></table>
@@ -2561,14 +2562,24 @@ window.ModuleKhoHang = (function () {
 
   // v5.19 (muc 2.1): them tham so tuy chon prefill (đã chọn san - dung khi Sua, tu items cua bao gia
   // dang sua) - checkbox mac dinh CHECKED va %VAT lay tu du lieu cu thay vi mac dinh 8/disabled.
+  /* v7.54: TÊN dùng cho báo giá = TÊN VIẾT HÓA ĐƠN của mã hàng (v7.46), lùi về Tên hàng nếu chưa
+     khai. Báo giá gửi ra ngoài phải ghi tên thương mại, không ghi tên nội bộ (tên nội bộ thường kèm
+     cả mã hàng). MỘT hàm để form chọn mã, bảng chi tiết và bản in không ghi ba tên khác nhau. */
+  function tenBaoGia(c) {
+    return String((c && (c.TenHoaDon || c.TenHang)) || '').trim();
+  }
   function candRowHtml(c, prefill) {
     // v6.61: GiaAloha nay là ALIAS của Giá bán (xem khohang.js) -> đổi nhãn cho khỏi hiểu nhầm.
     const gia = c.GiaAloha != null ? `<span style="color:#5f6368;">(${fmtNumber(c.GiaAloha)}đ)</span>` : '<span style="color:#c0392b;">(chưa có Giá bán)</span>';
     const checked = !!prefill;
     const vatValue = prefill && prefill.PhanTramVAT != null ? Math.round(Number(prefill.PhanTramVAT) * 10000) / 100 : 8;
-    return `<label class="bg-cand-row" data-search="${escapeHtml((c.MaHang + ' ' + c.TenHang).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #eee;">
+    /* v7.54: hiện TỒN KHO ngay cạnh mã — người lập báo giá không phải sang màn Thẻ kho tra lại.
+       Backend đã CHỈ trả mã còn tồn, nên ô này luôn > 0; hiện số để biết còn NHIỀU hay chỉ vài cái. */
+    const ton = `<span style="white-space:nowrap;color:#137333;font-weight:600;">tồn ${fmtNumber(c.TongTon)} ${escapeHtml(c.DonViCoBan || 'Cái')}</span>`;
+    const ten = tenBaoGia(c);
+    return `<label class="bg-cand-row" data-search="${escapeHtml((c.MaHang + ' ' + ten + ' ' + (c.TenHang || '')).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #eee;">
       <input type="checkbox" class="bg-chk" value="${c.MaHangID}" ${checked ? 'checked' : ''}>
-      <span style="flex:1;">${escapeHtml(c.MaHang)} — ${escapeHtml(c.TenHang)} ${gia}</span>
+      <span style="flex:1;">${escapeHtml(c.MaHang)} — ${escapeHtml(ten)} ${gia} ${ton}</span>
       <span style="white-space:nowrap;">VAT % <input type="number" class="bg-vat" value="${vatValue}" min="0" max="100" step="0.01" style="width:70px;" ${checked ? '' : 'disabled'}></span>
     </label>`;
   }

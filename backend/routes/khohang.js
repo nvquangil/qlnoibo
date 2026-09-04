@@ -1447,6 +1447,9 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
   try {
     const pool = await getPool();
     const excludeBaoGiaId = req.query.excludeBaoGiaId ? Number(req.query.excludeBaoGiaId) : null;
+    /* v7.54: TEN VIET HOA DON (v7.46, migration_v690) — bao gia gui khach ngoai phai ghi ten thuong
+       mai, khong ghi ten noi bo. Chua chay migration thi tra NULL, frontend tu lui ve TenHang. */
+    const cotTenHDBG = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
     const result = await pool.request().input('excludeBaoGiaId', sql.Int, excludeBaoGiaId).query(`
       /* v6.61: Bao gia Aloha lay thang GIA BAN cua the kho, bo han truong "Gia Aloha" rieng.
          Hai o gia song song luon lech nhau: sua gia ban ma quen sua gia Aloha la bao gia gui khach
@@ -1455,13 +1458,25 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
          du lieu cu giu nguyen, chi la khong dung va khong cho nhap nua.
          LUU Y: chu thich nay nam BEN TRONG chuoi template cua cau SQL -> TUYET DOI khong duoc go
          dau backtick vao day, no se ket thuc chuoi va lam sap ca file. */
-      SELECT h.MaHangID, h.MaHang, h.TenHang, h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
+      SELECT h.MaHangID, h.MaHang, h.TenHang, ${cotTenHDBG} AS TenHoaDon,
+        h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi, h.DonViCoBan,
+        ISNULL(v.TongTonThuc, 0) AS TongTon,
         (SELECT COUNT(*) FROM TheKhoChiTietMau ct WHERE ct.MaHangID = h.MaHangID) AS SoMau
       FROM TheKhoHangHoa h
+      /* v7.54: + TON KHO de nguoi lap bao gia thay ngay con bao nhieu, va CHI HIEN MA CON TON.
+         LEFT JOIN chu khong INNER: ma khong co dong nao trong view van phai ra o cau nay de DIEU KIEN
+         LOC ben duoi la cho DUY NHAT quyet dinh, khong bi an giau boi kieu JOIN.
+         ⚠️ DUNG cot TongTonThuc, KHONG dung TongTon: TongTon = 0 voi ma CHUA CO THE KHO (chi ton qua
+         phieu nhap kho) — lay cot do la ma vua nhap kho bi coi nhu HET va bien mat khoi bao gia.
+         Chinh migration_v682 ghi ro: "Cac man khac (Bao cao ton kho, Ban hang, Catalogue, Don khach)
+         LUON dung TongTonThuc".
+         (Chu thich nay nam TRONG chuoi template -> khong duoc go dau backtick, xem canh bao o tren.) */
+      LEFT JOIN vw_TonKhoHangHoa v ON v.MaHangID = h.MaHangID
       WHERE NOT EXISTS (
         SELECT 1 FROM BaoGiaAlohaChiTiet bc WHERE bc.MaHangID = h.MaHangID
           AND (@excludeBaoGiaId IS NULL OR bc.BaoGiaAlohaID <> @excludeBaoGiaId)
       )
+        AND ISNULL(v.TongTonThuc, 0) > 0
       ORDER BY h.MaHang`);
     res.json({ success: true, data: result.recordset });
   } catch (err) {
@@ -1488,8 +1503,13 @@ router.get('/baogia/:id', requireAuth, requirePermission('KHOHANG', 'view'), req
       SELECT b.*, u.HoTen AS NguoiTao FROM BaoGiaAloha b
       LEFT JOIN Users u ON u.UserID = b.NguoiTaoID WHERE b.ID = @id`);
     if (!headerResult.recordset.length) return res.status(404).json({ success: false, message: 'Không tìm thấy báo giá.' });
+    /* v7.54: TEN VIET HOA DON (v7.46) cho bao gia — chua chay migration_v690 thi tra NULL, frontend
+       tu lui ve TenHang. Dung `coCotTenHoaDon` DA CO SAN (utils/maHangCapNhat.js), khong tu viet ham
+       do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
+    const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
+
     const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
-      SELECT ct.ID, ct.MaHangID, ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
+      SELECT ct.ID, ct.MaHangID, ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
       FROM BaoGiaAlohaChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -1718,8 +1738,13 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
     const headerResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT * FROM BaoGiaAloha WHERE ID=@id');
     if (!headerResult.recordset.length) return res.status(404).json({ success: false, message: 'Không tìm thấy báo giá.' });
     const header = headerResult.recordset[0];
+    /* v7.54: TEN VIET HOA DON (v7.46) cho bao gia — chua chay migration_v690 thi tra NULL, frontend
+       tu lui ve TenHang. Dung `coCotTenHoaDon` DA CO SAN (utils/maHangCapNhat.js), khong tu viet ham
+       do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
+    const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
+
     const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
-      SELECT ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, h.GiaBan AS GiaAloha, h.MaBarcode, h.LoaiRi, h.AnhDaiDien,
+      SELECT ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, h.GiaBan AS GiaAloha, h.MaBarcode, h.LoaiRi, h.AnhDaiDien,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
       FROM BaoGiaAlohaChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -1789,7 +1814,10 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
       const giaGomVat = it.GiaAloha != null ? Number(it.GiaAloha) : null;
       const giaTruocVat = giaGomVat != null ? giaGomVat / (1 + vat) : null;
       const sauVat = giaGomVat;
-      const rowVals = { 1: i + 1, 5: it.TenHang, 6: it.MaBarcode || null, 7: giaTruocVat, 8: vat, 9: sauVat, 15: it.SoMau, 16: it.LoaiRi };
+      /* v7.54: ten tren bao gia = TEN VIET HOA DON, lui ve TenHang neu chua khai. Bao gia gui ra ngoai
+         phai ghi ten thuong mai; frontend (popup xem + ban in) dung cung quy tac qua tenBaoGia(). */
+      const tenBG = String(it.TenHoaDon || it.TenHang || '').trim();
+      const rowVals = { 1: i + 1, 5: tenBG, 6: it.MaBarcode || null, 7: giaTruocVat, 8: vat, 9: sauVat, 15: it.SoMau, 16: it.LoaiRi };
       for (let c = 1; c <= COL_COUNT; c++) {
         const cell = ws.getCell(r, c);
         if (rowVals[c] !== undefined) cell.value = rowVals[c];

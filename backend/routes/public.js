@@ -38,7 +38,9 @@ router.get('/catalogue', async (req, res) => {
              h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi   -- v6.31
       FROM vw_TonKhoHangHoa v
       JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
-      WHERE v.TongTonThuc > 0${await dieuKienCongKhaiMH(pool, 'h')}
+      ${/* v7.54: LEFT JOIN (không phải JOIN) — mã chưa gán danh mục vẫn phải hiện. */''}
+      LEFT JOIN TheKhoDanhMuc dm ON dm.TheKhoDanhMucID = v.TheKhoDanhMucID
+      WHERE v.TongTonThuc > 0${await dieuKienCongKhaiMH(pool, 'h')}${dieuKienCongKhaiDM('dm')}
       ORDER BY v.TenHang`);
     const items = itemsResult.recordset;
     if (!items.length) return res.json({ success: true, data: [] });
@@ -115,6 +117,21 @@ async function dieuKienCongKhaiMH(pool, biDanh) {
   }
   // ISNULL(...,1): dòng dữ liệu cũ chưa kịp có giá trị thì vẫn coi là HIỆN, không tự dưng biến mất.
   return __coCongKhaiMH ? ` AND ISNULL(${biDanh}.CongKhai, 1) = 1` : '';
+}
+
+/* ================================================================================================
+   v7.54 — SỬA LỖI: TẮT công khai của DANH MỤC thẻ kho mà catalogue VẪN hiện mã hàng của danh mục đó.
+   Quy tắc đã ghi ngay trên đầu (v6.71): "hiện khi VÀ CHỈ KHI danh mục CongKhai = 1 VÀ mã hàng
+   CongKhai = 1" — nhưng chỉ nhánh `?dm=<slug>` thực hiện nửa DANH MỤC (WHERE d.CongKhai = 1).
+   Nhánh catalogue CHUNG (không có ?dm=) chỉ lọc nửa MÃ HÀNG, nên tắt cả danh mục cũng không có tác
+   dụng ở đó. Đây là lỗi RÒ DỮ LIỆU RA NGOÀI, không phải lỗi hiển thị.
+
+   `ISNULL(dm.CongKhai, 1) = 1`: mã hàng KHÔNG thuộc danh mục nào (TheKhoDanhMucID NULL) thì không bị
+   danh mục nào tắt -> vẫn hiện. Đòi `dm.CongKhai = 1` sẽ làm mọi mã chưa gán danh mục biến mất khỏi
+   catalogue — mất hàng mà không ai hiểu vì sao.
+   ================================================================================================ */
+function dieuKienCongKhaiDM(biDanh) {
+  return ` AND ISNULL(${biDanh}.CongKhai, 1) = 1`;
 }
 
 router.get('/danhmuc', async (req, res) => {
@@ -390,8 +407,12 @@ router.post('/khach/datdon', requireKhach, async (req, res) => {
         FROM TheKhoHangHoa h
         JOIN vw_TonTheoMau ct ON ct.MaHangID = h.MaHangID   -- v6.89: có cả màu chỉ tồn tại trên phiếu nhập
         JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-        JOIN TheKhoDanhMuc d ON d.TheKhoDanhMucID = h.TheKhoDanhMucID
-        WHERE h.MaHang = @mh AND ms.TenMau = @mau AND d.CongKhai = 1${await dieuKienCongKhaiMH(pool, 'h')}
+        ${/* v7.54: LEFT JOIN + cùng điều kiện với catalogue. Trước là INNER JOIN + `d.CongKhai = 1`,
+              nên mã hàng CHƯA gán danh mục thì KHÁCH THẤY trên catalogue mà ĐẶT KHÔNG ĐƯỢC (báo mã
+              không hợp lệ) — hai nửa của cùng một quy tắc lệch nhau. Nay dùng CHUNG
+              dieuKienCongKhaiDM() để không thể trôi khỏi nhau. */''}
+        LEFT JOIN TheKhoDanhMuc d ON d.TheKhoDanhMucID = h.TheKhoDanhMucID
+        WHERE h.MaHang = @mh AND ms.TenMau = @mau${dieuKienCongKhaiDM('d')}${await dieuKienCongKhaiMH(pool, 'h')}
           ${dmId ? 'AND h.TheKhoDanhMucID = @dm' : ''}`)).recordset[0];
       if (!row) { khongHopLe.push({ maHang, tenMau }); continue; }
       /* v6.31: KHONG ep cung ve 'Ri'/'Cái' nua (truoc day moi don vi khac bi nuot thanh 'Cái').

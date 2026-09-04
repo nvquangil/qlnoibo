@@ -153,8 +153,11 @@ kiem(/row && row\.TenHoaDon \? row\.TenHoaDon : ''/.test(sFeKho),
   'Mo form Sua -> o dien san gia tri cu (khong bam Luu la xoa trang)');
 kiem(/name: 'TenHoaDon', label: 'Tên viết hóa đơn/.test(sFeDm),
   'Danh muc -> Hang hoa (ma hang) co truong TenHoaDon');
-kiem(/module\.khohang\.js\?v=7\.46/.test(sIndex) && /module\.danhmuc\.js\?v=7\.46/.test(sIndex),
-  'index.html da bump ?v= cho 2 file frontend');
+/* Khong ghim dung so — xem ghi chu cung loai o kiem_chungtu_congno_ncc muc 8. */
+const vKho = parseFloat((sIndex.match(/module\.khohang\.js\?v=([\d.]+)/) || [])[1] || 0);
+const vDm = parseFloat((sIndex.match(/module\.danhmuc\.js\?v=([\d.]+)/) || [])[1] || 0);
+kiem(vKho >= 7.46 && vDm >= 7.46,
+  'index.html da bump ?v= cho 2 file frontend (>= 7.46)', `khohang=${vKho} danhmuc=${vDm}`);
 
 console.log('\n=== 7. MO PHONG capNhatMaHang: gui rong = xoa, khong gui = giu nguyen ===');
 /* Pool gia: ghi lai cau SQL + tham so, tra ve du du lieu cho cac cau SELECT ma util can. */
