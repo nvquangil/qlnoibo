@@ -4424,7 +4424,33 @@ window.ModuleQLSX = (function () {
                 ? '<div class="empty-hint" style="color:#b26a00;">Mã này có tỷ lệ quy đổi nhưng CHƯA khai "ĐVT quy đổi" ở Thẻ kho — chỉ nhập được theo đơn vị chính.</div>' : ''}</div>
             </div>`).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>'}</div>
           </div>
+          ${/* v7.57: LUA CHON KET THUC. Chua nhap du so cat thi mac dinh don O LAI cong doan Kho nhap
+                de nhap tiep dot sau; tich o nay la ket thuc lenh (chuyen "Hoàn thành") DU CHUA DU —
+                thuc te hoan thien khong du theo so cat la binh thuong (hang loi, hut, huy...).
+                Nhap DU roi thi lenh tu ket thuc, o nay khong con y nghia -> ghi ro trong dong goi y. */''}
+          <div class="form-row" style="margin-top:8px;">
+            <label style="display:flex;gap:6px;align-items:center;">
+              <input type="checkbox" id="knKetThuc" name="ketThucKhoNhap">
+              <b>Đã hoàn thành</b> — kết thúc lệnh dù chưa nhập đủ số sổ cắt
+            </label>
+            <div class="empty-hint" id="knKetThucGoiY" style="margin-top:2px;"></div>
+          </div>
           <div id="knDaGhi"></div>`;
+        /* Dòng gợi ý nói đúng tình trạng HIỆN TẠI của lệnh (đã nhập / sổ cắt / còn lại) — người dùng
+           quyết định có tích hay không mà không phải tự cộng lại từng màu. */
+        (() => {
+          const tongCat = catMauList.reduce((a, ct) => a + (Number(ct.SoLuong) || 0), 0);
+          const tongDaNhap = catMauList.reduce((a, ct) => a + (Number(daNhapTheoMau[ct.MauSacID]) || 0), 0);
+          const con = Math.max(0, tongCat - tongDaNhap);
+          const el = box.querySelector('#knKetThucGoiY');
+          if (!el) return;
+          el.innerHTML = tongCat <= 0
+            ? 'Lệnh chưa ghi tiến độ Cắt nên không có mốc để đối chiếu — bấm Gửi là lệnh kết thúc như cũ.'
+            : (con > 0
+              ? `Đã nhập <b>${fmtNumber(tongDaNhap)}</b> / sổ cắt <b>${fmtNumber(tongCat)}</b> — còn <b style="color:#c0392b;">${fmtNumber(con)}</b>. `
+                + 'KHÔNG tích: lệnh <b>ở lại</b> công đoạn Kho nhập để nhập tiếp đợt sau.'
+              : `Đã nhập <b>${fmtNumber(tongDaNhap)}</b> / sổ cắt <b>${fmtNumber(tongCat)}</b> — <b style="color:#137333;">đã đủ</b>, lệnh tự kết thúc khi Gửi.`);
+        })();
         // v7.56: khối "Kho nhập đã ghi" — xem/sửa/xóa từng đợt (giống "Ghi nhận May đã gửi").
         renderKhoNhapDaGhi(box.querySelector('#knDaGhi'), maDH, perm);
       } else if (stageCode === 'GIT') {
@@ -4588,6 +4614,8 @@ window.ModuleQLSX = (function () {
           const donViDaChon = modal.querySelector(`.kho-donvi[data-mausac="${mauSacId}"]`).value;
           return { mauSacId, soLuong: i.value, donViDaChon };
         });
+        // v7.57: gửi lựa chọn kết thúc lệnh (chưa đủ + không tích -> backend giữ lại ở Kho nhập).
+        payload.ketThucKhoNhap = !!(modal.querySelector('#knKetThuc') || {}).checked;
         /* v7.56: CẢNH BÁO (không chặn) khi đợt này làm tổng vượt SL cắt. Không chặn vì nhập bù /
            hàng làm thêm là có thật; nhưng im lặng thì gõ thừa một số 0 là tồn kho sai mà không ai biết.
            So ở đơn vị của Ô ĐANG NHẬP: chọn ĐVT quy đổi (Ri) thì 1 = nhiều cái, nên phải nhân hệ số
@@ -4630,8 +4658,22 @@ window.ModuleQLSX = (function () {
       }
 
       try {
-        await apiPost(`/api/qlsx/orders/${maDH}/tiendo`, payload);
-        closeModal(); toast('Đã ghi nhận tiến độ.', 'success'); render(container, currentUser);
+        const kq = await apiPost(`/api/qlsx/orders/${maDH}/tiendo`, payload);
+        closeModal();
+        /* v7.57: NÓI RÕ chuyện gì đã xảy ra ở công đoạn Kho nhập — giữ lại để nhập tiếp, hay đã kết
+           thúc lệnh. Chỉ báo "Đã ghi nhận tiến độ" thì người dùng không biết lệnh còn ở Kho nhập hay
+           đã sang Hoàn thành, mà đó chính là điều họ cần biết để làm phiếu nhập kho. */
+        const kn = kq && kq.data && kq.data.khoNhap;
+        if (kn && kn.giuLai) {
+          toast(`Đã ghi đợt nhập kho. Đã nhập ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} — CÒN `
+            + `${fmtNumber(Math.max(0, (kn.soCat || 0) - (kn.daNhap || 0)))}, lệnh VẪN Ở công đoạn Kho nhập để nhập tiếp.`, 'success');
+        } else if (kn && kn.ketThuc && kn.chuaDu) {
+          toast(`Đã kết thúc lệnh với ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} (chưa đủ sổ cắt) — `
+            + 'chuyển sang làm phiếu nhập kho được rồi.', 'success');
+        } else {
+          toast('Đã ghi nhận tiến độ.', 'success');
+        }
+        render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
     });
   }

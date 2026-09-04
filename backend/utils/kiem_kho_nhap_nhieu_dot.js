@@ -1,5 +1,5 @@
 /* ================================================================================================
-   KIEM CHUNG v7.56 — KHO NHAP: ghi NHIEU DOT, CONG DON (chi voi lan ghi tu ban nay tro di)
+   KIEM CHUNG v7.56/v7.57 — KHO NHAP: ghi NHIEU DOT + chua du so cat thi GIU LAI o Kho nhap
    ------------------------------------------------------------------------------------------------
    Loi goc: `effectiveTienDoIds()` voi cong doan khac 'CAT' chi lay LAN GHI GAN NHAT, nen o Kho nhap
    ghi lan 2 la THAY THE lan 1 -> khong nhap nhieu dot duoc.
@@ -188,6 +188,48 @@ kiem(!!mEff && !!mCoCot && !!mKn && !!mCat, 'cat duoc 4 ham tu routes/qlsx.js');
   console.log('\n=== 8. Bump ?v= ===');
   const v = parseFloat((sIndex.match(/module\.qlsx\.js\?v=([\d.]+)/) || [])[1] || 0);
   kiem(v >= 7.56, 'index.html: module.qlsx.js da bump >= 7.56', 'dang la ' + v);
+
+  console.log('\n=== 9. v7.57: chua du so cat -> GIU LAI o Kho nhap; co lua chon "Da hoan thanh" ===');
+  kiem(/ketThucKhoNhap,/.test(sQlsx), 'route doc `ketThucKhoNhap` tu body');
+  const khoiChuyen = sQlsx.slice(sQlsx.indexOf('const nextIndex = curIndex === -1'),
+    sQlsx.indexOf('// Bao cho cac user phu trach cong doan KE TIEP'));
+  kiem(/if \(isKhoNhap\) \{/.test(khoiChuyen),
+    'tinh knChuaDu CA KHI isLast (Kho nhap thuong LA cong doan cuoi — chinh la truong hop nguoi dung bao)');
+  kiem(/knChuaDu = knSoCat > 0 && knDaNhap < knSoCat/.test(khoiChuyen),
+    'so cat = 0 thi KHONG coi la chua du (khong co moc de so)');
+  kiem(/await getStageActualQty\(pool, order\.DonHangID, stage\.StageID\)/.test(khoiChuyen)
+    && /await getTongSLCatForOrder\(pool, order\.DonHangID\)/.test(khoiChuyen),
+    'dung CHINH 2 ham cua he thong (khong tinh lai kieu khac)');
+  /* ⚠️ Bay da mac khi viet ban nay: ep `isLast = false` -> Kho nhap la cong doan cuoi thi nextIndex = -1
+     va dong `stages[nextIndex].StageID` doc stages[-1] -> TypeError moi lan ghi Kho nhap. */
+  kiem(/const isLast = curIndex === -1 \|\| nextIndex === -1;/.test(khoiChuyen),
+    'isLast van la const — KHONG bi ep lai (ep la stages[-1] -> TypeError)');
+  kiem(!/isLast = false/.test(bo(khoiChuyen)), 'khong co cho nao dat lai isLast');
+  kiem(/const giuLaiOKhoNhap = isKhoNhap && knChuaDu && !ketThucKhoNhap/.test(khoiChuyen),
+    'dieu kien giu lai: dung cong doan KN + chua du + KHONG tich hoan thanh');
+  kiem(/const advanced = !giuLaiOKhoNhap && wouldBeIdx > curPointerIdx/.test(khoiChuyen),
+    'giu lai thi KHONG tien con tro');
+  kiem(/\} else if \(giuLaiOKhoNhap\) \{[\s\S]{0,400}finalStageId = stage\.StageID;/.test(khoiChuyen),
+    'con tro tro vao CHINH cong doan Kho nhap (khong giu con tro cu — giu cu la don khong hien o Kho nhap)');
+  kiem(/finalTrangThai = 'Đang sản xuất';/.test(khoiChuyen.slice(khoiChuyen.indexOf('} else if (giuLaiOKhoNhap)'))),
+    'trang thai la "Dang san xuat", khong phai "Hoan thanh"');
+  kiem(/res\.json\(\{ success: true, data: \{ khoNhap: ketQuaKhoNhap \} \}\)/.test(sQlsx),
+    'tra ket qua ve cho frontend (giu lai / ket thuc / da nhap / so cat)');
+
+  console.log('\n=== 9b. Frontend: o tich + thong bao noi ro ket qua ===');
+  kiem(/id="knKetThuc"/.test(sFe), 'form Kho nhap co o tich "Da hoan thanh"');
+  kiem(/kết thúc lệnh dù chưa nhập đủ số sổ cắt/.test(sFe), 'nhan o tich noi ro y nghia');
+  kiem(/payload\.ketThucKhoNhap = !!\(modal\.querySelector\('#knKetThuc'\) \|\| \{\}\)\.checked/.test(sFe),
+    'gui co len backend');
+  kiem(/id="knKetThucGoiY"/.test(sFe) && /còn <b style="color:#c0392b;">/.test(sFe),
+    'dong goi y hien da nhap / so cat / con lai (nguoi dung khong phai tu cong)');
+  kiem(/Lệnh chưa ghi tiến độ Cắt nên không có mốc để đối chiếu/.test(sFe),
+    'noi ro truong hop chua ghi Cat (khong co moc) -> hanh vi nhu cu');
+  kiem(/lệnh VẪN Ở công đoạn Kho nhập để nhập tiếp/.test(sFe),
+    'sau khi Gui: bao RO la con o Kho nhap (khong chi "Da ghi nhan tien do")');
+  kiem(/Đã kết thúc lệnh với/.test(sFe), 'truong hop ket thuc du chua du cung bao ro');
+  kiem(/const kq = await apiPost\(`\/api\/qlsx\/orders\/\$\{maDH\}\/tiendo`/.test(sFe),
+    'frontend NHAN ket qua tra ve (truoc day bo qua)');
 
   console.log(`\n================ KET QUA: ${dat} dat / ${truot} sai ================`);
   process.exit(truot ? 1 : 0);

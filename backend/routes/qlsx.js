@@ -3223,6 +3223,10 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       // frontend chi gui khi don hang co > 1 dong so do da khai bao (xem module.qlsx.js renderStageFields
       // 'CAT') - de trong/khong gui neu don chi co 0 hoac 1 so do (khong co gi de chon).
       soDoId,
+      /* v7.57 (cong doan 'KN'): nguoi dung TICH "Đã hoàn thành" de ket thuc lenh DU CHUA NHAP DU so
+         so cat (hoan thien khong du la binh thuong: hang loi, hut, huy...). Khong tich + chua du ->
+         don O LAI cong doan Kho nhap de nhap tiep dot sau. Xem khoi tinh `knChuaDu` ben duoi. */
+      ketThucKhoNhap,
       // v5.16 (muc 2.2.1/2.2.2): khi don hang co >= 2 sơ đồ, frontend gui mang catGroups (1 phan tu/so do
       // co du lieu) THAY VI cac field phang sttSoCat/nhanVienTraiVaiIds/nhanVienCatId/soDoId/chiTietCay o
       // tren - xem nhanh rieng ben duoi (isMultiCatGroups).
@@ -3530,6 +3534,32 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
     // v5.0: bo qua cong doan "May" neu don hang giao gia cong ngoai (khac "Nha Lam") - xem tinhNextStage().
     const nextIndex = curIndex === -1 ? -1 : tinhNextStage(stages, curIndex, order);
     const isLast = curIndex === -1 || nextIndex === -1;
+
+    /* ================================================================================================
+       v7.57 — KHO NHẬP: CHƯA ĐỦ SỐ SỔ CẮT THÌ GIỮ LẠI Ở CÔNG ĐOẠN KHO NHẬP.
+       Truoc day ghi KN mot lan la don chuyen sang "Hoan thanh" ngay, du moi nhap duoc mot phan — nen
+       khong con cho nao de nhap tiep dot sau (don da roi khoi danh sach cong doan Kho nhap).
+       Nay:
+         · nhap CHUA DU so cat  -> GIU o Kho nhap (khong chuyen, khong "Hoan thanh")
+         · nhap DU so cat       -> chuyen tiep nhu cu
+         · nguoi dung tich "Đã hoàn thành" (`ketThucKhoNhap`) -> chuyen tiep DU CHUA DU
+           (thuc te: hoan thien khong du theo so cat la binh thuong — hang loi, hut, huy...)
+       ⚠️ So sanh sau khi DA GHI dot nay (khoi INSERT o tren da chay), va dung CHINH
+       getStageActualQty + getTongSLCatForOrder — cung ham voi con so man hinh hien, khong tinh lai. */
+    let knChuaDu = false, knDaNhap = 0, knSoCat = 0;
+    if (isKhoNhap) {
+      /* ⚠️ Tinh CA KHI isLast: Kho nhap THUONG LA cong doan cuoi — do chinh la truong hop nguoi dung
+         bao ("nhap xong ghi la chuyen sang hoan thanh"). Neu chi tinh khi !isLast thi khoi nay khong
+         bao gio chay va sua nay vo tac dung. */
+      knDaNhap = await getStageActualQty(pool, order.DonHangID, stage.StageID);
+      knSoCat = await getTongSLCatForOrder(pool, order.DonHangID);
+      /* So cat = 0 (chua ghi Cat) thi KHONG coi la "chua du" — khong co moc de so, giu hanh vi cu. */
+      knChuaDu = knSoCat > 0 && knDaNhap < knSoCat;
+      /* ⚠️ KHONG dat `isLast = false` o day. Kho nhap thuong LA cong doan cuoi nen nextIndex = -1;
+         ep isLast = false se lam dong duoi (`stages[nextIndex].StageID`) doc stages[-1] -> TypeError,
+         moi lan ghi Kho nhap deu vang. Viec "giu lai" xu ly BANG `giuLaiOKhoNhap` o khoi con tro ben
+         duoi — khong can dung den isLast. */
+    }
     const nextStageId = isLast ? null : stages[nextIndex].StageID;
     const nextStageName = isLast ? null : stages[nextIndex].TenCongDoan;
 
@@ -3540,13 +3570,23 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       ? stages.findIndex(s => s.StageID === order.CongDoanHienTaiID)
       : lenStages;                                 // NULL = đã hoàn thành = coi như sau công đoạn cuối
     const wouldBeIdx = isLast ? lenStages : nextIndex;
-    const advanced = wouldBeIdx > curPointerIdx;
+    /* v7.57: KN chua du va nguoi dung KHONG tich "Đã hoàn thành" -> KHONG tien con tro. Don o lai
+       dung cong doan Kho nhap de nhap tiep dot sau. */
+    const giuLaiOKhoNhap = isKhoNhap && knChuaDu && !ketThucKhoNhap;
+    const advanced = !giuLaiOKhoNhap && wouldBeIdx > curPointerIdx;
 
     let finalStageId, finalPercent, finalTrangThai;
     if (advanced) {
       finalStageId = nextStageId;                  // null nếu isLast (hoàn thành)
       finalPercent = isLast ? 100 : Math.round(((curIndex + 1) / lenStages) * 100);
       finalTrangThai = isLast ? 'Hoàn thành' : 'Đang sản xuất';
+    } else if (giuLaiOKhoNhap) {
+      /* v7.57: DUNG lai o cong doan KHO NHAP. Con tro phai tro vao CHINH cong doan Kho nhap — neu giu
+         nguyen con tro cu (co the dang o cong doan TRUOC) thi don khong hien o danh sach Kho nhap va
+         van khong nhap tiep duoc, tuc khong sua duoc gi. */
+      finalStageId = stage.StageID;
+      finalPercent = Math.round(((curIndex + 1) / lenStages) * 100);
+      finalTrangThai = 'Đang sản xuất';
     } else {
       // Ghi bổ sung công đoạn đã qua -> GIỮ NGUYÊN con trỏ + trạng thái hiện tại (không lùi).
       finalStageId = order.CongDoanHienTaiID || null;
@@ -3561,6 +3601,13 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       .input('TrangThai', sql.NVarChar, finalTrangThai)
       .query(`UPDATE DonHangSanXuat SET CongDoanHienTaiID=@StageID, PhanTramHoanThanh=@Percent, TrangThai=@TrangThai, UpdatedAt=SYSDATETIME()
               WHERE DonHangID=@id`);
+
+    /* v7.57: gom ket qua Kho nhap de tra ve cho frontend noi RO chuyen gi da xay ra — giu lai o Kho
+       nhap de nhap tiep, hay da ket thuc lenh. Khong noi ra thi nguoi dung bam Gui, thay man hinh
+       khong doi va khong biet la thanh cong hay khong. */
+    const ketQuaKhoNhap = isKhoNhap
+      ? { daNhap: knDaNhap, soCat: knSoCat, chuaDu: knChuaDu, giuLai: giuLaiOKhoNhap, ketThuc: !!ketThucKhoNhap }
+      : null;
 
     // Bao cho cac user phu trach cong doan KE TIEP biet de cap nhat tien do (CHI khi thuc su tien toi cong doan moi).
     // Boc try/catch rieng - loi gui thong bao khong duoc lam hong ket qua ghi nhan tien do chinh.
@@ -3588,7 +3635,7 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
        cao ton kho. Tu nay NhapCai chi con thay doi khi nguoi dung tu go o man The kho.
        ================================================================================================ */
 
-    res.json({ success: true });
+    res.json({ success: true, data: { khoNhap: ketQuaKhoNhap } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi ghi nhận tiến độ: ' + err.message });
