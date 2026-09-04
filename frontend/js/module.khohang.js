@@ -2568,6 +2568,13 @@ window.ModuleKhoHang = (function () {
   function tenBaoGia(c) {
     return String((c && (c.TenHoaDon || c.TenHang)) || '').trim();
   }
+  /* v7.55: dựng <option> cho ô lọc TỪ CHÍNH danh sách mã đang có (không lấy toàn bộ danh mục) — chọn
+     một giá trị là chắc chắn còn mã. Bỏ trùng, bỏ rỗng, xếp theo tiếng Việt. */
+  function optLoc(ds, truong) {
+    const gt = [...new Set((ds || []).map(x => String(x[truong] || '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'vi'));
+    return gt.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+  }
   function candRowHtml(c, prefill) {
     // v6.61: GiaAloha nay là ALIAS của Giá bán (xem khohang.js) -> đổi nhãn cho khỏi hiểu nhầm.
     const gia = c.GiaAloha != null ? `<span style="color:#5f6368;">(${fmtNumber(c.GiaAloha)}đ)</span>` : '<span style="color:#c0392b;">(chưa có Giá bán)</span>';
@@ -2577,7 +2584,9 @@ window.ModuleKhoHang = (function () {
        Backend đã CHỈ trả mã còn tồn, nên ô này luôn > 0; hiện số để biết còn NHIỀU hay chỉ vài cái. */
     const ton = `<span style="white-space:nowrap;color:#137333;font-weight:600;">tồn ${fmtNumber(c.TongTon)} ${escapeHtml(c.DonViCoBan || 'Cái')}</span>`;
     const ten = tenBaoGia(c);
-    return `<label class="bg-cand-row" data-search="${escapeHtml((c.MaHang + ' ' + ten + ' ' + (c.TenHang || '')).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #eee;">
+    /* v7.55: mang DANH MUC + LOAI HANG theo dong de loc — dat vao data-* chu khong doc lai tu mang
+       `candidates` luc loc: dong da dung ra HTML roi, doc tu DOM la mot nguon su that duy nhat. */
+    return `<label class="bg-cand-row" data-search="${escapeHtml((c.MaHang + ' ' + ten + ' ' + (c.TenHang || '')).toLowerCase())}" data-dm="${escapeHtml(c.TenTheKho || '')}" data-loai="${escapeHtml(c.TenNhom || '')}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #eee;">
       <input type="checkbox" class="bg-chk" value="${c.MaHangID}" ${checked ? 'checked' : ''}>
       <span style="flex:1;">${escapeHtml(c.MaHang)} — ${escapeHtml(ten)} ${gia} ${ton}</span>
       <span style="white-space:nowrap;">VAT % <input type="number" class="bg-vat" value="${vatValue}" min="0" max="100" step="0.01" style="width:70px;" ${checked ? '' : 'disabled'}></span>
@@ -2606,9 +2615,19 @@ window.ModuleKhoHang = (function () {
         </div>
         <hr>
         <div class="form-row">
-          <label>Chọn mã hàng (${candidates.length} mã hàng có thể báo giá)</label>
+          <label>Chọn mã hàng (${candidates.length} mã hàng có thể báo giá — chỉ mã CÒN TỒN)</label>
           <input type="text" id="bgSearch" placeholder="Tìm theo mã hàng hoặc tên hàng..." autocomplete="off" style="margin-bottom:8px;">
         </div>
+        ${/* v7.55: LỌC theo Danh mục thẻ kho + Loại hàng. Danh sách chọn dựng TỪ CHÍNH các mã đang có
+             trong danh sách (không lấy toàn bộ danh mục) — chọn một giá trị là chắc chắn còn mã, không
+             bao giờ lọc ra bảng rỗng. Lọc ở phía giao diện như ô tìm kiếm sẵn có, không gọi lại API. */''}
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div class="form-row" style="margin-bottom:0;"><label>Danh mục thẻ kho</label>
+            <select id="bgLocDM"><option value="">-- Tất cả danh mục --</option>${optLoc(candidates, 'TenTheKho')}</select></div>
+          <div class="form-row" style="margin-bottom:0;"><label>Loại hàng</label>
+            <select id="bgLocLoai"><option value="">-- Tất cả loại hàng --</option>${optLoc(candidates, 'TenNhom')}</select></div>
+        </div>
+        <div class="empty-hint" id="bgDemHien" style="margin-bottom:6px;"></div>
         <div id="bgCandList" style="max-height:320px;overflow:auto;border:1px solid #dcdfe3;border-radius:4px;">
           ${candidates.map(c => candRowHtml(c, existingItemsByMaHangId.get(String(c.MaHangID)))).join('') || '<div class="empty-hint" style="padding:10px;">Không còn mã hàng nào để báo giá — tất cả đã có trong báo giá khác.</div>'}
         </div>
@@ -2624,13 +2643,37 @@ window.ModuleKhoHang = (function () {
       chk.closest('.bg-cand-row').querySelector('.bg-vat').disabled = !chk.checked;
     }));
 
+    /* v7.55: BA bộ lọc (tìm chữ + danh mục + loại hàng) cùng chạy qua MỘT hàm — ba handler riêng thì
+       chọn danh mục xong gõ tìm là mất luôn bộ lọc danh mục (mỗi handler tự đặt display của mọi dòng).
+       Hiện luôn số dòng đang thấy: lọc ra 0 dòng mà bảng trống trơn thì người dùng tưởng hỏng. */
     const searchInput = modal.querySelector('#bgSearch');
-    if (searchInput) searchInput.addEventListener('input', () => {
-      const q = searchInput.value.trim().toLowerCase();
+    const selDM = modal.querySelector('#bgLocDM');
+    const selLoai = modal.querySelector('#bgLocLoai');
+    const oDem = modal.querySelector('#bgDemHien');
+    function apDungLoc() {
+      const q = (searchInput ? searchInput.value : '').trim().toLowerCase();
+      const dm = selDM ? selDM.value : '';
+      const loai = selLoai ? selLoai.value : '';
+      let hien = 0, chonMaAn = 0;
       modal.querySelectorAll('.bg-cand-row').forEach(row => {
-        row.style.display = (!q || row.dataset.search.includes(q)) ? 'flex' : 'none';
+        const khop = (!q || row.dataset.search.includes(q))
+          && (!dm || row.dataset.dm === dm)
+          && (!loai || row.dataset.loai === loai);
+        row.style.display = khop ? 'flex' : 'none';
+        if (khop) hien++;
+        else if (row.querySelector('.bg-chk').checked) chonMaAn++;
       });
-    });
+      if (!oDem) return;
+      /* ⚠️ Dòng bị ẩn VẪN được lưu nếu đang tích (submit đọc .bg-chk:checked trên cả bảng) — nói rõ,
+         không thì người dùng lọc lại rồi bấm Lưu và không hiểu vì sao báo giá có mã mình không thấy. */
+      oDem.innerHTML = `Đang hiện <b>${hien}</b> mã`
+        + (chonMaAn ? ` · <b style="color:#e65100;">${chonMaAn} mã đã tích đang bị ẩn bởi bộ lọc — vẫn được lưu</b>` : '');
+    }
+    if (searchInput) searchInput.addEventListener('input', apDungLoc);
+    if (selDM) selDM.addEventListener('change', apDungLoc);
+    if (selLoai) selLoai.addEventListener('change', apDungLoc);
+    modal.querySelectorAll('.bg-chk').forEach(chk => chk.addEventListener('change', apDungLoc));
+    apDungLoc();
 
     modal.querySelector('#bgForm').addEventListener('submit', async (e) => {
       e.preventDefault();

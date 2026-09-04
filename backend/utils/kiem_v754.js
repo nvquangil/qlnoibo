@@ -1,5 +1,5 @@
 /* ================================================================================================
-   KIEM CHUNG v7.54 — ba viec
+   KIEM CHUNG v7.54/v7.55 — bon viec
      1. Xuat Excel cho tab Cong no NHA GIA CONG / IN THEU (?loai=gc)
      2. SUA LOI RO DU LIEU: tat cong khai DANH MUC the kho ma catalogue van hien ma hang cua no
      3. Bao gia Aloha: chi ma CON TON, hien so ton canh ma, ten lay theo TEN VIET HOA DON
@@ -106,6 +106,65 @@ kiem(/tồn \$\{fmtNumber\(c\.TongTon\)\}/.test(sFeKhoHang), 'hien so ton canh m
 kiem(/escapeHtml\(c\.DonViCoBan \|\| 'Cái'\)/.test(sFeKhoHang), 'ton kem DVT cua chinh ma hang');
 kiem(/data-search="\$\{escapeHtml\(\(c\.MaHang \+ ' ' \+ ten \+ ' ' \+ \(c\.TenHang \|\| ''\)\)/.test(sFeKhoHang),
   'o tim kiem tim duoc theo CA hai ten (hoa don + noi bo)');
+
+/* ================================ 4. v7.55 LOC DANH MUC / LOAI HANG ================================ */
+console.log('\n=== 4. Bao gia Aloha: loc theo Danh muc the kho + Loai hang (v7.55) ===');
+const routeCand2 = sKhoHang.slice(sKhoHang.indexOf("router.get('/baogia/candidates'"),
+  sKhoHang.indexOf("router.get('/baogia'", sKhoHang.indexOf("router.get('/baogia/candidates'") + 10));
+kiem(/tk\.TenTheKho, nsp\.TenNhom/.test(routeCand2), 'backend tra TenTheKho + TenNhom');
+kiem(/LEFT JOIN TheKhoDanhMuc tk ON tk\.TheKhoDanhMucID = h\.TheKhoDanhMucID/.test(routeCand2),
+  'LEFT JOIN danh muc the kho (ca hai truong deu co the de trong)');
+kiem(/LEFT JOIN DanhMucNhomSanPham nsp ON nsp\.NhomSanPhamID = h\.NhomSanPhamID/.test(routeCand2),
+  'LEFT JOIN loai hang');
+kiem(/data-dm="\$\{escapeHtml\(c\.TenTheKho \|\| ''\)\}"/.test(sFeKhoHang), 'dong mang data-dm');
+kiem(/data-loai="\$\{escapeHtml\(c\.TenNhom \|\| ''\)\}"/.test(sFeKhoHang), 'dong mang data-loai');
+kiem(/id="bgLocDM"/.test(sFeKhoHang) && /id="bgLocLoai"/.test(sFeKhoHang), 'form co 2 o loc');
+kiem(/function apDungLoc\(\)/.test(sFeKhoHang), 'co MOT ham loc dung chung');
+/* Ba bo loc PHAI cung mot ham: ba handler rieng thi moi handler tu dat display cua MOI dong -> chon
+   danh muc xong go tim la mat luon bo loc danh muc. */
+kiem(/\(!q \|\| row\.dataset\.search\.includes\(q\)\)[\s\S]{0,120}&&[\s\S]{0,60}row\.dataset\.dm === dm[\s\S]{0,80}row\.dataset\.loai === loai/.test(sFeKhoHang),
+  'ba dieu kien AND trong CUNG mot bieu thuc (khong ghi de nhau)');
+/* 4 cho gan: o tim (input) + 2 o loc (change) + checkbox (change, de dem lai so dong bi an).
+   Dem CA checkbox vi mau `addEventListener('change', apDungLoc)` khop luon dong do — ghi 3 la con so
+   dung nhung nhan sai, lan sau doc lai se tuong thieu mot cho. */
+const soGanLoc = (bo(sFeKhoHang).match(/addEventListener\('(?:input|change)', apDungLoc\)/g) || []).length;
+kiem(soGanLoc === 4, 'gan apDungLoc o 4 cho: o tim + 2 o loc + checkbox', String(soGanLoc));
+kiem(/chk\.addEventListener\('change', apDungLoc\)/.test(sFeKhoHang),
+  'tich/bo tich cung goi lai de dem lai so dong');
+kiem(/apDungLoc\(\);/.test(sFeKhoHang), 'goi mot lan luc mo form (dem so dong ban dau)');
+kiem(/mã đã tích đang bị ẩn bởi bộ lọc — vẫn được lưu/.test(sFeKhoHang),
+  'CANH BAO: dong bi an van duoc luu neu dang tich (submit doc .bg-chk:checked tren ca bang)');
+kiem(/\.bg-chk:checked/.test(sFeKhoHang), 'submit that su doc :checked tren ca bang (nen canh bao la dung)');
+
+console.log('\n=== 4b. CHAY THAT optLoc(): dung tu chinh danh sach ma, bo trung/rong ===');
+const mOpt = (() => {
+  const i = sFeKhoHang.indexOf('function optLoc(ds, truong) {');
+  if (i < 0) return null;
+  const mo = sFeKhoHang.indexOf('{', i);
+  let sau = 1, j = mo + 1, ch = null;
+  for (; j < sFeKhoHang.length && sau > 0; j++) {
+    const c = sFeKhoHang[j];
+    if (ch) { if (c === ch && sFeKhoHang[j - 1] !== '\\') ch = null; continue; }
+    if (c === "'" || c === '"' || c === '`') { ch = c; continue; }
+    if (c === '{') sau++; else if (c === '}') sau--;
+  }
+  return sau === 0 ? sFeKhoHang.slice(i, j) : null;
+})();
+kiem(!!mOpt, 'cat duoc optLoc() tu file that');
+if (mOpt) {
+  const escapeHtml = (x) => (x == null ? '' : String(x).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+  const optLoc = new Function('escapeHtml', `${mOpt}\nreturn optLoc;`)(escapeHtml);
+  const ds = [{ TenTheKho: 'Hàng hè 2026' }, { TenTheKho: 'Áo khoác' }, { TenTheKho: 'Hàng hè 2026' },
+              { TenTheKho: '' }, { TenTheKho: null }, { TenTheKho: '  Áo khoác  ' }];
+  const html = optLoc(ds, 'TenTheKho');
+  const n = (html.match(/<option/g) || []).length;
+  kiem(n === 2, '6 dong -> 2 option (bo trung + bo rong + trim)', String(n));
+  kiem(html.indexOf('Áo khoác') < html.indexOf('Hàng hè 2026'), 'xep theo tieng Viet (A truoc H)');
+  kiem(!/<option value=""/.test(html), 'khong sinh option rong');
+  kiem(/&lt;b&gt;/.test(optLoc([{ X: '<b>' }], 'X')), 'gia tri duoc escape');
+  kiem(optLoc(null, 'X') === '' && optLoc([], 'X') === '', 'ds rong/null -> chuoi rong');
+}
 
 console.log(`\n================ KET QUA: ${dat} dat / ${truot} sai ================`);
 process.exit(truot ? 1 : 0);

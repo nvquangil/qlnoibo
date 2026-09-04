@@ -1461,6 +1461,9 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
       SELECT h.MaHangID, h.MaHang, h.TenHang, ${cotTenHDBG} AS TenHoaDon,
         h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi, h.DonViCoBan,
         ISNULL(v.TongTonThuc, 0) AS TongTon,
+        /* v7.55: DANH MUC the kho + LOAI HANG de form loc duoc. Lay tu bang danh muc (khong go cung),
+           LEFT JOIN vi ca hai truong deu co the de trong. */
+        tk.TenTheKho, nsp.TenNhom,
         (SELECT COUNT(*) FROM TheKhoChiTietMau ct WHERE ct.MaHangID = h.MaHangID) AS SoMau
       FROM TheKhoHangHoa h
       /* v7.54: + TON KHO de nguoi lap bao gia thay ngay con bao nhieu, va CHI HIEN MA CON TON.
@@ -1472,6 +1475,8 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
          LUON dung TongTonThuc".
          (Chu thich nay nam TRONG chuoi template -> khong duoc go dau backtick, xem canh bao o tren.) */
       LEFT JOIN vw_TonKhoHangHoa v ON v.MaHangID = h.MaHangID
+      LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
+      LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
       WHERE NOT EXISTS (
         SELECT 1 FROM BaoGiaAlohaChiTiet bc WHERE bc.MaHangID = h.MaHangID
           AND (@excludeBaoGiaId IS NULL OR bc.BaoGiaAlohaID <> @excludeBaoGiaId)
