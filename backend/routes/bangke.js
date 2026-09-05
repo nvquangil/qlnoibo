@@ -9,6 +9,7 @@
 const express = require('express');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+const { maRapCuaDon } = require('../utils/maRapCuaDon');   // v7.67: mã rập gộp 2 nguồn (Sơ đồ + Ghi tiến độ)
 
 const router = express.Router();
 const CN = (action) => [requireAuth, requirePermission('QLSX', action), requireChucNang('QLSX', 'bangkebtp')];
@@ -145,11 +146,9 @@ router.get('/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req,
       }
     } catch (e) { console.error('[bangke] lấy cột size từ Thông số đo lỗi (bỏ qua):', e.message); }
 
-    let maRap = '';
-    try {
-      maRap = [...new Set((await pool.request().input('id', sql.Int, order.DonHangID)
-        .query(`SELECT MaRap FROM DonHangChiTietSoDo WHERE DonHangID=@id AND MaRap IS NOT NULL AND LTRIM(RTRIM(MaRap))<>''`)).recordset.map(x => x.MaRap))].join(', ');   // v5.53
-    } catch (e) { console.error('[bangke] lấy Mã rập lỗi (bỏ qua):', e.message); }
+    /* v5.53 → v7.67: bản cũ ở đây CHỈ đọc DonHangChiTietSoDo nên mã rập mà Kỹ thuật khai lúc Ghi tiến
+       độ (TienDoSanXuat.MaRap) không hiện trên bảng kê. Dùng chung utils/maRapCuaDon.js. */
+    const maRap = await maRapCuaDon(pool, sql, order.DonHangID);
 
     res.json({ success: true, order: { MaDH: order.MaDH, TenSanPham: order.TenSanPham, MaSanPham: order.MaSanPham, AnhSanPham: order.AnhSanPham, MaRap: maRap }, data: parseData(bk), prefill, sizeCols });
   } catch (err) { console.error('[bangke] GET /:maDH', err); res.status(500).json({ success: false, message: 'Lỗi tải bảng kê: ' + err.message }); }

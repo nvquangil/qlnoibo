@@ -266,8 +266,10 @@ window.ModuleBangKeBTP = (function () {
     return `
       <h2 style="text-align:center;">BẢNG KÊ BÁN THÀNH PHẨM</h2>
       ${anh}
-      <p><b>Mã hàng:</b> ${escapeHtml(d.maHang || '')} &nbsp; <b>Ngày:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''}</p>
-      <p><b>Tên sản phẩm:</b> ${escapeHtml(d.tenSanPham || '')} &nbsp; <b>Mã rập:</b> ${escapeHtml(d.maRap || '')}${d.tenBan ? ' &nbsp; <b>Bản:</b> ' + escapeHtml(d.tenBan) : ''}</p>
+      ${/* v7.67: cột "Mã hàng" đổi tên thành "Mã rập" cho đồng bộ với các bản in Tài liệu may/đóng gói;
+           thiếu mã rập thì mới lùi về mã hàng cũ để phiếu không trống trơn. */''}
+      <p><b>Mã rập:</b> ${escapeHtml(String(d.maRap || '').trim() || d.maHang || '')} &nbsp; <b>Ngày:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''}</p>
+      <p><b>Tên sản phẩm:</b> ${escapeHtml(d.tenSanPham || '')}${d.tenBan ? ' &nbsp; <b>Bản:</b> ' + escapeHtml(d.tenBan) : ''}</p>
       ${d.ghiChu ? `<p><b>Ghi chú:</b> ${escapeHtml(d.ghiChu)}</p>` : ''}
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="4">
         <thead><tr><th style="width:38px;">STT</th><th>Màu vải chính</th>${(d.cols || []).map(c => `<th>${escapeHtml(c)}</th>`).join('')}<th>Tổng cộng</th><th>Ghi chú</th></tr></thead>

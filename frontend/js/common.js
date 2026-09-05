@@ -1476,16 +1476,44 @@ function printHtml(title, bodyHtml, opts) {
     });
   }
 
+  /* ================================================================================================
+     v7.67 — CHỜ ẢNH TẢI XONG RỒI MỚI ĐO TRANG VÀ IN.
+     Trước đây in NGAY tại `iframe.onload`. Nhưng ảnh lấy từ /uploads/... có thể chưa tải xong ở thời
+     điểm đó, gây HAI hậu quả cùng lúc:
+       · bản in ra Ô ẢNH TRẮNG — đúng triệu chứng "phiếu có ảnh trên màn hình mà in ra không có";
+       · chenSoTrang() đo chiều cao lúc ảnh còn cao 0 ⇒ số trang và chỗ ngắt trang sai.
+     Chờ tối đa 5 giây rồi in bằng mọi giá: một ảnh hỏng / đường dẫn sai KHÔNG được phép treo lệnh in
+     của cả phiếu. Ảnh lỗi cũng gọi tiếp (bắt cả 'error'), không đợi hết 5 giây vô ích.
+     Áp ở ĐÂY nên mọi phiếu in của hệ thống đều được, không phiếu nào phải tự lo.
+     ================================================================================================ */
+  function choAnhTai(win, xong) {
+    let d;
+    try { d = win.document; } catch (e) { xong(); return; }
+    const imgs = Array.prototype.slice.call(d.images || []);
+    const chuaXong = imgs.filter(im => !im.complete);
+    if (!chuaXong.length) { xong(); return; }
+    let conLai = chuaXong.length, daGoi = false;
+    const goi = () => { if (daGoi) return; daGoi = true; xong(); };
+    const mot = () => { if (--conLai <= 0) goi(); };
+    chuaXong.forEach(im => {
+      im.addEventListener('load', mot, { once: true });
+      im.addEventListener('error', mot, { once: true });
+    });
+    setTimeout(goi, 5000);
+  }
+
   iframe.onload = () => {
-    try {
-      try { chenSoTrang(); } catch (e) { console.warn('[printHtml] khong danh so trang duoc:', e.message); }
-      iframe.contentWindow.onafterprint = cleanup;
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-    } catch (e) {
-      toast('Không mở được hộp thoại in. Có thể thử Ctrl+P nếu cửa sổ in đã hiện nội dung.', 'error');
-      cleanup();
-    }
+    choAnhTai(iframe.contentWindow, () => {
+      try {
+        try { chenSoTrang(); } catch (e) { console.warn('[printHtml] khong danh so trang duoc:', e.message); }
+        iframe.contentWindow.onafterprint = cleanup;
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (e) {
+        toast('Không mở được hộp thoại in. Có thể thử Ctrl+P nếu cửa sổ in đã hiện nội dung.', 'error');
+        cleanup();
+      }
+    });
   };
   // An toan: phong truong hop onload/afterprint khong bao gio fire (hiem) - khong de iframe rac vinh vien.
   setTimeout(cleanup, 120000);

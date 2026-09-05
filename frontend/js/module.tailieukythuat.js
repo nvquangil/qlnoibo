@@ -346,10 +346,12 @@ window.ModuleTaiLieuKyThuat = (function () {
       `<div class="form-row"><label>Tên bản</label><input name="tenBan" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml(tenPhieu || '')}" placeholder="VD: Áo / Quần / Đợt 1 (để trống nếu chỉ 1 bản)"></div>`;
     return `
       <div class="form-grid">
-        <div class="form-row"><label>Mã hàng</label><input name="maHang" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml((data && data.maHang) || (order && (order.MaSanPham || order.MaDH)) || '')}"></div>
+        ${/* v7.67: ô "Mã hàng" đổi tên thành "Mã rập" (yêu cầu Nguyen) — vẫn lưu vào cột MaHang nên
+             KHÔNG cần migration. Mặc định lấy mã rập của lệnh SX, gồm cả mã Kỹ thuật khai lúc Ghi
+             tiến độ. Ô "Mã rập" chỉ-đọc bên dưới bỏ đi cho khỏi hai ô trùng nội dung. */''}
+        <div class="form-row"><label>Mã rập</label><input name="maHang" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml((data && data.maHang) || (order && order.MaRap) || '')}" placeholder="Kỹ thuật khai ở Ghi tiến độ / bảng Sơ đồ"></div>
         ${tenBanRow}
         <div class="form-row"><label>Tên sản phẩm</label><div class="readonly-fact">${escapeHtml((order && order.TenSanPham) || '')}</div></div>
-        <div class="form-row"><label>Mã rập</label><div class="readonly-fact">${escapeHtml((order && order.MaRap) || '')}</div></div>
         <div class="form-row"><label>Ngày cập nhật</label><input type="date" name="ngayCapNhat" ${perm.canEdit ? '' : 'disabled'} value="${data && data.ngayCapNhat ? String(data.ngayCapNhat).slice(0, 10) : today}"></div>
         <div class="form-row"><label>Diễn giải</label><input name="dienGiai" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml((data && data.dienGiai) || (order && order.TenSanPham) || '')}"></div>
         <div class="form-row"><label>Người lập</label><div class="readonly-fact">${escapeHtml((data && data.nguoiLap) || (currentUser && currentUser.hoTen) || '')}</div></div>
@@ -460,7 +462,7 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnPrintDoc').addEventListener('click', () => {
       state.muc = readMucFromDom(mucBox);
       const fd = new FormData(modal.querySelector('#tlktcForm'));
-      printTaiLieuChung({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), muc: state.muc, maRap: (order && order.MaRap) || '', tenBan: (fd.get('tenBan') || '').trim() }, maDH);   // v5.57 +Mã rập
+      printTaiLieuChung({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), muc: state.muc, maRap: (order && order.MaRap) || '', tenSanPham: (order && order.TenSanPham) || '', anhIn: res.anhMacDinh || '', tenBan: (fd.get('tenBan') || '').trim() }, maDH);   // v5.57 +Mã rập; v7.67 +ảnh SP + tên SP
     });
     const btnDelete = modal.querySelector('#btnDeleteDoc');
     if (btnDelete) btnDelete.addEventListener('click', async () => {
@@ -906,7 +908,8 @@ window.ModuleTaiLieuKyThuat = (function () {
       <form id="fTkct">
         <div class="form-grid">
           <div class="form-row"><label>Tên bản</label><input name="ten" value="${escapeHtml(tenPhieu)}" placeholder="VD: Áo / Quần / Đợt 1" ${tenPhieu ? 'readonly title="Đổi tên bản: tạo bản mới rồi xóa bản cũ"' : ''}></div>
-          <div class="form-row"><label>Mã hàng</label><input name="maHang" value="${escapeHtml((data && data.maHang) || order.MaSanPham || '')}"></div>
+          ${/* v7.67: đổi tên thành Mã rập, mặc định lấy mã rập của lệnh SX (gồm cả Ghi tiến độ). */''}
+          <div class="form-row"><label>Mã rập</label><input name="maHang" value="${escapeHtml((data && data.maHang) || order.MaRap || '')}" placeholder="Kỹ thuật khai ở Ghi tiến độ / bảng Sơ đồ"></div>
           <div class="form-row"><label>Ngày cập nhật</label><input type="date" name="ngayCapNhat" value="${data && data.ngayCapNhat ? String(data.ngayCapNhat).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
           <div class="form-row" style="grid-column:1/-1;"><label>Diễn giải</label><input name="dienGiai" value="${escapeHtml((data && data.dienGiai) || order.TenSanPham || '')}"></div>
           <div class="form-row" style="grid-column:1/-1;"><label>Ảnh đại diện hàng (in ở đầu phiếu)</label>
@@ -994,15 +997,16 @@ window.ModuleTaiLieuKyThuat = (function () {
     const rows = (d.rows || []).filter(r => String(r.pieceName || '').trim() || r.anhChiTiet);
     return `
       <h2 style="text-align:center;margin:0 0 6px;">THỐNG KÊ CHI TIẾT</h2>
-      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:8px;">
-        ${d.anhIn ? `<img src="${escapeHtml(d.anhIn)}" style="width:104px;height:104px;object-fit:contain;border:1px solid #999;">` : ''}
-        <div style="flex:1;font-size:12.5px;">
-          <div><b>Mã hàng:</b> ${escapeHtml(d.maHang || '')}${(d.order && d.order.MaRap) ? ' &nbsp; <b>Mã rập:</b> ' + escapeHtml(d.order.MaRap) : ''}</div>
+      ${/* v7.67: dùng chung khối đầu phiếu; "Mã hàng" đổi tên thành "Mã rập" và có ĐƯỜNG LÙI về mã rập
+           của lệnh SX — trước đây ô này lấy d.maHang, đơn nào chưa khai Mã sản phẩm là in ra trắng
+           (đúng lỗi "THỐNG KÊ CHI TIẾT mã hàng không hiện ở bản in"). */''}
+      ${khoiDauPhieuHtml(d.anhIn, `<div style="font-size:12.5px;">
+          <div><b>Mã rập:</b> ${escapeHtml(String(d.maHang || '').trim() || (d.order && d.order.MaRap) || '')}</div>
+          <div><b>Tên sản phẩm:</b> ${escapeHtml((d.order && d.order.TenSanPham) || '')}</div>
           <div><b>Diễn giải:</b> ${escapeHtml(d.dienGiai || '')}</div>
           <div><b>Ngày cập nhật:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''} &nbsp; <b>Người lập:</b> ${escapeHtml(d.nguoiLap || '')}</div>
           ${d.ten ? `<div><b>Bản:</b> ${escapeHtml(d.ten)}</div>` : ''}
-        </div>
-      </div>
+        </div>`)}
       <table><thead><tr>
         <th style="width:34px;">TT</th>
         ${TKCT_COT.map(c => `<th>${escapeHtml(c.nhan)}</th>`).join('')}
@@ -1114,7 +1118,7 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnPrintDoc').addEventListener('click', () => {
       syncTsdGrid(gridBox, state);
       const fd = new FormData(modal.querySelector('#tsdForm'));
-      printThongSoDo({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), cols: state.cols, rows: state.rows, maRap: (order && order.MaRap) || '', tenBan: (fd.get('tenBan') || '').trim(), yeuCauKyThuat: fd.get('yeuCauKyThuat') || '', anhGhiChu: anhState.list, anhIn: res.anhMacDinh || '' }, maDH);   // v5.57 +Mã rập; v5.58 +yêu cầu KT + ảnh; v7.65.2 +ảnh đại diện hàng
+      printThongSoDo({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), cols: state.cols, rows: state.rows, maRap: (order && order.MaRap) || '', tenSanPham: (order && order.TenSanPham) || '', tenBan: (fd.get('tenBan') || '').trim(), yeuCauKyThuat: fd.get('yeuCauKyThuat') || '', anhGhiChu: anhState.list, anhIn: res.anhMacDinh || '' }, maDH);   // v5.57 +Mã rập; v5.58 +yêu cầu KT + ảnh; v7.65.2 +ảnh đại diện hàng; v7.67 +tên SP
     });
     const btnDelete = modal.querySelector('#btnDeleteDoc');
     if (btnDelete) btnDelete.addEventListener('click', async () => {
@@ -1703,7 +1707,7 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnPrintDoc').addEventListener('click', () => {
       syncOGridFromDom(gridBox, state);
       const fd = new FormData(modal.querySelector('#motaspForm'));
-      printMoTaSanPham({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), chuY: fd.get('chuY'), oGrid: flattenGrid(state), maRap: (order && order.MaRap) || '', tenBan: (fd.get('tenBan') || '').trim() }, maDH, label);   // v5.57 +Mã rập
+      printMoTaSanPham({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), chuY: fd.get('chuY'), oGrid: flattenGrid(state), maRap: (order && order.MaRap) || '', tenSanPham: (order && order.TenSanPham) || '', anhIn: res.anhMacDinh || '', tenBan: (fd.get('tenBan') || '').trim() }, maDH, label);   // v5.57 +Mã rập; v7.67 +ảnh SP + tên SP
     });
     const btnDelete = modal.querySelector('#btnDeleteDoc');
     if (btnDelete) btnDelete.addEventListener('click', async () => {
@@ -1739,10 +1743,32 @@ window.ModuleTaiLieuKyThuat = (function () {
      ================================================================================================ */
   // v5.57: 2 dòng thông tin chung DÙNG CHUNG cho mọi bản in tài liệu — có Mã rập + Tên bản (nếu có).
   // data.maRap / data.tenBan do nơi gọi truyền vào (lấy từ res.order.MaRap của API).
+  /* ================================================================================================
+     v7.67 — KHỐI ĐẦU PHIẾU DÙNG CHUNG CHO **MỌI** BẢN IN CỦA "Tài liệu may / đóng gói".
+     Yêu cầu của Nguyen: bản in nào cũng phải có ẢNH SẢN PHẨM lấy từ lệnh SX, để cầm tờ giấy lên là
+     biết ngay đang làm mã nào. Trước đây mỗi builder tự dựng đầu phiếu nên chỉ 2/9 bản in có ảnh.
+     Gom vào ĐÚNG MỘT hàm ⇒ thêm bản in mới cũng không thể "quên" ảnh.
+     Không có ảnh thì trả lại nguyên khối thông tin, KHÔNG chừa ô trống lệch bố cục.
+     ================================================================================================ */
+  function khoiDauPhieuHtml(anhIn, noiDungHtml) {
+    const anh = String(anhIn || '').trim();
+    if (!anh) return noiDungHtml;
+    return `<div style="display:flex;gap:12px;align-items:flex-start;margin-top:10px;">
+      <img src="${escapeHtml(anh)}" style="width:104px;height:104px;object-fit:contain;border:1px solid #999;flex:none;">
+      <div style="flex:1;">${noiDungHtml}</div>
+    </div>`;
+  }
+
+  /* v7.67 — CỘT "Mã hàng" ĐỔI TÊN THÀNH "Mã rập" (yêu cầu Nguyen).
+     Giá trị: ưu tiên cái người dùng gõ trong ô Mã rập của form (data.maHang — vẫn lưu vào cột MaHang
+     nên KHÔNG cần migration), thiếu thì lấy mã rập của lệnh SX. Mã rập của lệnh SX nay gộp cả mã mà
+     bộ phận Kỹ thuật khai lúc **Ghi tiến độ** (xem backend/utils/maRapCuaDon.js).
+     Ô "Mã rập" cũ ở dòng 2 đổi thành Tên sản phẩm cho khỏi lặp hai ô giống hệt nhau. */
   function docInfoRowsHtml(data) {
+    const maRap = String(data.maHang || '').trim() || String(data.maRap || '').trim();
     return `
-      <tr><td style="width:50%;"><b>Mã hàng:</b> ${escapeHtml(data.maHang || '')}</td><td><b>Ngày cập nhật:</b> ${fmtDate(data.ngayCapNhat)}</td></tr>
-      <tr><td><b>Mã rập:</b> ${escapeHtml(data.maRap || '')}</td><td><b>Người lập:</b> ${escapeHtml(data.nguoiLap || '')}</td></tr>
+      <tr><td style="width:50%;"><b>Mã rập:</b> ${escapeHtml(maRap)}</td><td><b>Ngày cập nhật:</b> ${fmtDate(data.ngayCapNhat)}</td></tr>
+      <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(data.tenSanPham || '')}</td><td><b>Người lập:</b> ${escapeHtml(data.nguoiLap || '')}</td></tr>
       <tr><td colspan="2"><b>Diễn giải:</b> ${escapeHtml(data.dienGiai || '')}${data.tenBan ? ' &nbsp;·&nbsp; <b>Bản:</b> ' + escapeHtml(data.tenBan) : ''}</td></tr>`;
   }
   function buildTaiLieuChungBodyHtml(data) {
@@ -1752,9 +1778,7 @@ window.ModuleTaiLieuKyThuat = (function () {
       || '<tr><td colspan="2" style="text-align:center;">Chưa có nội dung</td></tr>';
     return `
       <h2 style="text-align:center;">TIÊU CHUẨN KỸ THUẬT</h2>
-      <table style="margin-top:10px;">
-        ${docInfoRowsHtml(data)}
-      </table>
+      ${khoiDauPhieuHtml(data.anhIn, `<table>${docInfoRowsHtml(data)}</table>`)}
       <table style="margin-top:10px;">${bodyRows}</table>`;
   }
   function printTaiLieuChung(data, maDH) { printHtml(`${maDH} - Tài liệu kỹ thuật chung`, buildTaiLieuChungBodyHtml(data)); }
@@ -1785,15 +1809,8 @@ window.ModuleTaiLieuKyThuat = (function () {
          <tr><td colspan="${cols.length + 4}"></td><td style="vertical-align:top;font-size:12px;">${ghiChuCell}</td></tr>`;
     return `
       <h2 style="text-align:center;">THÔNG SỐ KĨ THUẬT</h2>
-      ${/* v7.65.2: + ẢNH ĐẠI DIỆN HÀNG. Đặt cạnh khối thông tin để nhìn là biết đang xem mã nào —
-           cùng bố cục với bản in Thống kê chi tiết. Không có ảnh thì khối thông tin chiếm hết bề
-           ngang như cũ, không để lại ô trống. */''}
-      <div style="display:flex;gap:12px;align-items:flex-start;margin-top:10px;">
-        ${data.anhIn ? `<img src="${escapeHtml(data.anhIn)}" style="width:104px;height:104px;object-fit:contain;border:1px solid #999;flex:none;">` : ''}
-        <table style="flex:1;">
-          ${docInfoRowsHtml(data)}
-        </table>
-      </div>
+      ${/* v7.65.2: + ẢNH ĐẠI DIỆN HÀNG. v7.67: dùng chung khoiDauPhieuHtml() với mọi bản in khác. */''}
+      ${khoiDauPhieuHtml(data.anhIn, `<table>${docInfoRowsHtml(data)}</table>`)}
       <div style="margin-top:10px;font-weight:700;">1. BẢNG THÔNG SỐ${data.ngayCapNhat ? '  ' + fmtDate(data.ngayCapNhat) : ''}</div>
       <table style="margin-top:6px;width:100%;border-collapse:collapse;" border="1" cellpadding="4">
         <thead>
@@ -1824,21 +1841,21 @@ window.ModuleTaiLieuKyThuat = (function () {
     }
     return `
       <h2 style="text-align:center;">${escapeHtml(heading || 'MÔ TẢ SẢN PHẨM')}</h2>
-      <table style="margin-top:10px;">
-        ${docInfoRowsHtml(data)}
-      </table>
+      ${khoiDauPhieuHtml(data.anhIn, `<table>${docInfoRowsHtml(data)}</table>`)}
       <table style="margin-top:10px;width:100%;table-layout:fixed;">${gridRows}</table>
       ${data.chuY ? `<div style="margin-top:14px;border:1px solid #cc4125;border-radius:6px;padding:10px 12px;"><b>Chú ý:</b> ${escapeHtml(data.chuY).replace(/\n/g, '<br>')}</div>` : ''}`;
   }
   function printMoTaSanPham(data, maDH, label = 'Mô tả sản phẩm') { printHtml(`${maDH} - ${label}`, buildMoTaSanPhamBodyHtml(data, (label || '').toUpperCase())); }
 
   function buildChiDinhNplBodyHtml(rows, maDH, orderInfo) {
+    const o = orderInfo || {};
     return `
       <h2 style="text-align:center;">CHỈ ĐỊNH NGUYÊN PHỤ LIỆU (NPL)</h2>
-      <table style="margin-top:10px;">
-        <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(maDH)}</td><td><b>Mã hàng:</b> ${escapeHtml((orderInfo && orderInfo.MaSanPham) || '')}</td></tr>
-        <tr><td colspan="2"><b>Tên sản phẩm:</b> ${escapeHtml((orderInfo && orderInfo.TenSanPham) || '')}</td></tr>
-      </table>
+      ${/* v7.67: + ảnh sản phẩm; cột "Mã hàng" đổi thành "Mã rập". */''}
+      ${khoiDauPhieuHtml(o.AnhSanPham, `<table>
+        <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(maDH)}</td><td><b>Mã rập:</b> ${escapeHtml(o.MaRap || '')}</td></tr>
+        <tr><td colspan="2"><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td></tr>
+      </table>`)}
       <table style="margin-top:10px;">
         ${/* v5.88: bản in Chỉ định NPL có cột Ảnh phụ kiện */''}
         <thead><tr><th style="width:38px;">STT</th><th style="width:80px;">Ảnh</th><th>Mã PK</th><th>Tên phụ kiện</th><th>SL</th><th>ĐVT</th><th>Ghi chú</th></tr></thead>
@@ -1849,14 +1866,15 @@ window.ModuleTaiLieuKyThuat = (function () {
 
   /* v5.57: IN 4 LOẠI ĐƠN GIÁ theo từng BẢN (trước đây chỉ in được từ trong form soạn).
      Mỗi bản in có Mã hàng/Mã rập/Tên SP + tên bản ở đầu phiếu. */
-  function donGiaHeaderHtml(tieuDe, maDH, order, ten) {
+  function donGiaHeaderHtml(tieuDe, maDH, order, ten, anhIn) {
     order = order || {};
     return `
       <h2 style="text-align:center;">${escapeHtml(tieuDe)}</h2>
-      <table style="margin-top:10px;">
+      ${/* v7.67: + ảnh sản phẩm cho cả 4 bản in đơn giá. */''}
+      ${khoiDauPhieuHtml(anhIn || order.AnhSanPham, `<table>
         <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(maDH)}</td><td><b>Tên sản phẩm:</b> ${escapeHtml(order.TenSanPham || '')}</td></tr>
         <tr><td><b>Mã rập:</b> ${escapeHtml(order.MaRap || '')}</td><td><b>Bản:</b> ${ten ? escapeHtml(ten) : '(không tên)'}</td></tr>
-      </table>`;
+      </table>`)}`;
   }
   async function printDonGia(maDH, loai, ten) {
     const tenQ = ten !== undefined && ten !== null ? '?ten=' + encodeURIComponent(ten) : '';
@@ -1893,7 +1911,7 @@ window.ModuleTaiLieuKyThuat = (function () {
         <tbody><tr><td style="text-align:center;">1</td><td>LÀ (ủi)</td><td style="text-align:right;">${fmtNumber(d.la)}</td></tr>
         <tr><td style="text-align:center;">2</td><td>ĐÓNG GÓI</td><td style="text-align:right;">${fmtNumber(d.dg)}</td></tr></tbody></table>`;
     }
-    printHtml(`${maDH} - ${title}`, donGiaHeaderHtml(title, maDH, order, ten) + tableHtml);
+    printHtml(`${maDH} - ${title}`, donGiaHeaderHtml(title, maDH, order, ten, res.anhMacDinh) + tableHtml);   // v7.67
   }
 
   // Nhan mot doc lay ten hien thi (dung cho toast bao "chua co du lieu" theo dung loai nguoi dung chon).
@@ -1922,11 +1940,17 @@ window.ModuleTaiLieuKyThuat = (function () {
     } catch (err) { toast(err.message, 'error'); return; }
     const sections = [];
     /* v7.65.2: truyen anh dai dien y het duong in le, keo "In tat ca" ra ban KHONG co anh con in
-       tung ban thi CO — hai duong in cung mot tai lieu phai giong nhau. */
-    if (tsd.data) sections.push(buildThongSoDoBodyHtml({ ...tsd.data, anhIn: tsd.anhMacDinh || '' }));
-    if (mtsp.data) sections.push(buildMoTaSanPhamBodyHtml(mtsp.data, 'MÔ TẢ ĐƯỜNG MAY'));
-    if (qc.data) sections.push(buildMoTaSanPhamBodyHtml(qc.data, 'QUY CÁCH ĐÓNG GÓI'));
-    if (hait.data) sections.push(buildMoTaSanPhamBodyHtml(hait.data, 'HÌNH ẢNH MÔ TẢ IN/THÊU'));
+       tung ban thi CO — hai duong in cung mot tai lieu phai giong nhau.
+       v7.67: ap cho CA 4 loai, khong chi Thong so ky thuat. */
+    const kemAnh = (r) => Object.assign({}, r.data, {
+      anhIn: r.anhMacDinh || '',
+      maRap: (r.order && r.order.MaRap) || '',
+      tenSanPham: (r.order && r.order.TenSanPham) || ''
+    });
+    if (tsd.data) sections.push(buildThongSoDoBodyHtml(kemAnh(tsd)));
+    if (mtsp.data) sections.push(buildMoTaSanPhamBodyHtml(kemAnh(mtsp), 'MÔ TẢ ĐƯỜNG MAY'));
+    if (qc.data) sections.push(buildMoTaSanPhamBodyHtml(kemAnh(qc), 'QUY CÁCH ĐÓNG GÓI'));
+    if (hait.data) sections.push(buildMoTaSanPhamBodyHtml(kemAnh(hait), 'HÌNH ẢNH MÔ TẢ IN/THÊU'));
     if (bkHtml) sections.push(bkHtml);
     if (!sections.length) { toast(`Lệnh sản xuất ${maDH} chưa có tài liệu nào để in.`, 'error'); return; }
     const body = sections.map((s, i) => i === 0 ? s : `<div style="page-break-before:always;">${s}</div>`).join('');
@@ -1937,8 +1961,12 @@ window.ModuleTaiLieuKyThuat = (function () {
   // Mọi bản in đều gắn Mã rập (lấy từ res.order.MaRap) + tên bản qua docInfoRowsHtml().
   async function printOneOrderDoc(maDH, loai, ten) {
     const tenQ = ten !== undefined && ten !== null ? '&ten=' + encodeURIComponent(ten) : '';
+    /* v7.67: gắn LUÔN ảnh sản phẩm + tên sản phẩm ở đây, nên MỌI loại đi qua printOneOrderDoc đều có
+       ảnh trên bản in — không còn phải nhớ thêm ở từng nhánh if/else (đúng chỗ đã sót ở v7.65.2). */
     const withInfo = (data, res) => Object.assign({}, data, {
-      maRap: (res && res.order && res.order.MaRap) || '', tenBan: ten || ''
+      maRap: (res && res.order && res.order.MaRap) || '', tenBan: ten || '',
+      tenSanPham: (res && res.order && res.order.TenSanPham) || '',
+      anhIn: (res && res.anhMacDinh) || ''
     });
     try {
       if (loai === 'tailieuchung') {
@@ -1948,7 +1976,7 @@ window.ModuleTaiLieuKyThuat = (function () {
       } else if (loai === 'thongsodo') {
         const res = await apiGet(`/api/tailieukythuat/thongsodo/${maDH}?_=1${tenQ}`);
         if (!res.data) { toast(`Lệnh sản xuất ${maDH} chưa có ${LOAI_LABEL[loai]}.`, 'error'); return; }
-        printThongSoDo({ ...withInfo(res.data, res), anhIn: res.anhMacDinh || '' }, maDH);   // v7.65.2
+        printThongSoDo(withInfo(res.data, res), maDH);   // v7.65.2 (v7.67: ảnh đã nằm trong withInfo)
       } else if (loai === 'thongkechitiet') {
         /* v7.65.1: THIEU nhanh nay thi bam "In" o danh sach ban khong lam gi ca — roi het if/else
            ma khong bao loi. Day dung la trieu chung "bam in khong hoat dong". */
@@ -1956,7 +1984,8 @@ window.ModuleTaiLieuKyThuat = (function () {
         if (!res.data) { toast(`Lệnh sản xuất ${maDH} chưa có ${LOAI_LABEL[loai]}.`, 'error'); return; }
         printThongKeChiTiet({
           ...res.data, ten: ten || res.data.tenPhieu || '',
-          anhIn: res.data.anhDaiDien || res.anhMacDinh || '', order: res.order || {}
+          anhIn: res.data.anhDaiDien || res.anhMacDinh || '', order: res.order || {},
+          tenSanPham: (res.order && res.order.TenSanPham) || ''
         }, maDH);
       } else if (loai === 'motasp' || loai === 'quycach' || loai === 'hinhanhinthue') {
         // v5.43: 3 loại dùng chung bảng TaiLieuMoTaSanPham (phân biệt qua ?loai=), 1 builder chung.

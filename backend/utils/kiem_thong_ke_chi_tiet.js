@@ -187,7 +187,9 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
   ['Tên chi tiết', 'Vật liệu', 'Số lượng', 'Cặp', 'Chiều đối xứng', 'Tổng số lượng', 'Hình chi tiết']
     .forEach(n => kiem(sFe.indexOf(`'${n}'`) > 0 || sFe.indexOf(`>${n}<`) > 0, `tieu de tieng Viet: ${n}`));
   kiem(!/Piece Name<\/th>|>Material<\/th>|>Opposite<\/th>/.test(sFe), 'khong con tieu de tieng Anh tren giao dien');
-  kiem(/d\.anhIn \? `<img src="\$\{escapeHtml\(d\.anhIn\)\}"/.test(sFe), 'ban in co anh dai dien hang');
+  /* v7.67: anh khong con dung tay o tung builder nua — moi ban in di qua khoiDauPhieuHtml().
+     Kiem CHAY THAT (dung ra HTML roi dem the <img>) nam o utils/kiem_anh_va_marap_ban_in.js. */
+  kiem(/khoiDauPhieuHtml\(d\.anhIn,/.test(sFe), 'ban in Thong ke chi tiet dung khoi dau phieu co anh');
   kiem(/anhState\.rieng \|\| anhMacDinh/.test(sFe), 'anh: uu tien anh rieng, khong co thi dung anh ma hang');
   kiem(/tkctAnhVeMacDinh/.test(sFe), 'co nut quay ve dung lai anh cua ma hang');
   kiem(/thongkechitiet\/doc-excel/.test(sFe), 'form goi dung route doc Excel');
@@ -240,17 +242,20 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
   kiem((sRoute.match(/const anhMacDinh = await anhDaiDienCuaDon\(pool, order\);/g) || []).length === 2,
     'CA HAI route (thongsodo + thongkechitiet) deu tra anh dai dien mac dinh',
     String((sRoute.match(/const anhMacDinh = await anhDaiDienCuaDon\(pool, order\);/g) || []).length));
-  kiem(/data\.anhIn \? `<img src="\$\{escapeHtml\(data\.anhIn\)\}"/.test(sFe),
-    'ban in THONG SO KY THUAT co anh dai dien');
-  kiem(/d\.anhIn \? `<img src="\$\{escapeHtml\(d\.anhIn\)\}"/.test(sFe),
-    'ban in THONG KE CHI TIET co anh dai dien');
+  /* v7.67: yeu cau da mo rong ra HET cac ban in cua man hinh (khong chi 2 ban nay). Bay gio moi
+     builder goi khoiDauPhieuHtml(), va bai kiem CHAY THAT tung ban in nam o
+     utils/kiem_anh_va_marap_ban_in.js — o day chi giu moc chong sut. */
+  kiem((sFe.match(/khoiDauPhieuHtml\(/g) || []).length >= 7,
+    'anh dau phieu dung CHUNG mot ham cho moi ban in (>= 7 cho goi)',
+    String((sFe.match(/khoiDauPhieuHtml\(/g) || []).length));
   /* Ba duong in cung mot tai lieu (nut In trong form / nut In o danh sach ban / In tat ca) phai ra
      GIONG NHAU — thieu mot cho la "in cho nay co anh, cho kia khong". */
-  kiem(/anhIn: res\.anhMacDinh \|\| ''/.test(sFe)
-    && (sFe.match(/anhIn: res\.anhMacDinh \|\| ''/g) || []).length === 2,
-    'nut In trong form VA nut In o danh sach ban deu truyen anh',
+  kiem((sFe.match(/anhIn: res\.anhMacDinh \|\| ''/g) || []).length >= 2,
+    'cac nut In trong form deu truyen anh',
     String((sFe.match(/anhIn: res\.anhMacDinh \|\| ''/g) || []).length));
-  kiem(/buildThongSoDoBodyHtml\(\{ \.\.\.tsd\.data, anhIn: tsd\.anhMacDinh \|\| '' \}\)/.test(sFe),
+  kiem(/anhIn: \(res && res\.anhMacDinh\) \|\| ''/.test(sFe),
+    'nut In o danh sach ban: anh gan san trong withInfo() nen moi loai deu co');
+  kiem(/const kemAnh = \(r\) =>/.test(sFe) && /buildThongSoDoBodyHtml\(kemAnh\(tsd\)\)/.test(sFe),
     '"In tat ca tai lieu" cung truyen anh (khong de hai duong in ra hai ban khac nhau)');
   kiem(/flex:none;/.test(sFe), 'anh khong bi bop meo khi khoi thong tin dai');
   /* ⚠️ SAI NGUON ANH (v7.65.2 -> sua o v7.65.3): ban dau toi do `TheKhoHangHoa` theo ma san pham,
@@ -266,9 +271,10 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
     'lui ve the kho thi so ma DA CAT KHOANG TRANG hai dau (lech mot dau cach la khong ra dong nao)');
   kiem(/NULLIF\(LTRIM\(RTRIM\(ISNULL\(AnhDaiDien, ''\)\)\), ''\) IS NOT NULL/.test(sRoute),
     'chi lay dong the kho THAT SU co anh (khong tra ve chuoi rong roi tuong la co)');
-  /* 3 = 1 dong dinh nghia ham + 2 loi goi. */
-  kiem((sRoute.match(/anhDaiDienCuaDon\(pool, order\)/g) || []).length === 3,
-    'CA HAI route deu goi ham dung chung (khong con hai ban tu tra anh)',
+  /* v7.67: khong con "hai route", MOI route GET tra `order` deu phai kem anh -> so loi goi tang.
+     Rang buoc chat (khong cau res.json nao tra order ma thieu anhMacDinh) o kiem_anh_va_marap_ban_in.js. */
+  kiem((sRoute.match(/anhDaiDienCuaDon\(pool, order\)/g) || []).length >= 3,
+    'moi route deu goi ham dung chung (khong con ban tu tra anh)',
     String((sRoute.match(/anhDaiDienCuaDon\(pool, order\)/g) || []).length));
   kiem(!/SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms/.test(sRoute),
     'khong con ban tra anh viet tay (chi con trong ham dung chung)');

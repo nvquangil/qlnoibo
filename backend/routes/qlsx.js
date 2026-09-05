@@ -6,6 +6,7 @@ const { requireAuth, requirePermission, canUpdateStage, requireChucNang, require
 const { checkOverdueOrders } = require('../utils/checkOverdue');
 const { raSoatXoaDonHang, cauBaoChan } = require('../utils/donHangThamChieu');   // v7.11: xoa lenh SX
 const { conHangSQL } = require('../utils/tonVai');   // v7.36: "con hang" = con KG HOAC con MET
+const { maRapCuaDon, maRapTheoDon } = require('../utils/maRapCuaDon');   // v7.67: 1 ban cong thuc ma rap (2 nguon)
 /* v7.37: ba tang phong ve chong "lech ID trung ten" dung CHUNG mot ban chan doan. */
 const { chanDoanDon, danhMucTrungTen, timIdTheoTen } = require('../utils/chanDoanChiDinhVai');
 const { notifyStageUsers } = require('./notifications');
@@ -184,11 +185,11 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
 
   const user = req.session.user;
   let orders = result.recordset;
-  // v5.52: gộp Mã Rập từ các sơ đồ của đơn (DonHangChiTietSoDo) — hiện ở Danh sách lệnh SX + các phiếu.
-  const _mr = (await pool.request().query(`SELECT DonHangID, MaRap FROM DonHangChiTietSoDo WHERE MaRap IS NOT NULL AND LTRIM(RTRIM(MaRap)) <> ''`)).recordset;
-  const _mrMap = {};
-  for (const s of _mr) { (_mrMap[s.DonHangID] = _mrMap[s.DonHangID] || []).push(s.MaRap); }
-  orders.forEach(o => { o.MaRap = [...new Set(_mrMap[o.DonHangID] || [])].join(', '); });
+  /* v5.52: gộp Mã Rập của đơn — hiện ở Danh sách lệnh SX + các phiếu.
+     v7.67: bản cũ ở đây chỉ đọc DonHangChiTietSoDo nên đơn nào Kỹ thuật khai mã rập lúc GHI TIẾN ĐỘ
+     thì cột Mã rập trắng, dù getMaRapCuaDon() ngay dưới file này đã gộp 2 nguồn từ v6.06. */
+  const _mrMap = await maRapTheoDon(pool);
+  orders.forEach(o => { o.MaRap = _mrMap[o.DonHangID] || ''; });
   // v5.18 (muc 1.1): nguoi dung KHONG duoc phan cong bat ky cong doan nao (UserCongDoan rong - dung
   // cho tai khoan "chi xem" thuan tuy, khong phai cong nhan thao tac 1 cong doan cu the) truoc day bi
   // loc con 0 dong (mang rong .indexOf(...) luon la -1 voi moi don) - danh sach trong khong nghia ly gi
@@ -241,10 +242,8 @@ router.get('/orders-quakythuat', requireAuth, requirePermission('QLSX', 'view'),
     WHERE EXISTS (SELECT 1 FROM TienDoSanXuat td JOIN CongDoanSanXuat kt ON kt.StageID = td.StageID
                   WHERE td.DonHangID = d.DonHangID AND kt.MaCongDoan = N'KT')
     ORDER BY d.DonHangID DESC`)).recordset;
-  const _mr = (await pool.request().query(`SELECT DonHangID, MaRap FROM DonHangChiTietSoDo WHERE MaRap IS NOT NULL AND LTRIM(RTRIM(MaRap)) <> ''`)).recordset;
-  const _mrMap = {};
-  for (const s of _mr) { (_mrMap[s.DonHangID] = _mrMap[s.DonHangID] || []).push(s.MaRap); }
-  rows.forEach(o => { o.MaRap = [...new Set(_mrMap[o.DonHangID] || [])].join(', '); });
+  const _mrMap = await maRapTheoDon(pool);   // v7.67: gộp cả mã rập khai lúc Ghi tiến độ
+  rows.forEach(o => { o.MaRap = _mrMap[o.DonHangID] || ''; });
   res.json({ success: true, data: rows });
 });
 
@@ -1965,8 +1964,14 @@ router.get('/chidinhvaisx/:maDH/phieuxuat/:phieuId', requireAuth, requirePermiss
   const header = (await pool.request().input('id', sql.Int, req.params.phieuId).input('dh', sql.Int, order.DonHangID).query(`
     SELECT p.PhieuXuatID, p.NgayXuat, p.MaDon, p.Chuyen, p.NguoiNhan, p.MucDich, p.GhiChu,
            d.MaDH, d.TenSanPham, u.HoTen AS NguoiTao,
-           STUFF((SELECT DISTINCT ', ' + sd.MaRap FROM DonHangChiTietSoDo sd
-                  WHERE sd.DonHangID = p.DonHangID AND sd.MaRap IS NOT NULL AND LTRIM(RTRIM(sd.MaRap)) <> ''
+           ${/* v7.67: gộp cả mã rập khai lúc GHI TIẾN ĐỘ. Bảng dẫn xuất `z` KHÔNG tham chiếu cột
+                ngoài (SQL Server chỉ cho phép việc đó qua APPLY) — điều kiện lọc theo đơn nằm ở
+                WHERE của câu bao ngoài. */''}
+           STUFF((SELECT DISTINCT ', ' + z.MaRap FROM
+                    (SELECT sd.DonHangID, sd.MaRap FROM DonHangChiTietSoDo sd
+                     UNION ALL
+                     SELECT td.DonHangID, td.MaRap FROM TienDoSanXuat td) z
+                  WHERE z.DonHangID = p.DonHangID AND z.MaRap IS NOT NULL AND LTRIM(RTRIM(z.MaRap)) <> ''
                   FOR XML PATH('')), 1, 2, '') AS MaRap
     FROM PhieuXuatVai p
     LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
@@ -2082,16 +2087,11 @@ router.delete('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'del
    Nguồn chính: bảng Sơ đồ (DonHangChiTietSoDo.MaRap) — công đoạn Kỹ thuật khai từ v5.13.
    Nguồn cũ: TienDoSanXuat.MaRap — các lần Ghi tiến độ Kỹ thuật TRƯỚC v5.13 ghi thẳng vào cột này.
    Chỉ đọc 1 nguồn là đơn cũ hiện TRỐNG mã rập dù Kỹ thuật đã cập nhật (đúng lỗi người dùng báo).
-   Cùng tinh thần với cách sổ cắt lấy bù ISNULL(td.MaRap, sd.MaRap) ở v5.89. */
+   Cùng tinh thần với cách sổ cắt lấy bù ISNULL(td.MaRap, sd.MaRap) ở v5.89.
+   v7.67: công thức dời sang utils/maRapCuaDon.js để routes/tailieukythuat.js dùng CHUNG — trước đây
+   file đó giữ bản chỉ đọc bảng Sơ đồ nên mọi bản in Tài liệu may/đóng gói trắng mã rập. */
 async function getMaRapCuaDon(pool, donHangId) {
-  const r = (await pool.request().input('id', sql.Int, donHangId).query(`
-    SELECT DISTINCT LTRIM(RTRIM(x.MaRap)) AS MaRap FROM (
-      SELECT MaRap FROM DonHangChiTietSoDo WHERE DonHangID = @id
-      UNION ALL
-      SELECT MaRap FROM TienDoSanXuat WHERE DonHangID = @id
-    ) x
-    WHERE x.MaRap IS NOT NULL AND LTRIM(RTRIM(x.MaRap)) <> ''`)).recordset;
-  return r.map(x => x.MaRap).join(', ');
+  return maRapCuaDon(pool, sql, donHangId);
 }
 /* v6.06 — ĐƠN VỊ TÍNH của đơn (theo ĐÚNG cái đã khai ở Ra lệnh sản xuất): lấy ĐVT của dòng Cấu trúc vải
    đầu tiên có khai (DonHangChiTietVai.DonViTinh — đúng nguồn mà bản in Lệnh SX đang dùng), thiếu thì lùi

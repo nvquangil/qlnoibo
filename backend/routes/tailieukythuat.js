@@ -13,6 +13,8 @@ const path = require('path');
 const { docThongSoDoExcel } = require('../utils/docThongSoDoExcel');
 /* v7.65: đọc file Excel thống kê chi tiết (kèm hình rập vẽ bằng Freeform của Excel). */
 const { docThongKeChiTietExcel } = require('../utils/docThongKeChiTietExcel');
+/* v7.67: mã rập gộp CẢ 2 nguồn (bảng Sơ đồ + Ghi tiến độ). Xem đầu file util để biết vì sao. */
+const { maRapCuaDon, maRapTheoDon } = require('../utils/maRapCuaDon');
 
 /* Ảnh rập trích từ Excel ghi vào ĐÚNG thư mục mà routes/upload.js dùng, để mọi ảnh nằm một chỗ và
    đường dẫn /uploads/... phục vụ được ngay. */
@@ -102,11 +104,11 @@ async function coCot(pool, bang, cot) {
   return co;
 }
 
+/* v7.67 — CHỈ CÒN LÀ VỎ BỌC. Bản cũ ở đây chỉ đọc `DonHangChiTietSoDo`, nên mã rập mà bộ phận Kỹ
+   thuật gõ lúc **Ghi tiến độ** (`TienDoSanXuat.MaRap`) KHÔNG BAO GIỜ hiện ra ở Tài liệu may/đóng gói
+   — đúng lỗi Nguyen báo. qlsx.js đã gộp 2 nguồn từ v6.06; nay dùng chung một bản công thức. */
 async function maRapOf(pool, donHangId) {
-  if (!donHangId) return '';
-  const r = await pool.request().input('id', sql.Int, donHangId)
-    .query(`SELECT MaRap FROM DonHangChiTietSoDo WHERE DonHangID=@id AND MaRap IS NOT NULL AND LTRIM(RTRIM(MaRap))<>''`);
-  return [...new Set(r.recordset.map(x => x.MaRap))].join(', ');
+  return maRapCuaDon(pool, sql, donHangId);
 }
 
 async function getOrderBasic(pool, maDH) {
@@ -143,6 +145,19 @@ async function anhDaiDienCuaDon(pool, order) {
                WHERE LTRIM(RTRIM(MaHang)) = @ms AND NULLIF(LTRIM(RTRIM(ISNULL(AnhDaiDien, ''))), '') IS NOT NULL`)).recordset[0];
     return (a && a.AnhDaiDien) || '';
   } catch (e) { return ''; }
+}
+
+/* ================================================================================================
+   v7.67 — MỘT LỐI DUY NHẤT LẤY THÔNG TIN ĐẦU PHIẾU CHO MỌI BẢN IN CỦA MÀN "Tài liệu may/đóng gói".
+   Yêu cầu của Nguyen: "rà soát lại HẾT các bảng in ... đều đưa ảnh sản phẩm từ lệnh sản xuất lên bản
+   in để biết sản phẩm gì". Trước đây mỗi route tự dựng object `order` bằng một câu SELECT riêng, có
+   route lấy AnhSanPham có route không → in ra chỗ có ảnh chỗ không. Nay TẤT CẢ đi qua đây.
+   Trả `null` khi không tìm thấy đơn để route tự trả 404 như cũ.
+   ================================================================================================ */
+async function orderChoBanIn(pool, maDH) {
+  const order = await getOrderBasic(pool, maDH);
+  if (!order) return null;
+  return { order, anhMacDinh: await anhDaiDienCuaDon(pool, order) };
 }
 
 // ============ DANH SACH DON HANG KEM TRANG THAI "DA CO TAI LIEU" (dung chung ca 4 man hinh con) ============
@@ -214,7 +229,7 @@ async function getOrdersWithDocStatus(pool, loai) {
   const locInTheu = (loai === 'hinhanhinthue' || loai === 'dongiainthe') && await coCot(pool, 'DonHangSanXuat', 'CoInTheu')
     ? 'WHERE ISNULL(d.CoInTheu, 0) = 1' : '';
   const result = await pool.request().query(`
-    SELECT d.DonHangID, d.MaDH, d.MaSanPham, d.TenSanPham, kh.TenKhachHang, d.NgayGiaoDuKien, d.TrangThai, c.TenCongDoan, ${daCoExpr}
+    SELECT d.DonHangID, d.MaDH, d.MaSanPham, d.TenSanPham, d.AnhSanPham, kh.TenKhachHang, d.NgayGiaoDuKien, d.TrangThai, c.TenCongDoan, ${daCoExpr}
     FROM DonHangSanXuat d
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
@@ -222,11 +237,11 @@ async function getOrdersWithDocStatus(pool, loai) {
     ${locInTheu}
     ORDER BY d.CreatedAt DESC`);
   const rows = result.recordset;
-  // v5.53: gộp Mã Rập theo đơn (hiển thị ở danh sách + modal NPL + header các form).
-  const mr = (await pool.request().query(`SELECT DonHangID, MaRap FROM DonHangChiTietSoDo WHERE MaRap IS NOT NULL AND LTRIM(RTRIM(MaRap))<>''`)).recordset;
-  const mrMap = {};
-  for (const s of mr) { (mrMap[s.DonHangID] = mrMap[s.DonHangID] || []).push(s.MaRap); }
-  rows.forEach(o => { o.MaRap = [...new Set(mrMap[o.DonHangID] || [])].join(', '); });
+  /* v5.53: gộp Mã Rập theo đơn (hiển thị ở danh sách + modal NPL + header các form).
+     v7.67: bản cũ ở đây CHỈ đọc DonHangChiTietSoDo nên đơn nào Kỹ thuật khai mã rập lúc Ghi tiến độ
+     thì cột Mã rập trắng. Nay dùng chung utils/maRapCuaDon.js (gộp cả TienDoSanXuat). */
+  const mrMap = await maRapTheoDon(pool);
+  rows.forEach(o => { o.MaRap = mrMap[o.DonHangID] || ''; });
   return rows;
 }
 
@@ -241,23 +256,23 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), async (req
 // v5.56: danh sách BẢN (nhiều bản có tên/đơn) — dùng chung khuôn với các loại khác.
 router.get('/dongiamay/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
-  if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
-  const phieu = (await pool.request().input('id', sql.Int, o.DonHangID).query(
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67
+  if (!ob) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const phieu = (await pool.request().input('id', sql.Int, ob.order.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu, COUNT(*) AS SoDong FROM DonHangDonGiaCongDoanMay WHERE DonHangID=@id GROUP BY ISNULL(TenPhieu, N'') ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: phieu });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: phieu });
 });
 router.get('/dongiamay/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham, MaSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
-  if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67
+  if (!ob) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const hasTen = req.query.ten !== undefined;   // không truyền ?ten= = LẤY TẤT CẢ (giữ tương thích báo cáo/lương cũ)
   const ten = req.query.ten != null ? String(req.query.ten) : '';
-  const rq = pool.request().input('id', sql.Int, o.DonHangID);
+  const rq = pool.request().input('id', sql.Int, ob.order.DonHangID);
   if (hasTen) rq.input('ten', sql.NVarChar, ten);
   const rows = (await rq.query(`SELECT ID, TenCongDoan, GiayGio, HeSoCongDoan, HeSoCongNhan, ThanhTien FROM DonHangDonGiaCongDoanMay
     WHERE DonHangID=@id${hasTen ? ` AND ISNULL(TenPhieu, N'')=@ten` : ''} ORDER BY ThuTu, ID`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaSanPham: o.MaSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: rows });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: rows });
 });
 router.post('/dongiamay/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
@@ -298,15 +313,17 @@ router.delete('/dongiamay/:maDH', requireAuth, requirePermission('QLSX', 'delete
 // v5.56: danh sách BẢN.
 router.get('/dongiagiacong/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, o.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu, COUNT(*) AS SoDong FROM DonHangHangMucGiaCong WHERE DonHangID=@id GROUP BY ISNULL(TenPhieu, N'') ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: phieu });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: phieu });
 });
 router.get('/dongiagiacong/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const catalog = (await pool.request().query('SELECT HangMucGiaCongID, TenHangMuc, DonGiaMacDinh FROM HangMucGiaCong ORDER BY TenHangMuc')).recordset;
   const hasTen = req.query.ten !== undefined;
@@ -317,7 +334,7 @@ router.get('/dongiagiacong/:maDH', requireAuth, requirePermission('QLSX', 'view'
     SELECT dhg.HangMucGiaCongID, hm.TenHangMuc, ISNULL(dhg.DonGia, hm.DonGiaMacDinh) AS DonGia
     FROM DonHangHangMucGiaCong dhg JOIN HangMucGiaCong hm ON hm.HangMucGiaCongID = dhg.HangMucGiaCongID
     WHERE dhg.DonHangID = @id${hasTen ? ` AND ISNULL(dhg.TenPhieu, N'')=@ten` : ''} ORDER BY hm.TenHangMuc`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, catalog, chosen });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, catalog, chosen });
 });
 router.post('/dongiagiacong/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
@@ -435,7 +452,7 @@ router.get('/tailieuchung/:maDH/phieu', requireAuth, requirePermission('QLSX', '
   if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, order.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu FROM TaiLieuKyThuatChung WHERE DonHangID=@id AND LaMau=0 ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order, data: phieu });
+  res.json({ success: true, order, anhMacDinh: await anhDaiDienCuaDon(pool, order), data: phieu });   // v7.67
 });
 
 router.get('/tailieuchung/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
@@ -448,7 +465,7 @@ router.get('/tailieuchung/:maDH', requireAuth, requirePermission('QLSX', 'view')
     hasTen
       ? `SELECT TOP 1 ID FROM TaiLieuKyThuatChung WHERE DonHangID=@id AND LaMau=0 AND ISNULL(TenPhieu, N'')=@ten ORDER BY ID`
       : `SELECT TOP 1 ID FROM TaiLieuKyThuatChung WHERE DonHangID=@id AND LaMau=0 ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
-  res.json({ success: true, data: row ? await getTaiLieuChungDetail(pool, row.ID) : null, order });
+  res.json({ success: true, data: row ? await getTaiLieuChungDetail(pool, row.ID) : null, order, anhMacDinh: await anhDaiDienCuaDon(pool, order) });   // v7.67
 });
 
 router.post('/tailieuchung/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
@@ -706,7 +723,7 @@ router.get('/thongkechitiet/:maDH/phieu', requireAuth, requirePermission('QLSX',
   const phieu = (await pool.request().input('id', sql.Int, order.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu FROM TaiLieuThongKeChiTiet
       WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order, data: phieu });
+  res.json({ success: true, order, anhMacDinh: await anhDaiDienCuaDon(pool, order), data: phieu });   // v7.67
 });
 
 router.get('/thongkechitiet/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
@@ -804,7 +821,7 @@ router.get('/thongsodo/:maDH/phieu', requireAuth, requirePermission('QLSX', 'vie
   if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, order.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu FROM TaiLieuThongSoDo WHERE DonHangID=@id ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order, data: phieu });
+  res.json({ success: true, order, anhMacDinh: await anhDaiDienCuaDon(pool, order), data: phieu });   // v7.67
 });
 
 router.get('/thongsodo/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
@@ -1003,7 +1020,7 @@ router.get('/motasp/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view')
   if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, order.DonHangID).input('loai', sql.NVarChar, motaLoai(req)).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu FROM TaiLieuMoTaSanPham WHERE DonHangID=@id AND Loai=@loai ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order, data: phieu });
+  res.json({ success: true, order, anhMacDinh: await anhDaiDienCuaDon(pool, order), data: phieu });   // v7.67
 });
 
 router.get('/motasp/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
@@ -1016,7 +1033,7 @@ router.get('/motasp/:maDH', requireAuth, requirePermission('QLSX', 'view'), asyn
     hasTen
       ? `SELECT TOP 1 ID FROM TaiLieuMoTaSanPham WHERE DonHangID=@id AND Loai=@loai AND ISNULL(TenPhieu, N'')=@ten ORDER BY ID`
       : `SELECT TOP 1 ID FROM TaiLieuMoTaSanPham WHERE DonHangID=@id AND Loai=@loai ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
-  res.json({ success: true, data: row ? await getMoTaSanPhamDetail(pool, row.ID) : null, order });
+  res.json({ success: true, data: row ? await getMoTaSanPhamDetail(pool, row.ID) : null, order, anhMacDinh: await anhDaiDienCuaDon(pool, order) });   // v7.67
 });
 
 router.post('/motasp/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
@@ -1110,15 +1127,17 @@ router.put('/motasp-mau/:id', requireAuth, requirePermission('QLSX', 'edit'), as
 // v5.56: danh sách BẢN.
 router.get('/dongiainthe/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, o.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu, COUNT(*) AS SoDong FROM DonHangDonGiaInThe WHERE DonHangID=@id GROUP BY ISNULL(TenPhieu, N'') ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: phieu });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: phieu });
 });
 router.get('/dongiainthe/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const hasTen = req.query.ten !== undefined;
   const ten = req.query.ten != null ? String(req.query.ten) : '';
@@ -1127,7 +1146,7 @@ router.get('/dongiainthe/:maDH', requireAuth, requirePermission('QLSX', 'view'),
   // v5.87: + AnhMinhHoa (ảnh từng dòng). Dò cột để màn hình vẫn mở được khi CHƯA chạy migration_v660.
   const coAnh = await coCot(pool, 'DonHangDonGiaInThe', 'AnhMinhHoa');
   const rows = (await rq.query(`SELECT ID, Ten, DonGia${coAnh ? ', AnhMinhHoa' : ", CAST(NULL AS NVARCHAR(500)) AS AnhMinhHoa"} FROM DonHangDonGiaInThe WHERE DonHangID=@id${hasTen ? ` AND ISNULL(TenPhieu, N'')=@ten` : ''} ORDER BY ThuTu, ID`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: rows });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: rows });
 });
 router.post('/dongiainthe/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
@@ -1166,15 +1185,17 @@ router.delete('/dongiainthe/:maDH', requireAuth, requirePermission('QLSX', 'dele
 // v5.56: danh sách BẢN (mỗi bản gồm 2 dòng LA + DG).
 router.get('/dongialadonggoi/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const phieu = (await pool.request().input('id', sql.Int, o.DonHangID).query(
     `SELECT ISNULL(TenPhieu, N'') AS TenPhieu, COUNT(*) AS SoDong FROM DonHangDonGiaLaDongGoi WHERE DonHangID=@id GROUP BY ISNULL(TenPhieu, N'') ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: phieu });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: phieu });
 });
 router.get('/dongialadonggoi/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
-  const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID, MaDH, TenSanPham FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
+  const ob = await orderChoBanIn(pool, req.params.maDH);   // v7.67: kèm luôn ảnh sản phẩm + mã rập 2 nguồn
+  const o = ob && ob.order;
   if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const hasTen = req.query.ten !== undefined;
   const ten = req.query.ten != null ? String(req.query.ten) : '';
@@ -1183,7 +1204,7 @@ router.get('/dongialadonggoi/:maDH', requireAuth, requirePermission('QLSX', 'vie
   // Không truyền ?ten= = lấy TẤT CẢ (tương thích tính lương cũ: mỗi Loai lấy dòng đầu tìm được).
   const rows = (await rq.query(`SELECT Loai, DonGia FROM DonHangDonGiaLaDongGoi WHERE DonHangID=@id${hasTen ? ` AND ISNULL(TenPhieu, N'')=@ten` : ''}`)).recordset;
   const m = {}; rows.forEach(r => { if (m[r.Loai] == null) m[r.Loai] = r.DonGia; });
-  res.json({ success: true, order: { MaDH: o.MaDH, TenSanPham: o.TenSanPham, MaRap: await maRapOf(pool, o.DonHangID) }, data: { la: m.LA != null ? m.LA : '', dg: m.DG != null ? m.DG : '' } });
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, data: { la: m.LA != null ? m.LA : '', dg: m.DG != null ? m.DG : '' } });
 });
 router.post('/dongialadonggoi/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
