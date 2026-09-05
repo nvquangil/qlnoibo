@@ -386,10 +386,11 @@ function openModal(innerHtml, opts) {
 
   // v5.51: mọi <select> trong modal thành ô "gõ để tìm" + tự áp cho các dòng thêm động (Thêm cây/Thêm dòng...).
   const __mbody = backdrop.querySelector('.modal-body');
-  enhanceSelects(__mbody);
+  // v7.63: bọc CẢ <select> LẪN <input list="..."> — xem enhanceDatalists().
+  enhanceInputs(__mbody);
   try {
     backdrop.__selObserver = new MutationObserver(muts => {
-      for (const m of muts) for (const n of m.addedNodes) if (n && n.nodeType === 1) enhanceSelects(n);
+      for (const m of muts) for (const n of m.addedNodes) if (n && n.nodeType === 1) enhanceInputs(n);
       // v5.61.1: nội dung trong modal đổi (thêm dòng, đổi bản...) -> đo lại chiều cao thanh công cụ dính.
       if (typeof capNhatThanhCongCuDinh === 'function') capNhatThanhCongCuDinh(modalEl);
     });
@@ -505,6 +506,27 @@ function capNhatMoiThanhCongCuDinh() {
   else batDau();
 })();
 
+/* ==================================================================================================
+   v7.63 — BỌC CẢ CÁC Ô NẰM NGOÀI MODAL.
+   `openModal` đã bọc mọi ô trong `.modal-body`, nhưng có form vẽ thẳng vào vùng nội dung của tab
+   (không qua modal). Thay vì đi soi từng màn xem cái nào trong modal cái nào không — soi kiểu đó
+   sai một cái là màn đó lại "bấm không sổ danh sách" mà không ai biết — cứ theo dõi luôn `.content`.
+   `enhanceOneSelect` / `enhanceOneDatalist` đều có cờ đánh dấu nên gọi lại KHÔNG bọc hai lần.
+   ================================================================================================== */
+(function boc0Ngoai() {
+  const chay = () => { const c = document.querySelector('.content'); if (c) enhanceInputs(c); };
+  const batDau = () => {
+    const c = document.querySelector('.content');
+    if (!c) return;
+    let hen = null;
+    const gopNhip = () => { clearTimeout(hen); hen = setTimeout(chay, 60); };
+    try { new MutationObserver(gopNhip).observe(c, { childList: true, subtree: true }); } catch (e) { }
+    chay();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', batDau);
+  else batDau();
+})();
+
 // v5.51: Nâng cấp MỌI <select> trong 1 vùng thành ô "gõ để tìm trong danh sách" (combobox).
 // GIỮ NGUYÊN <select> gốc (ẩn đi) làm nguồn giá trị -> mọi code đọc .value / lắng nghe 'change' /
 // nạp lại <option> qua opt() vẫn chạy y như cũ. Opt-out 1 select: thêm thuộc tính data-nosearch.
@@ -548,6 +570,11 @@ function enhanceOneSelect(sel) {
   try { new MutationObserver(syncText).observe(sel, { childList: true, attributes: true, attributeFilter: ['disabled'] }); } catch (e) {}
   sel.addEventListener('change', syncText);
   input.addEventListener('focus', () => { syncText(); input.select(); build(true); });
+  /* v7.63: BẤM CHUỘT VÀO LÀ SỔ DANH SÁCH RA — kể cả khi ô đang có sẵn giá trị và đang được focus.
+     Trước đây chỉ có sự kiện `focus`, mà focus KHÔNG bắn lại khi ô đã được focus sẵn: chọn xong một
+     giá trị rồi muốn đổi thì bấm vào không thấy gì, phải xóa chữ đi mới hiện danh sách.
+     Đang mở panel thì bấm để đặt con trỏ giữa chữ vẫn được — không dựng lại. */
+  input.addEventListener('click', () => { if (!panel) { input.select(); build(true); } });
   input.addEventListener('input', () => build(false));
   input.addEventListener('blur', () => setTimeout(() => { close(); syncText(); }, 150));
   input.addEventListener('keydown', (e) => {
@@ -566,6 +593,117 @@ function enhanceOneSelect(sel) {
     else if (e.key === 'Escape') { close(); }
   });
 }
+
+/* ==================================================================================================
+   v7.63 — Ô GÕ TỰ DO CÓ GỢI Ý (<input list="...">) : BẤM VÀO LÀ SỔ DANH SÁCH RA
+   --------------------------------------------------------------------------------------------------
+   VẤN ĐỀ: `<input list="dl">` dùng datalist SẴN CÓ của trình duyệt. Trình duyệt LỌC danh sách theo
+   chữ đang có trong ô — ô đã có "Đen" thì bấm vào chỉ thấy các mục chứa "Đen", muốn xem cả danh sách
+   phải XÓA chữ đi trước. Đó đúng là điều người dùng phàn nàn, và nó xảy ra ở MỌI phiếu:
+     Ra lệnh SX (khách hàng, đơn vị công việc), Chỉ định vải (loại vải, màu), Tài liệu KT (đơn vị NPL),
+     Phiếu nhập kho hàng (mã hàng, màu), Thẻ kho (mã hàng, màu, khách), Phụ kiện (mã phụ kiện).
+
+   CÁCH LÀM: thay popup của trình duyệt bằng CHÍNH cái combobox mà `<select>` đang dùng (.ss-dropdown)
+   — cùng giao diện, cùng phím tắt. Khác `enhanceOneSelect` một điểm quan trọng: ô này vẫn GÕ TỰ DO
+   được (gõ tên màu mới, mã mới), nên KHÔNG ép phải chọn trong danh sách.
+
+   ⚠️ Phải GỠ thuộc tính `list` sau khi bọc, kẻo hai danh sách chồng lên nhau (popup của trình duyệt
+   + panel của mình). Tên datalist giữ ở `data-dl` để mỗi lần mở còn đọc lại — nhiều datalist được
+   dựng lại sau khi tải dữ liệu, đọc một lần rồi nhớ là hiện danh sách cũ.
+   ================================================================================================== */
+function enhanceDatalists(root) {
+  if (!root || root.nodeType !== 1) return;
+  const ds = [];
+  if (root.tagName === 'INPUT' && root.getAttribute('list')) ds.push(root);
+  if (root.querySelectorAll) root.querySelectorAll('input[list]').forEach(i => ds.push(i));
+  ds.forEach(enhanceOneDatalist);
+}
+function enhanceOneDatalist(input) {
+  if (!input || input.dataset.dlEnhanced != null || input.dataset.nosearch != null) return;
+  const id = input.getAttribute('list');
+  if (!id) return;
+  input.dataset.dlEnhanced = '1';
+  input.dataset.dl = id;
+  input.removeAttribute('list');      // tắt popup gốc của trình duyệt
+  input.setAttribute('autocomplete', 'off');
+
+  let panel = null, hi = -1, shown = [], dangChon = false;
+  function docMuc() {
+    const dl = document.getElementById(input.dataset.dl);
+    if (!dl) return [];
+    return Array.from(dl.options).map(o => {
+      const val = (o.value != null && o.value !== '') ? o.value : (o.textContent || '');
+      const mo = String(o.textContent || '').trim();
+      return { val: String(val), mo: (mo && mo !== String(val)) ? mo : '' };
+    }).filter(x => x.val !== '');
+  }
+  function reposition() {
+    if (!panel) return;
+    const r = input.getBoundingClientRect();
+    panel.style.left = r.left + 'px'; panel.style.top = (r.bottom + 2) + 'px';
+    panel.style.width = Math.max(r.width, 200) + 'px';
+  }
+  function close() {
+    if (panel) {
+      panel.remove(); panel = null;
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    }
+    hi = -1;
+  }
+  function build(showAll) {
+    const typed = showAll ? '' : String(input.value || '').trim().toLowerCase();
+    const all = docMuc();
+    shown = (typed ? all.filter(x => (x.val + ' ' + x.mo).toLowerCase().includes(typed)) : all).slice(0, 60);
+    if (!shown.length) { close(); return; }
+    if (!panel) {
+      panel = document.createElement('div'); panel.className = 'ss-dropdown';
+      document.body.appendChild(panel);
+      window.addEventListener('scroll', reposition, true);
+      window.addEventListener('resize', reposition);
+    }
+    reposition(); hi = -1;
+    panel.innerHTML = shown.map((x, i) => `<div class="ss-option" data-i="${i}"><b>${escapeHtml(x.val)}</b>${
+      x.mo ? ` <span style="color:#5f6368;">· ${escapeHtml(x.mo)}</span>` : ''}</div>`).join('');
+    Array.from(panel.children).forEach((el, i) =>
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); pick(shown[i]); }));
+  }
+  /* Chọn một mục: đặt giá trị rồi bắn CẢ `input` LẪN `change`. Các màn hình cũ nối tay bằng
+     `.oninput` hoặc `.onchange` tùy chỗ — bắn thiếu một cái là có màn không cập nhật. `dangChon`
+     chặn chính handler `input` của mình dựng lại panel vừa đóng. */
+  function pick(x) {
+    if (!x) return;
+    dangChon = true;
+    input.value = x.val;
+    close();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    dangChon = false;
+  }
+  function hl() {
+    if (!panel) return;
+    Array.from(panel.children).forEach((el, i) => el.classList.toggle('ss-option-active', i === hi));
+    if (panel.children[hi]) panel.children[hi].scrollIntoView({ block: 'nearest' });
+  }
+
+  input.addEventListener('focus', () => { input.select(); build(true); });
+  // Bấm chuột vào ô ĐANG focus -> vẫn sổ đủ danh sách (focus không bắn lại lần hai).
+  input.addEventListener('click', () => { if (!panel) { input.select(); build(true); } });
+  input.addEventListener('input', () => { if (!dangChon) build(false); });
+  input.addEventListener('blur', () => setTimeout(close, 150));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!panel) build(true); else { hi = Math.min(shown.length - 1, hi + 1); hl(); } }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (panel) { hi = Math.max(0, hi - 1); hl(); } }
+    /* Enter khi ĐANG tô một dòng thì chọn dòng đó và chặn submit. KHÁC ô <select>: ở đây KHÔNG tự
+       chọn gợi ý đầu tiên — ô này gõ tự do được, người dùng gõ tên màu MỚI rồi Enter là hợp lệ,
+       tự thay bằng gợi ý gần giống sẽ ghi sai dữ liệu. */
+    else if (e.key === 'Enter') { if (panel && hi >= 0) { e.preventDefault(); pick(shown[hi]); } else close(); }
+    else if (e.key === 'Escape') { close(); }
+  });
+}
+
+/* Gọi CẢ HAI ở mọi nơi đang gọi enhanceSelects — để không có màn nào được bọc nửa vời. */
+function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); }
 
 function closeModal(opts) {
   opts = opts || {};
