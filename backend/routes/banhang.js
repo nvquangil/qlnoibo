@@ -28,6 +28,9 @@ const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 const { taoWorkbookHoaDon } = require('../utils/hoaDonVietInvoice');
 /* v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690). */
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
+/* v7.59: MOT ban cong thuc "da tra / con o khach" — dung chung voi routes/nhaplai.js va 4 man hinh
+   hang mau. Xem ghi chu dai trong chinh file do. */
+const { hangMauDangOKhach, gomTheoKhachMa, coCotHangMau } = require('../utils/dongDaBanChoKhach');
 
 const router = express.Router();
 
@@ -572,6 +575,94 @@ router.get('/phieu/:id/hoadon', requireAuth, requirePermission('KHOHANG', 'view'
   }
 });
 
+/* ================================================================================================
+   v7.59 — HANG MAU / CHO KHACH MUON
+   ------------------------------------------------------------------------------------------------
+   Phieu ban hang co co `LaHangMau` van TRU TON va van vao CONG NO y het phieu ban binh thuong —
+   khong mot phep tinh tien nao doi. Cai duy nhat them vao la CAU TRA LOI cho:
+       "mau nay da gui cho khach do chua, tu bao gio, con bao nhieu chua tra?"
+   So lieu lay tu utils/dongDaBanChoKhach.js (CUNG ban cong thuc voi Phieu nhap lai), nen so o day
+   va so "con tra duoc" o man Phieu nhap lai KHONG THE lech nhau.
+
+   ⚠️ QUYEN — CO Y KHAC NHAU giua hai route duoi:
+     · /hangmau       : so rieng, gate theo ChucNang KHOHANG/hangmau (tab rieng, co the giao rieng).
+     · /hangmau/nhac  : chi gate theo quyen XEM cua module. Route nay phuc vu CANH BAO ngay tren form
+       Phieu ban hang va popup The kho — hai man o TAB KHAC. Gate no theo 'hangmau' thi nguoi lap
+       phieu (khong duoc giao tab so) se bi 403 va canh bao "im lang" khong hien, dung kieu loi da
+       gap nhieu lan. Du lieu tra ve chi la thu ma ho da thay duoc o danh sach phieu ban hang.
+   ================================================================================================ */
+async function docHangMau(pool, q) {
+  const ds = await hangMauDangOKhach(pool, sql, {
+    tenKhach: q.tenKhach || null,
+    maHangID: q.maHangID ? Number(q.maHangID) : null,
+    /* Mac dinh CHI hien phan con o khach. `tatCa=1` de xem ca lich su da tra xong. */
+    chiConGiu: String(q.tatCa || '') !== '1'
+  });
+  return String(q.gom || '') === '1' ? gomTheoKhachMa(ds) : ds;
+}
+
+router.get('/hangmau', requireAuth, requirePermission('KHOHANG', 'view'),
+  requireChucNang('KHOHANG', 'hangmau'), async (req, res) => {
+    const pool = await getPool();
+    res.json({ success: true, data: await docHangMau(pool, req.query || {}), coCot: await coCotHangMau(pool) });
+  });
+
+router.get('/hangmau/nhac', requireAuth, requirePermission('KHOHANG', 'view'), async (req, res) => {
+  const pool = await getPool();
+  const q = { ...(req.query || {}), gom: '1' };   // canh bao luon la ban GOM theo ma + mau
+  res.json({ success: true, data: await docHangMau(pool, q) });
+});
+
+router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
+  requireChucNang('KHOHANG', 'hangmau'), async (req, res) => {
+    const pool = await getPool();
+    const ds = await docHangMau(pool, { ...(req.query || {}), gom: '' });
+    const hai = n => String(n).padStart(2, '0');
+    const ngayVN = d => { const x = new Date(d); return isNaN(x) ? '' : `${hai(x.getDate())}/${hai(x.getMonth() + 1)}/${x.getFullYear()}`; };
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Hàng mẫu ở khách');
+    ws.columns = [
+      { header: 'Ngày gửi', key: 'Ngay', width: 11 },
+      { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
+      { header: 'Khách hàng', key: 'TenKhach', width: 28 },
+      { header: 'Mã hàng', key: 'MaHang', width: 16 },
+      { header: 'Tên hàng', key: 'TenHang', width: 30 },
+      { header: 'Màu', key: 'TenMau', width: 14 },
+      { header: 'SL gửi', key: 'SLGui', width: 10 },
+      { header: 'Đã trả', key: 'DaTra', width: 10 },
+      { header: 'Còn ở khách', key: 'ConLai', width: 12 },
+      { header: 'Đơn vị', key: 'DonVi', width: 9 },
+      { header: 'Số ngày mượn', key: 'SoNgay', width: 13 },
+      { header: 'Ghi chú dòng', key: 'GhiChu', width: 26 }
+    ];
+    ws.getRow(1).font = { bold: true };
+    ds.forEach(r => ws.addRow({
+      Ngay: ngayVN(r.NgayBan), SoPhieu: r.SoPhieu, TenKhach: r.TenKhach,
+      MaHang: r.MaHang, TenHang: r.TenHang, TenMau: r.TenMau || '',
+      SLGui: so(r.SoLuongCai), DaTra: so(r.DaTraCai), ConLai: so(r.ConOKhachCai),
+      DonVi: r.DonViCoBan || 'Cái', SoNgay: r.SoNgayMuon == null ? '' : r.SoNgayMuon,
+      GhiChu: r.GhiChu || ''
+    }));
+    if (ds.length) {
+      const cuoi = ws.rowCount;
+      const cot = k => ws.getColumn(k).letter;
+      const tong = k => ({ formula: `SUM(${cot(k)}2:${cot(k)}${cuoi})` });
+      const r = ws.addRow({ TenHang: 'TỔNG', SLGui: tong('SLGui'), DaTra: tong('DaTra'), ConLai: tong('ConLai') });
+      r.font = { bold: true };
+    }
+    /* Chuan bat buoc cho moi file xuat: dinh dang so + ke bang (khong de bang tran khong duong ke). */
+    ['SLGui', 'DaTra', 'ConLai', 'SoNgay'].forEach(k => { ws.getColumn(k).numFmt = '#,##0'; ws.getColumn(k).alignment = { horizontal: 'right' }; });
+    for (let i = 1; i <= ws.rowCount; i++) {
+      ws.getRow(i).eachCell(c => { c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }; });
+    }
+    const ten = String(req.query.tenKhach || 'tat_ca').replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 40);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Hang_mau_o_khach_${ten}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  });
+
 router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const header = (await pool.request().input('id', sql.Int, req.params.id).query(`
@@ -1107,6 +1198,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
   const b = req.body || {};
 
   const coDonIDs = await coCotDonIDs(pool);   // v6.25.4
+  const coMau = await coCotHangMau(pool);     // v7.59: cot LaHangMau (migration_v693)
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
@@ -1129,13 +1221,14 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
       .input('TongSLCai', sql.Int, tong.tongSLCai)
       .input('GhiChu', sql.NVarChar, b.ghiChu || null)
       .input('NguoiTaoID', sql.Int, user.userId)
+      .input('LaHangMau', sql.Bit, coMau ? (b.laHangMau ? 1 : 0) : null)
       .query(`INSERT INTO PhieuBanHang (SoPhieu, NgayBan, KhachHangID, TenKhach, SDT, DiaChi,
                 PhanTramCKNPP, PhanTramVAT, TongTienHang, TienCKNPP, TienTruocVAT, TienVAT, TongThanhToan,
-                TongSLCai, GhiChu, NguoiTaoID)
+                TongSLCai, GhiChu, NguoiTaoID${coMau ? ', LaHangMau' : ''})
               OUTPUT INSERTED.PhieuBHID
               VALUES (@SoPhieu, @NgayBan, @KhachHangID, @TenKhach, @SDT, @DiaChi,
                 @CKNPP, @VAT, @TongTienHang, @TienCKNPP, @TienTruocVAT, @TienVAT, @TongThanhToan,
-                @TongSLCai, @GhiChu, @NguoiTaoID)`)).recordset[0].PhieuBHID;
+                @TongSLCai, @GhiChu, @NguoiTaoID${coMau ? ', @LaHangMau' : ''})`)).recordset[0].PhieuBHID;
     await ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs,
       { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: user.userId });   // v7.22
     await ghiShopNVKD(pool, tran, phieuBHID, b);              // v7.24: chon tay tren form (neu co)
@@ -1168,6 +1261,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   }
 
   const coDonIDs = await coCotDonIDs(pool);
+  const coMau = await coCotHangMau(pool);     // v7.59
   /* Phần tồn mà CHÍNH phiếu này đang giữ — cộng bù khi kiểm tồn, vì lát nữa hệ thống hoàn nó trước
      rồi mới trừ lại theo số mới. Không cộng bù thì sửa tăng số lượng sẽ bị báo thiếu tồn oan. */
   const ctCu = (await pool.request().input('id', sql.Int, req.params.id).query(`
@@ -1215,10 +1309,12 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
       .input('TongThanhToan', sql.Decimal(18, 2), tong.tongThanhToan)
       .input('TongSLCai', sql.Int, tong.tongSLCai)
       .input('GhiChu', sql.NVarChar, b.ghiChu || null)
+      .input('LaHangMau', sql.Bit, coMau ? (b.laHangMau ? 1 : 0) : null)
       .query(`UPDATE PhieuBanHang SET NgayBan=@NgayBan, KhachHangID=@KhachHangID, TenKhach=@TenKhach,
                 SDT=@SDT, DiaChi=@DiaChi, PhanTramCKNPP=@CKNPP, PhanTramVAT=@VAT,
                 TongTienHang=@TongTienHang, TienCKNPP=@TienCKNPP, TienTruocVAT=@TienTruocVAT,
                 TienVAT=@TienVAT, TongThanhToan=@TongThanhToan, TongSLCai=@TongSLCai, GhiChu=@GhiChu
+                ${coMau ? ', LaHangMau=@LaHangMau' : ''}
               WHERE PhieuBHID=@id`);
     await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs,
       { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: (req.session.user || {}).userId });   // v7.22

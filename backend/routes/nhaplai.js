@@ -24,6 +24,8 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 const { so, lam2, tien, laDonViGop, donViChinhLaGop, slSangCai, slSangDonViChinh,
         sinhSoPhieu, ghiXuatKho } = require('../utils/banHangCommon');
+/* v7.59: MOT ban cong thuc "dong da ban -> da tra bao nhieu, con lai bao nhieu" (xem file do). */
+const { layDongDaBan: __layDongDaBan } = require('../utils/dongDaBanChoKhach');
 
 const router = express.Router();
 
@@ -42,30 +44,14 @@ const CN = 'nhaplai';   // ChucNang KHOHANG/nhaplai - PHAI trung key tab o front
    Dung chung boi: man chon phieu xuat, o tu tim ma hang, VA khau kiem tra khi luu phieu.
    Dung chung nghia la man hinh hien bao nhieu thi luu duoc bay nhieu - khong the lech.
    `phieuBHID` = null  -> lay tat ca phieu ban cua khach (dung cho o tu tim ma hang).
+
+   v7.59: THAN HAM DA CHUYEN sang utils/dongDaBanChoKhach.js. Ly do: tu v7.59 co them 4 man hinh
+   (canh bao o form ban hang, so "Hang mau o khach", popup The kho, so cong no) can DUNG CON SO
+   "da tra / con lai" nay. De moi noi tu viet cau SQL la chac chan troi khoi nhau. Cho nay giu
+   nguyen ten va chu ky ham nen phan con lai cua file khong phai sua gi.
    ================================================================================================ */
-async function layDongDaBan(pool, tenKhach, phieuBHID) {
-  const rq = pool.request().input('ten', sql.NVarChar, String(tenKhach || '').trim());
-  if (phieuBHID) rq.input('pid', sql.Int, phieuBHID);
-  const rs = (await rq.query(`
-    SELECT ct.ID AS PhieuBHChiTietID, ct.PhieuBHID, p.SoPhieu, p.NgayBan,
-           p.PhanTramCKNPP, p.PhanTramVAT,
-           ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.SoLuongCai,
-           ct.GiaBanLe, ct.PhanTramCKShop, ct.GiaBan, ct.ThanhTien,
-           h.MaHang, h.TenHang, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi,
-           ms.TenMau,
-           ISNULL((SELECT SUM(nl.SoLuongCai) FROM PhieuNhapLaiChiTiet nl
-                   JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
-                   WHERE nl.PhieuBHChiTietID = ct.ID AND np.TrangThai <> N'Đã hủy'), 0) AS DaTraCai
-    FROM PhieuBanHangChiTiet ct
-    JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
-    JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
-    LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-    WHERE p.TrangThai <> N'Đã hủy'
-      AND LTRIM(RTRIM(p.TenKhach)) = @ten
-      ${phieuBHID ? 'AND p.PhieuBHID = @pid' : ''}
-    ORDER BY p.NgayBan DESC, p.PhieuBHID DESC, ct.ID`)).recordset;
-  return rs.map(r => ({ ...r, ConTraCai: Math.max(0, so(r.SoLuongCai) - so(r.DaTraCai)) }));
-}
+const layDongDaBan = (pool, tenKhach, phieuBHID) =>
+  __layDongDaBan(pool, sql, { tenKhach, phieuBHID });
 
 /* ---------- danh sach khach da tung mua (de chon o form) ---------- */
 router.get('/khach', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {

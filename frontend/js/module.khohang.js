@@ -51,6 +51,9 @@ window.ModuleKhoHang = (function () {
     { key: 'nhaplai', label: 'Phiếu nhập lại' },
     // v6.78: phiếu nhập kho (từ NCC / từ sản xuất). Code ở module.nhapkho.js cho gọn file này.
     { key: 'nhapkho', label: 'Phiếu nhập kho' },
+    // v7.59: theo dõi hàng GỬI MẪU / CHO KHÁCH MƯỢN. Phiếu bán hàng vẫn là luồng duy nhất để giao và
+    // ghi công nợ; tab này chỉ ĐỌC ra "còn ở khách bao nhiêu, bao lâu rồi".
+    { key: 'hangmau', label: 'Hàng mẫu ở khách' },
       // v5.17 (muc 1.2): 1 tab duy nhat gom ca "Tạo báo giá" (muc 1.2.1) va "Danh sách báo giá"
       // (muc 1.2.2) - dung 1 chuc nang ChucNang('KHOHANG','baogiaaloha') duy nhat cho ca 2, giong
       // dung cach nguoi dung mo ta chung la 2 "chuc nang con" cua CUNG 1 chuc nang cha "Báo giá Aloha".
@@ -79,6 +82,7 @@ window.ModuleKhoHang = (function () {
     if (activeTab === 'baogiaaloha') return renderBaoGiaAloha(perm);
     if (activeTab === 'taikhoankhach') return renderTaiKhoanKhach(perm);   // v5.63
     if (activeTab === 'banhang') return renderBanHang(perm);               // v6.23
+    if (activeTab === 'hangmau') return renderHangMau(perm);               // v7.59
     // v6.66: tab Phiếu nhập lại nằm ở file riêng (module.nhaplai.js) cho file này khỏi phình.
     // Quên nạp script thì báo rõ thay vì để trang trắng không hiểu vì sao.
     if (activeTab === 'nhapkho') {
@@ -1273,6 +1277,14 @@ window.ModuleKhoHang = (function () {
     const khachList = [...new Set(orders.map(o => o.TenKhach).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'vi'));
     const histStatusButtons = (o) => ['Chờ xử lý', 'Đã giao', 'Đã hủy'].filter(s => s !== o.TrangThai).map(s => `<button class="btn small secondary act-h-status" data-id="${o.DonID}" data-status="${s}">${s}</button>`).join(' ');
     const histActions = !!(perm && (perm.canEdit || perm.canDelete));
+    /* v7.59: mã này đang có MẪU ở những khách nào (gửi qua phiếu bán hàng có tích "Gửi mẫu", chưa
+       nhận lại bằng Phiếu nhập lại). Hữu ích khi cần tìm mẫu để đòi về.
+       ⚠️ Bọc try/catch: đây là API PHỤ. Nó lỗi/403 mà để ném ra thì cả popup Lịch sử không mở được —
+       đúng kiểu "bấm vào không có gì xảy ra" đã gặp nhiều lần. */
+    let mauOKhach = [];
+    try {
+      mauOKhach = (await apiGet('/api/banhang/hangmau/nhac?maHangID=' + hangInfo.MaHangID)).data || [];
+    } catch (e) { console.warn('[hàng mẫu] không lấy được mẫu đang ở khách của mã này:', e.message); }
     const modal = openModal(`
       <h3>Lịch sử &amp; chi tiết theo màu — ${escapeHtml(hangInfo.MaHang)} (${escapeHtml(hangInfo.TenHang)})</h3>
       ${hangInfo.AnhDaiDien ? `<img class="thumb hist-main-thumb" loading="lazy" decoding="async" src="${escapeHtml(anhNho(hangInfo.AnhDaiDien, 160))}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;cursor:pointer;margin-bottom:10px;" title="Bấm để phóng to ảnh đại diện">` : ''}
@@ -1302,6 +1314,20 @@ window.ModuleKhoHang = (function () {
         <td>${fmtDualUnit(c.TonCai, loaiRi, donViCoBan, donViQuyDoi)} ${Number(c.TonCai) < 0 ? '<span class="badge danger">Âm kho</span>' : ''}</td>
         <td>${perm && perm.canCreate ? `<button type="button" class="btn small secondary act-quick-order" data-idx="${idx}">Đặt hàng</button>` : ''}</td>
         </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có chi tiết theo màu</td></tr>'}</tbody></table>
+
+      ${/* v7.59: HÀNG MẪU ĐANG Ở KHÁCH — chỉ hiện khi thật sự có, để không làm dài popup vô ích.
+           Số ở đây = SL trên phiếu bán hàng có tích "Gửi mẫu" TRỪ phần đã nhận lại qua Phiếu nhập
+           lại; cùng công thức với ô "còn trả được" bên Phiếu nhập lại nên không thể lệch. */''}
+      ${mauOKhach.length ? `
+      <h4 style="margin:18px 0 8px;">Hàng mẫu đang ở khách</h4>
+      <table><thead><tr><th>Khách hàng</th><th>Màu</th><th>Còn ở khách</th><th>Số ngày mượn</th><th>Phiếu gửi</th></tr></thead>
+      <tbody>${mauOKhach.map(r => `<tr>
+        <td>${escapeHtml(r.TenKhach || '')}</td>
+        <td>${escapeHtml(r.TenMau || '')}</td>
+        <td style="text-align:right;"><b style="color:#c0392b;">${fmtNumber(r.ConOKhachCai)}</b> ${escapeHtml(r.DonViCoBan || 'Cái')}</td>
+        <td style="text-align:right;">${fmtNumber(r.SoNgayMuon)}</td>
+        <td>${escapeHtml((r.SoPhieu || []).join(', '))}</td></tr>`).join('')}</tbody></table>
+      <div class="empty-hint" style="text-align:left;">Khách trả mẫu thì lập <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ), không phải Phiếu nhập kho.</div>` : ''}
 
       ${/* v7.14: BỎ bảng "Lịch sử nhập / xuất theo chứng từ" (v7.12) — dồn 3 bảng vào một modal làm
            rối, và bảng đó trùng việc với Báo cáo tồn kho hàng hóa (bấm mã hàng để xem chi tiết chứng
@@ -2732,6 +2758,110 @@ window.ModuleKhoHang = (function () {
     return dsDonViTinh;
   }
 
+  /* ================================================================================================
+     v7.59 — HÀNG MẪU Ở KHÁCH
+     ------------------------------------------------------------------------------------------------
+     Trả lời đúng một câu: "mẫu nào đang ở khách nào, gửi bao lâu rồi, còn bao nhiêu chưa trả".
+     KHÔNG có luồng chứng từ riêng: hàng mẫu đi bằng CHÍNH phiếu bán hàng (tích ô "Gửi mẫu"), trả về
+     bằng CHÍNH phiếu nhập lại. Tab này chỉ ĐỌC — không tạo/sửa/xóa gì.
+     Số liệu lấy từ /api/banhang/hangmau, dùng chung công thức với ô "còn trả được" ở Phiếu nhập lại
+     (backend: utils/dongDaBanChoKhach.js) nên hai màn không thể ra hai con số.
+     ================================================================================================ */
+  let hmLoc = { tenKhach: '', maHang: '', tatCa: false };
+  async function renderHangMau(perm) {
+    const body = document.getElementById('khBody');
+    body.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+    let rows = [], coCot = true;
+    try {
+      const p = new URLSearchParams();
+      if (hmLoc.tenKhach) p.set('tenKhach', hmLoc.tenKhach);
+      if (hmLoc.tatCa) p.set('tatCa', '1');
+      const r = await apiGet('/api/banhang/hangmau' + (p.toString() ? '?' + p.toString() : ''));
+      rows = r.data || [];
+      coCot = r.coCot !== false;
+    } catch (e) {
+      body.innerHTML = `<div class="empty-hint">Không tải được: ${escapeHtml(e.message)}</div>`;
+      return;
+    }
+    // Lọc mã hàng làm ở trình duyệt: gõ tới đâu lọc tới đó, khỏi gọi lại API.
+    const loMa = String(hmLoc.maHang || '').trim().toLowerCase();
+    const ds = loMa
+      ? rows.filter(r => (String(r.MaHang || '') + ' ' + String(r.TenHang || '')).toLowerCase().indexOf(loMa) >= 0)
+      : rows;
+    const dsKhach = [...new Set(rows.map(r => String(r.TenKhach || '').trim()).filter(Boolean))].sort();
+    const tong = ds.reduce((a, r) => ({
+      gui: a.gui + Number(r.SoLuongCai || 0), tra: a.tra + Number(r.DaTraCai || 0), con: a.con + Number(r.ConOKhachCai || 0)
+    }), { gui: 0, tra: 0, con: 0 });
+
+    body.innerHTML = `
+      ${!coCot ? '<div class="empty-hint" style="text-align:left;color:#a8071a;">Chưa chạy <b>migration_v693</b> — chưa có cột đánh dấu hàng mẫu nên bảng này còn trống. Chạy migration rồi Ctrl+F5.</div>' : ''}
+      <p class="empty-hint" style="text-align:left;padding:0 0 8px;">Hàng mẫu đi bằng <b>chính phiếu bán hàng</b> (tích ô “Gửi mẫu / cho khách mượn” ở đầu phiếu) — vẫn trừ tồn, vẫn ghi công nợ. Khách trả thì lập <b>Phiếu nhập lại</b> để hoàn tồn và <b>trừ công nợ</b>; <b>không dùng Phiếu nhập kho</b> vì phiếu đó không chạm tới công nợ khách.</p>
+      <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
+        <label>Khách: <select id="hmKhach"><option value="">— tất cả —</option>${dsKhach.map(k => `<option value="${escapeHtml(k)}" ${k === hmLoc.tenKhach ? 'selected' : ''}>${escapeHtml(k)}</option>`).join('')}</select></label>
+        <label>Mã hàng: <input id="hmMa" value="${escapeHtml(hmLoc.maHang)}" placeholder="gõ mã hoặc tên hàng" style="width:170px;"></label>
+        <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="hmTatCa" ${hmLoc.tatCa ? 'checked' : ''} style="width:auto;margin:0;"> Hiện cả mẫu đã trả xong</label>
+        <button class="btn small secondary" id="hmXuat">⬇️ Xuất Excel</button>
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Còn ở khách: <b style="color:#c0392b;">${fmtNumber(tong.con)}</b> · đã gửi ${fmtNumber(tong.gui)} · đã trả ${fmtNumber(tong.tra)}</span>
+      </div>
+      <table><thead><tr>
+        <th>Ngày gửi</th><th>Số phiếu</th><th>Khách hàng</th><th>Mã hàng</th><th>Tên hàng</th><th>Màu</th>
+        <th>SL gửi</th><th>Đã trả</th><th>Còn ở khách</th><th>ĐVT</th><th>Số ngày mượn</th>
+      </tr></thead><tbody>
+        ${ds.map(r => {
+          const con = Number(r.ConOKhachCai || 0);
+          const ngay = Number(r.SoNgayMuon || 0);
+          return `<tr ${con <= 0 ? 'style="background:#f6ffed;color:#5f6368;"' : ''}>
+            <td>${fmtDate(r.NgayBan)}</td>
+            <td><a href="javascript:void(0)" class="hm-xem" data-id="${r.PhieuBHID}"><b>${escapeHtml(r.SoPhieu || '')}</b></a></td>
+            <td>${escapeHtml(r.TenKhach || '')}</td>
+            <td><b>${escapeHtml(r.MaHang || '')}</b></td>
+            <td>${escapeHtml(r.TenHang || '')}</td>
+            <td>${escapeHtml(r.TenMau || '')}</td>
+            <td style="text-align:right;">${fmtNumber(r.SoLuongCai)}</td>
+            <td style="text-align:right;">${fmtNumber(r.DaTraCai)}</td>
+            <td style="text-align:right;"><b ${con > 0 ? 'style="color:#c0392b;"' : ''}>${fmtNumber(con)}</b></td>
+            <td>${escapeHtml(r.DonViCoBan || 'Cái')}</td>
+            <td style="text-align:right;">${con > 0 ? fmtNumber(ngay) : '<span class="badge success">đã trả đủ</span>'}</td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="11" class="empty-hint">${coCot ? 'Không có hàng mẫu nào đang ở khách.' : 'Chưa chạy migration_v693.'}</td></tr>`}
+      </tbody>
+      ${ds.length ? `<tfoot><tr style="font-weight:bold;">
+        <td colspan="6" style="text-align:right;">TỔNG CỘNG</td>
+        <td style="text-align:right;">${fmtNumber(tong.gui)}</td>
+        <td style="text-align:right;">${fmtNumber(tong.tra)}</td>
+        <td style="text-align:right;color:#c0392b;">${fmtNumber(tong.con)}</td>
+        <td colspan="2"></td></tr></tfoot>` : ''}
+      </table>`;
+    wireTableSearch(body);
+    const veLai = () => renderHangMau(perm);
+    body.querySelector('#hmKhach').addEventListener('change', (e) => { hmLoc.tenKhach = e.target.value; veLai(); });
+    body.querySelector('#hmTatCa').addEventListener('change', (e) => { hmLoc.tatCa = e.target.checked; veLai(); });
+    // Ô mã hàng lọc tại chỗ: KHÔNG vẽ lại cả bảng mỗi phím gõ (mất con trỏ), chỉ ẩn/hiện dòng.
+    const oMa = body.querySelector('#hmMa');
+    oMa.addEventListener('input', () => {
+      hmLoc.maHang = oMa.value;
+      const q = oMa.value.trim().toLowerCase();
+      body.querySelectorAll('tbody tr').forEach(tr => {
+        const t = tr.textContent.toLowerCase();
+        tr.style.display = (!q || t.indexOf(q) >= 0) ? '' : 'none';
+      });
+    });
+    body.querySelectorAll('.hm-xem').forEach(a =>
+      a.addEventListener('click', () => xemPhieuBanHang(a.dataset.id, perm).catch(err => toast(err.message, 'error'))));
+    const bx = body.querySelector('#hmXuat');
+    bx.addEventListener('click', async () => {
+      const p = new URLSearchParams();
+      if (hmLoc.tenKhach) p.set('tenKhach', hmLoc.tenKhach);
+      if (hmLoc.tatCa) p.set('tatCa', '1');
+      const nhanCu = bx.textContent;
+      bx.textContent = 'Đang xuất...';
+      /* Chữ ký thật: taiFileXlsx(btn, url, tenDuPhong, nhanLoi) — hàm tự bật/tắt nút và tự toast lỗi. */
+      await taiFileXlsx(bx, '/api/banhang/hangmau/export' + (p.toString() ? '?' + p.toString() : ''),
+        'Hang_mau_o_khach_', 'Không xuất được Excel: ');
+      bx.textContent = nhanCu;
+    });
+  }
+
   async function renderBanHang(perm) {
     const body = document.getElementById('khBody');
     body.innerHTML = '<div class="empty-hint">Đang tải...</div>';
@@ -2767,7 +2897,10 @@ window.ModuleKhoHang = (function () {
         ${/* v6.75: cột GHI CHÚ — thông tin giao hàng nằm ngay trên danh sách, khỏi mở từng phiếu ra xem. */''}
         <th>Ghi chú</th><th style="width:240px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr ${r.TrangThai === 'Đã hủy' ? 'style="background:#fdecea;"' : ''}>
-        <td><a href="javascript:void(0)" class="act-xem" data-id="${r.PhieuBHID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td>
+        <td><a href="javascript:void(0)" class="act-xem" data-id="${r.PhieuBHID}"><b>${escapeHtml(r.SoPhieu)}</b></a>
+          ${/* v7.59: phiếu GỬI MẪU vẫn là phiếu bán hàng bình thường về tiền/tồn — nhãn chỉ để nhìn
+               ra ngay giữa danh sách, khỏi phải mở từng phiếu. */''}
+          ${Number(r.LaHangMau) === 1 ? '<div><span class="badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591;">Gửi mẫu</span></div>' : ''}</td>
         <td>${fmtDate(r.NgayBan)}</td><td>${escapeHtml(r.TenKhach)}</td>
         <td style="text-align:center;">${r.SoDong}</td><td style="text-align:right;">${fmtNumber(r.TongSLCai)}</td>
         <td style="text-align:right;">${fmtTien(r.TongTienHang)}</td>
@@ -3119,6 +3252,9 @@ window.ModuleKhoHang = (function () {
       <div style="text-align:center;margin-bottom:2px;">Ngày ${isNaN(d) ? '.....' : d.getDate()} tháng ${isNaN(d) ? '.....' : (d.getMonth() + 1)} năm ${isNaN(d) ? '.....' : d.getFullYear()}</div>
       <div style="text-align:right;margin-bottom:8px;"><b>Số: ${escapeHtml(h.SoPhieu || '')}</b></div>
       ${h.TrangThai === 'Đã hủy' ? '<div style="text-align:center;color:#a00;">(PHIẾU ĐÃ HỦY)</div>' : ''}
+      ${/* v7.59: bản in phải nói rõ đây là hàng GỬI MẪU / CHO MƯỢN — khách ký vào phiếu này là ký
+           nhận giữ mẫu, khác hẳn mua đứt, dù số tiền vẫn ghi công nợ y như phiếu bán. */''}
+      ${Number(h.LaHangMau) === 1 ? '<div style="text-align:center;margin:2px 0 6px;"><span style="font-weight:bold;border:1px solid #000;padding:2px 8px;">HÀNG GỬI MẪU / CHO MƯỢN — khách trả lại sẽ lập Phiếu nhập lại để trừ công nợ</span></div>' : ''}
       <p style="margin:2px 0;"><b>Khách hàng:</b> ${escapeHtml(h.TenKhach || '')} &nbsp;&nbsp;&nbsp; <b>SĐT:</b> ${escapeHtml(h.SDT || '')}</p>
       ${/* v7.09: GHI CHÚ lên CÙNG HÀNG với Địa chỉ, thay vì nằm dưới khối công nợ ở cuối phiếu.
            Ghi chú thường là thông tin giao hàng (giao giờ nào, gọi trước, hàng dễ vỡ...) nên phải
@@ -3357,6 +3493,20 @@ window.ModuleKhoHang = (function () {
                Ghi chú thường là thông tin giao hàng ("giao thứ 5", "gọi trước khi đến") — thuộc về
                phần thông tin khách, để tít dưới cuối form thì lúc nhập hay quên, lúc đọc lại phải
                cuộn qua cả bảng hàng mới thấy. Cho chiếm trọn 1 hàng để gõ được câu dài. */''}
+          ${/* v7.59: GỬI MẪU / CHO KHÁCH MƯỢN.
+               Chỉ là CỜ ĐÁNH DẤU — phiếu vẫn trừ tồn và vẫn vào công nợ y hệt phiếu bán bình thường,
+               không một phép tính tiền nào đổi. Nhờ cờ này mà trả lời được "mẫu này đã gửi cho khách
+               đó chưa, còn bao nhiêu chưa trả". Khách trả mẫu thì làm PHIẾU NHẬP LẠI (hoàn tồn + TRỪ
+               công nợ), KHÔNG phải phiếu nhập kho — phiếu nhập kho không chạm tới công nợ khách. */''}
+          <div class="form-row" style="grid-column:1/-1;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" name="laHangMau" id="bhLaHangMau" style="width:auto;margin:0;"
+                ${phieuSua && Number(phieuSua.header.LaHangMau) === 1 ? 'checked' : ''}>
+              <span>Gửi mẫu / cho khách mượn</span>
+            </label>
+            <div class="empty-hint" style="margin-top:2px;text-align:left;">Tiền và tồn kho <b>không đổi</b> — phiếu vẫn ghi công nợ như bán bình thường. Đánh dấu để theo dõi ở tab <b>Hàng mẫu ở khách</b> và để hệ thống nhắc khi lập phiếu sau. Khách trả mẫu: làm <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ), không phải Phiếu nhập kho.</div>
+          </div>
+          <div class="form-row" id="bhNhacMauBox" style="grid-column:1/-1;display:none;"></div>
           <div class="form-row" style="grid-column:1/-1;"><label>Ghi chú</label>
             <input name="ghiChu" value="${escapeHtml(phieuSua ? (phieuSua.header.GhiChu || '') : '')}"></div>
           ${/* v6.24: ô %CK NPP và %VAT đã CHUYỂN XUỐNG chân bảng dòng hàng (đúng khuôn mẫu Word) —
@@ -3572,8 +3722,64 @@ window.ModuleKhoHang = (function () {
       modal.querySelector('#bhSDT').value = k.SDT || '';
       modal.querySelector('#bhDiaChi').value = k.DiaChi || '';
     }
-    selKhach.addEventListener('change', () => apKhach(dsKhach.find(x => String(x.KhachHangID) === selKhach.value)));
+    /* ============================================================================================
+       v7.59 — NHẮC "KHÁCH NÀY ĐANG GIỮ MẪU" NGAY TRÊN FORM.
+       Đây là câu trả lời trực tiếp cho "làm thế nào để biết mẫu đó đã gửi cho khách đó rồi".
+       Số liệu lấy từ CÙNG công thức với Phiếu nhập lại (utils/dongDaBanChoKhach.js) nên không thể
+       lệch với ô "còn trả được" bên đó.
+       ⚠️ Lỗi ở đây KHÔNG được chặn việc lập phiếu: nếu route hỏng/403 thì chỉ im lặng bỏ khối nhắc.
+       Một API PHỤ ném lỗi giữa handler async là đúng kiểu bug "bấm nút không có gì xảy ra". */
+    let dsNhacMau = [];
+    const hopNhacMau = modal.querySelector('#bhNhacMauBox');
+    function veNhacMau() {
+      if (!hopNhacMau) return;
+      if (!dsNhacMau.length) { hopNhacMau.style.display = 'none'; hopNhacMau.innerHTML = ''; return; }
+      // Mã đang có trên chính phiếu này -> tô đậm hơn: rất có thể đang bán trùng mã đã cho mượn.
+      const maTrenPhieu = new Set();
+      modal.querySelectorAll('.bh-row .bh-mahang').forEach(s2 => { if (s2.value) maTrenPhieu.add(String(s2.value)); });
+      modal.querySelectorAll('.bh-row').forEach(el => {
+        const r = dong.find(x => String(x.idx) === el.dataset.idx);
+        if (r && r.maHangId) maTrenPhieu.add(String(r.maHangId));
+      });
+      const dv = (r) => escapeHtml(r.DonViCoBan || 'Cái');
+      hopNhacMau.innerHTML = `<div style="border:1px solid #f0c36d;background:#fffbe6;border-radius:6px;padding:8px 10px;">
+        <b>⚠️ Khách này đang giữ hàng mẫu chưa trả</b>
+        <div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">
+          ${dsNhacMau.map(r => {
+            const trung = maTrenPhieu.has(String(r.MaHangID));
+            return `<div style="font-size:13px;${trung ? 'font-weight:bold;color:#a8071a;' : ''}">
+              ${trung ? '● ' : '· '}<b>${escapeHtml(r.MaHang)}</b>${r.TenMau ? ' · ' + escapeHtml(r.TenMau) : ''}
+              — còn <b>${fmtNumber(r.ConOKhachCai)}</b> ${dv(r)}, gửi ${r.SoNgayMuon != null ? '<b>' + fmtNumber(r.SoNgayMuon) + '</b> ngày trước' : ''}
+              <span style="color:#5f6368;">(phiếu ${escapeHtml(r.SoPhieu.join(', '))})</span>
+              ${trung ? ' <span style="color:#a8071a;">— mã này đang có trên phiếu đang lập</span>' : ''}
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="empty-hint" style="margin-top:4px;text-align:left;">Khách trả mẫu thì lập <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ). Số ở đây và ô "còn trả được" bên Phiếu nhập lại là cùng một phép tính.</div>
+      </div>`;
+      hopNhacMau.style.display = '';
+    }
+    async function taiNhacMau() {
+      const ten = String((modal.querySelector('#bhKhach') || {}).value || '').trim();
+      if (!ten) { dsNhacMau = []; veNhacMau(); return; }
+      try {
+        const r = await apiGet('/api/banhang/hangmau/nhac?tenKhach=' + encodeURIComponent(ten));
+        dsNhacMau = (r && r.data) || [];
+      } catch (err) {
+        dsNhacMau = [];
+        console.warn('[hàng mẫu] không lấy được danh sách mẫu đang ở khách:', err.message);
+      }
+      veNhacMau();
+    }
+    selKhach.addEventListener('change', () => {
+      apKhach(dsKhach.find(x => String(x.KhachHangID) === selKhach.value));
+      taiNhacMau();
+    });
     if (selKhach.value) apKhach(dsKhach.find(x => String(x.KhachHangID) === selKhach.value));
+    taiNhacMau();
+    // Đổi mã hàng ở bảng dòng -> vẽ lại phần tô đậm (không gọi lại API, dữ liệu theo khách không đổi).
+    const hopDong = modal.querySelector('#bhDong');
+    if (hopDong) hopDong.addEventListener('change', veNhacMau);
     modal.querySelector('#bhThemKhach').addEventListener('click', async () => {
       const k = await themKhachNhanh(modal.querySelector('#bhKhach').value);
       if (!k) return;
@@ -3648,6 +3854,7 @@ window.ModuleKhoHang = (function () {
           shopId: fd.get('shopId') != null ? (fd.get('shopId') || null) : undefined,          // v7.24
           nhanVienId: fd.get('nhanVienId') != null ? (fd.get('nhanVienId') || null) : undefined,
           phanTramCKNPP: fd.get('ckNPP'), phanTramVAT: fd.get('vat'), ghiChu: fd.get('ghiChu'), dong: dongGui,
+          laHangMau: !!fd.get('laHangMau'),   // v7.59: chỉ là cờ đánh dấu, KHÔNG đổi tiền/tồn
           donHuy: donHuyList   // v7.17: đơn khách chọn hủy luôn khi bỏ dòng khỏi phiếu
         };
         const r = phieuSua

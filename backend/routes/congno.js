@@ -734,9 +734,14 @@ router.get('/congnokh', requireAuth, requirePermission('CONGNO', 'view'), requir
    nguoc - tinh trong khi da dao chieu se ra so vo nghia. */
 async function soChiTietKH(pool, ten) {
   const rq = () => pool.request().input('k', sql.NVarChar, ten);
+  /* v7.59: đánh dấu dòng phiếu GỬI MẪU. Khi đối chiếu nợ với khách, khoản này thường là thứ khách
+     cãi ("cái này là mẫu anh mượn mà") — phải nhìn ra ngay trên sổ, không phải mở từng phiếu.
+     Số tiền KHÔNG đổi: phiếu gửi mẫu vẫn ghi nợ đủ; trả mẫu thì Phiếu nhập lại ghi âm để triệt tiêu. */
+  const coMauCN = await coCot(pool, 'PhieuBanHang', 'LaHangMau');
   const ban = (await rq().query(`
     SELECT NgayBan AS Ngay, SoPhieu, TongThanhToan AS PhatSinh, 0 AS ThanhToan, N'Phiếu bán hàng' AS Loai, GhiChu AS DienGiai, PhieuBHID,
-           N'PBH' AS CtLoai, PhieuBHID AS CtID
+           N'PBH' AS CtLoai, PhieuBHID AS CtID,
+           ${coMauCN ? 'ISNULL(LaHangMau, 0)' : 'CAST(0 AS BIT)'} AS LaHangMau
     FROM PhieuBanHang WHERE LTRIM(RTRIM(TenKhach)) = @k AND TrangThai <> N'Đã hủy'`)).recordset;
   const thu = (await rq().query(`
     SELECT NgayThu AS Ngay, SoPhieu, 0 AS PhatSinh, SoTien AS ThanhToan, N'Phiếu thu' AS Loai, DienGiai, PhieuBHID,

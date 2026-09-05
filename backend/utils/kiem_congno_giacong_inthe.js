@@ -96,11 +96,17 @@ kiem(/ALTER TABLE CongNoDieuChinh ADD NhaGiaCongID INT NULL/.test(sMig), 'migrat
 kiem(/IF COL_LENGTH\('CongNoDieuChinh', 'NhaGiaCongID'\) IS NULL/.test(sMig), 'chay lai duoc');
 kiem(/FK_CongNoDieuChinh_NhaGiaCong/.test(sMig), 'co khoa ngoai toi NhaGiaCong');
 kiem(/'congnogiacong'/.test(sMig), 'seed ChucNang CONGNO/congnogiacong');
-const khoiDC = sCaiDat.slice(sCaiDat.indexOf('CREATE TABLE CongNoDieuChinh'),
-  sCaiDat.indexOf('CREATE TABLE CongNoDieuChinh') + 1200);
-kiem(/NhaGiaCongID INT NULL FOREIGN KEY REFERENCES NhaGiaCong/.test(khoiDC),
-  'CAI_DAT_DAY_DU.sql: CongNoDieuChinh da co NhaGiaCongID (cai moi khong thieu cot)');
-kiem(/\('CONGNO','congnogiacong'/.test(sCaiDat), 'CAI_DAT_DAY_DU.sql: seed chuc nang tab moi');
+/* v7.59 SUA CACH KIEM: truoc day cho nay doi thay `NhaGiaCongID` NAM TRONG `CREATE TABLE
+   CongNoDieuChinh` cua CAI_DAT_DAY_DU.sql — tuc doi mot BAN SUA TAY vao file GOP. Nhung file gop la
+   SINH RA (`node database/tao_file_cai_dat.js` = schema.sql + tat ca migration), dau file ghi ro
+   "KHONG SUA TAY, sua thi lan sinh sau mat sach". Sua tay vao do vua sai quy trinh vua tao cam giac
+   an toan gia: file gop that su co the DANG CU (thieu han cac migration moi) ma test van xanh.
+   Cach kiem DUNG: file gop phai chua nguyen KHOI migration_v691 -> cai may moi chay 1 file la co cot. */
+kiem(/\[\d+\/\d+\]\s+migration_v691\.sql/.test(sCaiDat),
+  'CAI_DAT_DAY_DU.sql da gop KHOI migration_v691 (file gop khong bi cu)');
+kiem(/ALTER TABLE CongNoDieuChinh ADD NhaGiaCongID INT NULL/.test(sCaiDat),
+  'CAI_DAT_DAY_DU.sql: cai moi se co cot NhaGiaCongID');
+kiem(/'congnogiacong'/.test(sCaiDat), 'CAI_DAT_DAY_DU.sql: seed chuc nang tab moi');
 
 console.log('\n=== B4. Route + do cot (chua chay migration van chay) ===');
 kiem(/router\.get\('\/congnogiacong'/.test(sCongNo), 'co GET /congno/congnogiacong');

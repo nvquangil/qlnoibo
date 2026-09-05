@@ -521,13 +521,19 @@ window.ModuleCongNo = (function () {
       <table><thead><tr><th>Ngày</th><th>Loại</th><th>Số phiếu</th><th>Phát sinh</th><th>Thanh toán</th><th>Còn nợ lũy kế</th><th>Diễn giải</th></tr></thead>
       ${/* v6.52: SỐ PHIẾU BÁN HÀNG bấm được -> mở chi tiết phiếu. Chỉ dòng có PhieuBHID mới bấm được;
            phiếu thu / điều chỉnh không có màn chi tiết riêng nên để chữ thường, không giả vờ bấm được. */''}
-      <tbody>${(d.rows || []).map(r => `<tr>
-        <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.Loai)}</td>
+      ${/* v7.59: dòng phiếu GỬI MẪU được đánh dấu — lúc đối chiếu nợ với khách, đây thường là khoản
+           khách nói "cái này là mẫu anh mượn". Tiền KHÔNG đổi: phiếu gửi mẫu vẫn ghi nợ đủ, khách
+           trả mẫu thì Phiếu nhập lại ghi âm để triệt tiêu. */''}
+      <tbody>${(d.rows || []).map(r => `<tr ${Number(r.LaHangMau) === 1 ? 'style="background:#fffbe6;"' : ''}>
+        <td>${fmtDate(r.Ngay)}</td>
+        <td>${escapeHtml(r.Loai)}${Number(r.LaHangMau) === 1 ? '<div><span class="badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591;">Gửi mẫu</span></div>' : ''}</td>
         <td>${oSoPhieu(r)}</td>
         <td style="text-align:right;">${Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''}</td>
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
+      ${(d.rows || []).some(r => Number(r.LaHangMau) === 1)
+        ? '<div class="empty-hint" style="text-align:left;">Dòng nền vàng là <b>phiếu gửi mẫu / cho mượn</b> — vẫn ghi nợ đủ như bán. Khách trả mẫu thì lập <b>Phiếu nhập lại</b> để trừ lại khoản này (Phiếu nhập kho không trừ công nợ).</div>' : ''}
       ${/* v6.47: xuất riêng sổ của khách này. v7.34: thêm khối kỳ + nút xuất mẫu sổ kế toán. */''}
       ${khoiXuatSoHtml()}
       <div class="modal-actions">

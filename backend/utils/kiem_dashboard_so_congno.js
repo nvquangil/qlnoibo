@@ -141,7 +141,10 @@ kiem(/GROUP BY LTRIM\(RTRIM\(TenKhach\)\)/.test(srcBDash),
 
 console.log('\n=== 11. index.html da bump ?v= (khong thi trinh duyet chay file cu) ===');
 kiem(/module\.dashboard\.js\?v=7\.44/.test(srcHtml), 'module.dashboard.js?v=7.44');
-kiem(/module\.congno\.js\?v=7\.44/.test(srcHtml), 'module.congno.js?v=7.44');
+/* v7.59: ghim CUNG so ?v= la sai — moi ban sau nay bump so len deu lam test nay do oan (da dinh 3
+   lan). Chi can dam bao KHONG TUT lai duoi ban da sua loi nay. */
+kiem(parseFloat((srcHtml.match(/module\.congno\.js\?v=([\d.]+)/) || [])[1]) >= 7.44,
+  'module.congno.js?v= >= 7.44 (khong tut lai ban cu hon ban sua loi nay)');
 
 console.log(`\n================ KET QUA: ${dat} dat / ${truot} sai ================`);
 process.exit(truot ? 1 : 0);
