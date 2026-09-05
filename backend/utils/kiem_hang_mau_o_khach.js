@@ -263,6 +263,52 @@ const dong = (o) => ({
     });
   });
 
+  /* ============================================================================================
+     9. CLI danh dau phieu cu — LOI HUA: chi ghi MOT cai co, khong dung gi khac
+     ============================================================================================ */
+  console.log('\n=== 9. CLI danh_dau_hang_mau.js ===');
+  const sCli = doc('utils/danh_dau_hang_mau.js');
+  const cliSach = bo(sCli);
+  /* Liet ke MOI cau ghi du lieu trong CLI. Chi duoc phep dung mot cau duy nhat. */
+  const cauGhi = (cliSach.match(/\b(UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+[A-Za-z_]+/gi) || [])
+    .map(s2 => s2.replace(/\s+/g, ' '));
+  bang(cauGhi, ['UPDATE PhieuBanHang'],
+    'CLI chi co DUNG MOT cau ghi du lieu, va la UPDATE PhieuBanHang');
+  kiem(/UPDATE PhieuBanHang SET LaHangMau = @v WHERE PhieuBHID = @id/.test(cliSach),
+    'cau do chi dat MOI cot LaHangMau, theo dung 1 phieu');
+  kiem(!/ghiXuatKho|XuatCai|NhapCai|TongThanhToan\s*=|DonKhachDatHang/.test(cliSach),
+    'CLI khong dung toi ton kho / tien / don khach');
+  kiem(/const GHI = co\('--ghi'\)/.test(sCli) && /if \(!GHI\) \{/.test(sCli),
+    'mac dinh XEM TRUOC, phai them --ghi moi ghi that');
+  const viTriBackup = cliSach.indexOf('backup');
+  const viTriUpdate = cliSach.indexOf('UPDATE PhieuBanHang');
+  kiem(viTriBackup > 0 && viTriBackup < viTriUpdate, 'sao luu trang thai cu TRUOC khi ghi');
+  kiem(/hoiXacNhan\(/.test(cliSach) && /KHONG_HOI/.test(cliSach), 'co buoc go xac nhan (bo duoc bang --khong-hoi)');
+  kiem(/new sql\.Transaction\(pool\)/.test(cliSach) && /tran\.rollback\(\)/.test(cliSach),
+    'ghi trong transaction, loi thi quay lui het');
+  kiem(/require\('\.\/dongDaBanChoKhach'\)/.test(sCli),
+    'xem truoc dung CHUNG cong thuc voi man hinh (khong tu tinh lai)');
+  kiem(/if \(!await coCotHangMau\(pool\)\)/.test(sCli),
+    'chua chay migration_v693 thi dung ngay, noi ro phai chay file nao');
+  /* Chuoi nguoi dung go PHAI di qua tham so, khong noi thang vao cau SQL. */
+  kiem(!/LIKE N'%" \+|LIKE '%" \+|\+ GHI_CHU|\+ KHACH/.test(cliSach),
+    'chuoi nguoi dung go khong bi noi thang vao cau SQL');
+  kiem(/rq\.input\('gc', sql\.NVarChar, '%' \+ thoatLike\(GHI_CHU\) \+ '%'\)/.test(sCli),
+    '--ghichu di qua tham so va co thoat ky tu dai dien');
+  /* Chay THAT ham thoat LIKE. */
+  const fThoat = new Function('return ' + (sCli.match(/const thoatLike = [^;]+;/) || [''])[0].replace(/^const thoatLike = /, '').replace(/;$/, ''))();
+  bang(fThoat('giam 50% cho khach'), 'giam 50[%] cho khach', 'thoatLike: % duoc thoat (khong thanh ky tu dai dien)');
+  bang(fThoat('gửi mẫu'), 'gửi mẫu', 'thoatLike: chuoi thuong giu nguyen');
+  bang(fThoat('a_b[c]'), 'a[_]b[[]c]', 'thoatLike: _ va [ deu duoc thoat');
+  /* Bay: tu khoa ra soat KHONG duoc co "mau" khong dau — se khop luon chu "màu" o rat nhieu ghi chu. */
+  const tuKhoa = (sCli.match(/const TU_KHOA_NGHI = \[([^\]]*)\]/) || [])[1] || '';
+  kiem(!/'mau'|"mau"/.test(tuKhoa),
+    'tu khoa ra soat KHONG chua "mau" khong dau (se khop nham chu "màu")', tuKhoa);
+  kiem(/'mẫu'/.test(tuKhoa) && /'mượn'/.test(tuKhoa), 'ra soat theo "mẫu" va "mượn"');
+  kiem(/ISNULL\(p\.LaHangMau, 0\) = 0/.test(cliSach),
+    'phan "nghi la hang mau" chi liet ke phieu CHUA duoc danh dau');
+  kiem(/TrangThai <> N'Đã hủy'/.test(cliSach), 'mac dinh bo qua phieu da huy');
+
   console.log('\n================================================================');
   console.log(`KET QUA: ${dat} dat / ${truot} truot`);
   process.exit(truot ? 1 : 0);
