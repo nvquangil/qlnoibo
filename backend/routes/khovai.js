@@ -8,7 +8,7 @@ const { xuatKhoVai } = require('../utils/vaiXuatService');
 const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung } = require('../utils/tonVai');
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/congno.js. Tong tien tren
    phieu nhap PHAI bang dung so ma cong no NCC ghi no cho chinh phieu do. */
-const { bieuThucTienCay } = require('../utils/tienVaiNhap');
+const { bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia } = require('../utils/tienVaiNhap');
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
 
@@ -453,6 +453,7 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
       return res.status(400).json({ success: false, message: 'Vui lòng chọn Loại vải và Màu cho tất cả các dòng.' });
     }
     const pool = await getPool();
+    const coDVTGia = await coCotDonViTinhGia(pool);   // v7.62 (migration_v694)
 
     // v5.4: them NgayHoaDon (khac Ngay nhap - khop yeu cau mau_phieu.docx "Ngay hoa don: nhap tay").
     const phieuResult = await pool.request()
@@ -462,8 +463,10 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
       .input('NgayHoaDon', sql.Date, ngayHoaDon || null)
       .input('GhiChu', sql.NVarChar, ghiChu || null)
       .input('NguoiTaoID', sql.Int, user.userId)
-      .query(`INSERT INTO PhieuNhapVai (NgayNhap, NCC_ID, SoHoaDon, NgayHoaDon, GhiChu, NguoiTaoID)
-              OUTPUT INSERTED.PhieuNhapID VALUES (@NgayNhap, @NCC_ID, @SoHoaDon, @NgayHoaDon, @GhiChu, @NguoiTaoID)`);
+      // v7.62: don gia tinh theo Kg hay Met — cua CA PHIEU. Do cot truoc (migration_v694).
+      .input('DonViTinhGia', sql.NVarChar, coDVTGia ? chuanDonViTinhGia(req.body.donViTinhGia) : null)
+      .query(`INSERT INTO PhieuNhapVai (NgayNhap, NCC_ID, SoHoaDon, NgayHoaDon, GhiChu, NguoiTaoID${coDVTGia ? ', DonViTinhGia' : ''})
+              OUTPUT INSERTED.PhieuNhapID VALUES (@NgayNhap, @NCC_ID, @SoHoaDon, @NgayHoaDon, @GhiChu, @NguoiTaoID${coDVTGia ? ', @DonViTinhGia' : ''})`);
     const phieuNhapId = phieuResult.recordset[0].PhieuNhapID;
 
     const dateObj = new Date(ngayNhap);
@@ -525,20 +528,31 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
 // ============ DANH SACH PHIEU NHAP KHO (v5.0 - man hinh list, xem/in/sua/xoa) ============
 router.get('/nhap', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'nhap'), async (req, res) => {
   const pool = await getPool();
+  /* v7.62: cot DonViTinhGia do migration_v694 them — chua chay thi coi nhu moi phieu deu tinh theo
+     KG (dung nhu truoc), khong duoc de ten cot lot vao cau SQL keo "Invalid column name". */
+  const coDVT = await coCotDonViTinhGia(pool);
+  const cotDVT = coDVT ? 'ISNULL(p.DonViTinhGia, N\'Kg\')' : 'CAST(N\'Kg\' AS NVARCHAR(10))';
+  /* So luong DUNG DE TINH TIEN cua tung cay: theo met neu phieu chon Met, con lai theo KG. */
+  const slTinhTien = coDVT
+    ? `CASE WHEN p.DonViTinhGia = N'Met' THEN ISNULL(v.SoMet,0) ELSE ISNULL(v.KGNhap,0) END`
+    : 'ISNULL(v.KGNhap,0)';
   // v5.4: them p.NgayHoaDon (can de dien san khi mo Sua phieu tu danh sach nay - openNhapEditModal).
   const result = await pool.request().query(`
     SELECT p.PhieuNhapID, p.NgayNhap, p.SoHoaDon, p.NgayHoaDon, p.GhiChu, p.NCC_ID, ncc.TenNCC, u.HoTen AS NguoiTao,
+           ${cotDVT} AS DonViTinhGia,
            COUNT(v.CayID) AS SoLuongCay, ISNULL(SUM(v.KGNhap), 0) AS TongKGNhap, ISNULL(SUM(v.SoMet), 0) AS TongMet,
            ${/* v7.61: TONG TIEN cua phieu — cung bieu thuc voi cong no NCC (utils/tienVaiNhap.js). */''}
-           ISNULL(SUM(${bieuThucTienCay('v')}), 0) AS TongTien,
-           ${/* Dem so cay "co don gia, co met, ma KG = 0" -> thanh tien ra 0 mot cach dang ngo. */''}
-           SUM(CASE WHEN ISNULL(v.DonGiaNhap,0) > 0 AND ISNULL(v.KGNhap,0) <= 0 AND ISNULL(v.SoMet,0) > 0
-                    THEN 1 ELSE 0 END) AS SoCayThieuKG
+           ISNULL(SUM(${await bieuThucTienCay(pool, 'v')}), 0) AS TongTien,
+           ${/* v7.62: dem cay "da khai don gia ma so luong tinh tien = 0, trong khi don vi KIA co so"
+                -> thanh tien 0 mot cach dang ngo (nham don vi, hoac quen nhap). */''}
+           SUM(CASE WHEN ISNULL(v.DonGiaNhap,0) > 0 AND (${slTinhTien}) <= 0
+                     AND (ISNULL(v.KGNhap,0) > 0 OR ISNULL(v.SoMet,0) > 0)
+                    THEN 1 ELSE 0 END) AS SoCayThieuSoLuong
     FROM PhieuNhapVai p
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
     LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
     LEFT JOIN VaiCay v ON v.PhieuNhapID = p.PhieuNhapID
-    GROUP BY p.PhieuNhapID, p.NgayNhap, p.SoHoaDon, p.NgayHoaDon, p.GhiChu, p.NCC_ID, ncc.TenNCC, u.HoTen
+    GROUP BY p.PhieuNhapID, p.NgayNhap, p.SoHoaDon, p.NgayHoaDon, p.GhiChu, p.NCC_ID, ncc.TenNCC, u.HoTen${coDVT ? ', p.DonViTinhGia' : ''}
     ORDER BY p.PhieuNhapID DESC`);
   res.json({ success: true, data: result.recordset });
 });
@@ -558,7 +572,7 @@ router.get('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
     SELECT v.CayID, v.MaCay, v.KGNhap, v.SoMet, v.KhoVaiThucTe, ISNULL(v.KhoVaiThucTe, dv.KhoVai) AS KhoVai, v.GSM, v.DonGiaNhap, v.QRCode, v.TrangThai, v.ViTriKho,
            ${/* v7.61: THANH TIEN tinh o BACKEND bang dung bieu thuc cua cong no — de ban in / man
                 xem / so cong no khong the ra ba con so khac nhau. */''}
-           ${bieuThucTienCay('v')} AS ThanhTien,
+           ${await bieuThucTienCay(pool, 'v')} AS ThanhTien,
            dv.MaVai, dv.LoaiVaiID, dv.MauSacID, lv.TenLoaiVai, ms.TenMau,
            ISNULL((SELECT SUM(KGXuat) FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID), 0) AS DaXuat,
            CASE WHEN EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID)
@@ -587,13 +601,17 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
     if (!ngayNhap) return res.status(400).json({ success: false, message: 'Thiếu ngày nhập.' });
     const pool = await getPool();
     const id = req.params.id;
+    const coDVTGiaSua = await coCotDonViTinhGia(pool);   // v7.62 (migration_v694)
 
     await pool.request()
       .input('id', sql.Int, id)
       .input('NgayNhap', sql.Date, ngayNhap).input('NCC_ID', sql.Int, nccId || null)
       .input('SoHoaDon', sql.NVarChar, soHoaDon || null).input('NgayHoaDon', sql.Date, ngayHoaDon || null)
       .input('GhiChu', sql.NVarChar, ghiChu || null)
-      .query('UPDATE PhieuNhapVai SET NgayNhap=@NgayNhap, NCC_ID=@NCC_ID, SoHoaDon=@SoHoaDon, NgayHoaDon=@NgayHoaDon, GhiChu=@GhiChu WHERE PhieuNhapID=@id');
+      .input('DonViTinhGia', sql.NVarChar, coDVTGiaSua ? chuanDonViTinhGia(req.body.donViTinhGia) : null)
+      .query(`UPDATE PhieuNhapVai SET NgayNhap=@NgayNhap, NCC_ID=@NCC_ID, SoHoaDon=@SoHoaDon, NgayHoaDon=@NgayHoaDon, GhiChu=@GhiChu
+                ${coDVTGiaSua ? ', DonViTinhGia=@DonViTinhGia' : ''}
+              WHERE PhieuNhapID=@id`);
 
     if (Array.isArray(lines)) {
       const existingResult = await pool.request().input('id', sql.Int, id).query('SELECT CayID, MaCay FROM VaiCay WHERE PhieuNhapID=@id');

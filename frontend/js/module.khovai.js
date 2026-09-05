@@ -281,8 +281,10 @@ window.ModuleKhoVai = (function () {
         <td>NKV-${String(r.PhieuNhapID).padStart(5, '0')}</td>
         <td>${fmtDate(r.NgayNhap)}</td><td>${escapeHtml(r.TenNCC)}</td><td>${escapeHtml(r.SoHoaDon)}</td>
         <td>${r.SoLuongCay}</td><td>${fmtNumber(r.TongKGNhap)}</td><td>${fmtNumber(r.TongMet)}</td>
-        <td style="text-align:right;"><b>${fmtTien(r.TongTien)}</b>${Number(r.SoCayThieuKG)
-          ? `<div style="font-size:11px;color:#c62828;" title="Tiền = KG × đơn giá. Cây chỉ khai MÉT (KG = 0) thì thành tiền ra 0 — công nợ NCC cũng đang ghi 0 cho cây đó.">⚠️ ${fmtNumber(r.SoCayThieuKG)} cây có giá nhưng KG = 0</div>` : ''}</td>
+        <td style="text-align:right;"><b>${fmtTien(r.TongTien)}</b>
+          <div style="font-size:11px;color:#5f6368;">đơn giá /${escapeHtml(nhanDonViGia(r.DonViTinhGia))}</div>
+          ${Number(r.SoCayThieuSoLuong)
+            ? `<div style="font-size:11px;color:#c62828;" title="Cây đã khai đơn giá nhưng số lượng dùng để tính tiền = 0, trong khi đơn vị kia lại có số — nhiều khả năng phiếu chọn nhầm 'Đơn giá tính theo'. Công nợ NCC cũng đang ghi theo con số này.">⚠️ ${fmtNumber(r.SoCayThieuSoLuong)} cây có giá nhưng ${laTinhTheoMet(r.DonViTinhGia) ? 'số mét' : 'KG'} = 0</div>` : ''}</td>
         <td>${escapeHtml(r.NguoiTao)}</td><td>${escapeHtml(r.GhiChu)}</td>
         <td>
           <button type="button" class="btn small secondary act-view" data-id="${r.PhieuNhapID}">Xem/In</button>
@@ -327,12 +329,12 @@ window.ModuleKhoVai = (function () {
            ⚠️ Bảng nay 10 cột: STT, Mã vải, Loại vải, Mầu, Khổ vải, Giá nhập, KG nhập, Số mét,
            Thành tiền, Mã cây. dongTongKgMet(…, 6, 2): 6 + 2 (kg/mét) + 2 = 10 — đổi cột là phải sửa
            hai số này, lệch là bảng vỡ mà trình duyệt không báo gì. */''}
-      <table><thead><tr><th style="width:38px;">STT</th><th>Mã vải</th><th>Loại vải</th><th>Mầu</th><th>Khổ vải</th><th>Giá nhập</th><th>KG nhập</th><th>Số mét</th><th>Thành tiền</th><th>Mã cây tự sinh</th></tr></thead>
+      <table><thead><tr><th style="width:38px;">STT</th><th>Mã vải</th><th>Loại vải</th><th>Mầu</th><th>Khổ vải</th><th>Giá nhập (đ/${escapeHtml(nhanDonViGia(header.DonViTinhGia))})</th><th>KG nhập</th><th>Số mét</th><th>Thành tiền</th><th>Mã cây tự sinh</th></tr></thead>
       ${/* v5.93: + dòng TỔNG CỘNG kg / mét ở cuối bảng */''}
-      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td style="text-align:right;">${fmtNumber(r.DonGiaNhap)}</td><td>${fmtNumber(r.KGNhap)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td style="text-align:right;">${fmtTien(tienCuaCay(r))}</td><td>${escapeHtml(r.MaCay)}</td></tr>`).join('')}
+      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td style="text-align:right;">${fmtNumber(r.DonGiaNhap)}</td><td>${fmtNumber(r.KGNhap)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td style="text-align:right;">${fmtTien(tienCuaCay(r, header.DonViTinhGia))}</td><td>${escapeHtml(r.MaCay)}</td></tr>`).join('')}
         ${dongTongKgMet(lines, 'KGNhap', 'SoMet', 6, 2)}
-        ${khoiTongTienHtml(lines, 8, 1)}</tbody></table>
-      <p class="p-meta" style="margin-top:6px;"><b>Tổng tiền bằng chữ:</b> ${escapeHtml(docSoTienBangChu(tongTienCay(lines)))}</p>
+        ${khoiTongTienHtml(lines, 8, 1, header.DonViTinhGia)}</tbody></table>
+      <p class="p-meta" style="margin-top:6px;"><b>Tổng tiền bằng chữ:</b> ${escapeHtml(docSoTienBangChu(tongTienCay(lines, header.DonViTinhGia)))}</p>
       <div class="p-sign"><div><div class="line">Người lập</div></div><div><div class="line">QC Vải</div></div><div><div class="line">Thủ kho</div></div></div>`);
   }
 
@@ -348,12 +350,12 @@ window.ModuleKhoVai = (function () {
       <table><thead><tr><th style="width:38px;">STT</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG nhập</th><th>Số mét</th><th>Khổ TT</th><th>GSM</th><th>Đơn giá</th><th>Thành tiền</th><th>Trạng thái</th></tr></thead>
       ${/* v6.13: Mã cây bấm được -> xem lịch sử nhập/xuất của chính cây đó (modal xếp chồng). */''}
       <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
-        <td>${fmtNumber(r.KGNhap)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td>${fmtNumber(r.GSM)}</td><td style="text-align:right;">${fmtNumber(r.DonGiaNhap)}</td>
-        <td style="text-align:right;">${fmtTien(tienCuaCay(r))}${laTienNghiNgoVai(r)
-          ? '<div style="font-size:11px;color:#c62828;" title="Tiền = KG × đơn giá — cây này chỉ khai MÉT nên ra 0.">⚠️ KG = 0</div>' : ''}</td>
+        <td>${fmtNumber(r.KGNhap)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td>${fmtNumber(r.GSM)}</td><td style="text-align:right;">${fmtNumber(r.DonGiaNhap)}<span style="font-size:11px;color:#5f6368;">/${escapeHtml(nhanDonViGia(header.DonViTinhGia))}</span></td>
+        <td style="text-align:right;">${fmtTien(tienCuaCay(r, header.DonViTinhGia))}${laTienNghiNgoVai(r, header.DonViTinhGia)
+          ? `<div style="font-size:11px;color:#c62828;" title="Phiếu này tính tiền theo ${laTinhTheoMet(header.DonViTinhGia) ? 'MÉT' : 'KG'} — cây này bỏ trống ô đó nên ra 0.">⚠️ ${laTinhTheoMet(header.DonViTinhGia) ? 'số mét' : 'KG'} = 0</div>` : ''}</td>
         <td>${statusBadge(r.TrangThai)}</td></tr>`).join('')}
         ${dongTongKgMet(lines, 'KGNhap', 'SoMet', 4, 5)}
-        ${khoiTongTienHtml(lines, 9, 1)}</tbody></table>
+        ${khoiTongTienHtml(lines, 9, 1, header.DonViTinhGia)}</tbody></table>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnCloseNhapView">Đóng</button>
         ${/* v6.13: sửa được NGAY trong cửa sổ xem — mở từ lịch sử cây vải không phải quay ra tab Nhập kho. */''}
@@ -429,6 +431,7 @@ window.ModuleKhoVai = (function () {
           <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">--</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC', row.NCC_ID)}</select></div>
           <div class="form-row"><label>Số hóa đơn</label><input name="soHoaDon" value="${escapeHtml(row.SoHoaDon || '')}"></div>
           <div class="form-row"><label>Ngày hóa đơn</label><input type="date" name="ngayHoaDon" value="${row.NgayHoaDon ? new Date(row.NgayHoaDon).toISOString().slice(0, 10) : ''}"></div>
+          ${oDonViTinhGiaHtml(row.DonViTinhGia)}
           <div class="form-row"><label>Ghi chú</label><input name="ghiChu" value="${escapeHtml(row.GhiChu || '')}"></div>
         </div>
         <div class="lap-wrap"><table class="lap-table">${COLS_SUA}${HEAD_SUA}
@@ -467,6 +470,8 @@ window.ModuleKhoVai = (function () {
         await apiPut('/api/khovai/nhap/' + row.PhieuNhapID, {
           ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId') || null, soHoaDon: fd.get('soHoaDon'),
           ngayHoaDon: fd.get('ngayHoaDon') || null, ghiChu: fd.get('ghiChu'),
+          donViTinhGia: fd.get('donViTinhGia') || 'Kg',   // v7.62: đổi ô này là đổi luôn số nợ NCC của phiếu
+
           lines: editLines
         });
         closeModal(); toast('Đã lưu.', 'success'); render(container, currentUser);
@@ -514,6 +519,7 @@ window.ModuleKhoVai = (function () {
           <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">--</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC')}</select></div>
           <div class="form-row"><label>Số hóa đơn</label><input name="soHoaDon"></div>
           <div class="form-row"><label>Ngày hóa đơn</label><input type="date" name="ngayHoaDon"></div>
+          ${oDonViTinhGiaHtml(null)}
           <div class="form-row"><label>Ghi chú</label><input name="ghiChu"></div>
         </div>
         <div class="lap-wrap"><table class="lap-table">${COLS_NHAP}${HEAD_NHAP}
@@ -548,7 +554,8 @@ window.ModuleKhoVai = (function () {
         khoVaiThucTe: r.querySelector('.r-kho').value, gsm: r.querySelector('.r-gsm').value,
         kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value, donGiaNhap: r.querySelector('.r-gia').value
       }));
-      return { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId'), soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon'), ghiChu: fd.get('ghiChu'), rolls };
+      return { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId'), soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon'), ghiChu: fd.get('ghiChu'),
+        donViTinhGia: fd.get('donViTinhGia') || 'Kg', rolls };
     }
     modal.querySelector('#nForm').addEventListener('input', () => saveDraft(DRAFT_KEY, collectDraftNhap()));
 
@@ -558,6 +565,10 @@ window.ModuleKhoVai = (function () {
       modal.querySelector('[name="soHoaDon"]').value = draft.soHoaDon || '';
       modal.querySelector('[name="ngayHoaDon"]').value = draft.ngayHoaDon || '';
       modal.querySelector('[name="ghiChu"]').value = draft.ghiChu || '';
+      /* v7.62: khôi phục cả ô "Đơn giá tính theo" — bỏ sót thì bản nháp của phiếu mua theo mét mở
+         lại thành Kg, lưu xong ra tiền 0 mà không ai để ý. */
+      const oDvt = modal.querySelector('[name="donViTinhGia"]');
+      if (oDvt) oDvt.value = draft.donViTinhGia || 'Kg';
       modal.querySelector('#rollRows').innerHTML = draft.rolls.map(() => rowTemplate()).join('');
       modal.querySelectorAll('#rollRows > [data-row]').forEach((r, i) => {
         const d = draft.rolls[i];
@@ -597,7 +608,9 @@ window.ModuleKhoVai = (function () {
       }));
       if (canhBaoThieuSoLuong(rolls, 'kgNhap', 'soMet', 'KG nhập')) return;   // v5.89
       try {
-        const res = await apiPost('/api/khovai/nhap', { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId') || null, soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon') || null, ghiChu: fd.get('ghiChu'), rolls });
+        const res = await apiPost('/api/khovai/nhap', { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId') || null, soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon') || null, ghiChu: fd.get('ghiChu'),
+          donViTinhGia: fd.get('donViTinhGia') || 'Kg',   // v7.62: quyết định tiền của phiếu VÀ số ghi nợ NCC
+          rolls });
         clearDraft(DRAFT_KEY);
         toast('Đã nhập kho.', 'success');
         closeModal();
@@ -1725,28 +1738,50 @@ window.ModuleKhoVai = (function () {
      ⚠️ Công thức là KG × đơn giá. `SoMet` KHÔNG tham gia — cây chỉ khai mét thì ra 0, và công nợ NCC
      cũng đang ghi 0 cho cây đó. Giữ nguyên để hai bên khớp; nhưng phải NÊU RA chứ không hiện số 0
      trơ trọi, nên có laTienNghiNgoVai(). */
-  function tienCuaCay(r) {
+  /* v7.62: đơn giá tính theo Kg hay Mét là của CẢ PHIẾU (PhieuNhapVai.DonViTinhGia).
+     Vải mua theo mét khai số mét, bỏ trống KG — trước v7.62 chỉ có công thức KG × giá nên loại vải
+     này ra tiền 0 ở CẢ phiếu LẪN công nợ NCC. */
+  function laTinhTheoMet(dvt) { return String(dvt || '').trim().toLowerCase() === 'met'; }
+  function nhanDonViGia(dvt) { return laTinhTheoMet(dvt) ? 'm' : 'kg'; }
+  function soLuongTinhTien(r, dvt) {
+    return laTinhTheoMet(dvt) ? (Number(r && r.SoMet) || 0) : (Number(r && r.KGNhap) || 0);
+  }
+  function tienCuaCay(r, dvt) {
     if (!r) return 0;
     if (r.ThanhTien != null) return Number(r.ThanhTien) || 0;
-    return (Number(r.KGNhap) || 0) * (Number(r.DonGiaNhap) || 0);
+    return soLuongTinhTien(r, dvt) * (Number(r.DonGiaNhap) || 0);
   }
-  function laTienNghiNgoVai(r) {
-    return !!r && (Number(r.DonGiaNhap) || 0) > 0
-      && (Number(r.KGNhap) || 0) <= 0 && (Number(r.SoMet) || 0) > 0;
+  /* Đã khai đơn giá mà số lượng dùng để tính tiền = 0, TRONG KHI đơn vị kia lại có số -> gần như
+     chắc chắn khai nhầm đơn vị (hoặc quên nhập), không phải hàng cho không. */
+  function laTienNghiNgoVai(r, dvt) {
+    if (!r || (Number(r.DonGiaNhap) || 0) <= 0) return false;
+    if (soLuongTinhTien(r, dvt) > 0) return false;
+    return laTinhTheoMet(dvt) ? (Number(r.KGNhap) || 0) > 0 : (Number(r.SoMet) || 0) > 0;
   }
-  function tongTienCay(lines) {
-    return (lines || []).reduce((s, r) => s + tienCuaCay(r), 0);
+  function tongTienCay(lines, dvt) {
+    return (lines || []).reduce((s, r) => s + tienCuaCay(r, dvt), 0);
+  }
+  /* Ô chọn "Đơn giá tính theo" ở đầu form Tạo / Sửa phiếu. Một ô cho CẢ phiếu (người dùng đã chốt),
+     nên phiếu trộn cả vải mua theo Kg lẫn theo mét thì phải tách thành hai phiếu. */
+  function oDonViTinhGiaHtml(dvtHienTai) {
+    const met = laTinhTheoMet(dvtHienTai);
+    return `<div class="form-row"><label>Đơn giá tính theo</label>
+      <select name="donViTinhGia" id="nhDonViTinhGia">
+        <option value="Kg"${met ? '' : ' selected'}>Kg — tiền = KG nhập × đơn giá</option>
+        <option value="Met"${met ? ' selected' : ''}>Mét — tiền = số mét × đơn giá</option>
+      </select>
+      <div class="empty-hint" style="margin-top:2px;text-align:left;">Áp cho <b>cả phiếu</b>. Đây cũng là số mà <b>công nợ nhà cung cấp</b> ghi nợ — đổi ở đây là đổi luôn số nợ của phiếu này.</div></div>`;
   }
   /* Dòng TỔNG TIỀN của bảng. `soCotTruoc` + 1 + `soCotSau` PHẢI bằng số cột tiêu đề — cùng ràng buộc
      với dongTongKgMet(), sai là bảng lệch cột mà trình duyệt không báo gì. */
-  function khoiTongTienHtml(lines, soCotTruoc, soCotSau) {
-    const t = tongTienCay(lines);
-    const nghiNgo = (lines || []).filter(laTienNghiNgoVai).length;
+  function khoiTongTienHtml(lines, soCotTruoc, soCotSau, dvt) {
+    const t = tongTienCay(lines, dvt);
+    const nghiNgo = (lines || []).filter(r => laTienNghiNgoVai(r, dvt)).length;
     return `<tr style="font-weight:700;background:#fff7e6;">
-      <td colspan="${soCotTruoc}" style="text-align:right;">TỔNG TIỀN</td>
+      <td colspan="${soCotTruoc}" style="text-align:right;">TỔNG TIỀN <span style="font-weight:400;font-size:11px;">(đơn giá theo ${escapeHtml(nhanDonViGia(dvt))})</span></td>
       <td style="text-align:right;">${fmtTien(t)} đ</td>
       ${soCotSau > 0 ? `<td colspan="${soCotSau}">${nghiNgo
-        ? `<span style="font-weight:400;font-size:11px;color:#c62828;">${nghiNgo} cây có đơn giá nhưng KG = 0</span>` : ''}</td>` : ''}</tr>`;
+        ? `<span style="font-weight:400;font-size:11px;color:#c62828;">${nghiNgo} cây có đơn giá nhưng ${laTinhTheoMet(dvt) ? 'số mét' : 'KG'} = 0</span>` : ''}</td>` : ''}</tr>`;
   }
 
   function focusODauDong(row) {
