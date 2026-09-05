@@ -555,10 +555,14 @@ window.ModuleTaiLieuKyThuat = (function () {
         </tr>`).join('') || `<tr><td colspan="${cols.length + (perm.canEdit ? 5 : 4)}" class="empty-hint">Chưa có dòng thông số nào</td></tr>`}
       </tbody>
     </table>
-    ${perm.canEdit ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+    ${perm.canEdit ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <button type="button" class="btn small secondary" id="btnTsdAddRow">+ Thêm dòng (thông số)</button>
         <button type="button" class="btn small secondary" id="btnTsdSizeChuan">↧ Điền size chuẩn (80→140)</button>
         <button type="button" class="btn small secondary" id="btnTsdTranspose" title="Dữ liệu cũ có dòng = size; bấm để đổi chiều cho đúng mẫu mới">⇄ Đổi chiều dòng/cột</button>
+        ${/* v7.64: đổ thẳng từ file Excel của khách. Số dòng và số cột size lấy theo file, không cố định. */''}
+        <button type="button" class="btn small" id="btnTsdNhapExcel" title="File có dòng tiêu đề với ô 'Measure' (hoặc 'Thông số'), bên phải là các cột size">⬆️ Tải file Excel</button>
+        <input type="file" id="fileTsdExcel" accept=".xlsx,.xlsm" style="display:none;">
+        <span class="empty-hint" style="padding:0;">Cột <b>Measure</b> → THÔNG SỐ, các cột còn lại → size. Thêm bao nhiêu dòng/size cũng được.</span>
       </div>` : ''}`;
   }
 
@@ -619,6 +623,47 @@ window.ModuleTaiLieuKyThuat = (function () {
       renderTsdGridBox(box, state);
       toast('Đã đổi chiều. Kiểm tra lại rồi bấm Lưu.', 'success');
     });
+    /* ==============================================================================================
+       v7.64 — TẢI FILE EXCEL LÊN, ĐỔ THẲNG VÀO LƯỚI.
+       Backend chỉ ĐỌC file rồi trả { cols, rows } (không ghi CSDL), nên tải nhầm file cũng không
+       hỏng dữ liệu đang có — người dùng xem lại lưới rồi mới bấm Lưu như thường.
+       ⚠️ Lưới đang có dữ liệu thì HỎI trước khi thay: người dùng có thể đã gõ tay một nửa.
+       ============================================================================================== */
+    const btnExcel = box.querySelector('#btnTsdNhapExcel');
+    const oFile = box.querySelector('#fileTsdExcel');
+    if (btnExcel && oFile) {
+      btnExcel.addEventListener('click', () => { oFile.value = ''; oFile.click(); });
+      oFile.addEventListener('change', async () => {
+        const f = oFile.files && oFile.files[0];
+        if (!f || !f.size) return;
+        syncTsdGrid(box, state);
+        const dangCoDuLieu = state.rows.some(r => String(r.tenDong || '').trim()
+          || (r.values || []).some(v => String(v || '').trim()));
+        if (dangCoDuLieu && !confirm('Lưới đang có dữ liệu. Thay TOÀN BỘ bằng nội dung file Excel?')) return;
+        const nhanCu = btnExcel.textContent;
+        btnExcel.disabled = true; btnExcel.textContent = 'Đang đọc...';
+        try {
+          const fd = new FormData();
+          fd.append('file', f);
+          const r = await fetch('/api/tailieukythuat/thongsodo/doc-excel', {
+            method: 'POST', credentials: 'same-origin', body: fd
+          });
+          const j = await r.json().catch(() => ({ success: false, message: 'Máy chủ trả về dữ liệu không đọc được.' }));
+          if (!r.ok || !j.success) throw new Error(j.message || ('HTTP ' + r.status));
+          state.cols = (j.data.cols || []).map(c => ({ tenCot: c.tenCot }));
+          state.rows = (j.data.rows || []).map(x => ({
+            tenDong: x.tenDong || '', viTriDo: x.viTriDo || '', dungSai: x.dungSai || '',
+            /* Ép đúng số ô = số cột, kẻo file thiếu ô cuối là lưới lệch cột. */
+            values: state.cols.map((c, i) => (x.values && x.values[i] != null ? x.values[i] : ''))
+          }));
+          renderTsdGridBox(box, state);
+          toast((j.message || 'Đã đọc file.') + ' Kiểm tra lại rồi bấm Lưu.', 'success');
+        } catch (err) {
+          toast('Không đọc được file: ' + err.message, 'error');
+        }
+        btnExcel.disabled = false; btnExcel.textContent = nhanCu;
+      });
+    }
     box.querySelectorAll('.tsd-del-col').forEach(btn => btn.addEventListener('click', () => {
       syncTsdGrid(box, state);
       const ci = Number(btn.closest('[data-col]').dataset.col);

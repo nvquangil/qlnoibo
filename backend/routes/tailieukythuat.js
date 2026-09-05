@@ -4,8 +4,23 @@
 // GET/POST/DELETE /api/qlsx/orders/:maDH/phukien da co san trong qlsx.js (xem migration_v514.sql phan
 // dau va HUONG_DAN_CAI_DAT.md Buoc 2.19 de biet ly do khong tach rieng bang/route cho muc nay).
 const express = require('express');
+const multer = require('multer');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+/* v7.64: đọc file Excel thông số kỹ thuật -> lưới { cols, rows }. Quy tắc dò bảng nằm ở util. */
+const { docThongSoDoExcel } = require('../utils/docThongSoDoExcel');
+
+/* Nhận file vào BỘ NHỚ (không ghi ra đĩa): file này chỉ dùng để đọc một lần rồi bỏ. */
+const uploadExcel = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+function nhanFileExcel(req, res, next) {
+  uploadExcel.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: 'File quá lớn (giới hạn 15 MB).' });
+    }
+    return res.status(400).json({ success: false, message: 'Lỗi khi nhận file: ' + err.message });
+  });
+}
 
 const router = express.Router();
 
@@ -586,6 +601,39 @@ router.get('/thongsodo/:maDH', requireAuth, requirePermission('QLSX', 'view'), a
       : `SELECT TOP 1 ID FROM TaiLieuThongSoDo WHERE DonHangID=@id ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
   res.json({ success: true, data: row ? await getThongSoDoDetail(pool, row.ID) : null, order });
 });
+
+/* ================================================================================================
+   v7.64 — TẢI FILE EXCEL THÔNG SỐ KỸ THUẬT LÊN, ĐỔ THẲNG VÀO LƯỚI.
+   CHỈ ĐỌC FILE, KHÔNG ghi gì vào CSDL: trả về { cols, rows } để form điền vào lưới; người dùng xem
+   lại rồi mới bấm Lưu như thường. Nhờ vậy tải nhầm file cũng không hỏng dữ liệu đang có.
+   Quy tắc đọc + lý do không gán cứng vị trí ô: xem đầu utils/docThongSoDoExcel.js.
+   ================================================================================================ */
+router.post('/thongsodo/doc-excel', requireAuth, requirePermission('QLSX', 'edit'),
+  nhanFileExcel, async (req, res) => {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ success: false, message: 'Không nhận được file.' });
+    }
+    const ten = String(req.file.originalname || '');
+    /* ExcelJS KHÔNG đọc được .xls (định dạng cũ của Excel 97-2003). Báo rõ cách xử lý, thay vì để
+       thư viện ném một câu khó hiểu rồi người dùng tưởng file hỏng. */
+    if (/\.xls$/i.test(ten)) {
+      return res.status(400).json({
+        success: false,
+        message: 'File .xls (Excel 97-2003) không đọc được. Mở bằng Excel rồi "Save As" sang .xlsx và tải lại.'
+      });
+    }
+    try {
+      const kq = await docThongSoDoExcel(req.file.buffer);
+      return res.json({
+        success: true,
+        data: { cols: kq.cols, rows: kq.rows },
+        message: `Đã đọc ${kq.rows.length} dòng thông số × ${kq.cols.length} size từ sheet "${kq.tenSheet}".`
+      });
+    } catch (err) {
+      /* Lỗi "không dò ra bảng" là lỗi của FILE, không phải lỗi hệ thống -> 400 kèm hướng dẫn. */
+      return res.status(400).json({ success: false, message: err.message });
+    }
+  });
 
 router.post('/thongsodo/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
