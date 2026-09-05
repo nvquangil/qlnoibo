@@ -412,6 +412,16 @@
          tiếp theo: không hiện gì thêm. */
       const laDongKhai = moi && idxKhaiMoi(d) === d.idx;
       const thuaHuong = moi && idxKhaiMoi(d) != null && idxKhaiMoi(d) !== d.idx;
+      /* ⚠️ v7.60 — MÃ ĐÃ CÓ TRONG DANH MỤC CŨNG PHẢI TẢI ĐƯỢC ẢNH ĐẠI DIỆN.
+         Ô "Ảnh đại diện mã hàng" trước đây nằm TRONG dòng khai, mà dòng khai chỉ hiện cho mã MỚI
+         (v6.99). Hệ quả: nhập hàng cho một mã đã có thì trên phiếu KHÔNG có chỗ nào tải ảnh đại diện
+         — người dùng tải được mỗi ảnh màu rồi kết luận "ảnh không lên thẻ kho".
+         Chỉ mở ĐÚNG Ô ẢNH, KHÔNG mở lại các ô cấp mã hàng khác (ĐVT / tỷ lệ / giá bán): v6.99 chặn
+         chúng vì 2 ô ĐVT luôn có giá trị mặc định nên lưu phiếu là ghi đè âm thầm, tồn quy đổi sai
+         gấp <tỷ lệ> lần. Ảnh không tham gia phép tính nào, và backend ghi bằng ISNULL nên bỏ trống
+         KHÔNG xóa mất ảnh cũ. */
+      const dongDauCuaMa = !moi && d.maHangId
+        && dongForm.find(x => String(x.maHangId) === String(d.maHangId)) === d;
       /* v6.93: MỌI ô ĐVT ở đây lấy từ DANH MỤC ĐƠN VỊ TÍNH (DanhMucDonViTinh) — không gõ cứng
          'Cái'/'Ri'. Nguyên tắc chung: trường nào đã có danh mục thì phải đọc từ danh mục, để thêm một
          đơn vị trong Danh mục là mọi form thấy ngay.
@@ -530,6 +540,20 @@
             </div>
           </div>
           <div class="empty-hint" style="margin:6px 0 0;">Hàng không quản theo lô/ri thì để tỷ lệ 1. Các dòng màu tiếp theo của mã này tự dùng lại thông tin ở đây.</div>
+        </td>
+      </tr>` : ''}
+      ${/* v7.60: mã ĐÃ CÓ -> dải mỏng chỉ có ô Ảnh đại diện. Dùng CHUNG class .nk-dong-moi để
+           ganDong() gắn sự kiện .nk-anhdd sẵn có, không phải nối dây lần hai. */''}
+      ${(!laDongKhai && dongDauCuaMa) ? `<tr data-idx="${d.idx}" class="nk-dong-moi" style="background:#f7fbff;">
+        <td colspan="${soCot}" style="padding:6px 10px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:#5f6368;">Ảnh đại diện mã <b>${escapeHtml(d.maHang || '')}</b>:</span>
+            ${d.anhDaiDien
+              ? `<img class="thumb" src="${escapeHtml(anhNho(d.anhDaiDien, 80))}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;">`
+              : '<span style="width:32px;height:32px;border:1px dashed #dcdfe3;border-radius:4px;display:inline-block;"></span>'}
+            <input type="file" class="nk-anhdd" accept="image/*" style="max-width:170px;font-size:12px;">
+            <span class="empty-hint" style="padding:0;">Bỏ trống = giữ nguyên ảnh đang lưu. Chỉ ô này được sửa; ĐVT / tỷ lệ / giá bán của mã đã có sửa ở <b>Danh mục → Hàng hóa</b>.</span>
+          </div>
         </td>
       </tr>` : ''}`;
     }

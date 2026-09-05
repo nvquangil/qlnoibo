@@ -3928,7 +3928,15 @@ window.ModuleKhoHang = (function () {
     if (mauCuaMa.length) {
       toast(`Đã điền sẵn ${mauCuaMa.length} dòng màu (kèm ảnh) của mã ${maHang} — chỉ cần bổ sung giá bán / danh mục.`, 'info');
     }
-    await openItemForm(null, p, mauCuaMa.length ? mauCuaMa : null, { PhieuNKID: phieuNKID, maHang });
+    /* ⚠️ v7.60 — MÃ ĐÃ CÓ THÌ MỞ FORM **SỬA**, KHÔNG PHẢI TẠO MỚI.
+       Ghi chú v6.86 ngay trên đã nói đúng ("mã ĐÃ CÓ thì mở form SỬA đúng mã đó") nhưng code vẫn
+       truyền `null` = TẠO MỚI. Form tạo mới không có `row` nên KHÔNG đọc được `AnhDaiDien` đang lưu:
+       ô ảnh đại diện hiện ra TRỐNG dù trong database mã đó đã có ảnh — đúng triệu chứng "vào thẻ kho
+       không thấy ảnh". Các ô khác (giá bán, danh mục, ĐVT, barcode) cũng trống y như vậy.
+       `rowMa` lấy từ CÙNG nguồn `tongHop` mà nút "Sửa" ở tab Thẻ kho đang dùng, nên hình dạng dữ liệu
+       giống hệt — không phải một đường thứ hai. */
+    await openItemForm(rowMa || null, p, mauCuaMa.length ? mauCuaMa : null,
+      rowMa ? undefined : { PhieuNKID: phieuNKID, maHang });
   }
 
   async function taoTheKhoTuPhieu(phieuNKID) {

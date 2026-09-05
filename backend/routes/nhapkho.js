@@ -440,14 +440,18 @@ async function taoTheKhoTuDong(pool, tran, dsGhi) {
   let soMau = 0, soAnh = 0, soAnhMau = 0;
   const daAnhDaiDien = new Set();
   for (const d of dsGhi) {
-    if (!d.maHangId || !d.mauSacId) continue;
-    if (d.anhMau) soAnhMau++;   // dem de bao lai cho nguoi dung: anh mau CO den backend hay khong
-    if (await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null)) soMau++;
-    // Anh dai dien la cua MA HANG: mot ma xuat hien nhieu dong (nhieu mau) thi chi ghi mot lan.
+    if (!d.maHangId) continue;
+    /* ⚠️ v7.60 — ANH DAI DIEN PHAI XU LY TRUOC KHI BO QUA DONG VI THIEU MAU.
+       Ban cu viet `if (!d.maHangId || !d.mauSacId) continue;` o dau vong lap. Anh dai dien la cua
+       MA HANG, khong lien quan gi den mau — nhung dong nao khong xac dinh duoc mau la anh dai dien
+       cua ca ma do bi bo luon, am tham, khong bao gi. */
     if (d.anhDaiDien && !daAnhDaiDien.has(d.maHangId)) {
       daAnhDaiDien.add(d.maHangId);
       if (await capNhatAnhDaiDien(pool, tran, d.maHangId, d.anhDaiDien)) soAnh++;
     }
+    if (!d.mauSacId) continue;
+    if (d.anhMau) soAnhMau++;   // dem de bao lai cho nguoi dung: anh mau CO den backend hay khong
+    if (await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null)) soMau++;
   }
   return { soMau, soAnh, soAnhMau };
 }
