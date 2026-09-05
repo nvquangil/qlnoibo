@@ -34,7 +34,8 @@ window.ModuleTaiLieuKyThuat = (function () {
     // v5.88: BỎ mục con "Quy cách đóng gói" khỏi nhóm này theo yêu cầu. Dữ liệu cũ (nếu đã nhập) VẪN
     // CÒN NGUYÊN trong bảng TaiLieuMoTaSanPham (Loai='quycach') và mọi route backend giữ nguyên — chỉ
     // ẩn lối vào. Muốn dùng lại chỉ cần thêm dòng { key: 'quycach', label: 'Quy cách đóng gói' } vào đây.
-    tlmay: [{ key: 'thongsodo', label: 'Thông số kỹ thuật' }, { key: 'motasp', label: 'Mô tả đường may' }, { key: 'dongiamay', label: 'Đơn giá công đoạn may' }, { key: 'dongiagiacong', label: 'Đơn giá giao gia công' }, { key: 'dongialadonggoi', label: 'Đơn giá là/đóng gói' }],
+    // v7.65: + "Thống kê chi tiết" (bảng kê các chi tiết/piece, nhập từ file Excel của khách).
+    tlmay: [{ key: 'thongsodo', label: 'Thông số kỹ thuật' }, { key: 'thongkechitiet', label: 'Thống kê chi tiết' }, { key: 'motasp', label: 'Mô tả đường may' }, { key: 'dongiamay', label: 'Đơn giá công đoạn may' }, { key: 'dongiagiacong', label: 'Đơn giá giao gia công' }, { key: 'dongialadonggoi', label: 'Đơn giá là/đóng gói' }],
     // v5.34c (mục 7): Tài liệu in thêu.
     tlinthue: [{ key: 'hinhanhinthue', label: 'Hình ảnh mô tả in/thêu' }, { key: 'dongiainthe', label: 'Đơn giá in thêu' }],
     // v5.50: "Chỉ định NPL" TÁCH thành TAB RIÊNG của QLSX (module.qlsx.js dispatch nhóm 'chidinhnpl'); trước là mục con của tlmay.
@@ -225,6 +226,7 @@ window.ModuleTaiLieuKyThuat = (function () {
     // v5.56: các loại tài liệu này giờ có NHIỀU BẢN có tên/đơn → mở DANH SÁCH BẢN trước (chooser), rồi mới vào editor.
     if (activeChild === 'tailieuchung') return openDocBanList({ maDH, base: 'tailieuchung', loai: 'tailieuchung', title: 'Tài liệu kỹ thuật chung', openEditor: openTaiLieuChungEditor });
     if (activeChild === 'thongsodo') return openDocBanList({ maDH, base: 'thongsodo', loai: 'thongsodo', title: 'Thông số đo', openEditor: openThongSoDoEditor });
+    if (activeChild === 'thongkechitiet') return openDocBanList({ maDH, base: 'thongkechitiet', loai: 'thongkechitiet', title: 'Thống kê chi tiết', openEditor: openThongKeChiTietEditor });   // v7.65
     if (activeChild === 'motasp') return openMoTaSanPhamBanList(maDH, 'motasp', 'Mô tả đường may');
     if (activeChild === 'quycach') return openMoTaSanPhamBanList(maDH, 'quycach', 'Quy cách đóng gói');   // v5.34c
     if (activeChild === 'hinhanhinthue') return openMoTaSanPhamBanList(maDH, 'hinhanhinthue', 'Hình ảnh mô tả in/thêu');   // v5.34c
@@ -699,6 +701,262 @@ window.ModuleTaiLieuKyThuat = (function () {
       try { await apiDelete(delBase + '/' + b.dataset.id); toast('Đã xóa.', 'success'); openDocMauManager(listUrl, delBase, title); }
       catch (err) { toast(err.message, 'error'); }
     }));
+  }
+
+  /* ================================================================================================
+     v7.65 — THỐNG KÊ CHI TIẾT
+     Bảng kê các chi tiết (piece) của sản phẩm. Cột CỐ ĐỊNH, tiêu đề TIẾNG VIỆT; chỉ SỐ DÒNG linh động.
+     Nguồn dữ liệu chính là file Excel của khách — cột "Piece Image" trong file KHÔNG phải ảnh dán mà
+     là HÌNH VẼ Freeform của Excel; backend đổi sang SVG rồi tải lên thành file (xem
+     utils/docHinhVeExcel.js). Ngoài ra mỗi dòng vẫn tải ảnh riêng được.
+     ================================================================================================ */
+  const TKCT_COT = [
+    { k: 'pieceName', nhan: 'Tên chi tiết', rong: 'min-width:150px;' },
+    { k: 'material', nhan: 'Vật liệu', rong: 'width:90px;' },
+    { k: 'quantity', nhan: 'Số lượng', rong: 'width:80px;' },
+    { k: 'pair', nhan: 'Cặp', rong: 'width:70px;' },
+    { k: 'opposite', nhan: 'Chiều đối xứng', rong: 'width:110px;' },
+    { k: 'tongSoLuong', nhan: 'Tổng số lượng', rong: 'width:100px;' }
+  ];
+  function tkctDongMoi() {
+    return { pieceName: '', material: '', quantity: '', pair: '', opposite: '', anhChiTiet: '', tongSoLuong: '', ghiChu: '' };
+  }
+  function tkctGridHtml(state) {
+    const soCot = TKCT_COT.length + 3 + (perm.canEdit ? 1 : 0);   // STT + [cột] + Hình + Ghi chú (+Xóa)
+    return `<table>
+      <thead><tr>
+        <th style="width:44px;">TT</th>
+        ${TKCT_COT.map(c => `<th style="${c.rong}">${escapeHtml(c.nhan)}</th>`).join('')}
+        <th style="width:120px;">Hình chi tiết</th>
+        <th style="min-width:120px;">Ghi chú</th>
+        ${perm.canEdit ? '<th style="width:64px;"></th>' : ''}
+      </tr></thead>
+      <tbody>
+        ${state.rows.map((r, ri) => `<tr data-row="${ri}">
+          <td style="text-align:center;">${ri + 1}</td>
+          ${TKCT_COT.map(c => `<td><input class="tlkt-grid-input tkct-o" data-k="${c.k}" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml(r[c.k] || '')}"${c.k === 'pieceName' ? ' placeholder="Sửa tên cho dễ nhìn"' : ' style="text-align:center;"'}></td>`).join('')}
+          <td style="text-align:center;">
+            ${/* Xem to: mở tab mới — CÙNG CÁCH với các ô ảnh khác trong chính file này.
+                 (Lightbox `openImageLightbox` nằm trong IIFE của module.khohang.js, gọi sang là
+                 ReferenceError — đúng bẫy "hàm có thật nhưng ở FILE KHÁC" đã mắc ở v7.49.) */''}
+            ${r.anhChiTiet ? `<a href="${escapeHtml(r.anhChiTiet)}" target="_blank" title="Bấm để xem to"><img src="${escapeHtml(r.anhChiTiet)}" style="max-width:110px;max-height:80px;object-fit:contain;display:block;margin:0 auto;"></a>` : '<span class="empty-hint" style="padding:0;">—</span>'}
+            ${perm.canEdit ? `<input type="file" class="tkct-file" accept="image/*" style="width:100%;font-size:10px;margin-top:3px;">
+              ${r.anhChiTiet ? '<button type="button" class="btn small danger tkct-xoa-anh" style="width:100%;margin-top:2px;">Xóa ảnh</button>' : ''}` : ''}
+          </td>
+          <td><input class="tlkt-grid-input tkct-o" data-k="ghiChu" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml(r.ghiChu || '')}"></td>
+          ${perm.canEdit ? '<td><button type="button" class="btn small danger tkct-del-row">Xóa</button></td>' : ''}
+        </tr>`).join('') || `<tr><td colspan="${soCot}" class="empty-hint">Chưa có chi tiết nào — tải file Excel lên hoặc bấm “Thêm dòng”.</td></tr>`}
+      </tbody>
+    </table>
+    ${perm.canEdit ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn small secondary" id="btnTkctAddRow">+ Thêm dòng</button>
+        <button type="button" class="btn small" id="btnTkctExcel" title="File có dòng tiêu đề với ô 'Piece Name', cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải file Excel</button>
+        <input type="file" id="fileTkctExcel" accept=".xlsx,.xlsm" style="display:none;">
+        <span class="empty-hint" style="padding:0;">Hình rập trong file Excel được <b>tải lên tự động</b>. Cột <b>Tổng số lượng</b> gõ tay.</span>
+      </div>` : ''}`;
+  }
+  function readTkctFromDom(box) {
+    return Array.from(box.querySelectorAll('tbody [data-row]')).map((tr, ri) => {
+      const cu = box.__state.rows[ri] || tkctDongMoi();
+      const r = { ...cu };
+      tr.querySelectorAll('.tkct-o').forEach(inp => { r[inp.dataset.k] = inp.value; });
+      return r;   // giữ nguyên anhChiTiet (không có ô nhập, nằm ngoài vòng đọc)
+    });
+  }
+  function renderTkctBox(box, state) {
+    box.__state = state;
+    box.innerHTML = tkctGridHtml(state);
+    wireTkctBox(box, state);
+  }
+  function wireTkctBox(box, state) {
+    const dongBo = () => { state.rows = readTkctFromDom(box); };
+    const btnAdd = box.querySelector('#btnTkctAddRow');
+    if (btnAdd) btnAdd.addEventListener('click', () => { dongBo(); state.rows.push(tkctDongMoi()); renderTkctBox(box, state); });
+    box.querySelectorAll('.tkct-del-row').forEach(b => b.addEventListener('click', () => {
+      dongBo();
+      state.rows.splice(Number(b.closest('[data-row]').dataset.row), 1);
+      renderTkctBox(box, state);
+    }));
+    box.querySelectorAll('.tkct-xoa-anh').forEach(b => b.addEventListener('click', () => {
+      dongBo();
+      state.rows[Number(b.closest('[data-row]').dataset.row)].anhChiTiet = '';
+      renderTkctBox(box, state);
+    }));
+    /* Ảnh riêng cho từng dòng — tải lên NGAY khi chọn để lỗi thì biết luôn, không mất cả bảng đã gõ. */
+    box.querySelectorAll('.tkct-file').forEach(inp => inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      if (!f || !f.size) return;
+      const ri = Number(inp.closest('[data-row]').dataset.row);
+      dongBo();
+      try {
+        state.rows[ri].anhChiTiet = await uploadFile(f, 'tkct');
+        renderTkctBox(box, state);
+      } catch (err) { toast('Không tải được ảnh: ' + err.message, 'error'); }
+    }));
+    /* Tải file Excel -> thay toàn bộ bảng. */
+    const btnExcel = box.querySelector('#btnTkctExcel');
+    const oFile = box.querySelector('#fileTkctExcel');
+    if (btnExcel && oFile) {
+      btnExcel.addEventListener('click', () => { oFile.value = ''; oFile.click(); });
+      oFile.addEventListener('change', async () => {
+        const f = oFile.files && oFile.files[0];
+        if (!f || !f.size) return;
+        dongBo();
+        const coDL = state.rows.some(r => String(r.pieceName || '').trim() || r.anhChiTiet);
+        if (coDL && !confirm('Bảng đang có dữ liệu. Thay TOÀN BỘ bằng nội dung file Excel?')) return;
+        const nhanCu = btnExcel.textContent;
+        btnExcel.disabled = true; btnExcel.textContent = 'Đang đọc...';
+        try {
+          const fd = new FormData();
+          fd.append('file', f);
+          const r = await fetch('/api/tailieukythuat/thongkechitiet/doc-excel', { method: 'POST', credentials: 'same-origin', body: fd });
+          const j = await r.json().catch(() => ({ success: false, message: 'Máy chủ trả về dữ liệu không đọc được.' }));
+          if (!r.ok || !j.success) throw new Error(j.message || ('HTTP ' + r.status));
+          state.rows = (j.data.rows || []).map(x => ({ ...tkctDongMoi(), ...x }));
+          renderTkctBox(box, state);
+          toast((j.message || 'Đã đọc file.') + ' Kiểm tra lại rồi bấm Lưu.', 'success');
+        } catch (err) { toast('Không đọc được file: ' + err.message, 'error'); }
+        btnExcel.disabled = false; btnExcel.textContent = nhanCu;
+      });
+    }
+  }
+
+  async function openThongKeChiTietEditor(maDH, tenPhieu, onDone) {
+    tenPhieu = tenPhieu || '';
+    const res = await apiGet(`/api/tailieukythuat/thongkechitiet/${maDH}?ten=${encodeURIComponent(tenPhieu)}`);
+    const data = res.data, order = res.order || {};
+    const anhMacDinh = res.anhMacDinh || '';
+    const state = { rows: (data && data.rows && data.rows.length) ? JSON.parse(JSON.stringify(data.rows)) : [tkctDongMoi()] };
+    /* Ảnh đại diện: để trống = dùng ảnh của mã hàng trên lệnh SX. Tải ảnh khác thì mới lưu riêng. */
+    const anhState = { rieng: (data && data.anhDaiDien) || '' };
+    const anhHienTai = () => anhState.rieng || anhMacDinh;
+
+    const modal = openModal(`
+      <h3>Thống kê chi tiết — ${escapeHtml(maDH)}${tenPhieu ? ' · ' + escapeHtml(tenPhieu) : ''}</h3>
+      <form id="fTkct">
+        <div class="form-grid">
+          <div class="form-row"><label>Tên bản</label><input name="ten" value="${escapeHtml(tenPhieu)}" placeholder="VD: Áo / Quần / Đợt 1" ${tenPhieu ? 'readonly title="Đổi tên bản: tạo bản mới rồi xóa bản cũ"' : ''}></div>
+          <div class="form-row"><label>Mã hàng</label><input name="maHang" value="${escapeHtml((data && data.maHang) || order.MaSanPham || '')}"></div>
+          <div class="form-row"><label>Ngày cập nhật</label><input type="date" name="ngayCapNhat" value="${data && data.ngayCapNhat ? String(data.ngayCapNhat).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row" style="grid-column:1/-1;"><label>Diễn giải</label><input name="dienGiai" value="${escapeHtml((data && data.dienGiai) || order.TenSanPham || '')}"></div>
+          <div class="form-row" style="grid-column:1/-1;"><label>Ảnh đại diện hàng (in ở đầu phiếu)</label>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <img id="tkctAnhDD" src="${escapeHtml(anhHienTai() || '')}" style="width:76px;height:76px;object-fit:cover;border-radius:6px;border:1px solid #dcdfe3;${anhHienTai() ? '' : 'display:none;'}">
+              <span id="tkctAnhTrong" class="empty-hint" style="padding:0;${anhHienTai() ? 'display:none;' : ''}">Mã hàng này chưa có ảnh trong Thẻ kho — tải ảnh ở đây nếu muốn bản in có ảnh.</span>
+              ${perm.canEdit ? `<input type="file" id="tkctAnhFile" accept="image/*" style="max-width:190px;font-size:12px;">
+                <button type="button" class="btn small secondary" id="tkctAnhVeMacDinh" ${anhState.rieng ? '' : 'style="display:none;"'}>↺ Dùng lại ảnh mã hàng</button>` : ''}
+            </div>
+            <div class="empty-hint" style="margin-top:2px;text-align:left;">Để trống = tự lấy ảnh của mã hàng trên lệnh SX. Tải ảnh ở đây là <b>chỉ đè cho bản này</b>, không đụng Thẻ kho.</div>
+          </div>
+        </div>
+        <div class="form-row"><label>Bảng chi tiết</label><div id="tkctGrid"></div></div>
+        <div class="form-row"><label>Ghi chú chung</label><textarea name="ghiChu" rows="2">${escapeHtml((data && data.ghiChu) || '')}</textarea></div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="tkctDong">Đóng</button>
+          <button type="button" class="btn secondary" id="tkctIn">🖨️ In</button>
+          ${perm.canDelete && data ? '<button type="button" class="btn danger" id="tkctXoa">Xóa bản</button>' : ''}
+          ${perm.canEdit ? '<button type="submit" class="btn">Lưu</button>' : ''}
+        </div>
+      </form>`);
+
+    const gridBox = modal.querySelector('#tkctGrid');
+    renderTkctBox(gridBox, state);
+
+    const oAnh = modal.querySelector('#tkctAnhFile');
+    if (oAnh) oAnh.addEventListener('change', async () => {
+      const f = oAnh.files && oAnh.files[0];
+      if (!f || !f.size) return;
+      try {
+        anhState.rieng = await uploadFile(f, 'tkct_dd');
+        const img = modal.querySelector('#tkctAnhDD');
+        img.src = anhState.rieng; img.style.display = '';
+        modal.querySelector('#tkctAnhTrong').style.display = 'none';
+        modal.querySelector('#tkctAnhVeMacDinh').style.display = '';
+      } catch (err) { toast('Không tải được ảnh: ' + err.message, 'error'); }
+    });
+    const bVe = modal.querySelector('#tkctAnhVeMacDinh');
+    if (bVe) bVe.addEventListener('click', () => {
+      anhState.rieng = '';
+      const img = modal.querySelector('#tkctAnhDD');
+      img.src = anhMacDinh || '';
+      img.style.display = anhMacDinh ? '' : 'none';
+      modal.querySelector('#tkctAnhTrong').style.display = anhMacDinh ? 'none' : '';
+      bVe.style.display = 'none';
+      toast('Bản in sẽ dùng lại ảnh của mã hàng.', 'success');
+    });
+
+    const gomDuLieu = () => {
+      const fd = new FormData(modal.querySelector('#fTkct'));
+      state.rows = readTkctFromDom(gridBox);
+      return {
+        ten: (fd.get('ten') || '').trim(), maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'),
+        ngayCapNhat: fd.get('ngayCapNhat') || null, ghiChu: fd.get('ghiChu'),
+        anhDaiDien: anhState.rieng || '', rows: state.rows
+      };
+    };
+    modal.querySelector('#tkctDong').addEventListener('click', closeModal);
+    modal.querySelector('#tkctIn').addEventListener('click', () => {
+      const d = gomDuLieu();
+      printThongKeChiTiet({ ...d, anhIn: anhHienTai(), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), order }, maDH);
+    });
+    const bXoa = modal.querySelector('#tkctXoa');
+    if (bXoa) bXoa.addEventListener('click', async () => {
+      if (!confirm('Xóa bản thống kê chi tiết này?')) return;
+      try {
+        await apiDelete(`/api/tailieukythuat/thongkechitiet/${maDH}?ten=${encodeURIComponent(tenPhieu)}`);
+        toast('Đã xóa.', 'success'); closeModal(); if (onDone) onDone();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+    modal.querySelector('#fTkct').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      try {
+        await apiPost(`/api/tailieukythuat/thongkechitiet/${maDH}`, gomDuLieu());
+        toast('Đã lưu thống kê chi tiết.', 'success');
+        closeModal(); if (onDone) onDone();
+      } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
+    });
+  }
+
+  /* Bản in — cùng khuôn với Thông số kỹ thuật, thêm ảnh đại diện hàng ở đầu phiếu. */
+  function buildThongKeChiTietBodyHtml(d) {
+    const rows = (d.rows || []).filter(r => String(r.pieceName || '').trim() || r.anhChiTiet);
+    return `
+      <h2 style="text-align:center;margin:0 0 6px;">THỐNG KÊ CHI TIẾT</h2>
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:8px;">
+        ${d.anhIn ? `<img src="${escapeHtml(d.anhIn)}" style="width:104px;height:104px;object-fit:contain;border:1px solid #999;">` : ''}
+        <div style="flex:1;font-size:12.5px;">
+          <div><b>Mã hàng:</b> ${escapeHtml(d.maHang || '')}${(d.order && d.order.MaRap) ? ' &nbsp; <b>Mã rập:</b> ' + escapeHtml(d.order.MaRap) : ''}</div>
+          <div><b>Diễn giải:</b> ${escapeHtml(d.dienGiai || '')}</div>
+          <div><b>Ngày cập nhật:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''} &nbsp; <b>Người lập:</b> ${escapeHtml(d.nguoiLap || '')}</div>
+          ${d.ten ? `<div><b>Bản:</b> ${escapeHtml(d.ten)}</div>` : ''}
+        </div>
+      </div>
+      <table><thead><tr>
+        <th style="width:34px;">TT</th>
+        ${TKCT_COT.map(c => `<th>${escapeHtml(c.nhan)}</th>`).join('')}
+        <th style="width:120px;">Hình chi tiết</th><th>Ghi chú</th>
+      </tr></thead><tbody>
+        ${rows.map((r, i) => `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          ${TKCT_COT.map(c => `<td${c.k === 'pieceName' ? '' : ' style="text-align:center;"'}>${escapeHtml(r[c.k] || '')}</td>`).join('')}
+          <td style="text-align:center;">${r.anhChiTiet ? `<img src="${escapeHtml(r.anhChiTiet)}" style="max-width:110px;max-height:78px;object-fit:contain;">` : ''}</td>
+          <td>${escapeHtml(r.ghiChu || '')}</td>
+        </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;">(chưa có chi tiết)</td></tr>'}
+      </tbody></table>
+      ${d.ghiChu ? `<p style="margin-top:8px;"><b>Ghi chú:</b> ${escapeHtml(d.ghiChu)}</p>` : ''}
+      <div class="p-sign" style="display:flex;justify-content:space-between;margin-top:26px;text-align:center;">
+        <div style="flex:1;"><div class="line">Người lập</div></div>
+        <div style="flex:1;"><div class="line">Kỹ thuật</div></div>
+        <div style="flex:1;"><div class="line">Quản đốc</div></div>
+      </div>`;
+  }
+  function printThongKeChiTiet(d, maDH) {
+    printHtml(`${maDH} - Thong ke chi tiet${d.ten ? ' - ' + d.ten : ''}`, buildThongKeChiTietBodyHtml(d), {
+      extraStyle: 'table{table-layout:auto;width:100%;} th,td{padding:3px 5px;font-size:11.5px;} h2{font-size:17px;}',
+      logo: true
+    });
   }
 
   async function openThongSoDoEditor(maDH, tenPhieu, onDone) {

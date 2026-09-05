@@ -7,8 +7,17 @@ const express = require('express');
 const multer = require('multer');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+const fs = require('fs');
+const path = require('path');
 /* v7.64: đọc file Excel thông số kỹ thuật -> lưới { cols, rows }. Quy tắc dò bảng nằm ở util. */
 const { docThongSoDoExcel } = require('../utils/docThongSoDoExcel');
+/* v7.65: đọc file Excel thống kê chi tiết (kèm hình rập vẽ bằng Freeform của Excel). */
+const { docThongKeChiTietExcel } = require('../utils/docThongKeChiTietExcel');
+
+/* Ảnh rập trích từ Excel ghi vào ĐÚNG thư mục mà routes/upload.js dùng, để mọi ảnh nằm một chỗ và
+   đường dẫn /uploads/... phục vụ được ngay. */
+const uploadDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 /* Nhận file vào BỘ NHỚ (không ghi ra đĩa): file này chỉ dùng để đọc một lần rồi bỏ. */
 const uploadExcel = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -580,6 +589,182 @@ async function replaceThongSoDoGrid(pool, taiLieuId, colsArr, rowsArr) {
 }
 
 // v5.56: danh sách BẢN. Mẫu (LaMau=1) có DonHangID NULL nên WHERE DonHangID=@id đã loại sẵn.
+/* ================================================================================================
+   v7.65 — THỐNG KÊ CHI TIẾT (bảng kê các chi tiết/piece của sản phẩm)
+   Cùng khuôn "nhiều bản có tên" với Thông số kỹ thuật để dùng lại openDocBanList/printOneOrderDoc
+   ở frontend. Cột CỐ ĐỊNH (Tên chi tiết / Vật liệu / SL / Cặp / Chiều đối xứng / Hình / Tổng SL),
+   chỉ SỐ DÒNG là linh động — khác Thông số kỹ thuật vốn thêm/bớt cả cột size.
+   ================================================================================================ */
+const TKCT_TRUONG = ['pieceName', 'material', 'quantity', 'pair', 'opposite', 'anhChiTiet', 'tongSoLuong', 'ghiChu'];
+
+/* Đọc file Excel -> các dòng chi tiết + hình rập. Hình trong cột "Piece Image" là HÌNH VẼ Freeform
+   của Excel chứ không phải ảnh dán; util đổi sang SVG, ở đây GHI RA FILE trong backend/uploads rồi
+   chỉ trả về đường dẫn — không nhét cả ảnh vào CSDL, và ảnh xem được ngay như mọi ảnh khác.
+   ⚠️ Route CHỮ phải đứng TRƯỚC route /:maDH, kẻo "doc-excel" bị hiểu là mã đơn hàng. */
+router.post('/thongkechitiet/doc-excel', requireAuth, requirePermission('QLSX', 'edit'),
+  nhanFileExcel, async (req, res) => {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ success: false, message: 'Không nhận được file.' });
+    }
+    if (/\.xls$/i.test(String(req.file.originalname || ''))) {
+      return res.status(400).json({
+        success: false,
+        message: 'File .xls (Excel 97-2003) không đọc được. Mở bằng Excel rồi "Save As" sang .xlsx và tải lại.'
+      });
+    }
+    try {
+      const kq = await docThongKeChiTietExcel(req.file.buffer);
+      const moc = Date.now();
+      let soAnh = 0;
+      kq.rows.forEach((r, i) => {
+        if (!r.anhSvg) { r.anhChiTiet = ''; delete r.anhSvg; return; }
+        const ten = `rap_${moc}_${i + 1}.svg`;
+        try {
+          fs.writeFileSync(path.join(uploadDir, ten), Buffer.from(r.anhSvg.split(',')[1] || '', 'base64'));
+          r.anhChiTiet = '/uploads/' + ten;
+          soAnh++;
+        } catch (e) {
+          /* Ghi được dòng nhưng không ghi được ảnh -> vẫn trả dòng, chỉ thiếu ảnh. Mất cả dòng vì
+             một lỗi ghi file là thiệt hơn nhiều. */
+          r.anhChiTiet = '';
+          console.error('[thongkechitiet] khong ghi duoc anh rap:', e.message);
+        }
+        delete r.anhSvg;
+      });
+      let msg = `Đã đọc ${kq.rows.length} chi tiết từ sheet "${kq.tenSheet}"`
+        + (soAnh ? `, tải lên ${soAnh} hình rập.` : ' (không thấy hình rập nào trong file).');
+      if (kq.lenhLa && kq.lenhLa.length) {
+        msg += ` ⚠️ File có nét cong (${kq.lenhLa.join(', ')}) — hình vẽ ra có thể thiếu nét, kiểm lại.`;
+      }
+      return res.json({ success: true, data: { rows: kq.rows }, message: msg });
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+  });
+
+async function getThongKeChiTietDetail(pool, id) {
+  const header = (await pool.request().input('id', sql.Int, id).query(`
+    SELECT tl.*, u.HoTen AS NguoiLap FROM TaiLieuThongKeChiTiet tl
+    LEFT JOIN Users u ON u.UserID = tl.NguoiLapID WHERE tl.ID = @id`)).recordset[0];
+  if (!header) return null;
+  const rows = (await pool.request().input('id', sql.Int, id).query(
+    'SELECT * FROM TaiLieuThongKeChiTietDong WHERE TaiLieuID=@id ORDER BY ThuTu, ID')).recordset;
+  return {
+    id: header.ID, tenPhieu: header.TenPhieu || '', maHang: header.MaHang, dienGiai: header.DienGiai,
+    ngayCapNhat: header.NgayCapNhat, anhDaiDien: header.AnhDaiDien || '', ghiChu: header.GhiChu || '',
+    nguoiLap: header.NguoiLap,
+    rows: rows.map(r => ({
+      pieceName: r.PieceName || '', material: r.Material || '', quantity: r.Quantity || '',
+      pair: r.Pair || '', opposite: r.Opposite || '', anhChiTiet: r.AnhChiTiet || '',
+      tongSoLuong: r.TongSoLuong || '', ghiChu: r.GhiChu || ''
+    }))
+  };
+}
+
+router.get('/thongkechitiet/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderBasic(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const phieu = (await pool.request().input('id', sql.Int, order.DonHangID).query(
+    `SELECT ISNULL(TenPhieu, N'') AS TenPhieu FROM TaiLieuThongKeChiTiet
+      WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 ORDER BY ISNULL(TenPhieu, N'')`)).recordset;
+  res.json({ success: true, order, data: phieu });
+});
+
+router.get('/thongkechitiet/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderBasic(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ten = req.query.ten != null ? String(req.query.ten) : '';
+  const row = (await pool.request().input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten)
+    .query(req.query.ten !== undefined
+      ? `SELECT TOP 1 ID FROM TaiLieuThongKeChiTiet WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 AND ISNULL(TenPhieu, N'')=@ten ORDER BY ID`
+      : `SELECT TOP 1 ID FROM TaiLieuThongKeChiTiet WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
+  /* Ảnh đại diện MẶC ĐỊNH của mã hàng — để bản in có ảnh mà không phải tải lại.
+     Bản ghi có `AnhDaiDien` riêng thì frontend ưu tiên cái đó (người dùng đã cố ý thay). */
+  let anhMacDinh = '';
+  try {
+    const a = (await pool.request().input('ms', sql.NVarChar, order.MaSanPham || '')
+      .query('SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms')).recordset[0];
+    anhMacDinh = (a && a.AnhDaiDien) || '';
+  } catch (e) { /* chưa có thẻ kho cho mã này -> bản in không có ảnh mặc định, không phải lỗi */ }
+  res.json({
+    success: true, order, anhMacDinh,
+    data: row ? await getThongKeChiTietDetail(pool, row.ID) : null
+  });
+});
+
+router.post('/thongkechitiet/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderBasic(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const b = req.body || {};
+  const ten = b.ten != null ? String(b.ten).trim() : '';
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+
+  const cu = (await pool.request().input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten)
+    .query(`SELECT TOP 1 ID FROM TaiLieuThongKeChiTiet
+             WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 AND ISNULL(TenPhieu, N'')=@ten ORDER BY ID`)).recordset[0];
+
+  const rqH = pool.request()
+    .input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten)
+    .input('MaHang', sql.NVarChar, b.maHang || null)
+    .input('DienGiai', sql.NVarChar, b.dienGiai || null)
+    .input('NgayCapNhat', sql.Date, b.ngayCapNhat || null)
+    .input('AnhDaiDien', sql.NVarChar, b.anhDaiDien || null)
+    .input('GhiChu', sql.NVarChar(sql.MAX), b.ghiChu || null)
+    .input('u', sql.Int, req.session.user.userId);
+  let id;
+  if (cu) {
+    id = cu.ID;
+    await rqH.input('tlid', sql.Int, id).query(`
+      UPDATE TaiLieuThongKeChiTiet SET MaHang=@MaHang, DienGiai=@DienGiai, NgayCapNhat=@NgayCapNhat,
+        AnhDaiDien=@AnhDaiDien, GhiChu=@GhiChu, NguoiLapID=@u, UpdatedAt=SYSDATETIME()
+      WHERE ID=@tlid`);
+    await pool.request().input('tlid', sql.Int, id)
+      .query('DELETE FROM TaiLieuThongKeChiTietDong WHERE TaiLieuID=@tlid');
+  } else {
+    id = (await rqH.query(`
+      INSERT INTO TaiLieuThongKeChiTiet (DonHangID, TenPhieu, MaHang, DienGiai, NgayCapNhat, AnhDaiDien, GhiChu, NguoiLapID)
+      OUTPUT INSERTED.ID VALUES (@id, @ten, @MaHang, @DienGiai, @NgayCapNhat, @AnhDaiDien, @GhiChu, @u)`)).recordset[0].ID;
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || {};
+    /* Dòng trắng hoàn toàn thì bỏ — người dùng hay để lại một dòng trống ở cuối. */
+    if (!TKCT_TRUONG.some(k => String(r[k] || '').trim())) continue;
+    await pool.request()
+      .input('tlid', sql.Int, id).input('tt', sql.Int, i)
+      .input('PieceName', sql.NVarChar, r.pieceName || null)
+      .input('Material', sql.NVarChar, r.material || null)
+      .input('Quantity', sql.NVarChar, r.quantity || null)
+      .input('Pair', sql.NVarChar, r.pair || null)
+      .input('Opposite', sql.NVarChar, r.opposite || null)
+      .input('AnhChiTiet', sql.NVarChar, r.anhChiTiet || null)
+      .input('TongSoLuong', sql.NVarChar, r.tongSoLuong || null)
+      .input('GhiChu', sql.NVarChar, r.ghiChu || null)
+      .query(`INSERT INTO TaiLieuThongKeChiTietDong
+                (TaiLieuID, ThuTu, PieceName, Material, Quantity, Pair, Opposite, AnhChiTiet, TongSoLuong, GhiChu)
+              VALUES (@tlid, @tt, @PieceName, @Material, @Quantity, @Pair, @Opposite, @AnhChiTiet, @TongSoLuong, @GhiChu)`);
+  }
+  res.json({ success: true, message: 'Đã lưu thống kê chi tiết.' });
+});
+
+router.delete('/thongkechitiet/:maDH', requireAuth, requirePermission('QLSX', 'delete'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderBasic(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ten = req.query.ten != null ? String(req.query.ten) : '';
+  /* Xóa CON trước rồi mới xóa header — ON DELETE CASCADE có sẵn nhưng làm rõ thứ tự cho khỏi phụ
+     thuộc vào việc khóa ngoại được khai đúng ở mọi bản cài. */
+  await pool.request().input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten)
+    .query(`DELETE FROM TaiLieuThongKeChiTietDong WHERE TaiLieuID IN
+             (SELECT ID FROM TaiLieuThongKeChiTiet WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ten)`);
+  await pool.request().input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten)
+    .query(`DELETE FROM TaiLieuThongKeChiTiet WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ten`);
+  res.json({ success: true, message: 'Đã xóa bản.' });
+});
+
 router.get('/thongsodo/:maDH/phieu', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
   const order = await getOrderBasic(pool, req.params.maDH);
