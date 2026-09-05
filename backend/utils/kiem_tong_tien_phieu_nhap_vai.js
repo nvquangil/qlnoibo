@@ -49,20 +49,32 @@ const poolGia = (coCot) => ({ request: () => ({ query: async () => ({ recordset:
 
 (async () => {
   let u = napMoi();
-  const btMoi = await u.bieuThucTienCay(poolGia(true), 'vc');
-  kiem(/CASE WHEN[\s\S]*DonViTinhGia[\s\S]*N'Met'[\s\S]*SoMet[\s\S]*ELSE[\s\S]*KGNhap/.test(btMoi.replace(/\s+/g, ' ')),
-    'da chay migration -> bieu thuc re nhanh theo DonViTinhGia cua PHIEU');
-  kiem(btMoi.indexOf('vc.PhieuNhapID') > 0, 'truy van con noi dung cay voi phieu cua no');
+  const btMoi = await u.bieuThucTienCay(poolGia(true), 'vc', 'pn');
+  kiem(/CASE WHEN pn\.DonViTinhGia = N'Met'[\s\S]*SoMet[\s\S]*ELSE[\s\S]*KGNhap/.test(btMoi.replace(/\s+/g, ' ')),
+    'da chay migration -> re nhanh theo DonViTinhGia cua PHIEU');
+  /* ⚠️ BAY DA LAM VO PRODUCTION (v7.62): ban dau dung TRUY VAN CON tuong quan cho khoi phai JOIN.
+     SQL Server cam subquery trong ham tong hop (Msg 130) — ma 3 trong 6 cho goi dat bieu thuc nay
+     trong SUM(...) => danh sach phieu nhap vai VA cong no NCC deu ném loi, man hinh trang tinh. */
+  kiem(btMoi.indexOf('(SELECT') === -1 && btMoi.toUpperCase().indexOf('SELECT') === -1,
+    'bieu thuc KHONG chua truy van con -> dung duoc trong SUM()', btMoi);
   kiem(btMoi.indexOf('ISNULL(vc.DonGiaNhap, 0)') > 0, 'van nhan voi don gia cua chinh cay');
+  /* Thieu bi danh phieu -> phai NEM LOI ngay luc dung cau, khong de ra cau SQL sai am tham. */
+  let loiThieu = null;
+  try { await napMoi().bieuThucTienCay(poolGia(true), 'vc'); } catch (e) { loiThieu = e.message; }
+  kiem(!!loiThieu && /THI\u1ebeU b\u00ed danh|THIEU bi danh/.test(loiThieu),
+    'thieu bi danh bang phieu -> NEM LOI ngay', String(loiThieu));
   u = napMoi();
-  const btCu = await u.bieuThucTienCay(poolGia(false), 'vc');
+  const btCu = await u.bieuThucTienCay(poolGia(false), 'vc', 'pn');
   bang(btCu, '((ISNULL(vc.KGNhap, 0)) * ISNULL(vc.DonGiaNhap, 0))',
     'CHUA chay migration -> quay ve dung bieu thuc cu (thuan KG), khong nhac ten cot chua co');
   kiem(btCu.indexOf('DonViTinhGia') === -1,
     'va TUYET DOI khong de ten cot moi lot vao cau SQL (keo "Invalid column name" gay ca man cong no)');
   u = napMoi();
-  const btV = await u.bieuThucTienCay(poolGia(true), 'v');
+  const btV = await u.bieuThucTienCay(poolGia(true), 'v', 'p');
   kiem(btV.indexOf('v.KGNhap') > 0 && btV.indexOf('vc.') === -1, 'doi duoc bi danh bang');
+  bang(await napMoi().bieuThucDonViSQL(poolGia(true), 'pn'),
+    "CASE WHEN pn.DonViTinhGia = N'Met' THEN N'm' ELSE N'Kg' END", 'nhan don vi trong SQL');
+  bang(await napMoi().bieuThucDonViSQL(poolGia(false), 'pn'), "N'Kg'", 'chua chay migration -> luon Kg');
 
   /* Ban JS — cung phep tinh. */
   bang(util.tienCay({ KGNhap: 12.5, DonGiaNhap: 80000 }, 'Kg'), 1000000, 'theo Kg: 12,5 x 80.000');
@@ -101,11 +113,51 @@ kiem(/require\('\.\.\/utils\/tienVaiNhap'\)/.test(sCN) && /require\('\.\.\/utils
    2. Backend tra ve TongTien / ThanhTien
    ================================================================================================ */
 console.log('\n=== 2. Backend khovai.js ===');
-kiem(/ISNULL\(SUM\(\$\{await bieuThucTienCay\(pool, 'v'\)\}\), 0\) AS TongTien/.test(sKV),
+kiem(/ISNULL\(SUM\(\$\{await bieuThucTienCay\(pool, 'v', 'p'\)\}\), 0\) AS TongTien/.test(sKV),
   'danh sach phieu tra TongTien');
-kiem(/\$\{await bieuThucTienCay\(pool, 'v'\)\} AS ThanhTien/.test(sKV), 'chi tiet phieu tra ThanhTien tung cay');
+kiem(/\$\{await bieuThucTienCay\(pool, 'v', 'pnv'\)\} AS ThanhTien/.test(sKV), 'chi tiet phieu tra ThanhTien tung cay');
 kiem(/AS SoCayThieuSoLuong/.test(sKV), 'dem so cay co gia ma KG = 0 (de canh bao)');
 kiem(/GROUP BY p\.PhieuNhapID/.test(sKV), 'van GROUP BY theo phieu (tong khong bi nhan ban)');
+
+  /* ================================================================================================
+     2b. QUET NGUON: KHONG duoc co truy van con nam trong SUM()/AVG()/MIN()/MAX()/COUNT().
+     Day la bay da lam vo production o v7.62 — SQL Server nem Msg 130 va ca man hinh trang.
+     Quet bang cach dem ngoac de tim dung pham vi cua tung ham tong hop.
+     ================================================================================================ */
+  console.log('\n=== 2b. Khong co truy van con trong ham tong hop ===');
+  function subqueryTrongAggregate(src) {
+    const loi = [];
+    const re = /\b(SUM|AVG|MIN|MAX|COUNT)\s*\(/gi;
+    let m;
+    while ((m = re.exec(src))) {
+      let i = m.index + m[0].length, sau = 1;
+      while (i < src.length && sau > 0) {
+        if (src[i] === '(') sau++;
+        else if (src[i] === ')') sau--;
+        i++;
+      }
+      const than = src.slice(m.index, i);
+      if (/\(\s*SELECT\b/i.test(than)) loi.push(than.replace(/\s+/g, ' ').slice(0, 110));
+    }
+    return loi;
+  }
+  [['congno.js', sCN], ['khovai.js', sKV]].forEach(([ten, src]) => {
+    const loi = subqueryTrongAggregate(bo(src));
+    kiem(loi.length === 0, `${ten}: khong co truy van con trong ham tong hop`, loi.join(' || '));
+  });
+  /* Va moi cho goi PHAI truyen bi danh bang phieu (3 tham so). */
+  [['congno.js', sCN], ['khovai.js', sKV]].forEach(([ten, src]) => {
+    const goi = (bo(src).match(/bieuThuc(?:TienCay|SoLuongTinhTien)\(pool,[^)]*\)/g) || []);
+    const thieu = goi.filter(g => (g.match(/,/g) || []).length < 2);
+    kiem(thieu.length === 0, `${ten}: moi loi goi deu truyen bi danh bang phieu`, thieu.join(' || '));
+    kiem(goi.length > 0, `${ten}: co loi goi util`);
+  });
+  /* Cho nao dung bi danh 'pnv' thi PHAI co JOIN sinh ra bi danh do. */
+  [['congno.js', sCN], ['khovai.js', sKV]].forEach(([ten, src]) => {
+    const dungPnv = /'pnv'/.test(src);
+    kiem(!dungPnv || /JOIN PhieuNhapVai pnv ON pnv\.PhieuNhapID/.test(src),
+      `${ten}: dung bi danh 'pnv' thi phai co JOIN PhieuNhapVai pnv`);
+  });
 
 /* ================================================================================================
    3. CHAY THAT cac ham tien o frontend

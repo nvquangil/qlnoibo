@@ -26,7 +26,7 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { loadGiaCong, loadInThe } = require('../utils/luongGiaCongInThe');
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/khovai.js (tong tien tren
    phieu nhap kho vai). Phieu va so cong no phai ra cung mot con so. */
-const { bieuThucTienCay } = require('../utils/tienVaiNhap');
+const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL } = require('../utils/tienVaiNhap');
 
 const router = express.Router();
 ['get', 'post', 'put', 'delete'].forEach(method => {
@@ -785,7 +785,7 @@ async function congNoNCC(pool) {
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
   const vai = coGiaVai ? (await pool.request().query(`
-    SELECT pn.NCC_ID, SUM(${await bieuThucTienCay(pool, 'vc')}) AS Tien, COUNT(DISTINCT pn.PhieuNhapID) AS SoPhieu
+    SELECT pn.NCC_ID, SUM(${await bieuThucTienCay(pool, 'vc', 'pn')}) AS Tien, COUNT(DISTINCT pn.PhieuNhapID) AS SoPhieu
     FROM PhieuNhapVai pn JOIN VaiCay vc ON vc.PhieuNhapID = pn.PhieuNhapID
     WHERE pn.NCC_ID IS NOT NULL GROUP BY pn.NCC_ID`)).recordset : [];
   const pk = coGiaPK ? (await pool.request().query(`
@@ -870,7 +870,7 @@ async function soChiTietNCC(pool, id) {
        Số hóa đơn NCC vẫn hữu ích nên đẩy sang cột Diễn giải, không chiếm chỗ số phiếu. */
     SELECT pn.NgayNhap AS Ngay,
            CONCAT(N'NKV-', RIGHT('00000' + CAST(pn.PhieuNhapID AS VARCHAR(10)), 5)) AS SoPhieu,
-           SUM(${await bieuThucTienCay(pool, 'vc')}) AS PhatSinh, 0 AS ThanhToan,
+           SUM(${await bieuThucTienCay(pool, 'vc', 'pn')}) AS PhatSinh, 0 AS ThanhToan,
            N'Nhập vải' AS Loai,
            LTRIM(RTRIM(ISNULL(N'HĐ ' + pn.SoHoaDon, '') + ISNULL(N' · ' + pn.GhiChu, ''))) AS DienGiai,
            N'PNV' AS CtLoai, pn.PhieuNhapID AS CtID
@@ -1199,9 +1199,11 @@ router.get('/chungtu', requireAuth, requirePermission('CONGNO', 'view'), async (
       const dong = (await rq().query(`
         SELECT vc.MaCay,
                LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
-               vc.KGNhap AS SoLuong, N'Kg' AS DonVi, vc.DonGiaNhap AS DonGia,
-               ${await bieuThucTienCay(pool, 'vc')} AS ThanhTien
+               ${await bieuThucSoLuongTinhTien(pool, 'vc', 'pnv')} AS SoLuong,
+               ${await bieuThucDonViSQL(pool, 'pnv')} AS DonVi, vc.DonGiaNhap AS DonGia,
+               ${await bieuThucTienCay(pool, 'vc', 'pnv')} AS ThanhTien
         FROM VaiCay vc
+        JOIN PhieuNhapVai pnv ON pnv.PhieuNhapID = vc.PhieuNhapID
         LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
         LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
         LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
@@ -1696,9 +1698,11 @@ async function dongHangTheoChungTu(pool, rows) {
         SELECT vc.PhieuNhapID AS Id,
                LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, v.MaVai) + ISNULL(N' - ' + ms.TenMau, '')
                      + N' · cây ' + vc.MaCay)) AS Ten,
-               vc.KGNhap AS SoLuong, N'Kg' AS DonVi, vc.DonGiaNhap AS DonGia,
-               ${await bieuThucTienCay(pool, 'vc')} AS ThanhTien
+               ${await bieuThucSoLuongTinhTien(pool, 'vc', 'pnv')} AS SoLuong,
+               ${await bieuThucDonViSQL(pool, 'pnv')} AS DonVi, vc.DonGiaNhap AS DonGia,
+               ${await bieuThucTienCay(pool, 'vc', 'pnv')} AS ThanhTien
         FROM VaiCay vc
+        JOIN PhieuNhapVai pnv ON pnv.PhieuNhapID = vc.PhieuNhapID
         JOIN DanhMucVai v ON v.VaiID = vc.VaiID
         LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = v.LoaiVaiID
         LEFT JOIN MauSac ms ON ms.MauSacID = v.MauSacID

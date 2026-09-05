@@ -38,18 +38,44 @@ async function coCotDonViTinhGia(pool) {
   return __coCotDVT;
 }
 
-/* Biểu thức SQL tính tiền của MỘT cây. `biDanh` = bí danh của bảng VaiCay trong câu truy vấn.
-   Dùng truy vấn con tương quan theo `PhieuNhapID` thay vì đòi bên gọi phải JOIN thêm PhieuNhapVai:
-   6 chỗ gọi có 6 kiểu FROM khác nhau, sửa hết là 6 cơ hội sai. Đây là tra khóa chính, chi phí không
-   đáng kể. */
-async function bieuThucTienCay(pool, biDanh) {
-  const b = biDanh || 'vc';
-  const soLuong = (await coCotDonViTinhGia(pool))
-    ? `CASE WHEN (SELECT p_dvt.DonViTinhGia FROM PhieuNhapVai p_dvt
-                   WHERE p_dvt.PhieuNhapID = ${b}.PhieuNhapID) = N'${MET}'
+/* ================================================================================================
+   ⚠️ v7.62.1 — SỬA LỖI TÔI VỪA GÂY RA. Bản v7.62 dựng biểu thức bằng TRUY VẤN CON tương quan
+   (`(SELECT DonViTinhGia FROM PhieuNhapVai WHERE PhieuNhapID = vc.PhieuNhapID)`) để bên gọi khỏi
+   phải JOIN thêm bảng phiếu. SQL Server **CẤM truy vấn con nằm trong hàm tổng hợp**:
+       Msg 130: Cannot perform an aggregate function on an expression containing an aggregate
+                or a subquery.
+   Mà 3 trong 6 chỗ gọi lại đặt biểu thức này trong `SUM(...)` — danh sách phiếu nhập kho vải VÀ
+   công nợ nhà cung cấp (bảng tổng hợp + sổ chi tiết) đều ném lỗi ⇒ màn hình trắng.
+
+   Nay BẮT BUỘC truyền bí danh bảng phiếu (`biDanhPhieu`) và chỉ sinh CASE thuần — dùng được trong
+   SUM. Chỗ nào chưa JOIN PhieuNhapVai thì phải JOIN (khóa ngoại NOT NULL nên JOIN không làm mất
+   dòng nào). Thiếu tham số thì NÉM LỖI NGAY lúc dựng câu, thay vì đẻ ra một câu SQL sai âm thầm.
+   ================================================================================================ */
+async function bieuThucSoLuongTinhTien(pool, biDanhCay, biDanhPhieu) {
+  const b = biDanhCay || 'vc';
+  if (!biDanhPhieu) {
+    throw new Error('bieuThucTienCay/bieuThucSoLuongTinhTien: THIẾU bí danh bảng PhieuNhapVai. '
+      + 'Câu truy vấn phải JOIN PhieuNhapVai rồi truyền bí danh của nó — KHÔNG dùng truy vấn con, '
+      + 'vì biểu thức này hay nằm trong SUM() và SQL Server cấm subquery trong hàm tổng hợp.');
+  }
+  return (await coCotDonViTinhGia(pool))
+    ? `CASE WHEN ${biDanhPhieu}.DonViTinhGia = N'${MET}'
             THEN ISNULL(${b}.SoMet, 0) ELSE ISNULL(${b}.KGNhap, 0) END`
     : `ISNULL(${b}.KGNhap, 0)`;
-  return `((${soLuong}) * ISNULL(${b}.DonGiaNhap, 0))`;
+}
+
+/* Biểu thức SQL tính TIỀN của MỘT cây. Dùng được cả trong SUM(). */
+async function bieuThucTienCay(pool, biDanhCay, biDanhPhieu) {
+  const b = biDanhCay || 'vc';
+  const sl = await bieuThucSoLuongTinhTien(pool, b, biDanhPhieu);
+  return `((${sl}) * ISNULL(${b}.DonGiaNhap, 0))`;
+}
+
+/* Nhãn đơn vị của số lượng dùng để tính tiền — cho các bảng chứng từ hiện "SL / ĐVT / Đơn giá". */
+async function bieuThucDonViSQL(pool, biDanhPhieu) {
+  return (await coCotDonViTinhGia(pool)) && biDanhPhieu
+    ? `CASE WHEN ${biDanhPhieu}.DonViTinhGia = N'${MET}' THEN N'm' ELSE N'Kg' END`
+    : `N'Kg'`;
 }
 
 /* Bản JS của CÙNG công thức — cho CLI và cho chỗ đã có sẵn dữ liệu trong bộ nhớ.
@@ -87,7 +113,8 @@ function nhanDonVi(donViTinhGia) { return laTinhTheoMet(donViTinhGia) ? 'm' : 'k
 function chuanDonViTinhGia(v) { return laTinhTheoMet(v) ? MET : KG; }
 
 module.exports = {
-  bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia,
+  bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL,
+  coCotDonViTinhGia, chuanDonViTinhGia,
   tienCay, tongTien, laTienNghiNgo, laTinhTheoMet, soLuongTinhTien, nhanDonVi,
   MET, KG
 };

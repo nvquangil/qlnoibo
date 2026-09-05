@@ -542,7 +542,7 @@ router.get('/nhap', requireAuth, requirePermission('KHOVAI', 'view'), requireChu
            ${cotDVT} AS DonViTinhGia,
            COUNT(v.CayID) AS SoLuongCay, ISNULL(SUM(v.KGNhap), 0) AS TongKGNhap, ISNULL(SUM(v.SoMet), 0) AS TongMet,
            ${/* v7.61: TONG TIEN cua phieu — cung bieu thuc voi cong no NCC (utils/tienVaiNhap.js). */''}
-           ISNULL(SUM(${await bieuThucTienCay(pool, 'v')}), 0) AS TongTien,
+           ISNULL(SUM(${await bieuThucTienCay(pool, 'v', 'p')}), 0) AS TongTien,
            ${/* v7.62: dem cay "da khai don gia ma so luong tinh tien = 0, trong khi don vi KIA co so"
                 -> thanh tien 0 mot cach dang ngo (nham don vi, hoac quen nhap). */''}
            SUM(CASE WHEN ISNULL(v.DonGiaNhap,0) > 0 AND (${slTinhTien}) <= 0
@@ -572,13 +572,15 @@ router.get('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
     SELECT v.CayID, v.MaCay, v.KGNhap, v.SoMet, v.KhoVaiThucTe, ISNULL(v.KhoVaiThucTe, dv.KhoVai) AS KhoVai, v.GSM, v.DonGiaNhap, v.QRCode, v.TrangThai, v.ViTriKho,
            ${/* v7.61: THANH TIEN tinh o BACKEND bang dung bieu thuc cua cong no — de ban in / man
                 xem / so cong no khong the ra ba con so khac nhau. */''}
-           ${await bieuThucTienCay(pool, 'v')} AS ThanhTien,
+           ${await bieuThucTienCay(pool, 'v', 'pnv')} AS ThanhTien,
            dv.MaVai, dv.LoaiVaiID, dv.MauSacID, lv.TenLoaiVai, ms.TenMau,
            ISNULL((SELECT SUM(KGXuat) FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID), 0) AS DaXuat,
            CASE WHEN EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID)
              OR EXISTS (SELECT 1 FROM GiaoVaiSanXuat WHERE CayID = v.CayID)
              OR EXISTS (SELECT 1 FROM KiemKeVai WHERE CayID = v.CayID) THEN 1 ELSE 0 END AS CoPhatSinh
-    FROM VaiCay v JOIN DanhMucVai dv ON dv.VaiID = v.VaiID
+    FROM VaiCay v
+    JOIN PhieuNhapVai pnv ON pnv.PhieuNhapID = v.PhieuNhapID
+    JOIN DanhMucVai dv ON dv.VaiID = v.VaiID
     LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
     WHERE v.PhieuNhapID = @id ORDER BY v.CayID`);
