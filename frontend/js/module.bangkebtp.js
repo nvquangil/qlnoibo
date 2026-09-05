@@ -61,8 +61,24 @@ window.ModuleBangKeBTP = (function () {
       try { await openEditor(maDH, ten, () => openBtpBanList(maDH)); }
       catch (err) { toast('Không mở được bảng kê: ' + err.message, 'error'); }
     };
+    /* v7.66 — "+ Thêm bảng kê" PHẢI MỞ FORM TRẮNG. Trước đây gọi openOne('') mà editor đọc bản theo
+       tên rỗng, nên đã có một bản "(không tên)" thì bấm Thêm là MỞ LẠI BẢN CŨ, phải ngồi xóa sạch
+       mới nhập được cái mới. Hỏi tên bản trước: tên chưa có ⇒ không tìm thấy bản nào ⇒ form trắng.
+       Cùng cách với openDocBanList ở module.tailieukythuat.js và openNplBanList. */
     const addBtn = modal.querySelector('#bkbAdd');
-    if (addBtn) addBtn.addEventListener('click', () => openOne(''));
+    if (addBtn) addBtn.addEventListener('click', () => {
+      const daCo = phieu.map(p => String(p.TenPhieu == null ? '' : p.TenPhieu).trim());
+      const tra = prompt('Tên bản bảng kê mới (vd Áo / Quần / Đợt 1; để trống nếu chỉ có 1 bản):', '');
+      if (tra === null) return;
+      const ten = tra.trim();
+      if (daCo.indexOf(ten) !== -1) {
+        toast(ten
+          ? `Đã có bản tên "${ten}". Đặt tên khác, hoặc bấm "Mở / Sửa" ở dòng đó.`
+          : 'Đã có một bản KHÔNG TÊN. Hãy đặt tên cho bản mới, hoặc mở bản cũ ở danh sách.', 'error');
+        return;
+      }
+      openOne(ten);
+    });
     modal.querySelectorAll('.bkb-open').forEach(b => b.addEventListener('click', () => openOne(b.dataset.ten)));
     // v5.57: IN ngay tại danh sách bản (không cần mở form).
     modal.querySelectorAll('.bkb-print').forEach(b => b.addEventListener('click', async () => {

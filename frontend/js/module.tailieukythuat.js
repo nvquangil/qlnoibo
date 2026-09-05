@@ -288,8 +288,32 @@ window.ModuleTaiLieuKyThuat = (function () {
     const openOne = async (ten) => {
       try { await openEditor(maDH, ten, reopen); } catch (err) { toast('Không mở được: ' + err.message, 'error'); }
     };
+    /* ==============================================================================================
+       v7.66 — "+ Thêm" PHẢI MỞ FORM TRẮNG.
+       Trước đây nút này gọi thẳng openOne('') — mà editor đọc bản theo `ISNULL(TenPhieu,'') = ''`,
+       nên nếu đã tồn tại một bản "(không tên)" thì bấm "+ Thêm" MỞ LẠI CHÍNH BẢN CŨ ĐÓ: người dùng
+       phải ngồi xóa sạch rồi mới nhập được cái mới, và chỉ cần quên xóa một dòng là bấm Lưu đã ghi
+       đè mất bản cũ.
+       Nay hỏi TÊN BẢN trước (đúng khuôn openNplBanList vốn đã làm vậy). Tên chưa có ⇒ editor không
+       tìm thấy bản nào ⇒ form TRẮNG, không editor nào phải sửa. Tên đã có ⇒ chặn, chỉ chỗ mở bản cũ
+       thay vì lặng lẽ ghi đè.
+       ⚠️ KHÔNG chữa bằng cách thêm nút "Xóa trắng": bắt người dùng dọn thứ lẽ ra không nên hiện ra
+       vẫn là bắt họ dọn.
+       ============================================================================================== */
     const addBtn = modal.querySelector('#docbAdd');
-    if (addBtn) addBtn.addEventListener('click', () => openOne(''));
+    if (addBtn) addBtn.addEventListener('click', () => {
+      const daCo = phieu.map(p => String(p.TenPhieu == null ? '' : p.TenPhieu).trim());
+      const tra = prompt(`Tên bản ${title.toLowerCase()} mới (vd Áo / Quần / Đợt 1; để trống nếu chỉ có 1 bản):`, '');
+      if (tra === null) return;                 // bấm Hủy -> không mở gì
+      const ten = tra.trim();
+      if (daCo.indexOf(ten) !== -1) {
+        toast(ten
+          ? `Đã có bản tên "${ten}". Đặt tên khác, hoặc bấm "Mở / Sửa" ở dòng đó để sửa bản cũ.`
+          : 'Đã có một bản KHÔNG TÊN. Hãy đặt tên cho bản mới, hoặc mở bản cũ ở danh sách.', 'error');
+        return;
+      }
+      openOne(ten);
+    });
     modal.querySelectorAll('.docb-open').forEach(b => b.addEventListener('click', () => openOne(b.dataset.ten)));
     // v5.57: IN ngay tại danh sách bản (không cần mở form). Dùng chung printOneOrderDoc theo loai + bản.
     modal.querySelectorAll('.docb-print').forEach(b => b.addEventListener('click', async () => {
