@@ -24,6 +24,9 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 /* v7.53: MOT ban cong thuc luong gia cong / in theu — dung CHUNG voi routes/payroll.js. So cong no
    nha gia cong phai ra DUNG con so cua bang luong; doc ghi chu dau file util truoc khi sua. */
 const { loadGiaCong, loadInThe } = require('../utils/luongGiaCongInThe');
+/* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/khovai.js (tong tien tren
+   phieu nhap kho vai). Phieu va so cong no phai ra cung mot con so. */
+const { bieuThucTienCay } = require('../utils/tienVaiNhap');
 
 const router = express.Router();
 ['get', 'post', 'put', 'delete'].forEach(method => {
@@ -782,7 +785,7 @@ async function congNoNCC(pool) {
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
   const vai = coGiaVai ? (await pool.request().query(`
-    SELECT pn.NCC_ID, SUM(ISNULL(vc.KGNhap,0) * ISNULL(vc.DonGiaNhap,0)) AS Tien, COUNT(DISTINCT pn.PhieuNhapID) AS SoPhieu
+    SELECT pn.NCC_ID, SUM(${bieuThucTienCay('vc')}) AS Tien, COUNT(DISTINCT pn.PhieuNhapID) AS SoPhieu
     FROM PhieuNhapVai pn JOIN VaiCay vc ON vc.PhieuNhapID = pn.PhieuNhapID
     WHERE pn.NCC_ID IS NOT NULL GROUP BY pn.NCC_ID`)).recordset : [];
   const pk = coGiaPK ? (await pool.request().query(`
@@ -867,7 +870,7 @@ async function soChiTietNCC(pool, id) {
        Số hóa đơn NCC vẫn hữu ích nên đẩy sang cột Diễn giải, không chiếm chỗ số phiếu. */
     SELECT pn.NgayNhap AS Ngay,
            CONCAT(N'NKV-', RIGHT('00000' + CAST(pn.PhieuNhapID AS VARCHAR(10)), 5)) AS SoPhieu,
-           SUM(ISNULL(vc.KGNhap,0) * ISNULL(vc.DonGiaNhap,0)) AS PhatSinh, 0 AS ThanhToan,
+           SUM(${bieuThucTienCay('vc')}) AS PhatSinh, 0 AS ThanhToan,
            N'Nhập vải' AS Loai,
            LTRIM(RTRIM(ISNULL(N'HĐ ' + pn.SoHoaDon, '') + ISNULL(N' · ' + pn.GhiChu, ''))) AS DienGiai,
            N'PNV' AS CtLoai, pn.PhieuNhapID AS CtID
@@ -1197,7 +1200,7 @@ router.get('/chungtu', requireAuth, requirePermission('CONGNO', 'view'), async (
         SELECT vc.MaCay,
                LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
                vc.KGNhap AS SoLuong, N'Kg' AS DonVi, vc.DonGiaNhap AS DonGia,
-               (ISNULL(vc.KGNhap,0) * ISNULL(vc.DonGiaNhap,0)) AS ThanhTien
+               ${bieuThucTienCay('vc')} AS ThanhTien
         FROM VaiCay vc
         LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
         LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
@@ -1694,7 +1697,7 @@ async function dongHangTheoChungTu(pool, rows) {
                LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, v.MaVai) + ISNULL(N' - ' + ms.TenMau, '')
                      + N' · cây ' + vc.MaCay)) AS Ten,
                vc.KGNhap AS SoLuong, N'Kg' AS DonVi, vc.DonGiaNhap AS DonGia,
-               ISNULL(vc.KGNhap, 0) * ISNULL(vc.DonGiaNhap, 0) AS ThanhTien
+               ${bieuThucTienCay('vc')} AS ThanhTien
         FROM VaiCay vc
         JOIN DanhMucVai v ON v.VaiID = vc.VaiID
         LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = v.LoaiVaiID

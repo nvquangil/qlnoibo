@@ -6,6 +6,9 @@ const { xuatKhoVai } = require('../utils/vaiXuatService');
 /* v7.36: MOT dinh nghia "con hang" cho ca he thong (con KG HOAC con MET) — xem utils/tonVai.js.
    Truoc day 8 cho tu viet `KGCon > 0` nen vai nhap theo met/cay (KGNhap = 0) vo hinh o moi man xuat. */
 const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung } = require('../utils/tonVai');
+/* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/congno.js. Tong tien tren
+   phieu nhap PHAI bang dung so ma cong no NCC ghi no cho chinh phieu do. */
+const { bieuThucTienCay } = require('../utils/tienVaiNhap');
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
 
@@ -525,7 +528,12 @@ router.get('/nhap', requireAuth, requirePermission('KHOVAI', 'view'), requireChu
   // v5.4: them p.NgayHoaDon (can de dien san khi mo Sua phieu tu danh sach nay - openNhapEditModal).
   const result = await pool.request().query(`
     SELECT p.PhieuNhapID, p.NgayNhap, p.SoHoaDon, p.NgayHoaDon, p.GhiChu, p.NCC_ID, ncc.TenNCC, u.HoTen AS NguoiTao,
-           COUNT(v.CayID) AS SoLuongCay, ISNULL(SUM(v.KGNhap), 0) AS TongKGNhap, ISNULL(SUM(v.SoMet), 0) AS TongMet
+           COUNT(v.CayID) AS SoLuongCay, ISNULL(SUM(v.KGNhap), 0) AS TongKGNhap, ISNULL(SUM(v.SoMet), 0) AS TongMet,
+           ${/* v7.61: TONG TIEN cua phieu — cung bieu thuc voi cong no NCC (utils/tienVaiNhap.js). */''}
+           ISNULL(SUM(${bieuThucTienCay('v')}), 0) AS TongTien,
+           ${/* Dem so cay "co don gia, co met, ma KG = 0" -> thanh tien ra 0 mot cach dang ngo. */''}
+           SUM(CASE WHEN ISNULL(v.DonGiaNhap,0) > 0 AND ISNULL(v.KGNhap,0) <= 0 AND ISNULL(v.SoMet,0) > 0
+                    THEN 1 ELSE 0 END) AS SoCayThieuKG
     FROM PhieuNhapVai p
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
     LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
@@ -548,6 +556,9 @@ router.get('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // giao vai SX/kiem ke chua - de frontend khoa doi loai vai/mau, giong dieu kien backend PUT ap dung).
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT v.CayID, v.MaCay, v.KGNhap, v.SoMet, v.KhoVaiThucTe, ISNULL(v.KhoVaiThucTe, dv.KhoVai) AS KhoVai, v.GSM, v.DonGiaNhap, v.QRCode, v.TrangThai, v.ViTriKho,
+           ${/* v7.61: THANH TIEN tinh o BACKEND bang dung bieu thuc cua cong no — de ban in / man
+                xem / so cong no khong the ra ba con so khac nhau. */''}
+           ${bieuThucTienCay('v')} AS ThanhTien,
            dv.MaVai, dv.LoaiVaiID, dv.MauSacID, lv.TenLoaiVai, ms.TenMau,
            ISNULL((SELECT SUM(KGXuat) FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID), 0) AS DaXuat,
            CASE WHEN EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet WHERE CayID = v.CayID)
