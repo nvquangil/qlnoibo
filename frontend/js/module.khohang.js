@@ -3306,7 +3306,12 @@ window.ModuleKhoHang = (function () {
     // v6.25.5: SỬA phiếu -> nạp lại các dòng đã lưu (SL luôn theo CÁI như lúc lập phiếu).
     if (phieuSua) {
       dongBanDau = (phieuSua.chiTiet || []).map(c => {
-        const ids = String(c.DonIDs || c.DonID || '').split(',').map(x => parseInt(x, 10)).filter(x => x > 0);
+        /* v7.58: ưu tiên `DonIDsThat` — CHỈ đơn thật của khách. Đơn PHẢN CHIẾU (do chính phiếu này
+           sinh ra cho dòng bán thẳng) không phải đơn khách đặt: để nó vào đây thì dòng bị khóa mã
+           hàng, hiện nhãn "từ 1 đơn: #456" sai sự thật, và id đó bị gửi ngược lên lúc lưu (backend
+           đã gỡ đơn đó ra rồi ⇒ lỗi khóa ngoại). Backend cũ chưa trả trường này thì lùi về cách cũ. */
+        const ids = String(c.DonIDsThat != null ? c.DonIDsThat : (c.DonIDs || c.DonID || ''))
+          .split(',').map(x => parseInt(x, 10)).filter(x => x > 0);
         return {
           idx: ++idx, maHangId: c.MaHangID, mauSacId: c.MauSacID, maHang: c.MaHang, tenHang: c.TenHang,
           tenMau: c.TenMau, soLuong: Number(c.SoLuongCai) || 0, donVi: 'Cái', loaiRi: c.LoaiRi, donViCoBan: c.DonViCoBan, donViQuyDoi: c.DonViQuyDoi,

@@ -587,6 +587,27 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
     WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
 
+  /* ==============================================================================================
+     v7.58 — TACH "DON THAT CUA KHACH" KHOI "DON PHAN CHIEU DO CHINH PHIEU NAY SINH".
+     Dong BAN THANG duoc v7.22 sinh mot don phan chieu roi gan DonID vao dong. Man hinh Sua phieu doc
+     `DonIDs` nen coi dong do la "lay tu don khach": khoa cung ma hang, hien nhan "tu 1 don: #456" —
+     trong khi khach chua he dat don nao. Nang hon: id do duoc gui NGUOC len khi luu, ma luc luu phieu
+     GO don phan chieu ra truoc => INSERT vao khoa ngoai da dut (loi FK__PhieuBanH__DonID__...).
+     Tra them `DonIDsThat` (rong = ban thang) de form dung DUNG loai don. PUT VAN loc lan nua — cho
+     trinh duyet con giu file JS cu.
+     ============================================================================================== */
+  const phanChieu = new Set();
+  if (await coCotNguonDat(pool)) {
+    (await pool.request().input('id', sql.Int, req.params.id).query(
+      `SELECT DonID FROM DonKhachDatHang WHERE PhieuBHID = @id AND NguonDat = N'${NGUON_PHIEU_BH}'`
+    )).recordset.forEach(r => phanChieu.add(Number(r.DonID)));
+  }
+  chiTiet.forEach(c => {
+    const that = dsDonCuaDong(c).filter(id => !phanChieu.has(Number(id)));
+    c.DonIDsThat = that.join(',');
+    c.LaBanThang = that.length ? 0 : 1;
+  });
+
   /* v6.24.3: CONG NO TRUOC PHIEU NAY + TONG CONG NO (in ra cuoi phieu cho khach doi chieu).
      v7.41: cong thuc DA CHUYEN sang utils/congNoTruocChungTu.js de PHIEU NHAP LAI dung CHUNG mot ban
      — viet ban thu hai cho phieu nhap lai la chac chan troi khoi nhau (bai hoc v6.47). Ket qua khong
@@ -867,6 +888,19 @@ async function taoDonPhanChieu(pool, tran, phieuBHID, d, tt) {
 
 async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPhieu) {
   for (const d of dong) {
+    /* v7.58 — LƯỚI AN TOÀN: gắn đơn KHÔNG còn tồn tại thì SQL Server ném lỗi khóa ngoại thô
+       ("FK__PhieuBanH__DonID__…") — không ai đọc ra được là chuyện gì. Kiểm trước để báo tiếng Việt.
+       Đường SỬA phiếu đã lọc sạch id chết ở PUT rồi, nên tới đây mà còn thiếu là dữ liệu thật sự lạ. */
+    if ((d.donIDs || []).length) {
+      const ids = [...new Set(d.donIDs.map(Number))];
+      const coThat = (await new sql.Request(tran).query(
+        `SELECT DonID FROM DonKhachDatHang WHERE DonID IN (${ids.join(',')})`)).recordset.map(r => Number(r.DonID));
+      const mat = ids.filter(id => coThat.indexOf(id) === -1);
+      if (mat.length) {
+        throw new Error(`Dòng ${d.maHang}: đơn khách đặt ${mat.map(x => '#' + x).join(', ')} không còn tồn tại `
+          + `(đã bị xóa ở màn hình khác). Đóng form, mở lại phiếu rồi chọn đơn lại.`);
+      }
+    }
     const ctID = (await new sql.Request(tran)
       .input('PhieuBHID', sql.Int, phieuBHID)
       .input('MaHangID', sql.Int, d.maHangId)
@@ -987,8 +1021,25 @@ async function goRangBuocDonTrenChiTiet(tran, phieuBHID) {
     .query('UPDATE PhieuBanHangChiTiet SET DonID = NULL WHERE PhieuBHID = @id AND DonID IS NOT NULL');
 }
 
+/* ================================================================================================
+   v7.58 SUA LOI: "The INSERT statement conflicted with the FOREIGN KEY constraint
+   FK__PhieuBanH__DonID__..., table dbo.DonKhachDatHang, column 'DonID'"   (khi SUA phieu, them ma)
+   ------------------------------------------------------------------------------------------------
+   Anh em ruot cua loi v7.42 (DELETE) nhung o chieu nguoc lai:
+     · Dong ban THANG (khong lay tu don khach) duoc v7.22 sinh mot DON PHAN CHIEU va gan DonID vao dong.
+     · Man hinh Sua phieu nap lai dong do KEM `DonIDs` -> gui NGUOC len khi luu.
+     · PUT: goChiTietPhieu() XOA HAN don phan chieu, roi ghiChiTietPhieu() lai INSERT dong voi DUNG
+       DonID vua bi xoa => khoa ngoai chan ngay o cau INSERT dau tien.
+   Nghia la: MOI phieu co du chi mot dong ban thang deu KHONG SUA DUOC, bat ke sua gi.
+   Cach sua: goChiTietPhieu tra ve DANH SACH DON PHAN CHIEU DA XOA; PUT loai cac id do khoi
+   `dong[].donIDs` truoc khi ghi lai. Dong do thanh "khong co don" -> ghiChiTietPhieu tu sinh don phan
+   chieu MOI cho no (dung nguyen tac v7.22, khong mat lien ket gi).
+   ⚠️ KHONG duoc "sua" bang cach bo khoa ngoai hay bo qua loi: khoa ngoai la thu duy nhat dang chan
+   dong phieu tro toi don khong ton tai.
+   ================================================================================================ */
 async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
   const dsDonGo = [];
+  const dsDonXoa = [];        // v7.58: đơn PHẢN CHIẾU vừa bị xóa -> id này đã CHẾT, không được gắn lại
   const coNguon = await coCotNguonDat(pool);   // v7.22
   const ct = (await new sql.Request(tran).input('id', sql.Int, phieuBHID).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.DonID,
@@ -1009,6 +1060,7 @@ async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
         const kqXoa = await new sql.Request(tran).input('don', sql.Int, donId).query(
           `DELETE FROM DonKhachDatHang WHERE DonID = @don AND NguonDat = N'${NGUON_PHIEU_BH}'`);
         if (kqXoa.rowsAffected[0]) {
+          dsDonXoa.push(Number(donId));   // v7.58
           console.warn('[banhang] go phieu: da XOA don phan chieu #%s (sinh tu chinh phieu nay).', donId);
           continue;
         }
@@ -1021,7 +1073,7 @@ async function goChiTietPhieu(pool, tran, phieuBHID, coDonIDs) {
   }
   await new sql.Request(tran).input('id', sql.Int, phieuBHID)
     .query('DELETE FROM PhieuBanHangChiTiet WHERE PhieuBHID = @id');
-  return dsDonGo;
+  return { donTreo: dsDonGo, donPhanChieuDaXoa: dsDonXoa };
 }
 
 /* v7.17: HUY don khach dat (dung khi nguoi dung xoa dong khoi phieu va chon "hủy luôn đơn").
@@ -1140,7 +1192,14 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
-    const dsDonGo = await goChiTietPhieu(pool, tran, p.PhieuBHID, coDonIDs);
+    const { donTreo: dsDonGo, donPhanChieuDaXoa } = await goChiTietPhieu(pool, tran, p.PhieuBHID, coDonIDs);
+    /* v7.58 — xem ghi chú dài ở goChiTietPhieu. Đơn phản chiếu vừa bị xóa thì id của nó đã CHẾT:
+       giữ lại trong `donIDs` là INSERT vào khóa ngoại đã đứt. Bỏ ra -> dòng thành "không có đơn"
+       -> ghiChiTietPhieu sinh đơn phản chiếu MỚI cho đúng số lượng/màu vừa sửa. */
+    if (donPhanChieuDaXoa.length) {
+      const daChet = new Set(donPhanChieuDaXoa.map(Number));
+      dong.forEach(d => { d.donIDs = (d.donIDs || []).filter(id => !daChet.has(Number(id))); });
+    }
     await new sql.Request(tran).input('id', sql.Int, p.PhieuBHID)
       .input('NgayBan', sql.Date, b.ngayBan || p.NgayBan)
       .input('KhachHangID', sql.Int, b.khachHangId || null)
