@@ -63,7 +63,7 @@ const router = express.Router();
 // bằng 1 middleware (thay cho requireChucNang cứng 'tailieukythuat' từng route) để bỏ/cấp quyền từng tab không
 // chặn nhầm nhau. Suy loai từ ?loai (route dùng chung) hoặc path (route 1 tab). requireChucNang tự lấy action theo method.
 function cnTaiLieuOf(loai) {
-  if (['thongsodo', 'motasp', 'quycach', 'dongiamay', 'dongiagiacong', 'dongialadonggoi'].includes(loai)) return 'tailieumay';
+  if (['thongsodo', 'thongkechitiet', 'motasp', 'quycach', 'dongiamay', 'dongiagiacong', 'dongialadonggoi'].includes(loai)) return 'tailieumay';
   if (['hinhanhinthue', 'dongiainthe'].includes(loai)) return 'tailieuinthe';
   return 'tailieukythuat';
 }
@@ -71,7 +71,11 @@ router.use((req, res, next) => {
   let loai = req.query.loai;
   if (!loai) {
     const seg = (req.path.split('/')[1] || '').toLowerCase();
-    if (seg.startsWith('thongsodo')) loai = 'thongsodo';
+    /* ⚠️ 'thongkechitiet' PHAI xet TRUOC 'thongsodo'? Khong — hai chuoi khong long nhau. Nhung phai
+       CO mat o day, keo route thong ke chi tiet roi vao nhanh mac dinh 'tailieuchung' va bi gate
+       bang quyen cua nhom KHAC. */
+    if (seg.startsWith('thongkechitiet')) loai = 'thongkechitiet';
+    else if (seg.startsWith('thongsodo')) loai = 'thongsodo';
     else if (seg.startsWith('motasp')) loai = 'motasp';
     else if (seg.startsWith('dongiagiacong')) loai = 'dongiagiacong';
     else if (seg.startsWith('dongialadonggoi')) loai = 'dongialadonggoi';
@@ -130,6 +134,12 @@ async function getOrdersWithDocStatus(pool, loai) {
     joinSql = '';
     daCoExpr = `CASE WHEN EXISTS (SELECT 1 FROM TaiLieuThongSoDo tl WHERE tl.DonHangID = d.DonHangID) THEN 1 ELSE 0 END AS DaCo,
       (SELECT MAX(tl2.UpdatedAt) FROM TaiLieuThongSoDo tl2 WHERE tl2.DonHangID = d.DonHangID) AS CapNhatLuc`;
+  } else if (loai === 'thongkechitiet') {
+    /* v7.65.1: THIEU nhanh nay thi 'thongkechitiet' roi xuong nhanh mac dinh (chi dinh NPL) -> cot
+       "Da co" bao theo bang phu kien, nen luu xong van hien "chua co". */
+    joinSql = '';
+    daCoExpr = `CASE WHEN EXISTS (SELECT 1 FROM TaiLieuThongKeChiTiet tl WHERE tl.DonHangID = d.DonHangID AND ISNULL(tl.LaMau,0)=0) THEN 1 ELSE 0 END AS DaCo,
+      (SELECT MAX(tl2.UpdatedAt) FROM TaiLieuThongKeChiTiet tl2 WHERE tl2.DonHangID = d.DonHangID AND ISNULL(tl2.LaMau,0)=0) AS CapNhatLuc`;
   } else if (loai === 'motasp' || loai === 'quycach' || loai === 'hinhanhinthue') {
     // v5.34c: 3 loai tai lieu anh-luoi dung chung bang TaiLieuMoTaSanPham, phan biet bang cot Loai.
     joinSql = '';
@@ -193,7 +203,7 @@ async function getOrdersWithDocStatus(pool, loai) {
 }
 
 router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
-  const loai = ['tailieuchung', 'thongsodo', 'motasp', 'chidinhnpl', 'dongiamay', 'dongiagiacong', 'quycach', 'hinhanhinthue', 'dongiainthe', 'dongialadonggoi'].includes(req.query.loai) ? req.query.loai : 'tailieuchung';
+  const loai = ['tailieuchung', 'thongsodo', 'thongkechitiet', 'motasp', 'chidinhnpl', 'dongiamay', 'dongiagiacong', 'quycach', 'hinhanhinthue', 'dongiainthe', 'dongialadonggoi'].includes(req.query.loai) ? req.query.loai : 'tailieuchung';
   const pool = await getPool();
   res.json({ success: true, data: await getOrdersWithDocStatus(pool, loai) });
 });
@@ -784,7 +794,16 @@ router.get('/thongsodo/:maDH', requireAuth, requirePermission('QLSX', 'view'), a
     hasTen
       ? `SELECT TOP 1 ID FROM TaiLieuThongSoDo WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ten ORDER BY ID`
       : `SELECT TOP 1 ID FROM TaiLieuThongSoDo WHERE DonHangID=@id ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
-  res.json({ success: true, data: row ? await getThongSoDoDetail(pool, row.ID) : null, order });
+  /* v7.65.2: ANH DAI DIEN HANG cho ban in Thong so ky thuat — lay theo ma hang cua lenh SX, dung
+     CUNG cach voi Thong ke chi tiet de hai ban in khong the ra hai anh khac nhau.
+     Boc try/catch: ma chua co the kho thi ban in khong co anh, KHONG duoc lam gay ca route. */
+  let anhMacDinh = '';
+  try {
+    const a = (await pool.request().input('ms', sql.NVarChar, order.MaSanPham || '')
+      .query('SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms')).recordset[0];
+    anhMacDinh = (a && a.AnhDaiDien) || '';
+  } catch (e) { /* chua co the kho cho ma nay */ }
+  res.json({ success: true, data: row ? await getThongSoDoDetail(pool, row.ID) : null, order, anhMacDinh });
 });
 
 /* ================================================================================================

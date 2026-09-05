@@ -197,6 +197,63 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
   kiem(/oFile\.value = ''/.test(sFe), 'xoa gia tri o file truoc khi mo (chon lai dung file cu van chay)');
   kiem(/target="_blank"/.test(sFe), 'xem anh to bang tab moi — cung cach voi cac o anh khac trong file nay');
 
+  /* ================================================================================================
+     6b. ⚠️ BAY DA MAC THAT (v7.65 -> phai sua o v7.65.1): them mot LOAI tai lieu moi thi phai noi
+     day o TAT CA cac bang phan nhanh theo `loai`, khong chi cho editor. Bo sot hai cho:
+       · printOneOrderDoc()          -> bam "In" KHONG LAM GI CA (roi het if/else, khong bao loi)
+       · getOrdersWithDocStatus()    -> roi xuong nhanh mac dinh (chi dinh NPL) nen cot "Da co" bao
+                                        theo bang phu kien => luu xong van hien "chua co"
+     Muc nay ep MOI cho re nhanh theo 'thongsodo' thi cung phai co 'thongkechitiet'.
+     ================================================================================================ */
+  console.log('\n=== 6b. Them loai tai lieu moi: KHONG bo sot bang phan nhanh nao ===');
+  const moc = [
+    [sRoute, "cnTaiLieuOf", 'backend: nhom quyen (cnTaiLieuOf)'],
+    [sRoute, "seg.startsWith('thongkechitiet')", 'backend: suy loai tu duong dan'],
+    [sRoute, "loai === 'thongkechitiet'", 'backend: cot "Da co" cua danh sach lenh SX'],
+    [sFe, "loai === 'thongkechitiet'", 'frontend: nhanh IN trong printOneOrderDoc'],
+    [sFe, "thongkechitiet: 'Thống kê chi tiết'", 'frontend: nhan loai (LOAI_LABEL)']
+  ];
+  moc.forEach(([src, chuoi, ten]) => kiem(src.indexOf(chuoi) > 0, ten));
+  kiem(/'thongsodo', 'thongkechitiet', 'motasp'/.test(sRoute),
+    'backend: thongkechitiet nam trong danh sach ?loai hop le cua /orders');
+  kiem(/CASE WHEN EXISTS \(SELECT 1 FROM TaiLieuThongKeChiTiet tl WHERE tl\.DonHangID = d\.DonHangID/.test(sRoute),
+    'cot "Da co" doc DUNG bang TaiLieuThongKeChiTiet (khong phai bang phu kien)');
+  kiem(/printThongKeChiTiet\(\{[\s\S]{0,200}anhIn: res\.data\.anhDaiDien \|\| res\.anhMacDinh/.test(sFe),
+    'nhanh IN lay anh: uu tien anh rieng cua ban, khong co thi anh ma hang');
+
+  console.log('\n=== 6c. Dan anh (Ctrl+V) vao o Hinh chi tiet ===');
+  kiem(/class="tkct-o-anh" tabindex="0"/.test(sFe),
+    'o hinh co tabindex -> moi nhan duoc su kien paste (thieu tabindex la Ctrl+V khong vao)');
+  kiem(/o\.addEventListener\('paste'/.test(sFe), 'co bat su kien paste');
+  kiem(/querySelectorAll\('\.tkct-o-anh'\)\.forEach/.test(sFe),
+    'bat tren TUNG O — bat o ca bang thi dan chu vao o ten cung roi vao day');
+  kiem(/items\[i\]\.kind === 'file' && \/\^image/.test(sFe), 'chi nhan muc la ANH trong bo nho tam');
+  kiem(/Bộ nhớ tạm không có ảnh/.test(sFe), 'dan thu khong phai anh -> bao ro, khong im lang');
+  kiem(/state\.rows\[ri\]\.anhChiTiet = await uploadFile\(f, 'tkct'\)/.test(sFe),
+    'anh dan dung CHUNG duong uploadFile voi nut chon file (mot duong ghi anh duy nhat)');
+  kiem((sFe.match(/uploadFile\(f, 'tkct'\)/g) || []).length === 2,
+    'dung o CA HAI cho: chon file va dan anh',
+    String((sFe.match(/uploadFile\(f, 'tkct'\)/g) || []).length));
+
+  console.log('\n=== 6d. Anh dai dien hang tren CA HAI ban in ===');
+  kiem(/anhMacDinh = \(a && a\.AnhDaiDien\) \|\| '';/.test(sRoute)
+    && (sRoute.match(/let anhMacDinh = ''/g) || []).length === 2,
+    'CA HAI route (thongsodo + thongkechitiet) deu tra anh dai dien mac dinh',
+    String((sRoute.match(/let anhMacDinh = ''/g) || []).length));
+  kiem(/data\.anhIn \? `<img src="\$\{escapeHtml\(data\.anhIn\)\}"/.test(sFe),
+    'ban in THONG SO KY THUAT co anh dai dien');
+  kiem(/d\.anhIn \? `<img src="\$\{escapeHtml\(d\.anhIn\)\}"/.test(sFe),
+    'ban in THONG KE CHI TIET co anh dai dien');
+  /* Ba duong in cung mot tai lieu (nut In trong form / nut In o danh sach ban / In tat ca) phai ra
+     GIONG NHAU — thieu mot cho la "in cho nay co anh, cho kia khong". */
+  kiem(/anhIn: res\.anhMacDinh \|\| ''/.test(sFe)
+    && (sFe.match(/anhIn: res\.anhMacDinh \|\| ''/g) || []).length === 2,
+    'nut In trong form VA nut In o danh sach ban deu truyen anh',
+    String((sFe.match(/anhIn: res\.anhMacDinh \|\| ''/g) || []).length));
+  kiem(/buildThongSoDoBodyHtml\(\{ \.\.\.tsd\.data, anhIn: tsd\.anhMacDinh \|\| '' \}\)/.test(sFe),
+    '"In tat ca tai lieu" cung truyen anh (khong de hai duong in ra hai ban khac nhau)');
+  kiem(/flex:none;/.test(sFe), 'anh khong bi bop meo khi khoi thong tin dai');
+
   console.log('\n=== 7. Migration + file cai moi ===');
   kiem(/CREATE TABLE TaiLieuThongKeChiTiet\b/.test(sMig), 'migration_v695 tao bang chinh');
   kiem(/CREATE TABLE TaiLieuThongKeChiTietDong\b/.test(sMig), 'va bang dong');

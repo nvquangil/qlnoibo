@@ -739,7 +739,14 @@ window.ModuleTaiLieuKyThuat = (function () {
             ${/* Xem to: mở tab mới — CÙNG CÁCH với các ô ảnh khác trong chính file này.
                  (Lightbox `openImageLightbox` nằm trong IIFE của module.khohang.js, gọi sang là
                  ReferenceError — đúng bẫy "hàm có thật nhưng ở FILE KHÁC" đã mắc ở v7.49.) */''}
-            ${r.anhChiTiet ? `<a href="${escapeHtml(r.anhChiTiet)}" target="_blank" title="Bấm để xem to"><img src="${escapeHtml(r.anhChiTiet)}" style="max-width:110px;max-height:80px;object-fit:contain;display:block;margin:0 auto;"></a>` : '<span class="empty-hint" style="padding:0;">—</span>'}
+            ${/* v7.65.1: Ô DÁN ẢNH. Bấm vào ô rồi Ctrl+V là dán thẳng ảnh trong bộ nhớ tạm (chụp
+                 màn hình, copy từ Excel/Word...). Ô phải có `tabindex` mới nhận được sự kiện paste. */''}
+            <div class="tkct-o-anh" tabindex="0" title="Bấm vào đây rồi Ctrl+V để dán ảnh"
+                 style="border:1px dashed #cfd4da;border-radius:5px;padding:3px;outline:none;">
+              ${r.anhChiTiet
+                ? `<a href="${escapeHtml(r.anhChiTiet)}" target="_blank" title="Bấm để xem to"><img src="${escapeHtml(r.anhChiTiet)}" style="max-width:104px;max-height:78px;object-fit:contain;display:block;margin:0 auto;"></a>`
+                : '<span class="empty-hint" style="padding:0;font-size:11px;">Bấm rồi Ctrl+V</span>'}
+            </div>
             ${perm.canEdit ? `<input type="file" class="tkct-file" accept="image/*" style="width:100%;font-size:10px;margin-top:3px;">
               ${r.anhChiTiet ? '<button type="button" class="btn small danger tkct-xoa-anh" style="width:100%;margin-top:2px;">Xóa ảnh</button>' : ''}` : ''}
           </td>
@@ -752,7 +759,7 @@ window.ModuleTaiLieuKyThuat = (function () {
         <button type="button" class="btn small secondary" id="btnTkctAddRow">+ Thêm dòng</button>
         <button type="button" class="btn small" id="btnTkctExcel" title="File có dòng tiêu đề với ô 'Piece Name', cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải file Excel</button>
         <input type="file" id="fileTkctExcel" accept=".xlsx,.xlsm" style="display:none;">
-        <span class="empty-hint" style="padding:0;">Hình rập trong file Excel được <b>tải lên tự động</b>. Cột <b>Tổng số lượng</b> gõ tay.</span>
+        <span class="empty-hint" style="padding:0;">Hình rập trong file Excel được <b>tải lên tự động</b>. Ô hình: <b>bấm rồi Ctrl+V</b> để dán ảnh. Cột <b>Tổng số lượng</b> gõ tay.</span>
       </div>` : ''}`;
   }
   function readTkctFromDom(box) {
@@ -793,6 +800,33 @@ window.ModuleTaiLieuKyThuat = (function () {
         renderTkctBox(box, state);
       } catch (err) { toast('Không tải được ảnh: ' + err.message, 'error'); }
     }));
+    /* ==============================================================================================
+       v7.65.1 — DÁN ẢNH (Ctrl+V) VÀO Ô HÌNH CHI TIẾT.
+       Bấm vào ô để nó nhận focus, rồi Ctrl+V. Ảnh trong bộ nhớ tạm đến dưới dạng file nên tải lên
+       bằng CHÍNH đường uploadFile như nút chọn file — một đường ghi ảnh duy nhất.
+       ⚠️ Bắt sự kiện trên TỪNG Ô, không bắt ở cả bảng: bắt ở bảng thì đang gõ trong ô chữ mà Ctrl+V
+       một đoạn văn bản cũng rơi vào đây. */
+    box.querySelectorAll('.tkct-o-anh').forEach(o => {
+      o.addEventListener('focus', () => { o.style.borderColor = '#1a73e8'; o.style.background = '#f5f9ff'; });
+      o.addEventListener('blur', () => { o.style.borderColor = '#cfd4da'; o.style.background = ''; });
+      if (!perm.canEdit) return;
+      o.addEventListener('paste', async (e) => {
+        const items = (e.clipboardData && e.clipboardData.items) || [];
+        let f = null;
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].kind === 'file' && /^image\//.test(items[i].type)) { f = items[i].getAsFile(); break; }
+        }
+        if (!f) { toast('Bộ nhớ tạm không có ảnh. Copy ảnh (không phải chữ) rồi dán lại.', 'error'); return; }
+        e.preventDefault();
+        const ri = Number(o.closest('[data-row]').dataset.row);
+        dongBo();
+        try {
+          state.rows[ri].anhChiTiet = await uploadFile(f, 'tkct');
+          renderTkctBox(box, state);
+          toast('Đã dán ảnh vào dòng ' + (ri + 1) + '.', 'success');
+        } catch (err) { toast('Không tải được ảnh vừa dán: ' + err.message, 'error'); }
+      });
+    });
     /* Tải file Excel -> thay toàn bộ bảng. */
     const btnExcel = box.querySelector('#btnTkctExcel');
     const oFile = box.querySelector('#fileTkctExcel');
@@ -1044,7 +1078,7 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnPrintDoc').addEventListener('click', () => {
       syncTsdGrid(gridBox, state);
       const fd = new FormData(modal.querySelector('#tsdForm'));
-      printThongSoDo({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), cols: state.cols, rows: state.rows, maRap: (order && order.MaRap) || '', tenBan: (fd.get('tenBan') || '').trim(), yeuCauKyThuat: fd.get('yeuCauKyThuat') || '', anhGhiChu: anhState.list }, maDH);   // v5.57 +Mã rập; v5.58 +yêu cầu KT + ảnh
+      printThongSoDo({ maHang: fd.get('maHang'), dienGiai: fd.get('dienGiai'), ngayCapNhat: fd.get('ngayCapNhat'), nguoiLap: (data && data.nguoiLap) || (currentUser && currentUser.hoTen), cols: state.cols, rows: state.rows, maRap: (order && order.MaRap) || '', tenBan: (fd.get('tenBan') || '').trim(), yeuCauKyThuat: fd.get('yeuCauKyThuat') || '', anhGhiChu: anhState.list, anhIn: res.anhMacDinh || '' }, maDH);   // v5.57 +Mã rập; v5.58 +yêu cầu KT + ảnh; v7.65.2 +ảnh đại diện hàng
     });
     const btnDelete = modal.querySelector('#btnDeleteDoc');
     if (btnDelete) btnDelete.addEventListener('click', async () => {
@@ -1715,9 +1749,15 @@ window.ModuleTaiLieuKyThuat = (function () {
          <tr><td colspan="${cols.length + 4}"></td><td style="vertical-align:top;font-size:12px;">${ghiChuCell}</td></tr>`;
     return `
       <h2 style="text-align:center;">THÔNG SỐ KĨ THUẬT</h2>
-      <table style="margin-top:10px;">
-        ${docInfoRowsHtml(data)}
-      </table>
+      ${/* v7.65.2: + ẢNH ĐẠI DIỆN HÀNG. Đặt cạnh khối thông tin để nhìn là biết đang xem mã nào —
+           cùng bố cục với bản in Thống kê chi tiết. Không có ảnh thì khối thông tin chiếm hết bề
+           ngang như cũ, không để lại ô trống. */''}
+      <div style="display:flex;gap:12px;align-items:flex-start;margin-top:10px;">
+        ${data.anhIn ? `<img src="${escapeHtml(data.anhIn)}" style="width:104px;height:104px;object-fit:contain;border:1px solid #999;flex:none;">` : ''}
+        <table style="flex:1;">
+          ${docInfoRowsHtml(data)}
+        </table>
+      </div>
       <div style="margin-top:10px;font-weight:700;">1. BẢNG THÔNG SỐ${data.ngayCapNhat ? '  ' + fmtDate(data.ngayCapNhat) : ''}</div>
       <table style="margin-top:6px;width:100%;border-collapse:collapse;" border="1" cellpadding="4">
         <thead>
@@ -1821,7 +1861,7 @@ window.ModuleTaiLieuKyThuat = (function () {
   }
 
   // Nhan mot doc lay ten hien thi (dung cho toast bao "chua co du lieu" theo dung loai nguoi dung chon).
-  const LOAI_LABEL = { tailieuchung: 'Tài liệu kỹ thuật chung', thongsodo: 'Thông số đo', chidinhnpl: 'Chỉ định NPL', motasp: 'Mô tả sản phẩm' };
+  const LOAI_LABEL = { tailieuchung: 'Tài liệu kỹ thuật chung', thongsodo: 'Thông số đo', thongkechitiet: 'Thống kê chi tiết', chidinhnpl: 'Chỉ định NPL', motasp: 'Mô tả sản phẩm' };
 
   // v5.15: goi TU BEN NGOAI module nay (nut "In tài liệu kỹ thuật" tren Danh sách lệnh sản xuất, xem
   // module.qlsx.js renderOrders()) - loai='all' (hoac khong truyen) => gop TAT CA loai DA CO du lieu
@@ -1845,7 +1885,9 @@ window.ModuleTaiLieuKyThuat = (function () {
       ]);
     } catch (err) { toast(err.message, 'error'); return; }
     const sections = [];
-    if (tsd.data) sections.push(buildThongSoDoBodyHtml(tsd.data));
+    /* v7.65.2: truyen anh dai dien y het duong in le, keo "In tat ca" ra ban KHONG co anh con in
+       tung ban thi CO — hai duong in cung mot tai lieu phai giong nhau. */
+    if (tsd.data) sections.push(buildThongSoDoBodyHtml({ ...tsd.data, anhIn: tsd.anhMacDinh || '' }));
     if (mtsp.data) sections.push(buildMoTaSanPhamBodyHtml(mtsp.data, 'MÔ TẢ ĐƯỜNG MAY'));
     if (qc.data) sections.push(buildMoTaSanPhamBodyHtml(qc.data, 'QUY CÁCH ĐÓNG GÓI'));
     if (hait.data) sections.push(buildMoTaSanPhamBodyHtml(hait.data, 'HÌNH ẢNH MÔ TẢ IN/THÊU'));
@@ -1870,7 +1912,16 @@ window.ModuleTaiLieuKyThuat = (function () {
       } else if (loai === 'thongsodo') {
         const res = await apiGet(`/api/tailieukythuat/thongsodo/${maDH}?_=1${tenQ}`);
         if (!res.data) { toast(`Lệnh sản xuất ${maDH} chưa có ${LOAI_LABEL[loai]}.`, 'error'); return; }
-        printThongSoDo(withInfo(res.data, res), maDH);
+        printThongSoDo({ ...withInfo(res.data, res), anhIn: res.anhMacDinh || '' }, maDH);   // v7.65.2
+      } else if (loai === 'thongkechitiet') {
+        /* v7.65.1: THIEU nhanh nay thi bam "In" o danh sach ban khong lam gi ca — roi het if/else
+           ma khong bao loi. Day dung la trieu chung "bam in khong hoat dong". */
+        const res = await apiGet(`/api/tailieukythuat/thongkechitiet/${maDH}?_=1${tenQ}`);
+        if (!res.data) { toast(`Lệnh sản xuất ${maDH} chưa có ${LOAI_LABEL[loai]}.`, 'error'); return; }
+        printThongKeChiTiet({
+          ...res.data, ten: ten || res.data.tenPhieu || '',
+          anhIn: res.data.anhDaiDien || res.anhMacDinh || '', order: res.order || {}
+        }, maDH);
       } else if (loai === 'motasp' || loai === 'quycach' || loai === 'hinhanhinthue') {
         // v5.43: 3 loại dùng chung bảng TaiLieuMoTaSanPham (phân biệt qua ?loai=), 1 builder chung.
         const label = { motasp: 'Mô tả đường may', quycach: 'Quy cách đóng gói', hinhanhinthue: 'Hình ảnh mô tả in/thêu' }[loai];
