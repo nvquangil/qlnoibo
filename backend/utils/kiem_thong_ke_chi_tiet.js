@@ -166,14 +166,15 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
   kiem(/fs\.writeFileSync\(path\.join\(uploadDir, ten\)/.test(sRoute),
     'hinh rap duoc GHI RA FILE trong uploads (khong nhet ca anh vao CSDL)');
   kiem(/delete r\.anhSvg;/.test(sRoute), 'khong tra data URL ve trinh duyet (chi tra duong dan)');
-  kiem(/SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms/.test(sRoute),
-    'anh dai dien mac dinh lay theo ma hang cua lenh SX');
-  /* Kiem HANH VI chu khong kiem NGUYEN VAN dong chu thich: cau tra anh mac dinh phai nam trong
-     try/catch, de ma chua co the kho khong lam gay ca route. */
-  const khoiAnh = sRoute.slice(sRoute.indexOf("let anhMacDinh = ''"), sRoute.indexOf('res.json({\n    success: true, order, anhMacDinh'));
-  kiem(/try \{[\s\S]*TheKhoHangHoa[\s\S]*\} catch \(e\)/.test(khoiAnh),
-    'cau lay anh mac dinh nam trong try/catch -> ma chua co the kho khong lam gay route',
-    khoiAnh.replace(/\s+/g, ' ').slice(0, 120));
+  kiem(/const anhMacDinh = await anhDaiDienCuaDon\(pool, order\);/.test(sRoute),
+    'anh dai dien mac dinh lay qua ham dung chung anhDaiDienCuaDon()');
+  /* Kiem HANH VI chu khong kiem NGUYEN VAN dong chu thich: viec tra anh phai nam trong try/catch,
+     de ma chua co the kho khong lam gay ca route. Tu v7.65.3 phan nay nam trong ham dung chung. */
+  const thanAnh = sRoute.slice(sRoute.indexOf('async function anhDaiDienCuaDon'),
+    sRoute.indexOf('// ============ DANH SACH DON HANG'));
+  kiem(/try \{[\s\S]*TheKhoHangHoa[\s\S]*\} catch \(e\) \{ return ''; \}/.test(thanAnh),
+    'cau lui ve the kho nam trong try/catch -> khong lam gay route',
+    thanAnh.replace(/\s+/g, ' ').slice(0, 120));
   kiem(/lenhLa && kq\.lenhLa\.length/.test(sRoute), 'file co net cong -> CANH BAO cho nguoi dung');
 
   console.log('\n=== 6. Form + ban in ===');
@@ -236,10 +237,9 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
     String((sFe.match(/uploadFile\(f, 'tkct'\)/g) || []).length));
 
   console.log('\n=== 6d. Anh dai dien hang tren CA HAI ban in ===');
-  kiem(/anhMacDinh = \(a && a\.AnhDaiDien\) \|\| '';/.test(sRoute)
-    && (sRoute.match(/let anhMacDinh = ''/g) || []).length === 2,
+  kiem((sRoute.match(/const anhMacDinh = await anhDaiDienCuaDon\(pool, order\);/g) || []).length === 2,
     'CA HAI route (thongsodo + thongkechitiet) deu tra anh dai dien mac dinh',
-    String((sRoute.match(/let anhMacDinh = ''/g) || []).length));
+    String((sRoute.match(/const anhMacDinh = await anhDaiDienCuaDon\(pool, order\);/g) || []).length));
   kiem(/data\.anhIn \? `<img src="\$\{escapeHtml\(data\.anhIn\)\}"/.test(sFe),
     'ban in THONG SO KY THUAT co anh dai dien');
   kiem(/d\.anhIn \? `<img src="\$\{escapeHtml\(d\.anhIn\)\}"/.test(sFe),
@@ -253,6 +253,32 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
   kiem(/buildThongSoDoBodyHtml\(\{ \.\.\.tsd\.data, anhIn: tsd\.anhMacDinh \|\| '' \}\)/.test(sFe),
     '"In tat ca tai lieu" cung truyen anh (khong de hai duong in ra hai ban khac nhau)');
   kiem(/flex:none;/.test(sFe), 'anh khong bi bop meo khi khoi thong tin dai');
+  /* ⚠️ SAI NGUON ANH (v7.65.2 -> sua o v7.65.3): ban dau toi do `TheKhoHangHoa` theo ma san pham,
+     nen hau het don KHONG ra anh nao — ma tren lenh SX chua chac co the kho, va the kho chua chac
+     da co anh. Anh dai dien that su cua don nam ngay tren lenh SX: `DonHangSanXuat.AnhSanPham`. */
+  kiem(/SELECT DonHangID, MaDH, MaSanPham, TenSanPham, AnhSanPham FROM DonHangSanXuat/.test(sRoute),
+    'getOrderBasic lay LUON AnhSanPham cua lenh SX');
+  kiem(/async function anhDaiDienCuaDon\(pool, order\)/.test(sRoute),
+    'co MOT ham dung chung tim anh cho ca hai loai tai lieu');
+  kiem(/if \(order\.AnhSanPham\) return order\.AnhSanPham;/.test(sRoute),
+    'UU TIEN anh cua chinh lenh SX');
+  kiem(/LTRIM\(RTRIM\(MaHang\)\) = @ms/.test(sRoute),
+    'lui ve the kho thi so ma DA CAT KHOANG TRANG hai dau (lech mot dau cach la khong ra dong nao)');
+  kiem(/NULLIF\(LTRIM\(RTRIM\(ISNULL\(AnhDaiDien, ''\)\)\), ''\) IS NOT NULL/.test(sRoute),
+    'chi lay dong the kho THAT SU co anh (khong tra ve chuoi rong roi tuong la co)');
+  /* 3 = 1 dong dinh nghia ham + 2 loi goi. */
+  kiem((sRoute.match(/anhDaiDienCuaDon\(pool, order\)/g) || []).length === 3,
+    'CA HAI route deu goi ham dung chung (khong con hai ban tu tra anh)',
+    String((sRoute.match(/anhDaiDienCuaDon\(pool, order\)/g) || []).length));
+  kiem(!/SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms/.test(sRoute),
+    'khong con ban tra anh viet tay (chi con trong ham dung chung)');
+
+  console.log('\n=== 6e. Nut xoa trang bang ===');
+  kiem(/id="btnTkctXoaTrang"/.test(sFe), 'co nut Xoa trang bang');
+  kiem(/state\.rows = \[tkctDongMoi\(\)\];/.test(sFe), 'xoa trang -> ve dung MOT dong rong');
+  kiem(/Xóa TRẮNG toàn bộ bảng/.test(sFe), 'hoi truoc khi xoa (khi bang dang co du lieu)');
+  kiem(/chưa bấm Lưu thì bản đã lưu vẫn còn nguyên/.test(sFe),
+    'noi ro chi xoa tren man hinh — chua Luu thi ban da luu con nguyen');
 
   console.log('\n=== 7. Migration + file cai moi ===');
   kiem(/CREATE TABLE TaiLieuThongKeChiTiet\b/.test(sMig), 'migration_v695 tao bang chinh');

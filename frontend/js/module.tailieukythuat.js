@@ -759,6 +759,9 @@ window.ModuleTaiLieuKyThuat = (function () {
         <button type="button" class="btn small secondary" id="btnTkctAddRow">+ Thêm dòng</button>
         <button type="button" class="btn small" id="btnTkctExcel" title="File có dòng tiêu đề với ô 'Piece Name', cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải file Excel</button>
         <input type="file" id="fileTkctExcel" accept=".xlsx,.xlsm" style="display:none;">
+        ${/* v7.65.3: XÓA TRẮNG BẢNG để nhập lại từ đầu — nhập nhầm file hoặc gõ sai nửa chừng thì
+             khỏi phải xóa từng dòng. CHỈ xóa trên màn hình; phải bấm Lưu thì mới ghi. */''}
+        <button type="button" class="btn small secondary" id="btnTkctXoaTrang" title="Xóa hết các dòng để nhập lại từ đầu (chưa Lưu thì bản đã lưu vẫn còn nguyên)">🗑 Xóa trắng bảng</button>
         <span class="empty-hint" style="padding:0;">Hình rập trong file Excel được <b>tải lên tự động</b>. Ô hình: <b>bấm rồi Ctrl+V</b> để dán ảnh. Cột <b>Tổng số lượng</b> gõ tay.</span>
       </div>` : ''}`;
   }
@@ -777,6 +780,15 @@ window.ModuleTaiLieuKyThuat = (function () {
   }
   function wireTkctBox(box, state) {
     const dongBo = () => { state.rows = readTkctFromDom(box); };
+    const btnXoaTrang = box.querySelector('#btnTkctXoaTrang');
+    if (btnXoaTrang) btnXoaTrang.addEventListener('click', () => {
+      dongBo();
+      const coDL = state.rows.some(r => String(r.pieceName || '').trim() || r.anhChiTiet);
+      if (coDL && !confirm('Xóa TRẮNG toàn bộ bảng để nhập lại từ đầu?\n\n(Chỉ xóa trên màn hình — chưa bấm Lưu thì bản đã lưu vẫn còn nguyên.)')) return;
+      state.rows = [tkctDongMoi()];
+      renderTkctBox(box, state);
+      toast('Đã xóa trắng bảng. Bấm Lưu nếu muốn ghi đè bản đang lưu.', 'success');
+    });
     const btnAdd = box.querySelector('#btnTkctAddRow');
     if (btnAdd) btnAdd.addEventListener('click', () => { dongBo(); state.rows.push(tkctDongMoi()); renderTkctBox(box, state); });
     box.querySelectorAll('.tkct-del-row').forEach(b => b.addEventListener('click', () => {

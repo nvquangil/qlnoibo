@@ -110,11 +110,39 @@ async function maRapOf(pool, donHangId) {
 }
 
 async function getOrderBasic(pool, maDH) {
+  /* v7.65.3: + AnhSanPham — ANH CUA CHINH LENH SX, do nguoi dung tai len luc Ra lenh SX.
+     Day moi la "anh dai dien hang" that su cua don; ban truoc toi di do TheKhoHangHoa theo ma hang
+     nen hau het don khong ra anh nao (ma tren lenh SX chua chac co the kho, va co the kho chua chac
+     da co anh). */
   const result = await pool.request().input('MaDH', sql.NVarChar, maDH).query(`
-    SELECT DonHangID, MaDH, MaSanPham, TenSanPham FROM DonHangSanXuat WHERE MaDH = @MaDH`);
+    SELECT DonHangID, MaDH, MaSanPham, TenSanPham, AnhSanPham FROM DonHangSanXuat WHERE MaDH = @MaDH`);
   const o = result.recordset[0] || null;
   if (o) o.MaRap = await maRapOf(pool, o.DonHangID);   // v5.53
   return o;
+}
+
+/* ================================================================================================
+   v7.65.3 — ANH DAI DIEN HANG CHO BAN IN TAI LIEU. MOT ban dung chung cho Thong so ky thuat va
+   Thong ke chi tiet, keo hai ban in ra hai anh khac nhau.
+   Thu tu uu tien:
+     1. `DonHangSanXuat.AnhSanPham` — anh tai len ngay luc Ra lenh SX. Gan nhu don nao cung co.
+     2. `TheKhoHangHoa.AnhDaiDien` theo MA SAN PHAM cua lenh — cho don cu chua tai anh o buoc Ra lenh.
+   ⚠️ So ma phai CAT KHOANG TRANG hai dau: ma go tay o lenh SX va ma o the kho hay lech mot dau cach,
+   so bang dau `=` thuong la khong ra dong nao (SQL Server mac dinh khong phan biet hoa thuong nen
+   khong can lo phan do).
+   Boc try/catch: khong tim duoc anh thi ban in khong co anh — KHONG duoc lam gay ca route.
+   ================================================================================================ */
+async function anhDaiDienCuaDon(pool, order) {
+  if (!order) return '';
+  if (order.AnhSanPham) return order.AnhSanPham;
+  const ma = String(order.MaSanPham || '').trim();
+  if (!ma) return '';
+  try {
+    const a = (await pool.request().input('ms', sql.NVarChar, ma)
+      .query(`SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa
+               WHERE LTRIM(RTRIM(MaHang)) = @ms AND NULLIF(LTRIM(RTRIM(ISNULL(AnhDaiDien, ''))), '') IS NOT NULL`)).recordset[0];
+    return (a && a.AnhDaiDien) || '';
+  } catch (e) { return ''; }
 }
 
 // ============ DANH SACH DON HANG KEM TRANG THAI "DA CO TAI LIEU" (dung chung ca 4 man hinh con) ============
@@ -692,12 +720,7 @@ router.get('/thongkechitiet/:maDH', requireAuth, requirePermission('QLSX', 'view
       : `SELECT TOP 1 ID FROM TaiLieuThongKeChiTiet WHERE DonHangID=@id AND ISNULL(LaMau,0)=0 ORDER BY ISNULL(TenPhieu, N''), ID`)).recordset[0];
   /* Ảnh đại diện MẶC ĐỊNH của mã hàng — để bản in có ảnh mà không phải tải lại.
      Bản ghi có `AnhDaiDien` riêng thì frontend ưu tiên cái đó (người dùng đã cố ý thay). */
-  let anhMacDinh = '';
-  try {
-    const a = (await pool.request().input('ms', sql.NVarChar, order.MaSanPham || '')
-      .query('SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms')).recordset[0];
-    anhMacDinh = (a && a.AnhDaiDien) || '';
-  } catch (e) { /* chưa có thẻ kho cho mã này -> bản in không có ảnh mặc định, không phải lỗi */ }
+  const anhMacDinh = await anhDaiDienCuaDon(pool, order);
   res.json({
     success: true, order, anhMacDinh,
     data: row ? await getThongKeChiTietDetail(pool, row.ID) : null
@@ -797,12 +820,7 @@ router.get('/thongsodo/:maDH', requireAuth, requirePermission('QLSX', 'view'), a
   /* v7.65.2: ANH DAI DIEN HANG cho ban in Thong so ky thuat — lay theo ma hang cua lenh SX, dung
      CUNG cach voi Thong ke chi tiet de hai ban in khong the ra hai anh khac nhau.
      Boc try/catch: ma chua co the kho thi ban in khong co anh, KHONG duoc lam gay ca route. */
-  let anhMacDinh = '';
-  try {
-    const a = (await pool.request().input('ms', sql.NVarChar, order.MaSanPham || '')
-      .query('SELECT TOP 1 AnhDaiDien FROM TheKhoHangHoa WHERE MaHang = @ms')).recordset[0];
-    anhMacDinh = (a && a.AnhDaiDien) || '';
-  } catch (e) { /* chua co the kho cho ma nay */ }
+  const anhMacDinh = await anhDaiDienCuaDon(pool, order);
   res.json({ success: true, data: row ? await getThongSoDoDetail(pool, row.ID) : null, order, anhMacDinh });
 });
 
