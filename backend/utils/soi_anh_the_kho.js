@@ -29,10 +29,27 @@ const { sql, getPool } = require('../db');
 
 const args = process.argv.slice(2);
 const co = (t) => args.indexOf(t) !== -1;
-const layChuoi = (t) => { const a = args.find(x => x.indexOf(t + '=') === 0); return a ? a.split('=').slice(1).join('=') : ''; };
+/* Nhan CA HAI kieu: `--ma=AAA` va `--ma AAA` (go co dau cach).
+   ⚠️ Vi sao phai nhan ca hai: go `--ma= BD26C124` thi shell tach thanh 2 doi so, `--ma=` RONG ->
+   ban cu bo qua bo loc AM THAM va in 20 ma gan nhat. Nguoi dung tuong dang xem ma minh hoi. */
+function layChuoi(t) {
+  const gan = args.find(x => x.indexOf(t + '=') === 0);
+  if (gan) {
+    const v = gan.slice(t.length + 1).trim();
+    if (v) return v;
+    // Dang `--ma= AAA`: gia tri roi sang doi so ke tiep.
+    const sau = args[args.indexOf(gan) + 1];
+    return (sau && sau.indexOf('--') !== 0) ? sau.trim() : '';
+  }
+  const i = args.indexOf(t);
+  if (i >= 0) { const sau = args[i + 1]; return (sau && sau.indexOf('--') !== 0) ? sau.trim() : ''; }
+  return '';
+}
 const DS_MA = layChuoi('--ma').split(',').map(s => s.trim()).filter(Boolean);
 const PHIEU = layChuoi('--phieu').trim();
 const CHI_THIEU = co('--thieu-anh');
+/* Go co y loc ma khong ra bo loc nao -> phai BAO, dung im lang in ra thu khac. */
+const DINH_LOC = args.some(x => x.indexOf('--ma') === 0 || x.indexOf('--phieu') === 0);
 
 const uploadDir = path.join(__dirname, '..', 'uploads');
 const so = (v) => Number(v || 0);
@@ -42,7 +59,11 @@ const so = (v) => Number(v || 0);
 function soiFile(duongDan) {
   const s = String(duongDan || '').trim();
   if (!s) return { trangThai: 'TRỐNG' };
-  if (s.indexOf('/uploads/') !== 0) return { trangThai: 'KHÔNG PHẢI FILE (' + s.slice(0, 24) + '…)' };
+  /* In NGUYÊN VĂN giá trị lạ (trong ngoặc kép, có độ dài) — không cắt cụt thành "/…" như bản đầu:
+     thấy đúng chuỗi đang lưu mới biết là rác hay là ảnh dạng data:/http:. */
+  if (s.indexOf('/uploads/') !== 0) {
+    return { trangThai: `KHÔNG PHẢI ĐƯỜNG DẪN ẢNH — đang lưu "${s.slice(0, 60)}" (${s.length} ký tự)` };
+  }
   const ten = s.slice('/uploads/'.length);
   const f = path.join(uploadDir, ten);
   try {
@@ -81,6 +102,19 @@ function soiFile(duongDan) {
     ORDER BY ${coUpdated ? 'ISNULL(h.UpdatedAt, h.CreatedAt)' : 'h.CreatedAt'} DESC`)).recordset;
 
   if (!ma.length) { console.log('\nKhong tim thay ma hang nao khop dieu kien.'); process.exit(1); }
+
+  /* Noi RO dang xem cai gi — kẻo lọc bị bỏ qua mà người dùng tưởng đang xem đúng mã mình hỏi. */
+  console.log('');
+  if (DS_MA.length) console.log('>>> DANG LOC theo ma: ' + DS_MA.join(', '));
+  else if (PHIEU) console.log('>>> DANG LOC theo phieu nhap: ' + PHIEU);
+  else {
+    console.log('>>> KHONG CO BO LOC — dang hien 20 ma SUA GAN NHAT.');
+    if (DINH_LOC) {
+      console.log('    !! Ban co go --ma / --phieu nhung khong doc ra gia tri (thua dau cach?).');
+      console.log('       Go dung: node utils/soi_anh_the_kho.js --ma=BD26C124');
+    }
+  }
+  if (CHI_THIEU) console.log('>>> Chi hien ma DANG THIEU anh.');
 
   /* ---------- Ảnh + số liệu theo màu ---------- */
   const ids = ma.map(x => x.MaHangID);

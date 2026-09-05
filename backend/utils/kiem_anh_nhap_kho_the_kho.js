@@ -183,6 +183,24 @@ async function chay(dsGhi) {
   kiem(/uploads/.test(sSoi) && /file mới nhất|file moi nhat|8 file/i.test(sSoi),
     'liet ke file moi nhat trong uploads de biet viec TAI LEN co chay khong');
 
+  /* CHAY THAT bo phan tich doi so. Bay that da gap: go `--ma= BD26C124` (thua dau cach) thi `--ma=`
+     RONG, ban dau bo qua bo loc AM THAM va in 20 ma gan nhat — nguoi dung tuong dang xem ma minh hoi. */
+  console.log('\n=== 5b. CHAY THAT bo phan tich doi so cua CLI ===');
+  const thanLay = sSoi.slice(sSoi.indexOf('function layChuoi(t)'), sSoi.indexOf('const DS_MA'));
+  kiem(!!thanLay, 'cat duoc ham layChuoi');
+  const layVoi = (argv) => new Function('args', thanLay + ' return layChuoi;')(argv)('--ma');
+  bang(layVoi(['--ma=BD26C124']), 'BD26C124', 'kieu --ma=GIATRI');
+  bang(layVoi(['--ma=', 'BD26C124']), 'BD26C124', 'kieu --ma= GIATRI (THUA DAU CACH) van doc duoc');
+  bang(layVoi(['--ma', 'BD26C124']), 'BD26C124', 'kieu --ma GIATRI');
+  bang(layVoi(['--ma', '--thieu-anh']), '', '--ma dung truoc mot co khac -> KHONG nuot co do');
+  bang(layVoi(['--thieu-anh']), '', 'khong go --ma -> rong');
+  bang(layVoi(['--ma=A,B']), 'A,B', 'nhieu ma ngan cach dau phay');
+  kiem(/const DINH_LOC = args\.some/.test(sSoi) && /khong doc ra gia tri|KHONG CO BO LOC/.test(sSoi),
+    'go --ma ma khong ra gia tri thi CANH BAO, khong im lang in thu khac');
+  kiem(/DANG LOC theo ma|DANG LOC theo phieu/.test(sSoi), 'in ro dang loc theo gi');
+  kiem(/KHÔNG PHẢI ĐƯỜNG DẪN ẢNH — đang lưu/.test(sSoi),
+    'gia tri la in NGUYEN VAN (ban dau cat cut thanh "/…", khong chan doan duoc)');
+
   console.log('\n=== 6. Bump ?v= ===');
   [['module.nhapkho.js', 7.60], ['module.khohang.js', 7.60]].forEach(([f, min]) => {
     const v = (sIndex.match(new RegExp(f.replace(/\./g, '\\.') + '\\?v=([\\d.]+)')) || [])[1];
