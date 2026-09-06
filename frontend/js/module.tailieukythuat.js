@@ -749,6 +749,77 @@ window.ModuleTaiLieuKyThuat = (function () {
   function tkctDongMoi() {
     return { pieceName: '', material: '', quantity: '', pair: '', opposite: '', anhChiTiet: '', tongSoLuong: '', ghiChu: '' };
   }
+
+  /* ================================================================================================
+     v7.68 — TỔNG SỐ LƯỢNG CHI TIẾT THEO VẬT LIỆU.
+     Yêu cầu: cộng cột "Tổng số lượng" của các dòng có tên VẬT LIỆU giống nhau; bảng có bao nhiêu
+     vật liệu thì ra bấy nhiêu dòng tổng.
+
+     ⚠️ Hai chỗ dễ sai, đã xử lý ở ĐÂY để form và bản in không thể ra hai con số khác nhau:
+
+     1. `TongSoLuong` lưu kiểu CHỮ (người dùng gõ tay) nên phải đọc số một cách khoan dung. Người
+        Việt gõ "1.200" là MỘT NGHÌN HAI TRĂM, còn "1.5" là một phẩy năm — `Number()` trả 1.2 cho
+        cả hai, sai hoàn toàn. Quy tắc `soTuChuoi()` bên dưới phân biệt bằng số chữ số sau dấu.
+     2. Gom nhóm theo tên đã CHUẨN HOÁ (cắt khoảng trắng hai đầu, gộp khoảng trắng giữa, không phân
+        biệt hoa/thường) nhưng HIỂN THỊ tên gốc gặp đầu tiên — "Vải chính" và "vải  chính" là một.
+        KHÔNG bỏ dấu tiếng Việt, kẻo gộp nhầm hai vật liệu khác nhau.
+     ================================================================================================ */
+  function soTuChuoi(s) {
+    let t = String(s == null ? '' : s).replace(/[^\d.,-]/g, '').trim();   // bỏ "cái", "pcs", khoảng trắng...
+    if (!t) return 0;
+    const cham = t.lastIndexOf('.'), phay = t.lastIndexOf(',');
+    if (cham >= 0 && phay >= 0) {
+      /* Có cả hai: dấu đứng SAU là dấu thập phân, dấu kia là phân cách nghìn. */
+      const tp = cham > phay ? '.' : ',';
+      t = t.split(tp === '.' ? ',' : '.').join('');
+      if (tp === ',') t = t.replace(',', '.');
+    } else if (cham >= 0 || phay >= 0) {
+      const d = cham >= 0 ? '.' : ',';
+      const phan = t.split(d);
+      /* Nhiều dấu (1.200.000) hoặc đúng 3 chữ số sau dấu (1.200) => PHÂN CÁCH NGHÌN. */
+      const laNghin = phan.length > 2 || (phan.length === 2 && /^\d{3}$/.test(phan[1]));
+      t = laNghin ? phan.join('') : phan.join('.');
+    }
+    const n = Number(t);
+    return isFinite(n) ? n : 0;
+  }
+  function tenVatLieuChuan(s) {
+    return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+  /* Trả [{ ten, tong, soDong }] theo ĐÚNG thứ tự vật liệu xuất hiện lần đầu trong bảng. */
+  function tongTheoVatLieu(rows) {
+    const map = new Map();
+    (rows || []).forEach(r => {
+      const goc = String((r && r.material) || '').trim();
+      const khoa = tenVatLieuChuan(goc);
+      const sl = soTuChuoi(r && r.tongSoLuong);
+      /* Dòng không khai vật liệu mà CÓ số thì vẫn phải hiện — giấu đi là tổng không khớp bảng. */
+      if (!khoa && !sl) return;
+      const k = khoa || ' chuakhai';
+      if (!map.has(k)) map.set(k, { ten: goc || '(chưa khai vật liệu)', tong: 0, soDong: 0 });
+      const m = map.get(k);
+      m.tong += sl;
+      m.soDong += 1;
+    });
+    return Array.from(map.values());
+  }
+  /* Dòng "có nội dung" — DÙNG CHUNG cho bản in và cho khối tổng, để hai bên không thể lệch nhau.
+     v7.68: tính cả dòng mới chỉ khai Vật liệu / Tổng số lượng (trước đây chỉ nhận dòng có Tên chi
+     tiết hoặc ảnh, nên dòng khai đủ số mà chưa đặt tên bị rơi khỏi bản in — và khỏi cả tổng). */
+  function tkctDongCoNoiDung(r) {
+    return !!(String((r && r.pieceName) || '').trim() || (r && r.anhChiTiet)
+      || String((r && r.material) || '').trim() || String((r && r.tongSoLuong) || '').trim());
+  }
+  /* Khối tổng hiển thị trong FORM (bản in dùng <tfoot> của chính bảng, xem buildThongKeChiTietBodyHtml). */
+  function tkctTongVLHtml(rows) {
+    const ds = tongTheoVatLieu((rows || []).filter(tkctDongCoNoiDung));
+    if (!ds.length) return '<div class="empty-hint" style="padding:0;">Chưa có số liệu để cộng theo vật liệu.</div>';
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      ${ds.map(v => `<span class="badge ok" style="font-size:12.5px;">${escapeHtml(v.ten)}: <b>${fmtNumber(v.tong)}</b>
+        <span style="opacity:.7;">(${v.soDong} dòng)</span></span>`).join('')}
+      <span class="empty-hint" style="padding:0;">Tổng chung: <b>${fmtNumber(ds.reduce((s, v) => s + v.tong, 0))}</b></span>
+    </div>`;
+  }
   function tkctGridHtml(state) {
     const soCot = TKCT_COT.length + 3 + (perm.canEdit ? 1 : 0);   // STT + [cột] + Hình + Ghi chú (+Xóa)
     return `<table>
@@ -783,6 +854,11 @@ window.ModuleTaiLieuKyThuat = (function () {
         </tr>`).join('') || `<tr><td colspan="${soCot}" class="empty-hint">Chưa có chi tiết nào — tải file Excel lên hoặc bấm “Thêm dòng”.</td></tr>`}
       </tbody>
     </table>
+    ${/* v7.68: TỔNG SỐ LƯỢNG THEO VẬT LIỆU — cập nhật ngay khi gõ, để soát số trước lúc Lưu/In. */''}
+    <div style="margin-top:8px;padding:8px 10px;border:1px solid #dadce0;border-radius:6px;background:#fafbfc;">
+      <div style="font-weight:600;font-size:12.5px;margin-bottom:5px;">Tổng số lượng theo vật liệu</div>
+      <div id="tkctTongVL">${tkctTongVLHtml(state.rows)}</div>
+    </div>
     ${perm.canEdit ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <button type="button" class="btn small secondary" id="btnTkctAddRow">+ Thêm dòng</button>
         <button type="button" class="btn small" id="btnTkctExcel" title="File có dòng tiêu đề với ô 'Piece Name', cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải file Excel</button>
@@ -808,6 +884,17 @@ window.ModuleTaiLieuKyThuat = (function () {
   }
   function wireTkctBox(box, state) {
     const dongBo = () => { state.rows = readTkctFromDom(box); };
+    /* v7.68: gõ tới đâu cộng tới đó. KHÔNG vẽ lại cả lưới (sẽ mất con trỏ đang gõ) — chỉ thay
+       nội dung ĐÚNG khối tổng. Chỉ nghe 2 cột có ảnh hưởng tới phép cộng. */
+    const veLaiTong = () => {
+      const oTong = box.querySelector('#tkctTongVL');
+      if (oTong) oTong.innerHTML = tkctTongVLHtml(readTkctFromDom(box));
+    };
+    box.querySelectorAll('.tkct-o').forEach(inp => {
+      if (inp.dataset.k !== 'material' && inp.dataset.k !== 'tongSoLuong') return;
+      inp.addEventListener('input', veLaiTong);
+      inp.addEventListener('change', veLaiTong);
+    });
     const btnXoaTrang = box.querySelector('#btnTkctXoaTrang');
     if (btnXoaTrang) btnXoaTrang.addEventListener('click', () => {
       dongBo();
@@ -996,7 +1083,23 @@ window.ModuleTaiLieuKyThuat = (function () {
 
   /* Bản in — cùng khuôn với Thông số kỹ thuật, thêm ảnh đại diện hàng ở đầu phiếu. */
   function buildThongKeChiTietBodyHtml(d) {
-    const rows = (d.rows || []).filter(r => String(r.pieceName || '').trim() || r.anhChiTiet);
+    const rows = (d.rows || []).filter(tkctDongCoNoiDung);   // v7.68: dùng chung bộ lọc với khối tổng
+    /* v7.68: các dòng TỔNG THEO VẬT LIỆU đặt ngay dưới bảng. Số cột tính động theo TKCT_COT nên
+       thêm/bớt cột sau này không làm lệch bảng (trước cột Tổng SL: TT + các cột đứng trước nó;
+       sau nó: Hình chi tiết + Ghi chú). */
+    const iTong = TKCT_COT.findIndex(c => c.k === 'tongSoLuong');
+    const truoc = 1 + (iTong < 0 ? TKCT_COT.length : iTong);
+    const sau = 2 + (iTong < 0 ? 0 : TKCT_COT.length - 1 - iTong);
+    const dsVL = tongTheoVatLieu(rows);
+    const dongTong = dsVL.map(v => `<tr>
+        <td colspan="${truoc}" style="text-align:right;font-weight:600;">Tổng số lượng — ${escapeHtml(v.ten)}</td>
+        <td style="text-align:center;font-weight:700;">${fmtNumber(v.tong)}</td>
+        <td colspan="${sau}"></td>
+      </tr>`).join('') + (dsVL.length > 1 ? `<tr>
+        <td colspan="${truoc}" style="text-align:right;font-weight:700;">TỔNG CỘNG</td>
+        <td style="text-align:center;font-weight:700;">${fmtNumber(dsVL.reduce((s, v) => s + v.tong, 0))}</td>
+        <td colspan="${sau}"></td>
+      </tr>` : '');
     return `
       <h2 style="text-align:center;margin:0 0 6px;">THỐNG KÊ CHI TIẾT</h2>
       ${/* v7.67: dùng chung khối đầu phiếu; "Mã hàng" đổi tên thành "Mã rập" và có ĐƯỜNG LÙI về mã rập
@@ -1020,6 +1123,10 @@ window.ModuleTaiLieuKyThuat = (function () {
           <td style="text-align:center;">${r.anhChiTiet ? `<img src="${escapeHtml(r.anhChiTiet)}" style="max-width:110px;max-height:78px;object-fit:contain;">` : ''}</td>
           <td>${escapeHtml(r.ghiChu || '')}</td>
         </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;">(chưa có chi tiết)</td></tr>'}
+        ${/* v7.68: dòng tổng nằm TRONG <tbody>, KHÔNG dùng <tfoot>. printHtml cắt bảng dài theo dòng
+             của tbody và nhân bản phần khung cho mỗi trang — để ở tfoot thì dòng tổng lặp lại ở
+             MỌI trang. Nằm trong tbody thì nó chỉ xuất hiện đúng một lần, ở cuối bảng. */''}
+        ${dongTong}
       </tbody></table>
       ${d.ghiChu ? `<p style="margin-top:8px;"><b>Ghi chú:</b> ${escapeHtml(d.ghiChu)}</p>` : ''}
       <div class="p-sign" style="display:flex;justify-content:space-between;margin-top:26px;text-align:center;">
