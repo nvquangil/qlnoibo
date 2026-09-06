@@ -94,7 +94,9 @@ window.ModuleTaiLieuKyThuat = (function () {
     body.innerHTML = `
       <div class="form-row">${searchBoxHtml('tlktSearchBox')}</div>
       ${/* v5.84: riêng tab Chỉ định NPL có thêm cột trạng thái XUẤT KHO phụ kiện */''}
-      <table><thead><tr><th>Mã ĐH</th><th>Mã hàng</th><th>Tên sản phẩm</th><th>Khách hàng</th><th>Ngày giao dự kiến</th><th>Trạng thái</th><th>Tài liệu</th>${activeChild === 'chidinhnpl' ? '<th>Xuất kho PK</th>' : ''}<th>Cập nhật lúc</th><th></th></tr></thead>
+      ${/* v7.67.1: cột "Mã hàng" đổi thành "Mã rập" và hiện MÃ RẬP (gộp cả mã Kỹ thuật khai lúc Ghi
+           tiến độ — xem backend/utils/maRapCuaDon.js). */''}
+      <table><thead><tr><th>Mã ĐH</th><th>Mã rập</th><th>Tên sản phẩm</th><th>Khách hàng</th><th>Ngày giao dự kiến</th><th>Trạng thái</th><th>Tài liệu</th>${activeChild === 'chidinhnpl' ? '<th>Xuất kho PK</th>' : ''}<th>Cập nhật lúc</th><th></th></tr></thead>
       <tbody>${orders.map(o => rowHtml(o)).join('') || `<tr><td colspan="${activeChild === 'chidinhnpl' ? 10 : 9}" class="empty-hint">Chưa có lệnh sản xuất nào.</td></tr>`}</tbody></table>`;
     wireTableSearch(body, 'tlktSearchBox');
     body.querySelectorAll('[data-open]').forEach(btn => btn.addEventListener('click', () => {
@@ -119,7 +121,7 @@ window.ModuleTaiLieuKyThuat = (function () {
         : '<span class="empty-hint">—</span>';
     }
     return `<tr>
-      <td><a href="#" class="tlkt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem phiếu In lệnh SX">${escapeHtml(o.MaDH)}</a></td><td>${escapeHtml(o.MaSanPham || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
+      <td><a href="#" class="tlkt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem phiếu In lệnh SX">${escapeHtml(o.MaDH)}</a></td><td>${escapeHtml(o.MaRap || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
       <td>${escapeHtml(o.TenKhachHang || '')}</td><td>${fmtDate(o.NgayGiaoDuKien)}</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan)}</td>
       <td>${o.DaCo ? '<span class="badge ok">Đã có</span>' : '<span class="badge warn">Chưa có</span>'}</td>
       ${activeChild === 'chidinhnpl' ? `<td>${trangThaiXuatPKHtml(o)}</td>` : ''}
@@ -1001,8 +1003,8 @@ window.ModuleTaiLieuKyThuat = (function () {
            của lệnh SX — trước đây ô này lấy d.maHang, đơn nào chưa khai Mã sản phẩm là in ra trắng
            (đúng lỗi "THỐNG KÊ CHI TIẾT mã hàng không hiện ở bản in"). */''}
       ${khoiDauPhieuHtml(d.anhIn, `<div style="font-size:12.5px;">
-          <div><b>Mã rập:</b> ${escapeHtml(String(d.maHang || '').trim() || (d.order && d.order.MaRap) || '')}</div>
-          <div><b>Tên sản phẩm:</b> ${escapeHtml((d.order && d.order.TenSanPham) || '')}</div>
+          <div><b>Mã lệnh SX:</b> ${escapeHtml(d.maDH || '')} &nbsp; <b>Mã rập:</b> ${escapeHtml(maRapDeIn(d))}</div>
+          <div><b>Tên sản phẩm:</b> ${escapeHtml((d.order && d.order.TenSanPham) || d.tenSanPham || '')}</div>
           <div><b>Diễn giải:</b> ${escapeHtml(d.dienGiai || '')}</div>
           <div><b>Ngày cập nhật:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''} &nbsp; <b>Người lập:</b> ${escapeHtml(d.nguoiLap || '')}</div>
           ${d.ten ? `<div><b>Bản:</b> ${escapeHtml(d.ten)}</div>` : ''}
@@ -1027,7 +1029,7 @@ window.ModuleTaiLieuKyThuat = (function () {
       </div>`;
   }
   function printThongKeChiTiet(d, maDH) {
-    printHtml(`${maDH} - Thong ke chi tiet${d.ten ? ' - ' + d.ten : ''}`, buildThongKeChiTietBodyHtml(d), {
+    printHtml(`${maDH} - Thong ke chi tiet${d.ten ? ' - ' + d.ten : ''}`, buildThongKeChiTietBodyHtml({ ...d, maDH }), {   // v7.67.1 +maDH
       extraStyle: 'table{table-layout:auto;width:100%;} th,td{padding:3px 5px;font-size:11.5px;} h2{font-size:17px;}',
       logo: true
     });
@@ -1759,17 +1761,27 @@ window.ModuleTaiLieuKyThuat = (function () {
     </div>`;
   }
 
+  /* v7.67 — MÃ RẬP DÙNG CHO BẢN IN: ưu tiên cái người dùng gõ trong ô Mã rập của form (`maHang` —
+     vẫn lưu vào cột MaHang nên KHÔNG cần migration), thiếu thì lấy mã rập của lệnh SX (`maRap`, gộp
+     cả mã Kỹ thuật khai lúc Ghi tiến độ), thiếu nữa thì lấy từ object order nếu bên gọi truyền vào. */
+  function maRapDeIn(d) {
+    return String((d && d.maHang) || '').trim()
+      || String((d && d.maRap) || '').trim()
+      || String((d && d.order && d.order.MaRap) || '').trim();
+  }
+
   /* v7.67 — CỘT "Mã hàng" ĐỔI TÊN THÀNH "Mã rập" (yêu cầu Nguyen).
      Giá trị: ưu tiên cái người dùng gõ trong ô Mã rập của form (data.maHang — vẫn lưu vào cột MaHang
      nên KHÔNG cần migration), thiếu thì lấy mã rập của lệnh SX. Mã rập của lệnh SX nay gộp cả mã mà
      bộ phận Kỹ thuật khai lúc **Ghi tiến độ** (xem backend/utils/maRapCuaDon.js).
      Ô "Mã rập" cũ ở dòng 2 đổi thành Tên sản phẩm cho khỏi lặp hai ô giống hệt nhau. */
   function docInfoRowsHtml(data) {
-    const maRap = String(data.maHang || '').trim() || String(data.maRap || '').trim();
     return `
-      <tr><td style="width:50%;"><b>Mã rập:</b> ${escapeHtml(maRap)}</td><td><b>Ngày cập nhật:</b> ${fmtDate(data.ngayCapNhat)}</td></tr>
-      <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(data.tenSanPham || '')}</td><td><b>Người lập:</b> ${escapeHtml(data.nguoiLap || '')}</td></tr>
-      <tr><td colspan="2"><b>Diễn giải:</b> ${escapeHtml(data.dienGiai || '')}${data.tenBan ? ' &nbsp;·&nbsp; <b>Bản:</b> ' + escapeHtml(data.tenBan) : ''}</td></tr>`;
+      ${/* v7.67.1: Mã lệnh SX và Mã rập nằm CÙNG MỘT HÀNG (yêu cầu Nguyen) — trước đây tách 2 hàng. */''}
+      <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(data.maDH || '')}</td><td><b>Mã rập:</b> ${escapeHtml(maRapDeIn(data))}</td></tr>
+      <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(data.tenSanPham || '')}</td><td><b>Ngày cập nhật:</b> ${fmtDate(data.ngayCapNhat)}</td></tr>
+      <tr><td><b>Người lập:</b> ${escapeHtml(data.nguoiLap || '')}</td><td>${data.tenBan ? '<b>Bản:</b> ' + escapeHtml(data.tenBan) : ''}</td></tr>
+      <tr><td colspan="2"><b>Diễn giải:</b> ${escapeHtml(data.dienGiai || '')}</td></tr>`;
   }
   function buildTaiLieuChungBodyHtml(data) {
     const bodyRows = (data.muc || []).map((m, i) => `
@@ -1781,7 +1793,9 @@ window.ModuleTaiLieuKyThuat = (function () {
       ${khoiDauPhieuHtml(data.anhIn, `<table>${docInfoRowsHtml(data)}</table>`)}
       <table style="margin-top:10px;">${bodyRows}</table>`;
   }
-  function printTaiLieuChung(data, maDH) { printHtml(`${maDH} - Tài liệu kỹ thuật chung`, buildTaiLieuChungBodyHtml(data)); }
+  /* v7.67.1: bơm `maDH` vào ngay ở HÀM IN, nên MỌI lối gọi (nút In trong form, nút In ở danh sách bản,
+     In tất cả) đều có Mã lệnh SX trên bản in — khỏi phải nhớ thêm ở từng chỗ gọi. */
+  function printTaiLieuChung(data, maDH) { printHtml(`${maDH} - Tài liệu kỹ thuật chung`, buildTaiLieuChungBodyHtml({ ...data, maDH })); }
 
   // v5.58: BẢN IN theo đúng biểu mẫu khách gửi (thongsodo.xls):
   //   Tiêu đề "THÔNG SỐ KĨ THUẬT" -> "1. BẢNG THÔNG SỐ <ngày>" -> bảng
@@ -1823,7 +1837,7 @@ window.ModuleTaiLieuKyThuat = (function () {
         <tbody>${bodyRows}</tbody>
       </table>`;
   }
-  function printThongSoDo(data, maDH) { printHtml(`${maDH} - Thông số đo`, buildThongSoDoBodyHtml(data)); }
+  function printThongSoDo(data, maDH) { printHtml(`${maDH} - Thông số đo`, buildThongSoDoBodyHtml({ ...data, maDH })); }   // v7.67.1 +maDH
 
   function buildMoTaSanPhamBodyHtml(data, heading) {
     const oGrid = data.oGrid || [];
@@ -1845,7 +1859,7 @@ window.ModuleTaiLieuKyThuat = (function () {
       <table style="margin-top:10px;width:100%;table-layout:fixed;">${gridRows}</table>
       ${data.chuY ? `<div style="margin-top:14px;border:1px solid #cc4125;border-radius:6px;padding:10px 12px;"><b>Chú ý:</b> ${escapeHtml(data.chuY).replace(/\n/g, '<br>')}</div>` : ''}`;
   }
-  function printMoTaSanPham(data, maDH, label = 'Mô tả sản phẩm') { printHtml(`${maDH} - ${label}`, buildMoTaSanPhamBodyHtml(data, (label || '').toUpperCase())); }
+  function printMoTaSanPham(data, maDH, label = 'Mô tả sản phẩm') { printHtml(`${maDH} - ${label}`, buildMoTaSanPhamBodyHtml({ ...data, maDH }, (label || '').toUpperCase())); }   // v7.67.1 +maDH
 
   function buildChiDinhNplBodyHtml(rows, maDH, orderInfo) {
     const o = orderInfo || {};
@@ -1872,8 +1886,9 @@ window.ModuleTaiLieuKyThuat = (function () {
       <h2 style="text-align:center;">${escapeHtml(tieuDe)}</h2>
       ${/* v7.67: + ảnh sản phẩm cho cả 4 bản in đơn giá. */''}
       ${khoiDauPhieuHtml(anhIn || order.AnhSanPham, `<table>
-        <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(maDH)}</td><td><b>Tên sản phẩm:</b> ${escapeHtml(order.TenSanPham || '')}</td></tr>
-        <tr><td><b>Mã rập:</b> ${escapeHtml(order.MaRap || '')}</td><td><b>Bản:</b> ${ten ? escapeHtml(ten) : '(không tên)'}</td></tr>
+        ${/* v7.67.1: Mã lệnh SX + Mã rập CÙNG MỘT HÀNG (trước đây tách 2 hàng — Nguyen báo sai). */''}
+        <tr><td style="width:50%;"><b>Mã lệnh SX:</b> ${escapeHtml(maDH)}</td><td><b>Mã rập:</b> ${escapeHtml(order.MaRap || '')}</td></tr>
+        <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(order.TenSanPham || '')}</td><td><b>Bản:</b> ${ten ? escapeHtml(ten) : '(không tên)'}</td></tr>
       </table>`)}`;
   }
   async function printDonGia(maDH, loai, ten) {
@@ -1945,7 +1960,8 @@ window.ModuleTaiLieuKyThuat = (function () {
     const kemAnh = (r) => Object.assign({}, r.data, {
       anhIn: r.anhMacDinh || '',
       maRap: (r.order && r.order.MaRap) || '',
-      tenSanPham: (r.order && r.order.TenSanPham) || ''
+      tenSanPham: (r.order && r.order.TenSanPham) || '',
+      maDH   // v7.67.1: "In tất cả" gọi thẳng builder, không qua hàm in -> tự bơm Mã lệnh SX
     });
     if (tsd.data) sections.push(buildThongSoDoBodyHtml(kemAnh(tsd)));
     if (mtsp.data) sections.push(buildMoTaSanPhamBodyHtml(kemAnh(mtsp), 'MÔ TẢ ĐƯỜNG MAY'));

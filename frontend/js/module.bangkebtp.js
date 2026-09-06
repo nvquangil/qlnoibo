@@ -267,9 +267,10 @@ window.ModuleBangKeBTP = (function () {
       <h2 style="text-align:center;">BẢNG KÊ BÁN THÀNH PHẨM</h2>
       ${anh}
       ${/* v7.67: cột "Mã hàng" đổi tên thành "Mã rập" cho đồng bộ với các bản in Tài liệu may/đóng gói;
-           thiếu mã rập thì mới lùi về mã hàng cũ để phiếu không trống trơn. */''}
-      <p><b>Mã rập:</b> ${escapeHtml(String(d.maRap || '').trim() || d.maHang || '')} &nbsp; <b>Ngày:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''}</p>
-      <p><b>Tên sản phẩm:</b> ${escapeHtml(d.tenSanPham || '')}${d.tenBan ? ' &nbsp; <b>Bản:</b> ' + escapeHtml(d.tenBan) : ''}</p>
+           thiếu mã rập thì mới lùi về mã hàng cũ để phiếu không trống trơn.
+           v7.67.1: Mã lệnh SX và Mã rập nằm CÙNG MỘT HÀNG. */''}
+      <p><b>Mã lệnh SX:</b> ${escapeHtml(d.maDH || '')} &nbsp; <b>Mã rập:</b> ${escapeHtml(String(d.maRap || '').trim() || d.maHang || '')}</p>
+      <p><b>Tên sản phẩm:</b> ${escapeHtml(d.tenSanPham || '')} &nbsp; <b>Ngày:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''}${d.tenBan ? ' &nbsp; <b>Bản:</b> ' + escapeHtml(d.tenBan) : ''}</p>
       ${d.ghiChu ? `<p><b>Ghi chú:</b> ${escapeHtml(d.ghiChu)}</p>` : ''}
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="4">
         <thead><tr><th style="width:38px;">STT</th><th>Màu vải chính</th>${(d.cols || []).map(c => `<th>${escapeHtml(c)}</th>`).join('')}<th>Tổng cộng</th><th>Ghi chú</th></tr></thead>
@@ -278,7 +279,7 @@ window.ModuleBangKeBTP = (function () {
       </table>`;
   }
   function printBangKe(d, maDH) {
-    printHtml('Bảng kê bán thành phẩm - ' + maDH, buildBangKeBodyHtml(d));
+    printHtml('Bảng kê bán thành phẩm - ' + maDH, buildBangKeBodyHtml({ ...d, maDH }));   // v7.67.1 +maDH
   }
   // v5.43: dựng HTML "Bảng kê BTP" của 1 đơn để in GỘP cùng tài liệu kỹ thuật (module.tailieukythuat gọi).
   // Trả null nếu đơn CHƯA CÓ bảng kê (để bỏ qua khi in). Map response /api/bangke/:maDH -> shape build.
@@ -293,7 +294,7 @@ window.ModuleBangKeBTP = (function () {
     return buildBangKeBodyHtml({
       maHang: d.MaHang || order.MaSanPham || maDH, ngayCapNhat: d.NgayCapNhat, ghiChu: d.GhiChu,
       cols: d.cols || [], rows: d.rows || [], anh: order.AnhSanPham,
-      tenSanPham: order.TenSanPham, maRap: order.MaRap, tenBan: ten || ''
+      tenSanPham: order.TenSanPham, maRap: order.MaRap, tenBan: ten || '', maDH   // v7.67.1 +maDH
     });
   }
 

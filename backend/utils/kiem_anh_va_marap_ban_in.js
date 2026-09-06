@@ -72,7 +72,8 @@ function demAnh(html, src) {
 }
 
 if (B) {
-  const chung = { maHang: '', maRap: 'RAP-77', tenSanPham: 'Áo thun', ngayCapNhat: '2026-09-05', nguoiLap: 'Nguyen', anhIn: ANH };
+  /* `maDH` do CHINH HAM IN bom vao ({ ...data, maDH }) — muc 1f duoi kiem dieu do o ma nguon. */
+  const chung = { maHang: '', maRap: 'RAP-77', tenSanPham: 'Áo thun', ngayCapNhat: '2026-09-05', nguoiLap: 'Nguyen', anhIn: ANH, maDH: 'DH2609001' };
 
   /* Moi phan tu: [ten ban in, html dung ra] */
   const banIn = [
@@ -94,6 +95,28 @@ if (B) {
   banIn.forEach(([ten, html]) => {
     kiem(/Mã rập:/.test(html) && html.indexOf('RAP-77') >= 0, `${ten}: co dong "Ma rap:" va DUNG gia tri`);
   });
+
+  /* ================================================================================================
+     v7.67.1 — MA LENH SX VA MA RAP PHAI NAM CUNG MOT HANG.
+     Nguyen bao lai: "o ban in van de ma lenh sx, ma rap 2 hang khac nhau".
+     Cach kiem CHAC: cat HTML thanh tung hang (<tr> hoac <div>) roi doi phai co MOT hang chua CA HAI
+     nhan. Kiem kieu "co ca hai chuoi trong html" thi tach ra 2 hang van dat -> vo dung.
+     ================================================================================================ */
+  console.log('\n--- 1b2. Ma lenh SX + Ma rap CUNG MOT HANG ---');
+  const cacHang = (html) => String(html)
+    .replace(/<\/(tr|div|p)>/g, '\u0001')
+    .split('\u0001');
+  banIn.forEach(([ten, html]) => {
+    const hang = cacHang(html);
+    const cungHang = hang.filter(h => /Mã lệnh SX:/.test(h) && /Mã rập:/.test(h));
+    const rieng = hang.filter(h => /Mã lệnh SX:/.test(h) !== /Mã rập:/.test(h) && (/Mã lệnh SX:/.test(h) || /Mã rập:/.test(h)));
+    kiem(cungHang.length === 1 && rieng.length === 0,
+      `${ten}: Ma lenh SX va Ma rap tren CUNG MOT hang`,
+      `cung hang=${cungHang.length}, tach rieng=${rieng.length}`);
+  });
+  banIn.forEach(([ten, html]) => {
+    kiem(html.indexOf('DH2609001') >= 0, `${ten}: co Ma lenh SX tren ban in`);
+  });
   banIn.forEach(([ten, html]) => {
     kiem(!/<b>Mã hàng:<\/b>/.test(html), `${ten}: KHONG con nhan "Ma hang" (da doi thanh Ma rap)`);
   });
@@ -111,6 +134,19 @@ if (B) {
   kiem(!/<img/.test(khongAnh), 'khong co anh -> khong sinh the <img> rong');
   kiem(/<table>/.test(khongAnh) && !/display:flex/.test(khongAnh.split('<table>')[0].slice(-200)),
     'khong co anh -> khoi thong tin chiem het be ngang nhu cu');
+
+  console.log('\n--- 1f. HAM IN tu bom maDH -> moi loi goi deu co Ma lenh SX ---');
+  const sachTlktA = bo(sTlkt);
+  [
+    ['buildTaiLieuChungBodyHtml({ ...data, maDH })', 'Tai lieu ky thuat chung'],
+    ['buildThongSoDoBodyHtml({ ...data, maDH })', 'Thong so ky thuat'],
+    ['buildMoTaSanPhamBodyHtml({ ...data, maDH }', 'Mo ta / Quy cach / Hinh in theu'],
+    ['buildThongKeChiTietBodyHtml({ ...d, maDH })', 'Thong ke chi tiet']
+  ].forEach(([chuoi, ten]) => kiem(sachTlktA.indexOf(chuoi) > 0, `${ten}: ham in bom maDH vao builder`));
+  kiem(/tenSanPham: \(r\.order && r\.order\.TenSanPham\) \|\| '',\s*maDH/.test(sachTlktA),
+    '"In tat ca" (goi thang builder, khong qua ham in) cung bom maDH');
+  kiem(/buildBangKeBodyHtml\(\{ \.\.\.d, maDH \}\)/.test(bo(sBtp)), 'Bang ke BTP: ham in bom maDH');
+  kiem(/tenBan: ten \|\| '', maDH/.test(bo(sBtp)), 'Bang ke BTP: duong in gop cung co maDH');
 
   console.log('\n--- 1e. khoiDauPhieuHtml: hop dong dung ---');
   bang(B.khoiDauPhieuHtml('', '<i>X</i>'), '<i>X</i>', 'anh rong -> tra nguyen noi dung');
@@ -276,6 +312,23 @@ function poolGia(traVe, ghiCau) {
   kiem(/value="\$\{escapeHtml\(\(data && data\.maHang\) \|\| \(order && order\.MaRap\)/.test(sachTlkt),
     'gia tri mac dinh cua o Ma rap lay TU LENH SX (khong con lay MaSanPham)');
   kiem(!/<b>Mã hàng:<\/b>/.test(bo(sBtp)), 'ban in Bang ke BTP cung doi "Ma hang" thanh "Ma rap"');
+  /* Bang ke BTP: hai nhan cung nam trong MOT the <p>. */
+  const pBtp = (bo(sBtp).match(/<p><b>Mã lệnh SX:<\/b>[^]*?<\/p>/) || [''])[0];
+  kiem(/Mã lệnh SX:/.test(pBtp) && /Mã rập:/.test(pBtp),
+    'Bang ke BTP: Ma lenh SX va Ma rap CUNG MOT hang');
+
+  console.log('\n--- 6b. DANH SACH lenh SX: cot "Ma hang" -> "Ma rap" va HIEN ma rap ---');
+  const dongTieuDe = (sachTlkt.match(/<th>Mã ĐH<\/th>[^\n]*/) || [''])[0];
+  kiem(/<th>Mã rập<\/th>/.test(dongTieuDe), 'tieu de cot doi thanh "Ma rap"', dongTieuDe.slice(0, 90));
+  kiem(!/<th>Mã hàng<\/th>/.test(dongTieuDe), 'khong con tieu de cot "Ma hang"');
+  /* O du lieu phai doc o.MaRap — doi nhan ma van in MaSanPham la chua lam gi ca. */
+  const dongDuLieu = (sachTlkt.match(/class="tlkt-lenh"[^\n]*/) || [''])[0];
+  kiem(/\$\{escapeHtml\(o\.MaRap \|\| ''\)\}/.test(dongDuLieu),
+    'o du lieu cot thu 2 lay o.MaRap (khong con o.MaSanPham)', dongDuLieu.slice(0, 140));
+  kiem(!/o\.MaSanPham/.test(dongDuLieu), 'khong con in MaSanPham o cot do');
+  /* Va backend phai TRA MaRap cho danh sach — gop ca nguon Ghi tien do. */
+  kiem(/rows\.forEach\(o => \{ o\.MaRap = mrMap\[o\.DonHangID\] \|\| ''; \}\);/.test(sRoute),
+    'backend /orders gan MaRap cho tung dong bang ban gop 2 nguon');
 
   [['common.js', 7.67], ['module.tailieukythuat.js', 7.67], ['module.bangkebtp.js', 7.67]].forEach(([f, min]) => {
     const v = (sIndex.match(new RegExp(f.replace(/\./g, '\\.') + '\\?v=([\\d.]+)')) || [])[1];
