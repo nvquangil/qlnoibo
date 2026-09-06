@@ -244,6 +244,29 @@ if (B) {
   kiem(/oTong\.innerHTML = tkctTongVLHtml\(readTkctFromDom\(box\)\)/.test(bo(sTlkt)),
     'go toi dau cong toi do — chi thay khoi tong, KHONG ve lai ca luoi (ve lai la mat con tro dang go)');
 
+  /* ================================================================================================
+     v7.68.1 — KHOI THONG TIN LENH SX PHAI KE BANG O MOI BAN IN (ke ca Thong ke chi tiet).
+     ================================================================================================ */
+  console.log('\n--- 1k. Khoi thong tin dau phieu: KE BANG o MOI ban in ---');
+  banIn.forEach(([ten, html]) => {
+    /* Lay phan TRUOC bang du lieu chinh: khoi dau phieu phai la <table>, khong phai <div> chu tran. */
+    const dau = html.slice(0, html.indexOf('<table><thead>') >= 0 ? html.indexOf('<table><thead>') : html.length);
+    kiem(/<table>/.test(dau), `${ten}: khoi thong tin lenh SX co KE BANG`);
+  });
+  const tkctKe = B.buildThongKeChiTietBodyHtml({ ...chung, rows: dsThu, order: { MaRap: 'RAP-77', TenSanPham: 'Áo thun' } });
+  const dauTkct = tkctKe.slice(0, tkctKe.indexOf('<table><thead>'));
+  kiem(/<table>\s*<tr>/.test(dauTkct.replace(/\n\s*/g, '\n')) || /<table>[\s\S]*<tr>/.test(dauTkct),
+    'Thong ke chi tiet: dau phieu dung <table><tr> (khong con <div> chu tran)');
+  kiem(!/font-size:12\.5px;">\s*<div><b>Mã lệnh SX/.test(tkctKe),
+    'khong con ban tu ke bang <div> cu');
+  /* Dung CHUNG docInfoRowsHtml -> doi bo cuc dau phieu chi phai sua MOT cho. */
+  kiem(/khoiDauPhieuHtml\(d\.anhIn, `<table>\$\{docInfoRowsHtml\(\{/.test(bo(sTlkt)),
+    'Thong ke chi tiet goi docInfoRowsHtml() dung chung, khong tu ke lai');
+  /* Va van phai giu du 6 muc thong tin sau khi doi sang bang. */
+  [['Mã lệnh SX', 'DH2609001'], ['Mã rập', 'RAP-77'], ['Tên sản phẩm', 'Áo thun'], ['Người lập', 'Nguyen']]
+    .forEach(([nhan, gt]) => kiem(dauTkct.indexOf(nhan) > 0 && dauTkct.indexOf(gt) > 0,
+      `Thong ke chi tiet: van con muc "${nhan}" va dung gia tri`));
+
   console.log('\n--- 1e. khoiDauPhieuHtml: hop dong dung ---');
   bang(B.khoiDauPhieuHtml('', '<i>X</i>'), '<i>X</i>', 'anh rong -> tra nguyen noi dung');
   bang(B.khoiDauPhieuHtml('   ', '<i>X</i>'), '<i>X</i>', 'anh chi co khoang trang -> coi nhu rong');

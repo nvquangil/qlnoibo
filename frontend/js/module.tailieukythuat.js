@@ -1105,13 +1105,17 @@ window.ModuleTaiLieuKyThuat = (function () {
       ${/* v7.67: dùng chung khối đầu phiếu; "Mã hàng" đổi tên thành "Mã rập" và có ĐƯỜNG LÙI về mã rập
            của lệnh SX — trước đây ô này lấy d.maHang, đơn nào chưa khai Mã sản phẩm là in ra trắng
            (đúng lỗi "THỐNG KÊ CHI TIẾT mã hàng không hiện ở bản in"). */''}
-      ${khoiDauPhieuHtml(d.anhIn, `<div style="font-size:12.5px;">
-          <div><b>Mã lệnh SX:</b> ${escapeHtml(d.maDH || '')} &nbsp; <b>Mã rập:</b> ${escapeHtml(maRapDeIn(d))}</div>
-          <div><b>Tên sản phẩm:</b> ${escapeHtml((d.order && d.order.TenSanPham) || d.tenSanPham || '')}</div>
-          <div><b>Diễn giải:</b> ${escapeHtml(d.dienGiai || '')}</div>
-          <div><b>Ngày cập nhật:</b> ${d.ngayCapNhat ? fmtDate(d.ngayCapNhat) : ''} &nbsp; <b>Người lập:</b> ${escapeHtml(d.nguoiLap || '')}</div>
-          ${d.ten ? `<div><b>Bản:</b> ${escapeHtml(d.ten)}</div>` : ''}
-        </div>`)}
+      ${/* v7.68.1: khối thông tin lệnh SX KẺ BẢNG y như các tài liệu khác — trước đây riêng phiếu này
+           dựng bằng <div> nên nhìn lạc lõng so với Thông số kỹ thuật / Mô tả / Đơn giá.
+           Dùng thẳng docInfoRowsHtml() (bản dùng chung) thay vì tự kẻ lại, để sau này đổi bố cục đầu
+           phiếu chỉ phải sửa MỘT chỗ. Chỉ cần ánh xạ 2 tên trường riêng của phiếu này:
+             · tên sản phẩm nằm trong `order`   · tên bản là `ten` (nơi khác gọi là `tenBan`). */''}
+      ${khoiDauPhieuHtml(d.anhIn, `<table>${docInfoRowsHtml({
+        ...d,
+        maRap: maRapDeIn(d),
+        tenSanPham: (d.order && d.order.TenSanPham) || d.tenSanPham || '',
+        tenBan: d.ten || d.tenBan || ''
+      })}</table>`)}
       <table><thead><tr>
         <th style="width:34px;">TT</th>
         ${TKCT_COT.map(c => `<th>${escapeHtml(c.nhan)}</th>`).join('')}
