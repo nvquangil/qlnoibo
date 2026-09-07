@@ -68,10 +68,11 @@
     const k = kyMacDinh();
     container.innerHTML = `
       <div class="toolbar" style="gap:8px;flex-wrap:wrap;align-items:flex-end;">
-        ${/* v7.75: ô ngày hiện dd/mm/yyyy. `input type="date"` hiển thị theo ngôn ngữ Windows nên
-             máy đặt tiếng Anh là ra mm/dd/yyyy, không ép được — xem oNgayHtml() ở common.js. */''}
-        <div><label>Từ ngày</label>${oNgayHtml('dbTu', k.tu)}</div>
-        <div><label>Đến ngày</label>${oNgayHtml('dbDen', k.den)}</div>
+        ${/* v7.76: quay lại `input type="date"` như MỌI màn hình khác — việc hiện dd/mm/yyyy do
+             enhanceONgay() trong common.js tự lo cho toàn hệ thống. Một cơ chế duy nhất, khỏi có
+             hai kiểu ô ngày song song. */''}
+        <div><label>Từ ngày</label><input type="date" id="dbTu" value="${k.tu}"></div>
+        <div><label>Đến ngày</label><input type="date" id="dbDen" value="${k.den}"></div>
         <button class="btn secondary" id="dbLoc">Xem</button>
         <button class="btn secondary" id="dbKy">Tháng này</button>
         <button class="btn secondary" id="dbKyNam">Năm nay</button>
@@ -79,8 +80,7 @@
         <button class="btn" id="dbChonKhach">👥 Chọn khách theo dõi</button>
       </div>
       <div id="dbBody"><div class="empty-hint">Đang tải...</div></div>`;
-    wireONgay(container, 'dbTu');    // v7.75
-    wireONgay(container, 'dbDen');
+    enhanceONgay(container);   // v7.76: dashboard vẽ thẳng vào tab, gọi luôn cho chắc (gọi lại không bọc 2 lần)
     document.getElementById('dbLoc').onclick = taiSoLieu;
     document.getElementById('dbChonKhach').onclick = moChonKhach;
     document.getElementById('dbKy').onclick = () => { const x = kyMacDinh(); dat(x.tu, x.den); };
@@ -89,8 +89,8 @@
       dat(`${n.getFullYear()}-01-01`, ngayISO(n));   // v7.72: không qua UTC nữa
     };
     function dat(tu, den) {
-      datONgay('dbTu', tu, container);      // v7.75: đặt bằng ISO, ô tự hiện dd/mm/yyyy
-      datONgay('dbDen', den, container);
+      document.getElementById('dbTu').value = tu;
+      document.getElementById('dbDen').value = den;
       taiSoLieu();
     }
     // Nạp danh sách khách theo dõi TRƯỚC khi gọi số liệu, không thì lần vẽ đầu ra "tất cả khách".
@@ -105,8 +105,8 @@
     body.innerHTML = '<div class="empty-hint">Đang tải...</div>';
     const p = new URLSearchParams();
     /* v7.75: gửi lên máy chủ vẫn là ISO 'yyyy-mm-dd' — chỉ phần NHÌN THẤY là dd/mm/yyyy. */
-    p.set('tuNgay', docONgay('dbTu'));
-    p.set('denNgay', docONgay('dbDen'));
+    p.set('tuNgay', document.getElementById('dbTu').value);
+    p.set('denNgay', document.getElementById('dbDen').value);
     const ds = khachTheoDoi();
     if (ds.length) p.set('khach', ds.join('|'));
     const kq = await apiGet('/api/dashboard/kinhdoanh?' + p.toString());

@@ -172,8 +172,10 @@ kiem(/click'[^\n]*if \(!panel\)/.test(sCommon),
   'dang mo danh sach thi bam khong dung lai (van dat duoc con tro giua chu)');
 
 console.log('\n=== 3. Moc goi: khong man nao bi bo sot ===');
-kiem(/function enhanceInputs\(root\) \{ enhanceSelects\(root\); enhanceDatalists\(root\); \}/.test(sCommon),
-  'co enhanceInputs goi CA HAI');
+/* v7.76: enhanceInputs nay goi BA bo nang cap (thêm enhanceONgay cho ô ngày dd/mm/yyyy).
+   Ghim cứng cả câu là mỗi lần thêm bộ mới lại đỏ oan -> chỉ đòi CÓ ĐỦ select + datalist. */
+kiem(/function enhanceInputs\(root\) \{[^}]*enhanceSelects\(root\);[^}]*enhanceDatalists\(root\);/.test(sCommon),
+  'co enhanceInputs goi CA HAI (select + datalist)');
 /* 4 = 1 dong dinh nghia + 2 moc cua modal (mo modal + MutationObserver them dong) + 1 moc .content. */
 const soGoi = (bo(sCommon).match(/enhanceInputs\(/g) || []).length;
 kiem(soGoi === 4, 'enhanceInputs duoc goi o DU 3 moc (+1 dong dinh nghia)', String(soGoi));

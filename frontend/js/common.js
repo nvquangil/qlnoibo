@@ -163,74 +163,138 @@ function isoTuNgayVN(s) {
   if (dt.getDate() !== d || dt.getMonth() !== th - 1) return '';
   return ngayISO(dt);
 }
-function oNgayHtml(id, iso, thuocTinh) {
-  return `<span class="o-ngay" style="display:inline-flex;align-items:center;gap:2px;">
-    <input type="text" id="${id}" class="o-ngay-chu" inputmode="numeric" maxlength="10"
-           placeholder="dd/mm/yyyy" value="${escapeHtml(ngayVNTuISO(iso))}"
-           data-iso="${escapeHtml(iso || '')}" style="width:118px;" ${thuocTinh || ''}>
-    <input type="date" id="${id}_lich" class="o-ngay-lich" value="${escapeHtml(iso || '')}"
-           tabindex="-1" aria-hidden="true"
-           style="width:0;height:0;padding:0;border:0;opacity:0;position:absolute;pointer-events:none;">
-    <button type="button" class="btn small secondary o-ngay-nut" data-cho="${id}"
-            title="Chọn ngày trên lịch" style="padding:2px 6px;">📅</button>
-  </span>`;
-}
-function wireONgay(root, id) {
-  const oChu = (root || document).querySelector('#' + id);
-  const oLich = (root || document).querySelector('#' + id + '_lich');
-  const nut = (root || document).querySelector(`.o-ngay-nut[data-cho="${id}"]`);
-  if (!oChu || !oLich) return;
+/* ================================================================================================
+   v7.76 — NÂNG CẤP **TẠI CHỖ** MỌI `<input type="date">` TRONG HỆ THỐNG (62 ô, 15 file).
 
-  const datISO = (iso) => {
-    oChu.dataset.iso = iso || '';
-    oChu.value = ngayVNTuISO(iso);
-    oLich.value = iso || '';
-    oChu.dispatchEvent(new Event('change', { bubbles: true }));
-  };
+   ⚠️ VÌ SAO KHÔNG SỬA TỪNG Ô: trong 62 ô đó có 25 ô mang `name=` (giá trị đi qua `FormData` lên
+   API) và 19 ô `required`. Đổi từng ô sang ô chữ là phải sửa mọi chỗ `fd.get('ngay')`,
+   `getElementById(...).value`, mọi handler 'change' — sai một chỗ là phiếu ghi ngày dạng
+   "07/09/2026" vào cột DATE, hoặc nút Lưu im lặng không phản ứng.
+
+   CÁCH LÀM (cùng lối với enhanceSelects/enhanceDatalists đã có sẵn): GIỮ NGUYÊN `<input type="date">`
+   làm nguồn giá trị — nguyên `id`, `name`, `value`, `min`, `max` — chỉ ẩn nó đi và chèn thêm một ô
+   CHỮ hiện dd/mm/yyyy ở trước. Nhờ vậy:
+     · `fd.get('ngay')`, `.value`, `getElementById(id).value` VẪN trả 'yyyy-mm-dd' như cũ;
+     · mọi `addEventListener('change')` sẵn có vẫn nhận sự kiện (ta bắn lại trên ô date gốc);
+     · KHÔNG phải sửa file nào khác, và ô ngày vẽ ra sau này cũng tự được nâng cấp.
+
+   `required` phải CHUYỂN sang ô chữ: để `required` trên một ô đang ẩn thì Chrome chặn submit với
+   "An invalid form control is not focusable" — form đứng im mà không báo gì.
+
+   Opt-out một ô: thêm `data-nosearch` (dùng chung cờ với các bộ nâng cấp khác).
+   ================================================================================================ */
+function enhanceONgay(root) {
+  if (!root || root.nodeType !== 1) return;
+  const ds = [];
+  if (root.tagName === 'INPUT' && root.type === 'date') ds.push(root);
+  if (root.querySelectorAll) root.querySelectorAll('input[type="date"]').forEach(i => ds.push(i));
+  ds.forEach(enhanceOneONgay);
+}
+function enhanceOneONgay(oNgay) {
+  if (!oNgay || oNgay.dataset.ngayEnhanced != null || oNgay.dataset.nosearch != null) return;
+  oNgay.dataset.ngayEnhanced = '1';
+
+  const oChu = document.createElement('input');
+  oChu.type = 'text';
+  oChu.className = 'o-ngay-chu ' + (oNgay.className || '');
+  oChu.setAttribute('inputmode', 'numeric');
+  oChu.setAttribute('maxlength', '10');
+  oChu.setAttribute('autocomplete', 'off');
+  oChu.placeholder = 'dd/mm/yyyy';
+  /* Thừa hưởng bề rộng/kiểu của ô gốc — nhiều ô ngày đã được đặt width riêng cho vừa cột phiếu. */
+  if (oNgay.getAttribute('style')) oChu.setAttribute('style', oNgay.getAttribute('style'));
+  if (oNgay.disabled) oChu.disabled = true;
+  /* Chuyển `required` sang ô chữ (xem cảnh báo "not focusable" ở đầu khối). */
+  if (oNgay.required) { oChu.required = true; oNgay.required = false; }
+
+  const nut = document.createElement('button');
+  nut.type = 'button';
+  nut.className = 'btn small secondary o-ngay-nut';
+  nut.title = 'Chọn ngày trên lịch';
+  nut.textContent = '📅';
+  nut.setAttribute('style', 'padding:1px 5px;margin-left:2px;line-height:1.2;');
+  if (oNgay.disabled) nut.disabled = true;
+
+  oNgay.parentNode.insertBefore(oChu, oNgay);
+  oNgay.parentNode.insertBefore(nut, oNgay);
+  /* Ẩn ô date gốc mà GIỮ trong DOM: mọi code cũ đọc .value / FormData vẫn thấy nó. */
+  oNgay.setAttribute('tabindex', '-1');
+  oNgay.setAttribute('aria-hidden', 'true');
+  oNgay.style.cssText = 'width:0;height:0;padding:0;margin:0;border:0;opacity:0;position:absolute;pointer-events:none;';
+
+  const veLaiChu = () => { oChu.value = ngayVNTuISO(oNgay.value); };
+  veLaiChu();
 
   /* Gõ: tự chèn dấu / sau ngày và sau tháng — khỏi phải với tay tìm dấu gạch trên điện thoại. */
   oChu.addEventListener('input', () => {
     const so = oChu.value.replace(/\D/g, '').slice(0, 8);
-    let ra = so;
-    if (so.length > 4) ra = so.slice(0, 2) + '/' + so.slice(2, 4) + '/' + so.slice(4);
-    else if (so.length > 2) ra = so.slice(0, 2) + '/' + so.slice(2);
-    oChu.value = ra;
+    if (so.length > 4) oChu.value = so.slice(0, 2) + '/' + so.slice(2, 4) + '/' + so.slice(4);
+    else if (so.length > 2) oChu.value = so.slice(0, 2) + '/' + so.slice(2);
+    else oChu.value = so;
   });
   /* Rời ô mới chuẩn hoá: đang gõ nửa vời mà đã sửa là giật con trỏ. Gõ sai thì TRẢ LẠI giá trị cũ
-     chứ không xoá trắng — xoá trắng là mất luôn kỳ đang xem mà người dùng không hiểu vì sao. */
+     chứ không xoá trắng — xoá trắng là mất luôn ngày đang có mà người dùng không hiểu vì sao. */
   const chuanHoa = () => {
     const iso = isoTuNgayVN(oChu.value);
-    if (iso) { datISO(iso); return; }
-    if (!oChu.value.trim()) { datISO(''); return; }
-    oChu.value = ngayVNTuISO(oChu.dataset.iso || '');
+    if (iso) {
+      if (oNgay.value !== iso) {
+        oNgay.value = iso;
+        oNgay.dispatchEvent(new Event('change', { bubbles: true }));   // code cũ lắng nghe vẫn nhận
+      }
+      oChu.value = ngayVNTuISO(iso);
+      return;
+    }
+    if (!oChu.value.trim()) {
+      if (oNgay.value !== '') {
+        oNgay.value = '';
+        oNgay.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
+    }
+    veLaiChu();
     toast('Ngày phải theo dạng dd/mm/yyyy (ví dụ 07/09/2026).', 'error');
   };
   oChu.addEventListener('blur', chuanHoa);
-  oChu.addEventListener('keydown', (e) => { if (e.key === 'Enter') { chuanHoa(); } });
-
-  oLich.addEventListener('change', () => datISO(oLich.value));
-  if (nut) nut.addEventListener('click', () => {
-    /* showPicker() phải gọi trong cử chỉ của người dùng (bấm nút) — đúng ngữ cảnh này. */
-    try { if (oLich.showPicker) { oLich.showPicker(); return; } } catch (e) { /* trình duyệt chặn */ }
-    oLich.style.cssText = 'width:auto;height:auto;opacity:1;position:static;pointer-events:auto;';
-    oLich.focus();
-    oLich.click();
+  oChu.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') chuanHoa();
+    /* Mũi tên xuống / F4: mở lịch — thói quen của người dùng Excel, khỏi phải rời bàn phím. */
+    if (e.key === 'ArrowDown' || e.key === 'F4') { e.preventDefault(); moLich(); }
   });
-}
-/* Đọc ra 'yyyy-mm-dd' để gửi máy chủ. Ưu tiên cái người dùng đang gõ, chưa hợp lệ thì lấy giá trị
-   đã chuẩn hoá lần cuối — không trả chuỗi rác lên API. */
-function docONgay(id, root) {
-  const oChu = (root || document).querySelector('#' + id);
-  if (!oChu) return '';
-  return isoTuNgayVN(oChu.value) || oChu.dataset.iso || '';
-}
-function datONgay(id, iso, root) {
-  const oChu = (root || document).querySelector('#' + id);
-  const oLich = (root || document).querySelector('#' + id + '_lich');
-  if (!oChu) return;
-  oChu.dataset.iso = iso || '';
-  oChu.value = ngayVNTuISO(iso);
-  if (oLich) oLich.value = iso || '';
+
+  function moLich() {
+    try { if (oNgay.showPicker) { oNgay.showPicker(); return; } } catch (e) { /* trình duyệt chặn */ }
+    /* Không có showPicker (trình duyệt cũ): hiện ô date thật ra để bấm được. */
+    oNgay.style.cssText = '';
+    oNgay.removeAttribute('tabindex');
+    oNgay.removeAttribute('aria-hidden');
+    oNgay.focus();
+    oNgay.click();
+  }
+  nut.addEventListener('click', moLich);
+
+  /* Code cũ đặt lại `.value` bằng JS (nút "Tháng này", nạp lại phiếu...) -> ô chữ phải theo.
+     Ô date không bắn sự kiện khi bị gán bằng JS nên phải theo dõi thuộc tính `value`. */
+  oNgay.addEventListener('change', veLaiChu);
+  oNgay.addEventListener('input', veLaiChu);
+  try {
+    new MutationObserver(() => {
+      veLaiChu();
+      const tat = !!oNgay.disabled;
+      oChu.disabled = tat; nut.disabled = tat;
+    }).observe(oNgay, { attributes: true, attributeFilter: ['value', 'disabled'] });
+  } catch (e) { }
+  /* MutationObserver KHÔNG bắt được `el.value = x` (đó là thuộc tính của đối tượng, không phải
+     attribute). Nên chặn thêm ở tầng property: mọi lần code cũ gán .value là ô chữ vẽ lại. */
+  try {
+    const goc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (goc && goc.set) {
+      Object.defineProperty(oNgay, 'value', {
+        get() { return goc.get.call(this); },
+        set(v) { goc.set.call(this, v); veLaiChu(); },
+        configurable: true
+      });
+    }
+  } catch (e) { }
 }
 
 /* v6.23: SỐ TIỀN BẰNG CHỮ cho phiếu bán hàng (mẫu Word có dòng "Số tiền bằng chữ").
@@ -837,7 +901,7 @@ function enhanceOneDatalist(input) {
 }
 
 /* Gọi CẢ HAI ở mọi nơi đang gọi enhanceSelects — để không có màn nào được bọc nửa vời. */
-function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); }
+function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); enhanceONgay(root); }
 
 function closeModal(opts) {
   opts = opts || {};
