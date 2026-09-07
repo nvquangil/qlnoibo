@@ -2,6 +2,7 @@ const express = require('express');
 const ExcelJS = require('exceljs'); // v5.19 (muc 4): xuat Excel cho Ton kho / The kho phu kien
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+const { dongLichSuPhuKien } = require('../utils/lichSuPhuKien');   // v7.69: lich su 1 ma PK, moi nhat len dau
 
 const router = express.Router();
 
@@ -540,18 +541,10 @@ router.get('/thekho', requireAuth, requirePermission('PHUKIEN', 'view'), require
       WHERE dm.MaPhuKien = @m
       ORDER BY p.Ngay, p.PhieuID`);
 
-    let tonCuoi = 0;
-    const rows = result.recordset.map(r => {
-      const nhap = r.LoaiPhieu === 'Nhập' ? Number(r.SoLuong) : 0;
-      const xuat = r.LoaiPhieu === 'Xuất' ? Number(r.SoLuong) : 0;
-      tonCuoi += nhap - xuat;
-      return {
-        loaiBaoCao: 'chitiet', phieuId: r.PhieuID, ngay: r.Ngay, loaiPhieu: r.LoaiPhieu,   // v6.13: + phieuId
-        donHang: r.MaDonHang || r.MaDon || '', nhap, xuat, ton: tonCuoi, dvt: r.DonVi,
-        AnhDaiDien: r.AnhDaiDien || null   // v7.52: mọi dòng cùng 1 mã nên ảnh giống nhau — hiện 1 lần ở đầu bảng
-      };
-    });
-    return res.json({ success: true, data: rows });
+    /* v7.69 — MỚI NHẤT LÊN ĐẦU. Cột "Tồn cuối" là số dư lũy kế nên PHẢI cộng theo ngày TĂNG rồi mới
+       đảo chiều hiển thị — KHÔNG được đổi `ORDER BY p.Ngay` ở câu SQL trên thành DESC.
+       Công thức nằm ở utils/lichSuPhuKien.js (xem đầu file để biết vì sao tách ra). */
+    return res.json({ success: true, data: dongLichSuPhuKien(result.recordset) });
   }
 
   // v6.32: + ĐVT quy đổi/tỷ lệ cho cột "Tồn quy đổi" (xem ghi chú ở route /thekho).
