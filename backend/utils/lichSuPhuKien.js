@@ -14,6 +14,13 @@
 
    Ba màn hình dùng chung dữ liệu này (tab Thẻ kho lọc theo 1 mã, bấm mã ở bảng tổng hợp, popup
    "Lịch sử" ở tab Danh mục) nên chỉ được có MỘT bản công thức.
+
+   VÌ SAO CHỈ PHỤ KIỆN LÀM VIỆC NÀY, VẢI THÌ KHÔNG (Nguyen giải thích 2026-09-05):
+     · Vải quản lý theo TỪNG CÂY — hết cây thì sang cây khác, nên lịch sử một cây không cần số dư
+       lũy kế và cũng không cần đảo chiều. Đừng "làm cho đồng bộ" ở màn lịch sử cây vải.
+     · Phụ kiện thì số lượng nhiều, dùng chung cho nhiều đơn, nên cái người dùng cần thấy NGAY khi
+       mở lịch sử là CÒN BAO NHIÊU — tức tồn cuối của phát sinh gần nhất. Đó là lý do phải đưa dòng
+       mới nhất lên đầu, không phải chỉ vì "cho dễ nhìn".
    ================================================================================================== */
 
 /* rs: recordset của câu SQL, mỗi dòng có { PhieuID, Ngay, LoaiPhieu, MaDon, MaDonHang, SoLuong,
