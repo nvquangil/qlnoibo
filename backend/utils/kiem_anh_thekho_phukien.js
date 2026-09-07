@@ -57,7 +57,11 @@ console.log('\n=== 3. Backend tra AnhDaiDien o CA HAI dang bao cao ===');
 const routeTK = sBe.slice(sBe.indexOf("router.get('/thekho'"), sBe.indexOf("router.get('/thekho/export'"));
 kiem(/\$\{cotAnhTK\('dm'\)\} AS AnhDaiDien/.test(routeTK), 'nhanh CHI TIET tra AnhDaiDien');
 kiem(/\$\{cotAnhTK\('dm2'\)\} AS AnhDaiDien/.test(routeTK), 'nhanh TONG HOP tra AnhDaiDien');
-kiem(/AnhDaiDien: r\.AnhDaiDien \|\| null/.test(routeTK), 'nhanh CHI TIET map ra field cho frontend');
+/* v7.69: phan MAP cua nhanh CHI TIET da doi sang utils/lichSuPhuKien.js (de dao chieu hien thi
+   "moi nhat len dau" ma khong pha cot ton luy ke). Kiem o file moi, va kiem route co goi vao. */
+kiem(/AnhDaiDien: r\.AnhDaiDien \|\| null/.test(doc('utils/lichSuPhuKien.js')),
+  'nhanh CHI TIET map ra field cho frontend (nay o utils/lichSuPhuKien.js)');
+kiem(/dongLichSuPhuKien\(result\.recordset\)/.test(routeTK), 'route CHI TIET goi ham dung chung do');
 kiem(/CAST\(NULL AS NVARCHAR\(500\)\)/.test(routeTK), 'chua co cot -> tra NULL, khong sap route');
 kiem(!/vw_TonKhoPhuKien[\s\S]{0,200}AnhDaiDien\s+FROM/.test(sBe),
   'KHONG sua view vw_TonKhoPhuKien (view la phep tinh ton tu 3 nguon phieu)');

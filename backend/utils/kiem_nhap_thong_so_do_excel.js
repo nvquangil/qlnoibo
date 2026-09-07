@@ -136,6 +136,67 @@ async function taoFile(luoi, tenSheet) {
     } else {
       console.log('  (bo qua muc file that: khong con file trong thu muc uploads)');
     }
+
+    /* ============================================================================================
+       i) v7.70 — BO CAC COT "STEP".
+       File GOC cua khach xen cot `Step` (chenh lech giua 2 size) GIUA cac cot size:
+           Measure | SIZE 4 | Step | SIZE 6 | Step | ... | SIZE 14 | Description
+       Lay ca vao la bang thong so co 6 cot rac. Truoc day Nguyen phai tu xoa cot do trong Excel.
+       ============================================================================================ */
+    console.log('\n  --- i) Bo cot Step (v7.70) ---');
+    buf = await taoFile([
+      ['Measure', 'SIZE 4', 'Step', 'SIZE 6', 'Step', 'SIZE 8'],
+      ['DAI AO', 39.45, 2.42, 41.87, 4.4, 46.27]
+    ]);
+    kq = await docThongSoDoExcel(buf);
+    bang(kq.cols.map(c => c.tenCot), ['SIZE 4', 'SIZE 6', 'SIZE 8'], 'cot Step KHONG thanh size');
+    bang(kq.rows[0].values, ['39.45', '41.87', '46.27'],
+      'gia tri lay DUNG cot size, khong bi lech sang so cua Step');
+    bang(kq.boQua, ['Step', 'Step'], 'bao lai da bo nhung cot nao (de nguoi dung khong tuong doc thieu)');
+
+    /* Cac cach viet khac cua cung mot cot. */
+    for (const ten of ['Step', 'STEP', 'step', 'Step (cm)', 'Step 4', 'Bước', 'Chênh lệch', 'Grading']) {
+      buf = await taoFile([['Measure', 'S', ten, 'M'], ['Dài áo', 1, 99, 2]]);
+      kq = await docThongSoDoExcel(buf);
+      bang([kq.cols.map(c => c.tenCot), kq.rows[0].values], [['S', 'M'], ['1', '2']],
+        `nhan va bo cot ten "${ten}"`);
+    }
+    /* KHONG duoc bo oan size that co chu gan giong. */
+    buf = await taoFile([['Measure', 'SIZE 4', 'Steppe', 'Stone', 'M'], ['Dài áo', 1, 2, 3, 4]]);
+    kq = await docThongSoDoExcel(buf);
+    bang(kq.cols.map(c => c.tenCot), ['SIZE 4', 'Steppe', 'Stone', 'M'],
+      'ten chi GAN giong "step" thi KHONG bo (khong bo oan size that)');
+
+    /* Cot Description = mo ta cach do -> vao o "Vi tri do", khong thanh size. */
+    buf = await taoFile([
+      ['Measure', 'SIZE 4', 'Step', 'SIZE 6', 'Description'],
+      ['DAI AO', 39, 2, 41, 'Đo từ cạnh cổ đến gấu']
+    ]);
+    kq = await docThongSoDoExcel(buf);
+    bang(kq.cols.map(c => c.tenCot), ['SIZE 4', 'SIZE 6'], 'Description KHONG thanh size');
+    bang(kq.rows[0].viTriDo, 'Đo từ cạnh cổ đến gấu', 'Description vao dung o "Vi tri do"');
+
+    /* --- j) FILE GOC THAT (con nguyen cot Step) --- */
+    const duongGoc = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/TSTP BDT25Z135 FILE GOC.xlsx';
+    if (fs.existsSync(duongGoc)) {
+      kq = await docThongSoDoExcel(fs.readFileSync(duongGoc));
+      bang([kq.dongTieuDe, kq.cols.length, kq.rows.length], [12, 6, 10],
+        'FILE GOC: tieu de dong 12, ra DUNG 6 size (khong phai 11), 10 dong');
+      bang(kq.cols.map(c => c.tenCot),
+        ['SIZE 4', 'SIZE 6', 'SIZE 8', 'SIZE 10', 'SIZE 12', 'SIZE 14'], 'FILE GOC: dung ten 6 size');
+      bang(kq.boQua.length, 5, 'FILE GOC: da bo dung 5 cot Step');
+      bang(kq.rows[0].values, ['39.45', '41.87', '46.27', '50.17', '53.07', '55.97'],
+        'FILE GOC: dong DAI AO dung tung o (bo qua so cua cot Step)');
+      /* ⚠️ MOC QUAN TRONG NHAT: file GOC (con cot Step) phai cho ra Y HET file Nguyen da xoa tay. */
+      const duongTay = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong so ky thuat.xlsx';
+      if (fs.existsSync(duongTay)) {
+        const kqTay = await docThongSoDoExcel(fs.readFileSync(duongTay));
+        bang([kq.cols, kq.rows], [kqTay.cols, kqTay.rows],
+          'FILE GOC cho ra KET QUA Y HET file da xoa cot Step bang tay');
+      }
+    } else {
+      console.log('  (bo qua muc file goc: khong con file trong thu muc uploads)');
+    }
   }
 
   console.log('\n=== 2. Bo doc: khong gan cung vi tri o ===');

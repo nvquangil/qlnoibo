@@ -863,10 +863,15 @@ router.post('/thongsodo/doc-excel', requireAuth, requirePermission('QLSX', 'edit
     }
     try {
       const kq = await docThongSoDoExcel(req.file.buffer);
+      /* v7.70: nói rõ đã BỎ những cột nào (Step...) — người dùng thấy số size ít hơn trong file mà
+         không biết vì sao thì lại tưởng đọc thiếu. */
+      const cauBoQua = (kq.boQua && kq.boQua.length)
+        ? ` Đã bỏ ${kq.boQua.length} cột không phải size: ${[...new Set(kq.boQua)].join(', ')}.`
+        : '';
       return res.json({
         success: true,
         data: { cols: kq.cols, rows: kq.rows },
-        message: `Đã đọc ${kq.rows.length} dòng thông số × ${kq.cols.length} size từ sheet "${kq.tenSheet}".`
+        message: `Đã đọc ${kq.rows.length} dòng thông số × ${kq.cols.length} size từ sheet "${kq.tenSheet}".${cauBoQua}`
       });
     } catch (err) {
       /* Lỗi "không dò ra bảng" là lỗi của FILE, không phải lỗi hệ thống -> 400 kèm hướng dẫn. */
