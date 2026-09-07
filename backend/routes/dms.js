@@ -375,7 +375,7 @@ router.get('/lich', ...CN('tuyen'), async (req, res) => {
     LEFT JOIN NhanVien nv ON nv.NhanVienID = l.NhanVienID
     LEFT JOIN TuyenBanHang tu ON tu.TuyenID = l.TuyenID
     WHERE YEAR(l.Ngay) = @n AND MONTH(l.Ngay) = @t
-    ORDER BY l.Ngay, nv.HoTen`)).recordset;
+    ORDER BY l.Ngay DESC, nv.HoTen`)).recordset;   // v7.79: ngày mới nhất lên đầu
   res.json({ success: true, data: rows, ky: { nam, thang } });
 });
 
@@ -452,7 +452,7 @@ router.get('/homnay', ...CN('ghetham'), async (req, res) => {
     SELECT g.GheThamID, g.ShopID, g.LoaiTiepXuc, g.ThoiGianVao, g.KetQua, g.NgoaiVung, g.KhoangCachM
     FROM GheTham g
     WHERE g.NhanVienID = @nv AND CAST(g.ThoiGianVao AS DATE) = @ngay
-    ORDER BY g.ThoiGianVao`)).recordset : [];
+    ORDER BY g.ThoiGianVao DESC`)).recordset : [];   // v7.79: lần ghé mới nhất lên đầu
   res.json({ success: true, data: { nhanVienId: nvId, ngay, lich, shopKeHoach, daGhe, cauHinh: await layCauHinh(pool) } });
 });
 

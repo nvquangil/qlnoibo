@@ -819,6 +819,12 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   rows.sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
   let luy = so(dongTong.TonDau);
   rows.forEach(r => { luy = lam2(luy + so(r.Nhap) - so(r.Xuat)); r.TonLuyKe = luy; });
+  /* v7.79 — NGÀY MỚI NHẤT LÊN ĐẦU. ⚠️ KHÔNG được sắp giảm dần ở `rows.sort` phía trên hay đổi
+     `ORDER BY` trong câu SQL: cột `TonLuyKe` là số dư cộng dồn, phải cộng theo chiều thời gian TĂNG
+     mới đúng. Cộng xong rồi mới đảo mảng — mỗi dòng giữ đúng tồn tại thời điểm của nó, dòng trên
+     cùng là phát sinh mới nhất và tồn của nó = tồn cuối kỳ. Xem giải thích đầy đủ ở
+     utils/lichSuPhuKien.js (v7.69 đã vấp đúng chỗ này). */
+  rows.reverse();
 
   res.json({ success: true, ky, data: {
     ma: h.MaHang, ten: h.TenHang, donVi: h.DonViCoBan || 'Cái',
@@ -882,6 +888,7 @@ router.get('/tonvai/chitiet', ...CN('tonvai'), async (req, res) => {
 
   let luy = lam2(dau.TonDau);
   rows.forEach(r => { luy = lam2(luy + r.Nhap - r.Xuat); r.TonLuyKe = luy; });
+  rows.reverse();   // v7.79: mới nhất lên đầu — đã cộng lũy kế xong nên không ảnh hưởng cột TonLuyKe
   res.json({ success: true, ky, data: {
     ma: v.MaVai, ten: [v.TenLoaiVai, v.TenMau].filter(Boolean).join(' · '), donVi: 'KG',
     tonDau: lam2(dau.TonDau), tonCuoi: luy, rows, coMet
@@ -926,6 +933,7 @@ router.get('/tonphukien/chitiet', ...CN('tonphukien'), async (req, res) => {
     }));
   let luy = lam2(dau.TonDau);
   rows.forEach(r => { luy = lam2(luy + r.Nhap - r.Xuat); r.TonLuyKe = luy; });
+  rows.reverse();   // v7.79: mới nhất lên đầu — đã cộng lũy kế xong nên không ảnh hưởng cột TonLuyKe
   res.json({ success: true, ky, data: {
     ma: pk.MaPhuKien, ten: pk.TenPhuKien, donVi: pk.DonViCoBan || '',
     tonDau: lam2(dau.TonDau), tonCuoi: luy, rows,
