@@ -61,16 +61,13 @@ window.ModuleDMS = (function () {
     + dm.npp.map(k => `<option value="${k.KhachHangID}" ${String(chon) === String(k.KhachHangID) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}</option>`).join('');
   const optNV = (chon, nhan) => `<option value="">${nhan || '— chọn nhân viên —'}</option>`
     + dm.nhanVien.map(n => `<option value="${n.NhanVienID}" ${String(chon) === String(n.NhanVienID) ? 'selected' : ''}>${escapeHtml(n.HoTen)}${n.MaNhanVien ? ' · ' + escapeHtml(n.MaNhanVien) : ''}</option>`).join('');
-  /* ⚠️ KHONG dung openImageLightbox() — ham do la BIEN CUC BO trong module.khohang.js, goi tu day la
-     "bam khong thay gi xay ra" (ReferenceError giua handler). Tu viet mot cai nho, dung openModal
-     chung nen dong lai van quay ve dung bang truoc (modal stack v5.97). */
-  function xemAnh(url, tieuDe) {
-    const m = openModal(`<h3>${escapeHtml(tieuDe || 'Ảnh')}</h3>
-      <div style="text-align:center;"><img src="${escapeHtml(url)}" style="max-width:100%;max-height:70vh;border-radius:6px;"></div>
-      <div class="modal-actions"><a class="btn secondary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Mở ảnh gốc</a>
-        <button class="btn" id="dmAnhDong">Đóng</button></div>`);
-    m.querySelector('#dmAnhDong').addEventListener('click', closeModal);
-  }
+  /* v7.77: ĐÃ BỎ bản xem ảnh riêng của file này — nay dùng `xemAnh()` DÙNG CHUNG ở common.js.
+     Bản cũ dựng bằng openModal nên trên điện thoại nút Đóng nằm dưới cuối modal, phải cuộn mới thấy;
+     lại còn nút "Mở ảnh gốc" mở tab mới rồi người dùng không biết đường về (đúng lỗi Nguyen báo).
+     Bản dùng chung có nút ✕ to ở góc trên, bấm nền / Esc / nút Back điện thoại đều đóng được.
+     ⚠️ Trước đây file này KHÔNG gọi được openImageLightbox() vì hàm đó là biến cục bộ trong
+     module.khohang.js — gọi sang là ReferenceError, "bấm không thấy gì xảy ra". Nay hàm nằm ở
+     common.js (phạm vi toàn cục) nên mọi module gọi được. */
   const linkMap = (lat, lon, nhan) => (lat != null && lon != null)
     ? `<a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" rel="noopener" title="Mở Google Maps">${nhan || '📍 xem'}</a>`
     : '<span class="empty-hint" style="padding:0;">chưa có toạ độ</span>';

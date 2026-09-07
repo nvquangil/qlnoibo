@@ -1125,13 +1125,14 @@ window.ModuleKhoHang = (function () {
   // v5.4: them tham so onCloseCb TUY CHON - khi zoom duoc mo TU BEN TRONG 1 modal khac (vd "chi tiet
   // ma hang" openHistory), modal do se bi THAY THE (openModal khong stack), nen phai truyen callback
   // de dong lightbox quay lai dung modal cu thay vi mat het (giong pattern onClose cua openQuickOrderModal).
+  /* v7.77: dùng lớp xem ảnh DÙNG CHUNG của common.js — có nút ✕ to, bấm nền/Esc/nút Back điện thoại
+     đều đóng được (xem ghi chú ở xemAnh()).
+     `onCloseCb` không còn cần: bản cũ dựng bằng openModal nên MỞ ĐÈ THAY THẾ modal "chi tiết mã
+     hàng" đang xem, phải có callback để dựng lại modal đó. Lớp mới nằm ĐỘC LẬP, phủ lên trên, nên
+     đóng ra là modal cũ vẫn còn nguyên — đúng ý "về màn hình gần nhất". Vẫn nhận tham số để các
+     chỗ gọi cũ không phải sửa. */
   function openImageLightbox(src, title, onCloseCb) {
-    const modal = openModal(`
-      <h3>${escapeHtml(title || 'Ảnh')}</h3>
-      <img src="${src}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;">
-      <div class="modal-actions"><button class="btn secondary" id="btnCloseImg">Đóng</button></div>`,
-      onCloseCb ? { onClose: onCloseCb } : undefined);
-    modal.querySelector('#btnCloseImg').addEventListener('click', onCloseCb || closeModal);
+    xemAnh(src, title || 'Ảnh');
   }
 
   // Dat hang nhanh tu man hinh chi tiet mau (muc 4b): co dinh 1 ma hang + 1 mau, cho phep them NHIEU

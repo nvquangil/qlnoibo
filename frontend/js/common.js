@@ -903,6 +903,118 @@ function enhanceOneDatalist(input) {
 /* Gọi CẢ HAI ở mọi nơi đang gọi enhanceSelects — để không có màn nào được bọc nửa vời. */
 function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); enhanceONgay(root); }
 
+/* ================================================================================================
+   v7.77 — XEM ẢNH TO CÓ NÚT ✕ (làm cho ĐIỆN THOẠI).
+
+   Nguyen: "ghé thăm shop chụp ảnh bấm vào ảnh xem nhưng ko có nút thoát khi đang mở trên điện
+   thoại ... có nút x để thoát ảnh ra về màn hình gần nhất".
+
+   NGUYÊN NHÂN: các ô ảnh trong hệ thống mở ảnh bằng `<a target="_blank">` — tức mở TAB MỚI của
+   trình duyệt. Trên máy tính còn đóng tab được, nhưng trên điện thoại thanh địa chỉ hay bị ẩn, người
+   dùng không thấy nút nào để về, tưởng là bị kẹt trong ảnh.
+
+   CÁCH LÀM: một lớp xem ảnh (lightbox) phủ toàn màn, có:
+     · nút ✕ TO ở góc trên phải — 44px, đủ lớn để bấm bằng ngón tay (chuẩn tối thiểu của cảm ứng);
+     · bấm ra nền tối cũng đóng;
+     · Esc đóng (máy tính);
+     · NÚT BACK của điện thoại cũng đóng ảnh chứ không rời khỏi trang — đây đúng phản xạ đầu tiên
+       của người dùng điện thoại (dùng history.pushState + popstate).
+   Lightbox nằm ĐỘC LẬP với openModal, nên mở đè lên modal đang xem được; đóng ra là thấy lại đúng
+   màn hình cũ ("về màn hình gần nhất") mà không phải nạp lại gì.
+
+   ⚠️ Bắt click ở TẦNG DOCUMENT thay vì đi sửa 11 chỗ mở ảnh ở 4 file: sửa từng chỗ thì ô ảnh thêm
+   sau này lại quên, mà đây là thứ người dùng gặp ở mọi phân hệ. Chỉ chặn thẻ <a> CÓ CHỨA <img> và
+   href trỏ tới ảnh — link chữ (vd "📍 xem" mở Google Maps của DMS) và link tải file KHÔNG bị chạm.
+   Opt-out một link: thêm `data-khong-lightbox`.
+   ================================================================================================ */
+function laDuongDanAnh(href) {
+  const s = String(href || '').trim();
+  if (!s) return false;
+  if (s.indexOf('data:image') === 0) return true;
+  return /\.(jpe?g|png|gif|webp|bmp|svg)(\?|#|$)/i.test(s) || s.indexOf('/uploads/') === 0 || s.indexOf('/anh/') === 0;
+}
+
+let __xemAnhDong = null;   // hàm đóng của lớp đang mở (chỉ mở một lớp một lúc)
+function xemAnh(src, tieuDe) {
+  if (!src) return;
+  if (__xemAnhDong) __xemAnhDong({ khongLuiHistory: true });
+
+  const lop = document.createElement('div');
+  lop.className = 'xem-anh-lop';
+  lop.setAttribute('style', 'position:fixed;inset:0;z-index:12000;background:rgba(0,0,0,.92);'
+    + 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;');
+  lop.innerHTML = `
+    <div style="position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;
+                padding:8px 10px;background:linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,0));">
+      <div style="flex:1;color:#fff;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+                  white-space:nowrap;">${escapeHtml(tieuDe || '')}</div>
+      ${/* Nút ✕: 44×44 là cỡ tối thiểu bấm được bằng ngón tay; đặt trong vùng an toàn của tai thỏ. */''}
+      <button type="button" class="xem-anh-dong" aria-label="Đóng ảnh"
+              style="width:44px;height:44px;flex:none;border:0;border-radius:50%;cursor:pointer;
+                     background:rgba(255,255,255,.92);color:#111;font-size:22px;line-height:44px;
+                     padding:0;">✕</button>
+    </div>
+    <img class="xem-anh-hinh" src="${escapeHtml(src)}" alt="${escapeHtml(tieuDe || 'Ảnh')}"
+         style="max-width:100%;max-height:100%;object-fit:contain;">
+    <div style="position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#cfd8dc;font-size:12px;">
+      Bấm ✕ hoặc bấm ra ngoài ảnh để đóng
+    </div>`;
+  document.body.appendChild(lop);
+  /* Chặn cuộn trang phía dưới trong lúc xem ảnh — kéo ảnh mà trang chạy theo là rất khó chịu. */
+  const cuonCu = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+
+  /* Nút BACK của điện thoại: thêm một mốc lịch sử để bấm Back là ĐÓNG ẢNH, không rời khỏi trang. */
+  let daThemMoc = false;
+  try { history.pushState({ xemAnh: 1 }, ''); daThemMoc = true; } catch (e) { }
+
+  function dong(opt) {
+    opt = opt || {};
+    if (__xemAnhDong !== dong) return;
+    __xemAnhDong = null;
+    document.removeEventListener('keydown', onEsc);
+    window.removeEventListener('popstate', onBack);
+    document.body.style.overflow = cuonCu;
+    if (lop.parentNode) lop.parentNode.removeChild(lop);
+    /* Đóng bằng ✕ / nền / Esc thì phải lùi mốc lịch sử vừa thêm, kẻo Back sau đó không có tác dụng. */
+    if (daThemMoc && !opt.tuHistory && !opt.khongLuiHistory) { try { history.back(); } catch (e) { } }
+  }
+  function onEsc(e) { if (e.key === 'Escape') { e.preventDefault(); dong(); } }
+  function onBack() { dong({ tuHistory: true }); }
+
+  lop.querySelector('.xem-anh-dong').addEventListener('click', (e) => { e.stopPropagation(); dong(); });
+  /* Bấm ra NỀN thì đóng; bấm vào chính tấm ảnh thì không (để còn phóng/kéo xem). */
+  lop.addEventListener('click', (e) => { if (e.target === lop) dong(); });
+  document.addEventListener('keydown', onEsc);
+  window.addEventListener('popstate', onBack);
+
+  __xemAnhDong = dong;
+  return dong;
+}
+
+/* Bắt click một lần cho cả trang. Dùng capture=false + kiểm tra kỹ để không giành link khác. */
+(function () {
+  const batDau = () => {
+    document.addEventListener('click', (e) => {
+      const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+      if (!a || a.dataset.khongLightbox != null) return;
+      if (a.hasAttribute('download')) return;              // link TẢI VỀ -> để nguyên
+      const href = a.getAttribute('href') || '';
+      /* Chỉ nhận link trỏ tới ẢNH. Link chữ mở trang khác (Google Maps của DMS, trang catalogue công
+         khai) hay link tải file .xlsx/.pdf đều KHÔNG khớp nên không bị chạm.
+         Nhận cả link CHỮ trỏ tới ảnh (vd "Xem QR" ở Kho vải): trên điện thoại đó cũng là ảnh mở ra
+         tab mới rồi kẹt, đúng cái Nguyen nói. */
+      if (!laDuongDanAnh(href)) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;   // người dùng cố ý mở tab mới
+      e.preventDefault();
+      const im = a.querySelector('img');
+      xemAnh(href, a.getAttribute('title') || (im && im.getAttribute('alt')) || (a.textContent || '').trim());
+    });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', batDau);
+  else batDau();
+})();
+
 function closeModal(opts) {
   opts = opts || {};
   const el = document.getElementById('__modal');
