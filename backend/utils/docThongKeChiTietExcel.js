@@ -32,6 +32,46 @@ const COT = [
 /* Cột BẮT BUỘC phải tìm ra thì mới coi là đã thấy bảng. */
 const COT_MOC = COT[0];
 
+/* ================================================================================================
+   v7.71 — BỎ CÁC DÒNG NHÃN, KHÔNG ĐỔ VÀO BẢNG.
+   File gốc của khách (TKCT BD26C12.xlsx) KHÔNG chỉ có một bảng — nó có NHIỀU KHỐI, mỗi khối là một
+   loại vải, và mỗi khối lại có dòng nhãn + dòng tiêu đề RIÊNG:
+
+        Style Set: | BD26C12 VCQ                      <- dòng nhãn
+        Piece Name | Code | Description | Material ... <- tiêu đề
+        BO GAU     |      |             | VCQ      ...
+        ...
+        Style Set: | BD26C12 VCA                      <- nhãn của khối 2
+        Piece Name | Code | ...                        <- tiêu đề LẶP LẠI
+        TSA X1     | ...  | VCA ...
+
+   Bộ đọc dò tiêu đề của khối ĐẦU rồi lấy mọi dòng bên dưới, nên "Style Set:" và "Piece Name" của
+   các khối sau bị lấy thành DÒNG DỮ LIỆU rác (tên chi tiết = "Style Set:"). Trước đây Nguyen phải
+   tự xóa các dòng đó trong Excel.
+
+   Vẫn ĐỌC HẾT các khối vào một bảng — mỗi khối chỉ khác nhau ở cột Material (VCQ / VCA / MEX), và
+   dòng "Tổng số lượng theo vật liệu" của v7.68 sẽ tự tách ra theo đúng từng loại vải.
+
+   Nhận diện theo ô TÊN CHI TIẾT, hai đường riêng biệt:
+     · Dòng TIÊU ĐỀ lặp lại  -> ô đó ghi đúng tên của CỘT MỐC ("Piece Name" / "Tên chi tiết"...).
+     · Dòng NHÃN ("Style Set:") -> khớp danh sách nhãn VÀ ô Vật liệu TRỐNG.
+   Cắt dấu hai chấm cuối trước khi so — file ghi "Style Set:".
+
+   ⚠️ ĐÃ BỎ OAN MỘT LẦN: bản đầu tôi so với TÊN CỦA MỌI CỘT, mà 'cap' là tên tiếng Việt (bỏ dấu) của
+   cột "Cặp" — nên chi tiết THẬT tên "cap" trong file của khách bị xóa mất. Vì vậy:
+     - dòng tiêu đề chỉ so với CỘT MỐC, không so cả 7 cột;
+     - nhãn phải kèm điều kiện "Vật liệu trống", vì dòng dữ liệu thật luôn có vật liệu.
+   ================================================================================================ */
+const NHAN_BO_DONG = ['style set', 'style', 'style file', 'chart', 'date', 'working units',
+  'measurement chart', 'measurement charts', 'set name', 'bo mau'];
+/* kTen / kVatLieu: giá trị 2 ô của dòng, ĐÃ qua chuan(). */
+function laDongNhan(kTen, kVatLieu) {
+  const t = String(kTen || '').replace(/[:：]+\s*$/, '').trim();
+  if (!t) return false;
+  if (COT_MOC.ten.indexOf(t) !== -1) return true;                       // tiêu đề của khối tiếp theo
+  return NHAN_BO_DONG.indexOf(t) !== -1 && !String(kVatLieu || '').trim();
+}
+
 async function docThongKeChiTietExcel(buffer) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
@@ -70,6 +110,7 @@ async function docThongKeChiTietExcel(buffer) {
 
     /* --- 4. Các dòng dữ liệu --- */
     const rows = [];
+    const boQuaDong = [];            // v7.71: các dòng nhãn đã bỏ — để báo lại cho người dùng
     for (let r = dongTieuDe + 1; r <= soDong; r++) {
       const ten = o(r, viTri.pieceName);
       /* Dòng KHÔNG có tên chi tiết nhưng CÓ hình -> vẫn giữ: rập có thể chưa kịp đặt tên, bỏ đi là
@@ -77,6 +118,8 @@ async function docThongKeChiTietExcel(buffer) {
       const svg = hinh.theoDong.get(r - 1) || '';
       if (!ten && !svg) continue;
       const lay = (k) => (viTri[k] ? o(r, viTri[k]) : '');
+      /* v7.71: dòng nhãn ("Style Set:") và dòng tiêu đề lặp lại của khối sau -> BỎ. */
+      if (ten && laDongNhan(chuan(ten), lay('material'))) { boQuaDong.push(ten); continue; }
       rows.push({
         pieceName: ten,
         material: lay('material'),
@@ -90,7 +133,7 @@ async function docThongKeChiTietExcel(buffer) {
       });
     }
     if (!rows.length) continue;
-    return { rows, dongTieuDe, tenSheet: ws.name, soHinh: hinh.theoDong.size, lenhLa: hinh.lenhLa || [] };
+    return { rows, dongTieuDe, tenSheet: ws.name, soHinh: hinh.theoDong.size, lenhLa: hinh.lenhLa || [], boQuaDong };
   }
 
   const err = new Error(
@@ -101,4 +144,4 @@ async function docThongKeChiTietExcel(buffer) {
   throw err;
 }
 
-module.exports = { docThongKeChiTietExcel, COT };
+module.exports = { docThongKeChiTietExcel, COT, laDongNhan, NHAN_BO_DONG };

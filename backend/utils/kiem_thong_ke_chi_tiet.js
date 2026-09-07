@@ -144,6 +144,73 @@ const FILE_KHACH = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/thong ke ch
     try { await docThongKeChiTietExcel(await wb3.xlsx.writeBuffer()); } catch (e) { loi = e.message; }
     kiem(!!loi && /piece name/i.test(loi) && /sheet/i.test(loi),
       'file khong co bang -> nem loi noi ro can o ten gi', String(loi));
+
+    /* ============================================================================================
+       v7.71 — FILE GOC CO NHIEU KHOI "Style Set:" -> BO DONG NHAN, KHONG BO OAN DU LIEU.
+       File goc cua khach khong chi mot bang: moi loai vai la mot khoi, moi khoi co dong nhan
+       "Style Set: <ten>" VA dong tieu de "Piece Name" RIENG. Bo doc do tieu de khoi DAU roi lay moi
+       dong ben duoi, nen cac dong nhan/tieu de cua khoi sau thanh DONG DU LIEU RAC.
+       ============================================================================================ */
+    console.log('\n  --- v7.71: bo dong nhan "Style Set:" / tieu de lap lai ---');
+    const taoNhieuKhoi = async () => {
+      const w = new ExcelJS.Workbook();
+      const s = w.addWorksheet('S');
+      s.getRow(1).values = [null, 'Style Set:', 'BD26C12 VCQ'];
+      s.getRow(2).values = [null, 'Piece Name', 'Code', 'Description', 'Material', 'Quantity', 'Pair', 'Opposite'];
+      s.getRow(3).values = [1, 'BO GAU', '', '', 'VCQ', '1', '0', 'None'];
+      /* ⚠️ DONG BAY: chi tiet THAT ten "cap" — trung ten tieng Viet (bo dau) cua cot "Cặp". */
+      s.getRow(4).values = [2, 'cap', '', '', 'VCQ', '1', '0', 'None'];
+      s.getRow(6).values = [null, 'Style Set:', 'BD26C12 VCA'];
+      s.getRow(7).values = [null, 'Piece Name', 'Code', 'Description', 'Material', 'Quantity', 'Pair', 'Opposite'];
+      s.getRow(8).values = [1, 'TSA X1', '', '', 'VCA', '1', '0', 'None'];
+      return await w.xlsx.writeBuffer();
+    };
+    kq = await docThongKeChiTietExcel(await taoNhieuKhoi());
+    bang(kq.rows.map(r => r.pieceName), ['BO GAU', 'cap', 'TSA X1'],
+      'doc HET cac khoi vao 1 bang, BO dong nhan va tieu de lap lai');
+    bang(kq.boQuaDong, ['Style Set:', 'Piece Name'], 'bao lai dung nhung dong da bo');
+    bang(kq.rows.map(r => r.material), ['VCQ', 'VCQ', 'VCA'],
+      'vat lieu theo dung tung khoi (de dong "Tong so luong theo vat lieu" v7.68 tach ra dung)');
+    /* ⚠️ CHONG BO OAN — loi tôi ĐÃ MẮC o ban dau: so ten voi TAT CA cac cot, ma 'cap' la ten tieng
+       Viet cua cot "Cặp" -> chi tiet that ten "cap" bi xoa mat. Nay chi so voi COT MOC. */
+    kiem(kq.rows.some(r => r.pieceName === 'cap'),
+      'chi tiet that ten "cap" KHONG bi bo oan (trung ten cot "Cap")');
+    for (const ten of ['Material', 'Quantity', 'Pair', 'Opposite', 'Total']) {
+      const w = new ExcelJS.Workbook();
+      const s = w.addWorksheet('S');
+      s.getRow(1).values = [null, 'Piece Name', 'Material'];
+      s.getRow(2).values = [1, ten, 'VC'];
+      const r2 = await docThongKeChiTietExcel(await w.xlsx.writeBuffer());
+      bang(r2.rows.map(x => x.pieceName), [ten],
+        `chi tiet ten "${ten}" (trung ten cot khac) van duoc giu`);
+    }
+    /* Nhan phai KEM dieu kien "vat lieu trong": dong du lieu that luon co vat lieu. */
+    const wNhan = new ExcelJS.Workbook();
+    const sNhan = wNhan.addWorksheet('S');
+    sNhan.getRow(1).values = [null, 'Piece Name', 'Material'];
+    sNhan.getRow(2).values = [1, 'Style Set:', ''];
+    sNhan.getRow(3).values = [2, 'Style', 'VC'];
+    kq = await docThongKeChiTietExcel(await wNhan.xlsx.writeBuffer());
+    bang(kq.rows.map(r => r.pieceName), ['Style'],
+      'nhan + vat lieu TRONG -> bo; cung ten nhung CO vat lieu -> giu (khong bo oan)');
+
+    /* --- FILE GOC THAT (con nguyen 3 khoi Style Set) --- */
+    const duongGocTkct = '/sessions/friendly-relaxed-ramanujan/mnt/uploads/TKCT BD26C12 (1).xlsx';
+    if (fs.existsSync(duongGocTkct)) {
+      kq = await docThongKeChiTietExcel(fs.readFileSync(duongGocTkct));
+      bang([kq.dongTieuDe, kq.rows.length], [9, 16],
+        'FILE GOC: tieu de dong 9, ra 16 chi tiet (khong co dong rac, khong mat dong nao)');
+      bang(kq.boQuaDong, ['Style Set:', 'Piece Name', 'Style Set:'],
+        'FILE GOC: bo dung 3 dong nhan/tieu de cua 3 khoi');
+      kiem(kq.rows.some(r => r.pieceName === 'cap'), 'FILE GOC: chi tiet "cap" con nguyen');
+      kiem(!kq.rows.some(r => /style set/i.test(r.pieceName) || /^piece name$/i.test(r.pieceName)),
+        'FILE GOC: khong con dong nao ten la "Style Set:" hay "Piece Name"');
+      const dem = {};
+      kq.rows.forEach(r => { dem[r.material] = (dem[r.material] || 0) + 1; });
+      bang(dem, { VCQ: 13, VCA: 2, MEX: 1 }, 'FILE GOC: du 3 loai vat lieu, dung so dong moi loai');
+    } else {
+      console.log('  (bo qua muc file goc: khong con file trong thu muc uploads)');
+    }
   }
 
   console.log('\n=== 4. Bo trich hinh: khong ve bua ===');

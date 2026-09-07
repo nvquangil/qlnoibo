@@ -688,6 +688,11 @@ router.post('/thongkechitiet/doc-excel', requireAuth, requirePermission('QLSX', 
       });
       let msg = `Đã đọc ${kq.rows.length} chi tiết từ sheet "${kq.tenSheet}"`
         + (soAnh ? `, tải lên ${soAnh} hình rập.` : ' (không thấy hình rập nào trong file).');
+      /* v7.71: nói rõ đã BỎ những dòng nhãn nào ("Style Set:", tiêu đề lặp của khối sau) — thấy số
+         chi tiết ít hơn số dòng trong file mà không biết vì sao thì lại tưởng đọc thiếu. */
+      if (kq.boQuaDong && kq.boQuaDong.length) {
+        msg += ` Đã bỏ ${kq.boQuaDong.length} dòng nhãn/tiêu đề: ${[...new Set(kq.boQuaDong)].join(', ')}.`;
+      }
       if (kq.lenhLa && kq.lenhLa.length) {
         msg += ` ⚠️ File có nét cong (${kq.lenhLa.join(', ')}) — hình vẽ ra có thể thiếu nét, kiểm lại.`;
       }
