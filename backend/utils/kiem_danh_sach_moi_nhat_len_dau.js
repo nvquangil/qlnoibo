@@ -164,7 +164,51 @@ kiem(conTang.length === 0,
   'khong con cau ORDER BY theo ngay TANG nao ngoai danh sach CO Y GIU',
   conTang.join(' | '));
 
+/* ================================================================================================
+   5b. v7.80 — BIT LO HONG CUA BO QUET: co SO sap bang JS, KHONG qua ORDER BY.
+   ⚠️ Muc 5 o tren chi soi cac cau `ORDER BY`, nen SO QUY (congno.js) bi BO SOT: no lay phieu thu/chi
+   bang 2 cau khong co ORDER BY roi `.sort()` o tang JS. Nguyen phai bao lai moi phat hien.
+   Nay quet CA hai duong: moi cho `.sort((a, b) => new Date(...))` TANG trong backend deu phai co
+   `reverse()` ngay sau vong tinh luy ke — tru cac cho co y giu tang.
+   ================================================================================================ */
+console.log('\n=== 5b. Cac SO sap bang JS (lo hong da lam bo sot so quy) ===');
+const SO_SAP_JS = [
+  ['routes/congno.js', 'so chi tiet cong no KHACH'],
+  ['routes/congno.js', 'so chi tiet cong no NCC'],
+  ['routes/congno.js', 'SO QUY chi tiet'],
+  ['routes/congno.js', 'so cong no NHA GIA CONG'],
+  ['routes/baocao.js', 'the kho hang hoa'],
+  ['routes/baocao.js', 'the kho vai'],
+  ['routes/baocao.js', 'the kho phu kien']
+];
+const sCongNo2 = doc('routes/congno.js');
+/* Dem: moi cho sap TANG theo ngay phai di kem mot lan dao chieu. */
+const demSapTang = (src) => (src.match(/\.sort\(\(a, b\) => new Date\(a\./g) || []).length;
+const demDao = (src) => (src.match(/rows\.slice\(\)\.reverse\(\)|rows\.reverse\(\)/g) || []).length;
+bang(demSapTang(bo(sCongNo2)), 4, 'congno.js: co 4 so sap tang theo ngay');
+bang(demDao(bo(sCongNo2)), 4, 'congno.js: CA 4 so deu co dao chieu (truoc v7.80 chi co 3 — sot so quy)');
+bang(demSapTang(bo(sBaoCao)), 3, 'baocao.js: co 3 so sap tang theo ngay');
+bang(demDao(bo(sBaoCao)), 3, 'baocao.js: ca 3 so deu co dao chieu');
+kiem(SO_SAP_JS.length === 7, 'tong 7 so co so du luy ke — tat ca da mo i nhat len dau');
+
+/* Rieng SO QUY: kiem tan goc cau tra ve. */
+kiem(/data: \{ ten, dauKy, rows: rows\.slice\(\)\.reverse\(\), soDu:/.test(sCongNo2),
+  'SO QUY tra ve rows DA DAO (moi nhat len dau)');
+kiem(/rows\.forEach\(r => \{ luy \+= so\(r\.Thu\) - so\(r\.Chi\); r\.SoDu = /.test(sCongNo2),
+  'SO QUY van cong SoDu theo chieu TANG truoc khi dao (khong doi .sort sang giam)');
+kiem(/new Date\(a\.Ngay\) - new Date\(b\.Ngay\) \|\| String\(a\.SoPhieu\)/.test(sCongNo2),
+  'SO QUY: .sort van (a - b) — cung ngay thi theo so phieu, giu on dinh thu tu');
+/* Ban in SO KE TOAN doc tu tren xuong nen phai lat lai — va viec lat chi lam o MOT cho. */
+kiem(/const tatCa = \(opt\.rows \|\| \[\]\)\.slice\(\)\.reverse\(\);/.test(sCongNo2),
+  'ban in So ke toan tu lat lai CU->MOI (khong bi anh huong boi viec dao o man hinh xem)');
+
 console.log('\n=== 6. Frontend khong sap lai lam mat tac dung ===');
+/* So quy chi tiet o frontend chi map ra bang, khong tu sap lai. */
+const sFeCongNo = bo(doc('../frontend/js/module.congno.js'));
+const thanQuy = sFeCongNo.slice(sFeCongNo.indexOf('async function soChiTietQuy'),
+  sFeCongNo.indexOf('async function soChiTietQuy') + 1800);
+kiem(!/\.sort\(|\.reverse\(/.test(thanQuy),
+  'FE so quy chi tiet KHONG tu sap/dao lai (giu dung thu tu backend tra ve)');
 ['module.baocao.js', 'module.dms.js'].forEach(f => {
   const s = bo(doc('../frontend/js/' + f));
   const sapNgay = (s.match(/\.sort\([^)]*[Nn]gay[^)]*\)/g) || [])

@@ -1042,7 +1042,12 @@ router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), r
   const rows = [...thu, ...chi].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay) || String(a.SoPhieu).localeCompare(String(b.SoPhieu)));
   let luy = dauKy;
   rows.forEach(r => { luy += so(r.Thu) - so(r.Chi); r.SoDu = Math.round(luy * 100) / 100; });
-  res.json({ success: true, data: { ten, dauKy, rows, soDu: Math.round(luy * 100) / 100 } });
+  /* v7.80 — NGÀY MỚI NHẤT LÊN ĐẦU. Ba sổ còn lại của phân hệ này (công nợ khách / NCC / nhà gia
+     công) đã `rows.slice().reverse()` từ trước; RIÊNG sổ quỹ bị sót — đúng lỗi Nguyen báo.
+     ⚠️ Vẫn phải sắp TĂNG rồi cộng `SoDu` xong MỚI đảo: `SoDu` là số dư lũy kế, đổi `.sort` sang
+     giảm là mỗi dòng ra một con số vô nghĩa. Đảo bằng `.slice()` để không sửa mảng đang cộng dở —
+     dùng đúng cách của 3 sổ kia cho khỏi lệch lối làm. */
+  res.json({ success: true, data: { ten, dauKy, rows: rows.slice().reverse(), soDu: Math.round(luy * 100) / 100 } });
 });
 
 /* ================================================================================================
