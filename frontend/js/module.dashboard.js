@@ -14,6 +14,7 @@
 (function () {
   const KHOA_LUU = 'dashboard_khach_theo_doi';
   let container = null, currentUser = null, dsKhachTatCa = [], soLieu = null;
+  let soQuy = null;   // v7.78: số dư từng quỹ (null = chưa lấy được / không có quyền -> ẩn khối)
   let dsTheoDoi = [];   // nạp 1 lần khi mở màn, sau đó chỉ đổi khi người dùng bấm Áp dụng
 
   function getTabs() { return [{ key: 'kinhdoanh', label: 'Kinh doanh' }]; }
@@ -109,10 +110,49 @@
     p.set('denNgay', document.getElementById('dbDen').value);
     const ds = khachTheoDoi();
     if (ds.length) p.set('khach', ds.join('|'));
-    const kq = await apiGet('/api/dashboard/kinhdoanh?' + p.toString());
+    /* ============================================================================================
+       v7.78 — LẤY LUÔN SỔ QUỸ để xem cùng dashboard ("chỉ cần số tiền hiện tại").
+       Gọi lại ĐÚNG route sẵn có `/api/congno/soquy` — KHÔNG viết lại phép tính số dư ở đây. Số dư
+       quỹ = đầu kỳ + tổng thu − tổng chi, tính lại từ phiếu thu/chi (xem tinhSoQuy trong
+       backend/routes/congno.js). Có hai bản tính rồi sẽ trôi khỏi nhau, và lúc đó không biết tin
+       con số nào.
+       ⚠️ Route đó đòi quyền phân hệ CÔNG NỢ + chức năng `soquy`. Ai không có quyền thì `catch` trả
+       null và khối quỹ ĐƯỢC ẨN — tuyệt đối không mở đường xem tiền qua dashboard cho người chưa
+       được cấp quyền, cũng không để lỗi 403 làm trắng cả trang.
+       Gọi SONG SONG với số liệu kinh doanh cho khỏi cộng thêm thời gian chờ.
+       ============================================================================================ */
+    const [kq, kqQuy] = await Promise.all([
+      apiGet('/api/dashboard/kinhdoanh?' + p.toString()),
+      apiGet('/api/congno/soquy').catch(() => null)
+    ]);
     if (!kq.success) { body.innerHTML = `<div class="empty-hint">Lỗi: ${escapeHtml(kq.message || '')}</div>`; return; }
     soLieu = kq.data;
+    soQuy = (kqQuy && kqQuy.success && Array.isArray(kqQuy.data)) ? kqQuy.data : null;
     veBody();
+  }
+
+  /* Dải thẻ SỐ TIỀN ĐANG CÓ của từng quỹ. Chỉ hiện số dư hiện tại — Nguyen chốt "không cần chi
+     tiết", nên thẻ KHÔNG bấm được, ai cần sổ thì vào phân hệ Công nợ → Sổ quỹ như cũ.
+     Số dư quỹ là LŨY KẾ ĐẾN HIỆN TẠI, không theo kỳ lọc ở trên — phải ghi rõ kẻo hiểu là số của kỳ. */
+  function daiSoQuy() {
+    if (!soQuy || !soQuy.length) return '';
+    const tongDu = soQuy.reduce((s, q) => s + (Number(q.soDu) || 0), 0);
+    const bieuTuong = q => q.loai === 'TienMat' ? '💵' : (q.loai === 'ChuaGan' ? '❓' : '🏦');
+    return `
+      <div style="border:1px solid #cfd8dc;border-radius:6px;padding:10px 12px;background:#fff;margin-bottom:12px;">
+        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <b style="font-size:13px;">Tiền đang có (sổ quỹ)</b>
+          <span style="font-size:18px;font-weight:700;color:#1a73e8;">${fmtTien(tongDu)} đ</span>
+          <span style="font-size:12px;color:#78909c;">tính đến hiện tại, không theo kỳ đã chọn</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${soQuy.map(q => `<div style="flex:1;min-width:150px;border:1px solid #e0e0e0;border-radius:6px;
+              padding:6px 10px;background:${q.loai === 'TienMat' ? '#fff8e1' : (q.loai === 'ChuaGan' ? '#fdecea' : '#e8f0fe')};">
+            <div style="font-size:12px;color:#5f6368;">${bieuTuong(q)} ${escapeHtml(q.ten)}</div>
+            <div style="font-size:17px;font-weight:700;color:${Number(q.soDu) < 0 ? '#c0392b' : '#137333'};">${fmtTien(q.soDu)} đ</div>
+          </div>`).join('')}
+        </div>
+      </div>`;
   }
 
   function the(nhan, gt, mau, phu) {
@@ -135,6 +175,7 @@
         ${the('CÒN NỢ (lũy kế)', fmtTien(t.conNo) + ' đ', '#c62828', 'tính đến hiện tại, không theo kỳ')}
         ${the('Số khách', fmtNumber(t.soKhach), '#455a64', '')}
       </div>
+      ${daiSoQuy()}
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
         ${bieuDoTron(rows, 'DoanhThuThuan', 'Tỷ lệ doanh thu thuần theo khách')}
         ${bieuDoTron(rows, 'ConNo', 'Tỷ lệ công nợ theo khách')}
