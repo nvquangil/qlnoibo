@@ -343,7 +343,7 @@ window.ModuleTaiLieuKyThuat = (function () {
   /* ================= HEADER DUNG CHUNG (Mã hàng/Diễn giải/Ngày cập nhật/Người lập) ================= */
   // v5.56: +ô "Tên bản" (tenBan) khi tài liệu hỗ trợ nhiều bản/đơn.
   function tlktHeaderFieldsHtml(data, order, tenPhieu) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = homNayISO();
     const tenBanRow = tenPhieu === undefined ? '' :
       `<div class="form-row"><label>Tên bản</label><input name="tenBan" ${perm.canEdit ? '' : 'disabled'} value="${escapeHtml(tenPhieu || '')}" placeholder="VD: Áo / Quần / Đợt 1 (để trống nếu chỉ 1 bản)"></div>`;
     return `
@@ -999,7 +999,7 @@ window.ModuleTaiLieuKyThuat = (function () {
           <div class="form-row"><label>Tên bản</label><input name="ten" value="${escapeHtml(tenPhieu)}" placeholder="VD: Áo / Quần / Đợt 1" ${tenPhieu ? 'readonly title="Đổi tên bản: tạo bản mới rồi xóa bản cũ"' : ''}></div>
           ${/* v7.67: đổi tên thành Mã rập, mặc định lấy mã rập của lệnh SX (gồm cả Ghi tiến độ). */''}
           <div class="form-row"><label>Mã rập</label><input name="maHang" value="${escapeHtml((data && data.maHang) || order.MaRap || '')}" placeholder="Kỹ thuật khai ở Ghi tiến độ / bảng Sơ đồ"></div>
-          <div class="form-row"><label>Ngày cập nhật</label><input type="date" name="ngayCapNhat" value="${data && data.ngayCapNhat ? String(data.ngayCapNhat).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày cập nhật</label><input type="date" name="ngayCapNhat" value="${data && data.ngayCapNhat ? String(data.ngayCapNhat).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row" style="grid-column:1/-1;"><label>Diễn giải</label><input name="dienGiai" value="${escapeHtml((data && data.dienGiai) || order.TenSanPham || '')}"></div>
           <div class="form-row" style="grid-column:1/-1;"><label>Ảnh đại diện hàng (in ở đầu phiếu)</label>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">

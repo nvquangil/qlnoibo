@@ -499,7 +499,7 @@ window.ModuleDMS = (function () {
       <form id="dmFLich">
         <div class="form-grid">
           <div class="form-row"><label>Nhân viên *</label><select name="nhanVienId" required>${optNV('')}</select></div>
-          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" required value="${new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" required value="${homNayISO()}"></div>
           <div class="form-row"><label>Tuyến</label><select name="tuyenId"><option value="">— đi tự do (không theo tuyến) —</option>${dm.tuyen.map(t => `<option value="${t.TuyenID}">${escapeHtml(t.MaTuyen + ' · ' + t.TenTuyen)}</option>`).join('')}</select></div>
           <div class="form-row"><label>Ghi chú</label><input name="ghiChu"></div>
         </div>
@@ -520,7 +520,7 @@ window.ModuleDMS = (function () {
   /* ============================== TAB 3: GHE THAM (dien thoai) ============================== */
   async function renderGheTham() {
     const body = document.getElementById('dmsBody');
-    const ngay = new Date().toISOString().slice(0, 10);
+    const ngay = homNayISO();
     let d;
     try { d = (await apiGet('/api/dms/homnay?ngay=' + ngay)).data; }
     catch (e) { body.innerHTML = `<div class="empty-hint">Không tải được: <b>${escapeHtml(e.message)}</b></div>`; return; }
@@ -693,7 +693,7 @@ window.ModuleDMS = (function () {
   /* ============================== TAB 4: LO TRINH ============================== */
   async function renderLoTrinh() {
     const body = document.getElementById('dmsBody');
-    const homNay = new Date().toISOString().slice(0, 10);
+    const homNay = homNayISO();
     body.innerHTML = `
       <div class="toolbar">
         <label>Từ ngày: </label><input type="date" id="dmLtTu" value="${homNay}">

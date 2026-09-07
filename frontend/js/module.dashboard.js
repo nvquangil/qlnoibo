@@ -53,11 +53,14 @@
   }
 
   // Mặc định: từ đầu tháng đến hôm nay
+  /* v7.72 SỬA LỖI "tháng này lấy từ 31 tháng trước".
+     Bản cũ dùng `d.toISOString()` — hàm đó đổi sang UTC, mà VN là UTC+7: ngày 1/9 lúc 00:00 giờ VN
+     thành 2026-08-31T17:00Z ⇒ cắt ra "2026-08-31". Nên xem "tháng này" luôn kéo thêm ngày 31 của
+     tháng trước. Nay dùng ngayISO() (lấy Y/M/D theo giờ máy — xem common.js). */
   function kyMacDinh() {
     const n = new Date();
     const dau = new Date(n.getFullYear(), n.getMonth(), 1);
-    const iso = (d) => d.toISOString().slice(0, 10);
-    return { tu: iso(dau), den: iso(n) };
+    return { tu: ngayISO(dau), den: ngayISO(n) };
   }
 
   async function render(el, user) {
@@ -79,7 +82,7 @@
     document.getElementById('dbKy').onclick = () => { const x = kyMacDinh(); dat(x.tu, x.den); };
     document.getElementById('dbKyNam').onclick = () => {
       const n = new Date();
-      dat(`${n.getFullYear()}-01-01`, n.toISOString().slice(0, 10));
+      dat(`${n.getFullYear()}-01-01`, ngayISO(n));   // v7.72: không qua UTC nữa
     };
     function dat(tu, den) {
       document.getElementById('dbTu').value = tu;

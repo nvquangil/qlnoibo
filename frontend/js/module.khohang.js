@@ -3466,7 +3466,7 @@ window.ModuleKhoHang = (function () {
       ${phieuSua ? '<div class="empty-hint" style="text-align:left;">Lưu xong hệ thống sẽ <b>hoàn tồn theo phiếu cũ rồi trừ lại theo số mới</b>, các đơn khách đặt gắn phiếu cũng được gắn lại — số phiếu giữ nguyên.</div>' : ''}
       <form id="fBH">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày bán *</label><input type="date" name="ngayBan" required value="${phieuSua ? String(phieuSua.header.NgayBan).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày bán *</label><input type="date" name="ngayBan" required value="${phieuSua ? String(phieuSua.header.NgayBan).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row"><label>Khách hàng *</label>
             <div style="display:flex;gap:6px;">
               ${/* v6.25.5: khi SỬA phải chọn sẵn đúng khách của phiếu, kẻo lưu lại làm mất KhachHangID. */''}

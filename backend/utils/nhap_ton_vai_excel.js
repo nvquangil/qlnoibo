@@ -28,6 +28,9 @@
 const path = require('path');
 const XLSX = require('xlsx');
 const { sql, getPool } = require('../db');
+/* v7.72: chỉ lấy `homNayISO` — hàm `ngayISO` bên dưới là bản RIÊNG của file này (đọc ngày từ ô
+   Excel: Date hoặc chuỗi dd/mm/yyyy), khác việc của utils/ngayISO.js nên đừng gộp hai cái. */
+const { homNayISO } = require('./ngayISO');
 
 // ---------------------------------------------------------------- tien ich
 function boDau(s) {
@@ -263,7 +266,7 @@ async function main() {
   }
 
   const pool = await getPool();
-  const ngayMacDinh = ngayISO(ts.ngay) || new Date().toISOString().slice(0, 10);
+  const ngayMacDinh = ngayISO(ts.ngay) || homNayISO();   // v7.72: hôm nay theo giờ VN, không qua UTC
 
   // ---- Kiem tra tung dong (chay ca o che do xem truoc) ----
   const hopLe = [], boQua = [];

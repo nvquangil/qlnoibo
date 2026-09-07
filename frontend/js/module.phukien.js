@@ -613,7 +613,7 @@ window.ModulePhuKien = (function () {
       <h3>Tạo phiếu Nhập phụ kiện</h3>
       <form id="pkForm">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" value="${homNayISO()}" required></div>
           ${/* v6.10: KHÔNG còn bắt buộc — chỉ là bộ lọc cho dễ tìm mã. */''}
           <div class="form-row"><label>Lọc theo loại phụ kiện (không bắt buộc)</label>
             <select id="pkLoaiPhieu"><option value="">-- Tất cả loại --</option>${(dm.loaiPhuKien || []).map(l => `<option value="${escapeHtml(l.TenLoai)}">${escapeHtml(l.TenLoai)}</option>`).join('')}</select></div>
@@ -847,7 +847,7 @@ window.ModulePhuKien = (function () {
       <h3>Tạo phiếu Xuất phụ kiện</h3>
       <form id="pkForm">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" value="${homNayISO()}" required></div>
           <div class="form-row"><label>Đơn hàng sản xuất (nếu xuất kèm đơn)</label>
             <select name="donHangId" id="pkOrderSelect"><option value="">-- Không gắn đơn hàng --</option>${opt(dm.donHang, 'DonHangID', 'MaDH')}</select></div>
           <div class="form-row"><label>Mã đơn khác / ghi chú đơn</label><input name="maDon" placeholder="VD: chuyền 2, đơn ngoài hệ thống..."></div>

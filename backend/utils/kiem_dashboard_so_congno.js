@@ -140,7 +140,10 @@ kiem(/GROUP BY LTRIM\(RTRIM\(TenKhach\)\)/.test(srcBDash),
   'backend dashboard nhom theo LTRIM(RTRIM(TenKhach)) -> ten tra ve da chuan hoa giong nhau');
 
 console.log('\n=== 11. index.html da bump ?v= (khong thi trinh duyet chay file cu) ===');
-kiem(/module\.dashboard\.js\?v=7\.44/.test(srcHtml), 'module.dashboard.js?v=7.44');
+/* Ghim CỨNG số 7.44 là sai kiểu: bản sau bump lên là test đỏ oan (đã đỏ ở v7.72). Đổi sang >=. */
+kiem(parseFloat((srcHtml.match(/module\.dashboard\.js\?v=([\d.]+)/) || [])[1]) >= 7.44,
+  'module.dashboard.js?v= >= 7.44 (không tụt lại bản cũ hơn bản sửa lỗi này)',
+  String((srcHtml.match(/module\.dashboard\.js\?v=([\d.]+)/) || [])[1]));
 /* v7.59: ghim CUNG so ?v= la sai — moi ban sau nay bump so len deu lam test nay do oan (da dinh 3
    lan). Chi can dam bao KHONG TUT lai duoi ban da sua loi nay. */
 kiem(parseFloat((srcHtml.match(/module\.congno\.js\?v=([\d.]+)/) || [])[1]) >= 7.44,

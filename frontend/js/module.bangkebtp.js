@@ -107,7 +107,7 @@ window.ModuleBangKeBTP = (function () {
     // dam bao moi hang co du values theo so cot
     const fixRows = () => state.rows.forEach(r => { r.values = r.values || []; while (r.values.length < state.cols.length) r.values.push(''); r.values.length = state.cols.length; });
     fixRows();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = homNayISO();
 
     const modal = openModal(`
       <h3>Bảng kê bán thành phẩm — ${escapeHtml(maDH)}${tenPhieu ? ' · Bản: ' + escapeHtml(tenPhieu) : ''}</h3>

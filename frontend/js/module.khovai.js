@@ -515,7 +515,7 @@ window.ModuleKhoVai = (function () {
       <p style="font-size:13px;color:#5f6368;margin-top:-6px;">Chọn Loại vải + Màu — hệ thống tự tìm hoặc tự tạo mã vải tương ứng, không cần nhớ mã. Mã cây do hệ thống tự sinh khi lưu.</p>
       <form id="nForm">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày nhập *</label><input type="date" name="ngayNhap" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="form-row"><label>Ngày nhập *</label><input type="date" name="ngayNhap" value="${homNayISO()}" required></div>
           <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">--</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC')}</select></div>
           <div class="form-row"><label>Số hóa đơn</label><input name="soHoaDon"></div>
           <div class="form-row"><label>Ngày hóa đơn</label><input type="date" name="ngayHoaDon"></div>
@@ -1025,7 +1025,7 @@ window.ModuleKhoVai = (function () {
       <h3>Tạo phiếu xuất kho vải (nhiều cây 1 lần)</h3>
       <form id="xForm">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày xuất *</label><input type="date" name="ngayXuat" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="form-row"><label>Ngày xuất *</label><input type="date" name="ngayXuat" value="${homNayISO()}" required></div>
           <div class="form-row"><label>Đơn hàng sản xuất</label>
             <select name="donHangId" id="xOrderSelect">
               <option value="">-- Xuất tự do (không gắn đơn hàng) --</option>
@@ -1475,7 +1475,7 @@ window.ModuleKhoVai = (function () {
         <h3 style="margin-top:0;">Kiểm kê kho vải</h3>
         ${perm.canCreate && rolls.length ? `
         <form id="kkForm">
-          <div class="form-row"><label>Ngày kiểm *</label><input type="date" name="ngayKiem" value="${new Date().toISOString().slice(0, 10)}" required style="max-width:200px;"></div>
+          <div class="form-row"><label>Ngày kiểm *</label><input type="date" name="ngayKiem" value="${homNayISO()}" required style="max-width:200px;"></div>
           <div id="kkRows">${rowTemplate()}</div>
           <button type="button" class="btn small secondary" id="btnAddK">+ Thêm cây vải</button>
           <div style="margin-top:14px;"><button type="submit" class="btn">Lưu kiểm kê</button></div>
@@ -1565,7 +1565,7 @@ window.ModuleKhoVai = (function () {
       ${perm.canEdit ? '<div style="margin-bottom:10px;"><button class="btn small secondary" id="btnPrinterCfg">⚙️ Cài đặt máy in mạng</button></div>' : ''}
       <div class="card" style="max-width:560px;">
         <h3 style="margin-top:0;">In tem QR theo ngày nhập</h3>
-        <div class="form-row"><label>Chọn ngày nhập</label><input type="date" id="temDate" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="form-row"><label>Chọn ngày nhập</label><input type="date" id="temDate" value="${homNayISO()}"></div>
         <div class="form-row"><label>Khổ tem (A6)</label>
           <label style="margin-right:16px;font-weight:normal;"><input type="radio" name="temKho" value="doc" checked> Khổ dọc</label>
           <label style="font-weight:normal;"><input type="radio" name="temKho" value="ngang"> Khổ ngang</label>

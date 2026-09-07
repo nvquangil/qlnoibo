@@ -248,7 +248,7 @@ window.ModuleCongNo = (function () {
       <h3>${isEdit ? 'Sửa phiếu thu ' + escapeHtml(row.SoPhieu) : 'Tạo phiếu thu'}</h3>
       <form id="fThu">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày thu *</label><input type="date" name="ngay" required value="${isEdit ? String(row.NgayThu).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày thu *</label><input type="date" name="ngay" required value="${isEdit ? String(row.NgayThu).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row"><label>Loại đối tượng</label>
             <select name="loaiDoiTuong" id="thuLoai">
               <option value="KhachHang" ${isEdit && row.LoaiDoiTuong === 'Khac' ? '' : 'selected'}>Khách hàng (giảm công nợ)</option>
@@ -408,7 +408,7 @@ window.ModuleCongNo = (function () {
       <h3>${isEdit ? 'Sửa phiếu chi ' + escapeHtml(row.SoPhieu) : 'Tạo phiếu chi'}</h3>
       <form id="fChi">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày chi *</label><input type="date" name="ngay" required value="${isEdit ? String(row.NgayChi).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày chi *</label><input type="date" name="ngay" required value="${isEdit ? String(row.NgayChi).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row"><label>Chi cho</label>
             <select name="loaiDoiTuong" id="chiLoai">
               <option value="NhaCungCap" ${loai === 'NhaCungCap' ? 'selected' : ''}>Nhà cung cấp (giảm công nợ NCC)</option>
@@ -870,7 +870,7 @@ window.ModuleCongNo = (function () {
       <h3>${sua ? 'Sửa' : 'Thêm'} điều chỉnh công nợ</h3>
       <form id="fDC">
         <div class="form-grid">
-          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" required value="${row && row.Ngay ? String(row.Ngay).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
+          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" required value="${row && row.Ngay ? String(row.Ngay).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row"><label>Loại *</label>
             <select name="loaiDoiTuong" id="dcLoai">
               <option value="NhaCungCap" ${loaiHT === 'NhaCungCap' ? 'selected' : ''}>Nhà cung cấp (nợ phải trả)</option>

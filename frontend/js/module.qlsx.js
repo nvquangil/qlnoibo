@@ -1409,7 +1409,7 @@ window.ModuleQLSX = (function () {
               </div>
               <datalist id="dlKhachHangLenh">${dm.khachHang.map(k => `<option value="${escapeHtml(k.TenKhachHang)}">`).join('')}</datalist>
               <div class="empty-hint" style="padding:2px 0 0;">Tên chưa có trong danh mục vẫn lưu được — chỉ hiện ở lệnh này và các bản in, không thêm vào danh mục.</div></div>
-            <div class="form-row"><label>Ngày đặt</label><input type="date" name="ngayDat" value="${new Date().toISOString().slice(0, 10)}"></div>
+            <div class="form-row"><label>Ngày đặt</label><input type="date" name="ngayDat" value="${homNayISO()}"></div>
             <div class="form-row"><label>Deadline ra hàng *</label><input type="date" name="ngayGiao" required></div>
             <!-- v5.13 (muc 1.1.2): "He so quy doi" MOI, khai bao 1 lan o day - dung CHUNG cho cong doan
                  Cat sau nay thay vi nhap tay tung cay/tung lan Ghi tien do - xem renderStageFields('CAT'). -->
@@ -2823,7 +2823,7 @@ window.ModuleQLSX = (function () {
           <div class="form-row"><label>Công đoạn *</label>
             <select name="congDoan" id="pCongDoanSelect" required>${stages.map(s => `<option value="${s.StageID}" ${s.StageID === detail.CongDoanHienTaiID ? 'selected' : ''}>${escapeHtml(s.TenCongDoan)}</option>`).join('')}</select>
           </div>
-          <div class="form-row"><label>Ngày ghi nhận *</label><input type="date" name="ngayGhiNhan" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="form-row"><label>Ngày ghi nhận *</label><input type="date" name="ngayGhiNhan" value="${homNayISO()}" required></div>
         </div>
         <div id="pStageFields"></div>
         <div class="form-row"><label>Ghi chú</label><textarea name="ghiChu" rows="2"></textarea></div>
@@ -4821,7 +4821,7 @@ window.ModuleQLSX = (function () {
 
   function openGiaoNhanNhaInTheuModal(maDH, row, loai, perm) {
     const isGiao = loai === 'giao';
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = homNayISO();
     const dateCurrent = isGiao ? row.NgayGiaoIn : row.NgayNhanIn;
     const html = `
       <h3>${isGiao ? 'Giao' : 'Nhận'} nhà in thêu — ${escapeHtml(maDH)}</h3>

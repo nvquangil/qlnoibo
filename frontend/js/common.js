@@ -104,6 +104,34 @@ function fmtNumber(n) {
   return Number(n).toLocaleString('vi-VN');
 }
 
+/* ================================================================================================
+   v7.72 — NGÀY DẠNG yyyy-mm-dd THEO **GIỜ VIỆT NAM**, KHÔNG QUA UTC.
+
+   ⚠️ `new Date().toISOString().slice(0, 10)` LÀ SAI và đã gây lỗi thật:
+     · `new Date(2026, 8, 1)` là 1/9 lúc 00:00 giờ VN. Đổi sang UTC (VN = UTC+7) thành
+       2026-08-31T17:00Z ⇒ cắt 10 ký tự đầu ra **"2026-08-31"**. Đây đúng là lỗi Nguyen báo:
+       "Dashboard xem tháng này đang lấy từ 31 tháng trước".
+     · Với "hôm nay": từ 00:00 đến 06:59 giờ VN, UTC vẫn là ngày HÔM QUA ⇒ mọi ô Ngày mặc định
+       (phiếu nhập/xuất/thu/chi/tiến độ...) bị **lùi 1 ngày**. Xưởng vào sớm là gặp ngay, mà lỗi
+       không báo gì cả — cứ ghi sai ngày.
+
+   Cách đúng: lấy năm/tháng/ngày theo GIỜ MÁY (getFullYear/getMonth/getDate), tự ghép chuỗi.
+   Mọi chỗ cần "hôm nay" hoặc "đầu tháng" phải dùng 2 hàm này, KHÔNG gọi toISOString nữa.
+   (Định dạng LẠI một giá trị đọc từ CSDL thì vẫn dùng `String(x).slice(0, 10)` như cũ — chuỗi
+   ngày do SQL Server trả về không đi qua múi giờ nào.)
+   ================================================================================================ */
+function ngayISO(d) {
+  /* Chặn rỗng TRƯỚC khi dựng Date: `new Date(null)` KHÔNG phải NaN mà là mốc 1970-01-01 — để lọt
+     là ô ngày trên phiếu hiện "1970-01-01" thay vì để trống. */
+  if (d === null || d === undefined || d === '') return '';
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt)) return '';
+  return dt.getFullYear() + '-'
+    + String(dt.getMonth() + 1).padStart(2, '0') + '-'
+    + String(dt.getDate()).padStart(2, '0');
+}
+function homNayISO() { return ngayISO(new Date()); }
+
 /* v6.23: SỐ TIỀN BẰNG CHỮ cho phiếu bán hàng (mẫu Word có dòng "Số tiền bằng chữ").
    Quy tắc tiếng Việt: đọc theo nhóm 3 chữ số (tỷ / triệu / nghìn), "linh" cho hàng chục = 0,
    "mười" cho 10-19, "mốt/tư/lăm" ở hàng đơn vị khi hàng chục >= 2. Làm tròn về đồng. */

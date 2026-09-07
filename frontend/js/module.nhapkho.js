@@ -185,7 +185,7 @@
     dm = (await apiGet('/api/nhapkho/danhmuc' + (id ? '?phieuNKID=' + id : ''))).data;
     const h = sua ? sua.header : null;
     const soPhieu = h ? h.SoPhieu : ((await apiGet('/api/nhapkho/next-sophieu')).data || '');
-    const homNay = new Date().toISOString().slice(0, 10);
+    const homNay = homNayISO();
 
     dongForm = sua ? sua.chiTiet.map((r, i) => ({
       idx: i, maHangId: r.MaHangID, maHang: r.MaHang, tenHang: r.TenHang, mauSacId: r.MauSacID,

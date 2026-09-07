@@ -153,7 +153,7 @@
       return;
     }
     const soPhieu = (await apiGet('/api/nhaplai/next-sophieu')).data || '';
-    const homNay = new Date().toISOString().slice(0, 10);
+    const homNay = homNayISO();
 
     openModal(`
       <div class="modal-head"><h3>Lập phiếu nhập lại — hàng khách trả</h3></div>

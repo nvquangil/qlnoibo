@@ -20,6 +20,7 @@
 const express = require('express');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
+const { homNayISO, ngayTruocISO } = require('../utils/ngayISO');   // v7.72: hom nay theo gio VN
 
 const router = express.Router();
 const M = 'DMS';
@@ -424,7 +425,7 @@ async function nhanVienCuaUser(pool, user) {
 router.get('/homnay', ...CN('ghetham'), async (req, res) => {
   const pool = await getPool();
   const nvId = await nhanVienCuaUser(pool, req.session.user);
-  const ngay = req.query.ngay || new Date().toISOString().slice(0, 10);
+  const ngay = req.query.ngay || homNayISO();   // v7.72: hôm nay theo GIỜ VN, không qua UTC
   const lich = nvId ? (await pool.request().input('nv', sql.Int, nvId).input('ngay', sql.Date, ngay).query(`
     SELECT l.LichID, l.TuyenID, tu.MaTuyen, tu.TenTuyen
     FROM LichDiTuyen l LEFT JOIN TuyenBanHang tu ON tu.TuyenID = l.TuyenID
@@ -556,8 +557,8 @@ router.delete('/ghetham/:id', ...CN_GHI('ghetham', 'delete'), async (req, res) =
 router.get('/donhang', ...CN('ghetham'), async (req, res) => {
   const pool = await getPool();
   const nvId = req.query.nhanVienId ? Number(req.query.nhanVienId) : await nhanVienCuaUser(pool, req.session.user);
-  const tuNgay = req.query.tuNgay || new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
-  const denNgay = req.query.denNgay || new Date().toISOString().slice(0, 10);
+  const tuNgay = req.query.tuNgay || ngayTruocISO(29);   // v7.72
+  const denNgay = req.query.denNgay || homNayISO();
   if (!nvId) return res.json({ success: true, data: [] });
   const rows = (await pool.request().input('nv', sql.Int, nvId)
     .input('tu', sql.Date, tuNgay).input('den', sql.Date, denNgay).query(`
@@ -590,7 +591,7 @@ router.get('/shop/:id/lichsu', ...CN('shop'), async (req, res) => {
    ================================================================================================ */
 router.get('/lotrinh', ...CN('lotrinh'), async (req, res) => {
   const pool = await getPool();
-  const tuNgay = req.query.tuNgay || new Date().toISOString().slice(0, 10);
+  const tuNgay = req.query.tuNgay || homNayISO();   // v7.72
   const denNgay = req.query.denNgay || tuNgay;
   const nvId = req.query.nhanVienId ? Number(req.query.nhanVienId) : null;
   const rq = pool.request().input('tu', sql.Date, tuNgay).input('den', sql.Date, denNgay);
