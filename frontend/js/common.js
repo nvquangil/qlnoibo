@@ -253,7 +253,12 @@ function fmtQuyDoi(total, heSo, phepTinh, donViChinh, donViQuyDoi) {
   const dvQuyDoi = escapeHtml(donViQuyDoi);
   const ketQua = phepTinh === 'Chia' ? (n / he) : (n * he);
   const dauPhep = phepTinh === 'Chia' ? '÷' : '×';
-  return `${fmtNumber(n)} ${dvChinh} (${dauPhep}${fmtNumber(he)} = ${fmtNumber(ketQua)} ${dvQuyDoi})`;
+  /* v7.74: BỎ CẶP NGOẶC, giữ nguyên thông tin quy đổi (Nguyen chốt).
+     Trước:  "240 Ri (×5 = 1.200 Cái)"      Nay:  "240 Ri × 5 = 1.200 Cái"
+     Sửa ở ĐÂY nên đổi đồng loạt 10 chỗ đang dùng: bản in lệnh SX, dòng Tổng cộng trong form Ra lệnh
+     SX (cả thêm mới lẫn sửa), danh sách lệnh SX, popup chi tiết đơn, sổ cắt — không để hai kiểu
+     hiển thị lệch nhau giữa màn hình và tờ giấy in. */
+  return `${fmtNumber(n)} ${dvChinh} ${dauPhep} ${fmtNumber(he)} = ${fmtNumber(ketQua)} ${dvQuyDoi}`;
 }
 
 function opt(list, valueKey, labelKey, selected) {
