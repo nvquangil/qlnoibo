@@ -132,6 +132,107 @@ function ngayISO(d) {
 }
 function homNayISO() { return ngayISO(new Date()); }
 
+/* ================================================================================================
+   v7.75 — Ô NHẬP NGÀY HIỆN THEO KIỂU VIỆT NAM (dd/mm/yyyy).
+
+   VÌ SAO PHẢI TỰ LÀM: `<input type="date">` hiển thị theo NGÔN NGỮ CỦA TRÌNH DUYỆT/WINDOWS, không
+   theo trang web. Máy đặt tiếng Anh (Mỹ) là ô ngày hiện mm/dd/yyyy — đúng lỗi Nguyen báo — và
+   KHÔNG có cách nào ép định dạng bằng CSS hay thuộc tính HTML. Đây là hạn chế của chính trình duyệt.
+
+   Cách làm: ô CHỮ hiện dd/mm/yyyy (gõ tay được, tự chèn dấu /) + nút 📅 mở đúng bộ chọn ngày của
+   trình duyệt (một `<input type="date">` ẩn). Giữ được cả hai thứ: đọc/gõ theo kiểu Việt Nam, mà
+   vẫn có lịch bấm chọn — nhất là trên điện thoại.
+
+   Ba hàm dùng chung: oNgayHtml() dựng ô, wireONgay() gắn sự kiện, docONgay() đọc ra 'yyyy-mm-dd'
+   để gửi lên máy chủ. Giá trị TRAO ĐỔI VỚI MÁY CHỦ luôn là ISO — chỉ phần NHÌN THẤY là dd/mm/yyyy.
+   ================================================================================================ */
+function ngayVNTuISO(iso) {
+  const m = String(iso || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
+/* Nhận '7/9/26', '07/09/2026', '7-9-2026'... -> 'yyyy-mm-dd'. Không hợp lệ thì trả ''. */
+function isoTuNgayVN(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/);
+  if (!m) return '';
+  const d = Number(m[1]), th = Number(m[2]);
+  let nam = Number(m[3]);
+  if (nam < 100) nam += 2000;                       // gõ tắt '26' -> 2026
+  if (d < 1 || d > 31 || th < 1 || th > 12) return '';
+  const dt = new Date(nam, th - 1, d);
+  /* Chặn ngày không tồn tại (31/02): Date tự nhảy sang tháng sau nên so lại ngày/tháng. */
+  if (dt.getDate() !== d || dt.getMonth() !== th - 1) return '';
+  return ngayISO(dt);
+}
+function oNgayHtml(id, iso, thuocTinh) {
+  return `<span class="o-ngay" style="display:inline-flex;align-items:center;gap:2px;">
+    <input type="text" id="${id}" class="o-ngay-chu" inputmode="numeric" maxlength="10"
+           placeholder="dd/mm/yyyy" value="${escapeHtml(ngayVNTuISO(iso))}"
+           data-iso="${escapeHtml(iso || '')}" style="width:118px;" ${thuocTinh || ''}>
+    <input type="date" id="${id}_lich" class="o-ngay-lich" value="${escapeHtml(iso || '')}"
+           tabindex="-1" aria-hidden="true"
+           style="width:0;height:0;padding:0;border:0;opacity:0;position:absolute;pointer-events:none;">
+    <button type="button" class="btn small secondary o-ngay-nut" data-cho="${id}"
+            title="Chọn ngày trên lịch" style="padding:2px 6px;">📅</button>
+  </span>`;
+}
+function wireONgay(root, id) {
+  const oChu = (root || document).querySelector('#' + id);
+  const oLich = (root || document).querySelector('#' + id + '_lich');
+  const nut = (root || document).querySelector(`.o-ngay-nut[data-cho="${id}"]`);
+  if (!oChu || !oLich) return;
+
+  const datISO = (iso) => {
+    oChu.dataset.iso = iso || '';
+    oChu.value = ngayVNTuISO(iso);
+    oLich.value = iso || '';
+    oChu.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  /* Gõ: tự chèn dấu / sau ngày và sau tháng — khỏi phải với tay tìm dấu gạch trên điện thoại. */
+  oChu.addEventListener('input', () => {
+    const so = oChu.value.replace(/\D/g, '').slice(0, 8);
+    let ra = so;
+    if (so.length > 4) ra = so.slice(0, 2) + '/' + so.slice(2, 4) + '/' + so.slice(4);
+    else if (so.length > 2) ra = so.slice(0, 2) + '/' + so.slice(2);
+    oChu.value = ra;
+  });
+  /* Rời ô mới chuẩn hoá: đang gõ nửa vời mà đã sửa là giật con trỏ. Gõ sai thì TRẢ LẠI giá trị cũ
+     chứ không xoá trắng — xoá trắng là mất luôn kỳ đang xem mà người dùng không hiểu vì sao. */
+  const chuanHoa = () => {
+    const iso = isoTuNgayVN(oChu.value);
+    if (iso) { datISO(iso); return; }
+    if (!oChu.value.trim()) { datISO(''); return; }
+    oChu.value = ngayVNTuISO(oChu.dataset.iso || '');
+    toast('Ngày phải theo dạng dd/mm/yyyy (ví dụ 07/09/2026).', 'error');
+  };
+  oChu.addEventListener('blur', chuanHoa);
+  oChu.addEventListener('keydown', (e) => { if (e.key === 'Enter') { chuanHoa(); } });
+
+  oLich.addEventListener('change', () => datISO(oLich.value));
+  if (nut) nut.addEventListener('click', () => {
+    /* showPicker() phải gọi trong cử chỉ của người dùng (bấm nút) — đúng ngữ cảnh này. */
+    try { if (oLich.showPicker) { oLich.showPicker(); return; } } catch (e) { /* trình duyệt chặn */ }
+    oLich.style.cssText = 'width:auto;height:auto;opacity:1;position:static;pointer-events:auto;';
+    oLich.focus();
+    oLich.click();
+  });
+}
+/* Đọc ra 'yyyy-mm-dd' để gửi máy chủ. Ưu tiên cái người dùng đang gõ, chưa hợp lệ thì lấy giá trị
+   đã chuẩn hoá lần cuối — không trả chuỗi rác lên API. */
+function docONgay(id, root) {
+  const oChu = (root || document).querySelector('#' + id);
+  if (!oChu) return '';
+  return isoTuNgayVN(oChu.value) || oChu.dataset.iso || '';
+}
+function datONgay(id, iso, root) {
+  const oChu = (root || document).querySelector('#' + id);
+  const oLich = (root || document).querySelector('#' + id + '_lich');
+  if (!oChu) return;
+  oChu.dataset.iso = iso || '';
+  oChu.value = ngayVNTuISO(iso);
+  if (oLich) oLich.value = iso || '';
+}
+
 /* v6.23: SỐ TIỀN BẰNG CHỮ cho phiếu bán hàng (mẫu Word có dòng "Số tiền bằng chữ").
    Quy tắc tiếng Việt: đọc theo nhóm 3 chữ số (tỷ / triệu / nghìn), "linh" cho hàng chục = 0,
    "mười" cho 10-19, "mốt/tư/lăm" ở hàng đơn vị khi hàng chục >= 2. Làm tròn về đồng. */
