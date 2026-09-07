@@ -92,6 +92,120 @@ window.ModuleDMS = (function () {
     });
   }
 
+  /* ================================================================================================
+     v7.73 — ĐÓNG DẤU THỜI GIAN / ĐỊA ĐIỂM LÊN ẢNH CHECK-IN (kiểu app TimeMark).
+     Ảnh ghé thăm là BẰNG CHỨNG, nên thông tin phải nằm TRÊN CHÍNH TẤM ẢNH — lưu riêng ở CSDL thì
+     ảnh tải về / gửi Zalo là mất hết ngữ cảnh, và không chứng minh được gì.
+
+     Vẽ bằng <canvas> ngay trên máy nhân viên, KHÔNG đóng ở máy chủ, vì:
+       · chữ tiếng Việt dùng font hệ thống của trình duyệt — chắc chắn có dấu (đóng bằng `sharp` ở
+         máy chủ Windows phải tự lo font, thiếu font là ra ô vuông);
+       · ảnh gửi lên đã là ảnh cuối, máy chủ không phải giải nén/vẽ lại cho từng lượt chụp.
+
+     4 dòng đóng lên ảnh (Nguyen chốt v7.73): ngày+giờ · tên shop · địa chỉ (tra từ GPS) ·
+     toạ độ + tên nhân viên.
+     ================================================================================================ */
+
+  /* Đọc file ảnh thành bitmap, ÁP ĐÚNG CHIỀU EXIF. Ảnh chụp bằng điện thoại hầu hết có cờ
+     orientation; bỏ qua cờ đó là ảnh bị quay ngang và dấu đóng nằm sai cạnh. */
+  async function docAnhDungChieu(file) {
+    if (window.createImageBitmap) {
+      try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+      catch (e) { /* trình duyệt cũ không nhận tham số -> dùng <img> bên dưới */ }
+    }
+    return await new Promise((ok, loi) => {
+      const url = URL.createObjectURL(file);
+      const im = new Image();
+      im.onload = () => { URL.revokeObjectURL(url); ok(im); };
+      im.onerror = () => { URL.revokeObjectURL(url); loi(new Error('Không đọc được ảnh.')); };
+      im.src = url;
+    });
+  }
+
+  /* Cắt chuỗi dài thành nhiều dòng vừa bề rộng — địa chỉ đầy đủ thường dài hơn khổ ảnh. */
+  function xepDong(ctx, chu, rongToiDa, toiDaSoDong) {
+    const tu = String(chu || '').split(' ').filter(Boolean);
+    const dong = [];
+    let cur = '';
+    for (const t of tu) {
+      const thu = cur ? cur + ' ' + t : t;
+      if (ctx.measureText(thu).width <= rongToiDa || !cur) { cur = thu; continue; }
+      dong.push(cur); cur = t;
+      if (dong.length >= toiDaSoDong) break;
+    }
+    if (cur && dong.length < toiDaSoDong) dong.push(cur);
+    /* Còn chữ mà đã hết dòng cho phép -> thêm "…" để không giả vờ là đã hiện đủ. */
+    if (dong.length === toiDaSoDong && ctx.measureText(chu).width > rongToiDa * toiDaSoDong) {
+      dong[toiDaSoDong - 1] = dong[toiDaSoDong - 1].replace(/\s*\S*$/, '') + '…';
+    }
+    return dong;
+  }
+
+  const CANH_TOI_DA_ANH = 1600;   // cùng mức với nén ảnh chung của hệ thống (v6.07)
+
+  /* Trả về File JPEG ĐÃ đóng dấu. `tt` = { thoiDiem, tenShop, diaChi, lat, lon, tenNhanVien }. */
+  async function dongDauAnh(file, tt) {
+    const img = await docAnhDungChieu(file);
+    const w0 = img.width || img.naturalWidth, h0 = img.height || img.naturalHeight;
+    const ty = Math.min(1, CANH_TOI_DA_ANH / Math.max(w0, h0));
+    const W = Math.max(1, Math.round(w0 * ty)), H = Math.max(1, Math.round(h0 * ty));
+
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0, W, H);
+    if (img.close) img.close();
+
+    /* Cỡ chữ theo bề rộng ảnh -> ảnh to nhỏ gì dấu cũng đọc được, không bị bé li ti. */
+    const coChu = Math.max(13, Math.round(W / 40));
+    const viLe = Math.round(coChu * 0.6);
+    const caoDong = Math.round(coChu * 1.32);
+    const rongChu = W - viLe * 2;
+
+    ctx.font = `${coChu}px Arial, sans-serif`;
+    const gio = tt.thoiDiem;
+    const dsDong = [];
+    dsDong.push({ chu: '🕐 ' + gio, dam: true });
+    if (tt.tenShop) dsDong.push({ chu: '🏪 ' + tt.tenShop });
+    /* Địa chỉ: tra được thì hiện; không tra được thì NÓI RÕ, không để trống cho tưởng là quên. */
+    dsDong.push({ chu: '📍 ' + (tt.diaChi || '(không tra được địa chỉ — xem toạ độ bên dưới)') });
+    const toaDo = (tt.lat && tt.lon) ? `${Number(tt.lat).toFixed(6)}, ${Number(tt.lon).toFixed(6)}` : 'chưa có toạ độ';
+    dsDong.push({ chu: `🧭 ${toaDo}${tt.tenNhanVien ? '  ·  NV: ' + tt.tenNhanVien : ''}` });
+
+    /* Xếp dòng trước để biết dải nền cao bao nhiêu (địa chỉ có thể chiếm 2 dòng). */
+    const veDong = [];
+    dsDong.forEach(d => {
+      ctx.font = `${d.dam ? 'bold ' : ''}${coChu}px Arial, sans-serif`;
+      xepDong(ctx, d.chu, rongChu, 2).forEach(s => veDong.push({ chu: s, dam: d.dam }));
+    });
+    const caoDai = veDong.length * caoDong + viLe * 2;
+
+    /* Dải nền chuyển màu: đọc rõ chữ trắng mà không che hẳn phần ảnh phía trên. */
+    const g = ctx.createLinearGradient(0, H - caoDai, 0, H);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.28, 'rgba(0,0,0,0.55)');
+    g.addColorStop(1, 'rgba(0,0,0,0.78)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, H - caoDai, W, caoDai);
+
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#fff';
+    /* Viền chữ mảnh: nền ảnh sáng (tường trắng, trời) thì chữ trắng vẫn nổi. */
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = Math.max(1, Math.round(coChu / 12));
+    let y = H - caoDai + viLe;
+    veDong.forEach(d => {
+      ctx.font = `${d.dam ? 'bold ' : ''}${coChu}px Arial, sans-serif`;
+      ctx.strokeText(d.chu, viLe, y);
+      ctx.fillText(d.chu, viLe, y);
+      y += caoDong;
+    });
+
+    const blob = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', 0.85));
+    if (!blob) throw new Error('Không tạo được ảnh đã đóng dấu.');
+    return new File([blob], 'ghetham.jpg', { type: 'image/jpeg' });
+  }
+
   /* Nap Leaflet MOT LAN. Khong tai duoc thi tra false de goi ban do bao ro, khong lam vo ca tab. */
   let __leaflet = null;
   function napLeaflet() {
@@ -624,13 +738,47 @@ window.ModuleDMS = (function () {
       };
       modal.querySelector('#dmLayLai').addEventListener('click', layViTri);
       layViTri();
+      /* v7.73: ĐÓNG DẤU giờ + shop + địa chỉ + toạ độ/nhân viên lên ảnh TRƯỚC KHI tải lên, để tấm
+         ảnh tự nó là bằng chứng (kiểu app TimeMark). Xem dongDauAnh() ở đầu file. */
       modal.querySelector('#dmGAnhFile').addEventListener('change', async (e) => {
         const f = e.target.files[0]; if (!f) return;
+        const oXem = modal.querySelector('#dmGAnhXem');
+        const oFile = e.target;
+        oFile.disabled = true;
+        oXem.innerHTML = '<span class="empty-hint" style="padding:0;">Đang đóng dấu thời gian / địa điểm lên ảnh...</span>';
         try {
-          const url = await uploadFile(f, 'ghetham');
+          const lat = modal.querySelector('#dmGLat').value || null;
+          const lon = modal.querySelector('#dmGLon').value || null;
+          const oShop = modal.querySelector('[name="shopId"]');
+          const shop = shops.find(s => String(s.ShopID) === String(oShop && oShop.value)) || {};
+          /* Tra địa chỉ từ GPS. Lỗi mạng / tra không ra thì để trống — KHÔNG chặn việc chụp. */
+          let diaChi = '';
+          if (lat && lon) {
+            try {
+              diaChi = ((await apiGet(`/api/dms/diachi?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`)).data || {}).diaChi || '';
+            } catch (err) { diaChi = ''; }
+          }
+          const anhDaDong = await dongDauAnh(f, {
+            thoiDiem: fmtDateTime(new Date()),          // giờ VN — xem quy tắc ở common.js (v7.72)
+            tenShop: [shop.MaShop, shop.TenShop].filter(Boolean).join(' · '),
+            diaChi, lat, lon,
+            tenNhanVien: (currentUser && currentUser.hoTen) || ''
+          });
+          const url = await uploadFile(anhDaDong, 'ghetham');
           modal.querySelector('#dmGAnh').value = url;
-          modal.querySelector('#dmGAnhXem').innerHTML = `<img src="${escapeHtml(anhNho(url, 160))}" style="width:90px;height:90px;object-fit:cover;border-radius:6px;">`;
-        } catch (err) { toast('Không tải được ảnh: ' + err.message, 'error'); }
+          /* Xem trước bằng ảnh ĐÃ đóng dấu (cỡ lớn hơn ô cũ để đọc được dòng chữ mà kiểm luôn). */
+          oXem.innerHTML = `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" title="Bấm để xem ảnh to">
+              <img src="${escapeHtml(anhNho(url, 320))}" style="max-width:200px;border-radius:6px;border:1px solid #dadce0;"></a>
+            <div class="empty-hint" style="padding:0;text-align:left;">${diaChi
+              ? 'Đã đóng dấu giờ + địa chỉ lên ảnh.'
+              : '⚠️ Đã đóng dấu giờ + toạ độ, nhưng CHƯA tra được địa chỉ (mạng hoặc dịch vụ bản đồ). Ảnh vẫn dùng được.'}</div>`;
+        } catch (err) {
+          oXem.innerHTML = '';
+          toast('Không xử lý được ảnh: ' + err.message, 'error');
+        }
+        /* Luôn mở lại ô chọn file, kể cả khi lỗi — không thì nhân viên bị kẹt, chụp lại không được. */
+        oFile.disabled = false;
+        oFile.value = '';
       });
     }
     modal.querySelector('#dmFGhe').addEventListener('submit', async (e) => {

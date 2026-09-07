@@ -21,6 +21,7 @@ const express = require('express');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { homNayISO, ngayTruocISO } = require('../utils/ngayISO');   // v7.72: hom nay theo gio VN
+const { diaChiTuToaDo } = require('../utils/diaChiTuToaDo');       // v7.73: dia chi tu GPS cho dau anh
 
 const router = express.Router();
 const M = 'DMS';
@@ -420,6 +421,18 @@ async function nhanVienCuaUser(pool, user) {
     .query('SELECT NhanVienID FROM Users WHERE UserID = @u')).recordset[0];
   return r ? r.NhanVienID : null;
 }
+
+/* ================================================================================================
+   v7.73 — TRA ĐỊA CHỈ TỪ TOẠ ĐỘ, cho dấu thời gian/địa điểm đóng lên ảnh check-in (kiểu TimeMark).
+   Gọi từ MÁY CHỦ chứ không để từng điện thoại tự gọi Nominatim, vì: khai được User-Agent bắt buộc,
+   ghi đệm dùng chung cho cả đội (nhiều nhân viên ghé cùng shop chỉ tốn 1 lượt), và giữ được giới hạn
+   ~1 lượt/giây của Nominatim ở MỘT chỗ. Chi tiết ràng buộc: xem utils/diaChiTuToaDo.js.
+   Tra không ra thì trả `diaChi: ''` kèm HTTP 200 — đây KHÔNG phải lỗi, ảnh vẫn đóng dấu được.
+   ================================================================================================ */
+router.get('/diachi', ...CN('ghetham'), async (req, res) => {
+  const { diaChi, tuDem } = await diaChiTuToaDo(req.query.lat, req.query.lon);
+  res.json({ success: true, data: { diaChi, tuDem } });
+});
 
 /* Man hinh check-in: shop cua tuyen hom nay (uu tien) + toan bo shop de con ghe shop moi */
 router.get('/homnay', ...CN('ghetham'), async (req, res) => {
