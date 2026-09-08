@@ -143,7 +143,11 @@ const CHO_PHEP_TANG = [
   'ORDER BY Ngay', 'ORDER BY p.Ngay, p.PhieuID',
   /* 3 so chi tiet cua baocao.js: co y tang vi cong luy ke, da dao o tang JS (muc 1). */
   'ORDER BY p.NgayNhap, p.SoPhieu', 'ORDER BY p.NgayBan, p.PhieuBHID', 'ORDER BY d.ThoiGian',
-  'ORDER BY c.NgayNhap, c.CayID'
+  'ORDER BY c.NgayNhap, c.CayID',
+  /* v7.87: KHONG phai danh sach hien thi — day la GOP CHUOI (FOR XML PATH) cua cac so phieu nhap kho
+     cua mot lenh SX: "NK0001, NK0007". Doc theo thu tu thoi gian moi dung nghia "nhap dot 1, dot 2";
+     dao lai la thanh "NK0007, NK0001", vo ly. */
+  'ORDER BY pk.NgayNhap, pk.PhieuNKID FOR XML PATH'
 ];
 const conTang = [];
 [['baocao.js', sBaoCao], ['dms.js', sDms], ['khovai.js', sKhoVai], ['qlsx.js', sQlsx],

@@ -176,7 +176,8 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
            (SELECT COUNT(DISTINCT td.SoDoID) FROM TienDoSanXuat td
               JOIN CongDoanSanXuat cc ON cc.StageID = td.StageID
               WHERE td.DonHangID = d.DonHangID AND cc.MaCongDoan = 'CAT' AND td.SoDoID IS NOT NULL
-                AND EXISTS (SELECT 1 FROM TienDoCatChiTietCay cay WHERE cay.TienDoID = td.TienDoID)) AS SoSoDoDaCat
+                AND EXISTS (SELECT 1 FROM TienDoCatChiTietCay cay WHERE cay.TienDoID = td.TienDoID)) AS SoSoDoDaCat,
+           ${COT_PHIEU_NHAP_KHO('d')}
     FROM DonHangSanXuat d
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
@@ -663,6 +664,26 @@ async function ghiChiTietCayCat(pool, tienDoId, c, soLuongLop, heSo) {
                   VALUES (@TienDoID, @CayID, @SttCay, @SoLuongLop, @HeSoQuyDoi, @SoKgMetSuDung${coAnh ? ', @AnhCay' : ''}${coGiatCap ? ', @SoCaiGiatCap' : ''})`);
 }
 
+/* ================================================================================================
+   v7.87 — PHIEU NHAP KHO CUA MOT LENH SX (2 cot: so phieu + ngay nhap gan nhat).
+
+   Nguyen: "Danh sach lenh san xuat them cot phieu nhap kho ... Khi in phieu cua lenh san xuat do co
+   phieu nhap kho va ngay nhap kho."
+
+   MOT BAN CONG THUC DUY NHAT cho ca danh sach lenh (GET /orders) lan cho moi ban in (getOrderByMaDH).
+   Viet hai lan la som muon hai cho lech nhau — vd mot ben quen loai phieu 'Đã hủy'.
+
+   ⚠️ Subquery nam o COT SELECT, TUYET DOI khong long trong SUM/COUNT/AVG (SQL Server Msg 130 ->
+   man hinh trang; da lam vo production o v7.62).
+   Mot lenh nhap kho nhieu dot -> nhieu phieu, nen gop chuoi "NK0001, NK0007"; ngay lay lan GAN NHAT.
+   ================================================================================================ */
+const COT_PHIEU_NHAP_KHO = (bd) => `
+           STUFF((SELECT N', ' + pk.SoPhieu FROM PhieuNhapKhoHang pk
+                   WHERE pk.DonHangID = ${bd}.DonHangID AND pk.TrangThai <> N'Đã hủy'
+                   ORDER BY pk.NgayNhap, pk.PhieuNKID FOR XML PATH('')), 1, 2, '') AS SoPhieuNhapKho,
+           (SELECT MAX(pk2.NgayNhap) FROM PhieuNhapKhoHang pk2
+             WHERE pk2.DonHangID = ${bd}.DonHangID AND pk2.TrangThai <> N'Đã hủy') AS NgayNhapKho`;
+
 async function getOrderByMaDH(pool, maDH) {
   // v5.6: bo sung join lay TenNhaIn (thieu tu truoc - chi co TenNhaGiaCong) - dung cho phieu bao cao
   // (in phieu: hien ten nha gia cong/nha in trong bang lich su, yeu cau v5.6).
@@ -678,7 +699,10 @@ async function getOrderByMaDH(pool, maDH) {
     SELECT d.*,
            ISNULL(NULLIF(LTRIM(RTRIM(d.TenKhachHangTuDo)), ''), kh.TenKhachHang) AS TenKhachHang,   -- v6.43
            c.TenCongDoan, c.MaCongDoan, ncc1.TenNha AS TenNhaGiaCong, ncc1.LaNoiBo AS LaNoiBoNhaGiaCong, ncc2.TenNha AS TenNhaIn,
-           dvqd.DonViQuyDoi AS TenDonViQuyDoi, dvqd.PhepTinh AS PhepTinhQuyDoi
+           dvqd.DonViQuyDoi AS TenDonViQuyDoi, dvqd.PhepTinh AS PhepTinhQuyDoi,
+           ${/* v7.87: đặt ở chỗ đọc lệnh DÙNG CHUNG nên MỌI bản in của lệnh đều có sẵn 2 cột này,
+                không phải nhớ thêm vào từng bản in một. */''}
+           ${COT_PHIEU_NHAP_KHO('d')}
     FROM DonHangSanXuat d
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID

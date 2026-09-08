@@ -762,7 +762,10 @@ window.ModuleQLSX = (function () {
           <span id="dlDangLoc" style="color:#1a73e8;"></span>
         </div>
       </div>
-      <table><thead><tr><th style="width:56px">Ảnh SP</th><th>Mã ĐH</th><th>Tên SP</th><th>Mã Rập</th><th>Khách hàng</th><th>SL</th><th>Ngày ra lệnh</th><th>Ngày giao</th><th>Công đoạn</th><th>%</th><th>Trạng thái</th><th style="width:460px">Thao tác</th></tr></thead>
+      ${/* v7.87: cột PHIẾU NHẬP KHO — nhìn danh sách là biết lệnh nào đã nhập kho, phiếu số mấy,
+           ngày nào; không phải sang phân hệ Kho hàng hóa dò lại. Lệnh nhập nhiều đợt thì hiện đủ
+           các số phiếu, ngày lấy lần nhập GẦN NHẤT. */''}
+      <table><thead><tr><th style="width:56px">Ảnh SP</th><th>Mã ĐH</th><th>Tên SP</th><th>Mã Rập</th><th>Khách hàng</th><th>SL</th><th>Ngày ra lệnh</th><th>Ngày giao</th><th>Công đoạn</th><th>%</th><th>Trạng thái</th><th>Phiếu nhập kho</th><th style="width:460px">Thao tác</th></tr></thead>
       ${/* v6.48.2: tô màu bằng CLASS (.dl-qua/.dl-sap trong style.css) chứ không đặt style thẳng vào
            <tr>. Nền vẽ ở <td>, mà quy tắc :hover của bảng cũng nhắm vào <td> — nền đặt ở <tr> nằm
            DƯỚI nền của <td> nên rê chuột vào là màu cảnh báo biến mất. */''}
@@ -776,6 +779,10 @@ window.ModuleQLSX = (function () {
         ${/* v5.99: đơn nhiều sơ đồ chưa cắt đủ -> nhắc ngay cạnh công đoạn (tổ Cắt vẫn thấy đơn này) */''}
         <td>${escapeHtml(o.TenCongDoan)}${o.ConPhaiCat ? `<div><span class="badge warn" title="Đơn có ${o.SoSoDo} sơ đồ, đã ghi sổ cắt ${o.SoSoDoDaCat} sơ đồ">✂️ Còn cắt ${o.SoSoDoConLai}/${o.SoSoDo} sơ đồ</span></div>` : ''}</td>
         <td>${o.PhanTramHoanThanh}%</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan, o.TenNhaGiaCong, o.MaCongDoan)}</td>
+        ${/* Chưa nhập kho thì để TRỐNG, không ghi "—": cột này trống ở phần lớn lệnh đang chạy. */''}
+        <td>${o.SoPhieuNhapKho
+          ? `<b>${escapeHtml(o.SoPhieuNhapKho)}</b><div style="font-size:11px;color:#5f6368;">Nhập ${fmtDate(o.NgayNhapKho)}</div>`
+          : ''}</td>
         <td>
           ${permTiendo.canEdit ? `<button class="btn small secondary act-progress" data-madh="${o.MaDH}">Ghi tiến độ</button>` : ''}
           <button class="btn small secondary act-printlenh" data-madh="${o.MaDH}">In lệnh SX</button>
@@ -783,7 +790,7 @@ window.ModuleQLSX = (function () {
           <button class="btn small secondary act-printtlkt" data-madh="${o.MaDH}">In tài liệu KT</button>${''/* v5.44.5: LUÔN hiện nút In tài liệu KT (bỏ gate quyền tailieukythuat) theo yêu cầu */}
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-madh="${o.MaDH}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-delete" data-madh="${o.MaDH}">Xóa</button>` : ''}
-        </td></tr>`; }).join('') || '<tr><td colspan="12" class="empty-hint">Chưa có lệnh sản xuất nào trong phạm vi quyền của bạn</td></tr>'}</tbody></table>`;
+        </td></tr>`; }).join('') || '<tr><td colspan="13" class="empty-hint">Chưa có lệnh sản xuất nào trong phạm vi quyền của bạn</td></tr>'}</tbody></table>`;
 
     /* v6.48.1: bấm con số để lọc bảng. Bấm lại đúng nhóm đang lọc thì bỏ lọc — không phải đi tìm
        nút "Tất cả" mỗi lần. Dòng "chưa có lệnh nào" không có data-dl nên luôn hiện, không bị lọc mất. */
@@ -4893,7 +4900,11 @@ window.ModuleQLSX = (function () {
       // v6.06: đơn vị lấy theo ĐVT khai ở Ra lệnh SX (Cấu trúc vải), không mặc định "Cái".
       cap('Tổng SL', o.TongSoLuong != null ? fmtQuyDoi(o.TongSoLuong, o.HeSoQuyDoi, o.PhepTinhQuyDoi, dvtLenh || 'Cái', o.TenDonViQuyDoi) : ''),
       cap('Trạng thái', escapeHtml(o.TrangThai || '')),
-      cap('% hoàn thành', o.PhanTramHoanThanh != null ? o.PhanTramHoanThanh + '%' : '')
+      cap('% hoàn thành', o.PhanTramHoanThanh != null ? o.PhanTramHoanThanh + '%' : ''),
+      /* v7.87: PHIẾU NHẬP KHO + NGÀY NHẬP. `cap()` tự bỏ dòng khi giá trị rỗng, nên lệnh chưa nhập
+         kho thì bản in không có hai dòng này — không in ra dòng trống cho có. */
+      cap('Phiếu nhập kho', escapeHtml(o.SoPhieuNhapKho || '')),
+      cap('Ngày nhập kho', o.NgayNhapKho ? fmtDate(o.NgayNhapKho) : '')
     ].filter(Boolean).join('');
     return `<table style="width:100%;border-collapse:collapse;margin-bottom:8px;"><tr>
         <td style="vertical-align:top;padding:0;">

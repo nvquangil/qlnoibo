@@ -83,12 +83,22 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
        mot lan, de lai trong danh sach la mo duong nhap trung ca lenh.
        ⚠️ Phai GIU LAI lenh cua CHINH phieu dang sua (?phieuNKID=), khong thi mo form Sua se thay o
        lenh SX rong roi bam Luu la mat lien ket - dung kieu loi am tham. */
-    q(`SELECT TOP 300 d.DonHangID, d.MaDH, d.TenSanPham FROM DonHangSanXuat d
+    /* v7.87: NHAP BO SUNG. `?keCaDaNhap=1` -> GIU LAI ca lenh da nhap kho, kem so phieu da nhap de
+       nguoi dung nhin thay minh dang nhap them cho lenh nao. Mac dinh van BO (nhap trung ca lenh la
+       loi nang hon), chi khi nguoi dung CHU DONG tich "Nhập bổ sung" moi hien.
+       ⚠️ Dem so phieu bang subquery o cot SELECT, KHONG dat trong COUNT(...) — SQL Server Msg 130. */
+    q(`SELECT TOP 300 d.DonHangID, d.MaDH, d.TenSanPham,
+              (SELECT COUNT(*) FROM PhieuNhapKhoHang p2
+                WHERE p2.DonHangID = d.DonHangID AND p2.TrangThai <> N'Đã hủy') AS SoPhieuDaNhap,
+              (SELECT TOP 1 p3.SoPhieu FROM PhieuNhapKhoHang p3
+                WHERE p3.DonHangID = d.DonHangID AND p3.TrangThai <> N'Đã hủy'
+                ORDER BY p3.NgayNhap DESC, p3.PhieuNKID DESC) AS SoPhieuGanNhat
+       FROM DonHangSanXuat d
        WHERE d.TrangThai = N'Hoàn thành'
-         AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang p
+         ${req.query.keCaDaNhap === '1' ? '' : `AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang p
                          WHERE p.DonHangID = d.DonHangID
                            AND p.TrangThai <> N'Đã hủy'
-                           AND (${req.query.phieuNKID ? 'p.PhieuNKID <> ' + (parseInt(req.query.phieuNKID, 10) || 0) : '1=1'}))
+                           AND (${req.query.phieuNKID ? 'p.PhieuNKID <> ' + (parseInt(req.query.phieuNKID, 10) || 0) : '1=1'}))`}
        ORDER BY d.DonHangID DESC`),
     q('SELECT TheKhoDanhMucID, TenTheKho FROM TheKhoDanhMuc ORDER BY TenTheKho'),
     /* ⚠️ Ten bang la DanhMucNhomSanPham (migration_v54), KHONG phai NhomSanPham.

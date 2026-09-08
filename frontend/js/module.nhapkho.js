@@ -191,6 +191,10 @@
     const dangAnTheKho = !!(dsAn.length && dsAn.every(x => Number(x.AnTheKho) === 1));
     const soPhieu = h ? h.SoPhieu : ((await apiGet('/api/nhapkho/next-sophieu')).data || '');
     const homNay = homNayISO();
+    /* v7.87: trạng thái ô tích "Nhập bổ sung". Mở form là LUÔN bắt đầu ở trạng thái mặc định (không
+       kể lệnh đã nhập) — nhớ lựa chọn của lần trước thì lần lập phiếu sau vô tình thấy cả lệnh đã
+       nhập mà không để ý, đúng cái mà v6.89 đã chặn. */
+    let keDaNhap = false;
 
     dongForm = sua ? sua.chiTiet.map((r, i) => ({
       idx: i, maHangId: r.MaHangID, maHang: r.MaHang, tenHang: r.TenHang, mauSacId: r.MauSacID,
@@ -289,15 +293,34 @@
         : 'Nhà cung cấp <span class="bat-buoc">*</span>';
       /* Dựng lại ô nguồn theo loại. Giữ lại lựa chọn cũ nếu người dùng đổi loại rồi đổi về:
          `nhoNcc`/`nhoDon` nhớ giá trị trước đó. */
+      /* v7.87: NHẬP BỔ SUNG. Danh sách lệnh SX mặc định BỎ lệnh đã nhập kho (v6.89 — để lại là mở
+         đường nhập trùng cả lệnh). Nhưng có lệnh nhập kho làm nhiều đợt, và trước đây không có
+         đường nào chọn lại. Nay có ô tích: tích vào là nạp lại danh sách kèm CẢ lệnh đã nhập, mỗi
+         lệnh ghi rõ đã có mấy phiếu và số phiếu gần nhất — chọn nhầm thì nhìn là thấy. */
       $('#nkfONguon').innerHTML = sx
         ? `<select id="nkfDon" style="width:100%;"><option value="">-- Chọn lệnh SX đã hoàn thành --</option>
-             ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}</option>`).join('')}
-           </select>${(dm.donHang || []).length ? '' : '<div class="empty-hint" style="margin-top:2px;">Chưa có lệnh SX nào ở trạng thái Hoàn thành.</div>'}`
+             ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}${Number(d2.SoPhieuDaNhap) > 0 ? `  ⚠️ đã nhập ${d2.SoPhieuDaNhap} phiếu${d2.SoPhieuGanNhat ? ' (' + escapeHtml(d2.SoPhieuGanNhat) + ')' : ''}` : ''}</option>`).join('')}
+           </select>
+           <label style="display:flex;gap:5px;align-items:center;font-size:12px;margin-top:4px;white-space:nowrap;">
+             <input type="checkbox" id="nkfKeDaNhap" ${keDaNhap ? 'checked' : ''}> Nhập bổ sung — hiện cả lệnh SX đã nhập kho
+           </label>
+           ${(dm.donHang || []).length ? '' : `<div class="empty-hint" style="margin-top:2px;">${keDaNhap ? 'Chưa có lệnh SX nào ở trạng thái Hoàn thành.' : 'Không còn lệnh SX nào chưa nhập kho — tích "Nhập bổ sung" để chọn lệnh đã nhập.'}</div>`}`
         : `<select id="nkfNcc" style="width:100%;"><option value="">-- Chọn nhà cung cấp --</option>
              ${opt(dm.ncc, 'NCC_ID', 'TenNCC', '')}</select>`;
       const oN = $('#nkfNcc'), oD = $('#nkfDon');
       if (oN) { oN.value = nhoNcc || ''; oN.onchange = () => { nhoNcc = oN.value; }; }
       if (oD) { oD.value = nhoDon || ''; oD.onchange = () => { nhoDon = oD.value; }; }
+      const oKe = $('#nkfKeDaNhap');
+      if (oKe) oKe.onchange = async () => {
+        keDaNhap = oKe.checked;
+        /* Nạp LẠI đúng route danh mục cũ, chỉ thêm tham số — một nghiệp vụ một luồng, không viết
+           endpoint thứ hai chỉ để lấy thêm mấy lệnh. */
+        try {
+          dm = (await apiGet('/api/nhapkho/danhmuc'
+            + (id ? '?phieuNKID=' + id : '?x=1') + (keDaNhap ? '&keCaDaNhap=1' : ''))).data;
+        } catch (e) { toast('Không nạp lại được danh sách lệnh SX: ' + e.message, 'error'); return; }
+        apLoai();
+      };
       veDong();   // vẽ lại để ẩn/hiện cột Đơn giá
     }
     $('#nkfLoai').onchange = apLoai;
