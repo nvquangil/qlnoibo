@@ -194,6 +194,19 @@ window.ModuleCongNo = (function () {
       </div>`, { logo: true });
   }
 
+  /* v7.83: một ô "chứng từ đi kèm" dùng chung cho CẢ HAI chiều của cặp chuyển thẳng
+     (phiếu thu ↔ phiếu chi). Hai màn hình đối xứng nhau nên chỉ có một bản dựng ô này — làm hai
+     bản là sớm muộn hai màn hiện hai kiểu khác nhau rồi lại phải đi so.
+     Không có chứng từ kèm thì trả về CHUỖI RỖNG, không phải dấu "—": cột này trống ở gần hết các
+     dòng (chỉ phiếu chuyển thẳng mới có), rải dấu gạch khắp bảng chỉ làm rối mắt. */
+  function oPhieuKem(id, soPhieu, loai, tenDoiTuong) {
+    if (!id || !soPhieu) return '';
+    const nhan = loai === 'PC' ? 'Chuyển thẳng cho' : 'Thu từ';
+    return `<a href="javascript:void(0)" class="act-ct-xem" data-loai="${loai}" data-id="${id}"
+              title="Xem chứng từ đi kèm"><b>${escapeHtml(soPhieu)}</b></a>`
+      + (tenDoiTuong ? `<div style="font-size:11px;color:#5f6368;">${nhan}: ${escapeHtml(tenDoiTuong)}</div>` : '');
+  }
+
   /* ============================== 1. PHIẾU THU ============================== */
   async function renderPhieuThu(perm) {
     const body = document.getElementById('cnBody');
@@ -209,8 +222,11 @@ window.ModuleCongNo = (function () {
         <button class="btn small secondary" id="btnXuatThu">⬇️ Xuất Excel</button>
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã thu: <b>${fmtTien(tong)}</b> đ · ${rows.length} phiếu · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
+      ${/* v7.83: cột PHIẾU CHI KÈM — chỉ có giá trị với phiếu thu hình thức "Chuyển thẳng" (v6.54:
+           khách trả tiền nhưng chuyển thẳng cho NCC / trả hộ chi phí, backend tự sinh phiếu chi
+           cùng số tiền). Phiếu thu bình thường thì ô này trống, KHÔNG hiện gạch ngang giả cho có. */''}
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Người/Khách nộp</th><th>Phiếu bán hàng</th><th>Tài khoản</th>
-        <th>Số tiền</th><th>Hình thức</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
+        <th>Số tiền</th><th>Hình thức</th><th>Phiếu chi kèm</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         ${/* v6.56: bấm số phiếu -> popup chi tiết (có nút In luôn). */''}
         <td><a href="javascript:void(0)" class="act-ct-xem" data-loai="PT" data-id="${r.PhieuThuID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td><td>${fmtDate(r.NgayThu)}</td>
@@ -218,10 +234,11 @@ window.ModuleCongNo = (function () {
         <td>${escapeHtml(r.SoPhieuBH || '')}</td><td>${escapeHtml((r.MaTK ? r.MaTK + ' - ' : '') + (r.TenTK || ''))}</td>
         <td style="text-align:right;"><b>${fmtTien(r.SoTien)}</b></td>
         <td>${escapeHtml(r.HinhThuc || '')}${r.SoTaiKhoan ? `<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.TenNganHang || '')} — ${escapeHtml(r.SoTaiKhoan)}</div>` : ''}</td>
+        <td>${oPhieuKem(r.PhieuChiKemID, r.SoPhieuChiKem, 'PC', r.TenNhanChuyenThang)}</td>
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         <td><button class="btn small secondary act-in" data-id="${r.PhieuThuID}" title="In phiếu thu">🖨️</button>
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuThuID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuThuID}">Xóa</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có phiếu thu nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có phiếu thu nào</td></tr>'}</tbody></table>`;
     wireTableSearch(body);
     body.querySelector('#btnXuatThu').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=phieuthu', 'phieu_thu.xlsx'));
@@ -371,7 +388,7 @@ window.ModuleCongNo = (function () {
         <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã chi: <b>${fmtTien(tong)}</b> đ (trong đó tính chi phí KD: <b>${fmtTien(tongCPKD)}</b> đ) · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Đối tượng nhận</th><th>Tài khoản</th><th>Tính CPKD</th>
-        <th>Số tiền</th><th>Hình thức</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
+        <th>Số tiền</th><th>Hình thức</th><th>Phiếu thu kèm</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         ${/* v6.56: bấm số phiếu -> popup chi tiết (có nút In luôn). */''}
         <td><a href="javascript:void(0)" class="act-ct-xem" data-loai="PC" data-id="${r.PhieuChiID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td><td>${fmtDate(r.NgayChi)}</td>
@@ -380,10 +397,13 @@ window.ModuleCongNo = (function () {
         <td>${r.TinhChiPhiKD ? '<span class="badge warn">Có</span>' : '<span class="badge">Không</span>'}</td>
         <td style="text-align:right;"><b>${fmtTien(r.SoTien)}</b></td>
         <td>${escapeHtml(r.HinhThuc || '')}${r.SoTaiKhoan ? `<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.TenNganHang || '')} — ${escapeHtml(r.SoTaiKhoan)}</div>` : ''}</td>
+        ${/* v7.83: chiều ngược của "phiếu chi kèm". Phiếu chi sinh từ chuyển thẳng KHÔNG sửa/xóa được
+             ở đây (v6.54) nên chỉ rõ nó thuộc phiếu thu nào để người dùng biết sang đó mà sửa. */''}
+        <td>${oPhieuKem(r.PhieuThuKemID, r.SoPhieuThuKem, 'PT', r.TenNguoiNopKem)}</td>
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         <td><button class="btn small secondary act-in" data-id="${r.PhieuChiID}" title="In phiếu chi">🖨️</button>
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuChiID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuChiID}">Xóa</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có phiếu chi nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có phiếu chi nào</td></tr>'}</tbody></table>`;
     wireTableSearch(body);
     body.querySelector('#btnXuatChi').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=phieuchi', 'phieu_chi.xlsx'));

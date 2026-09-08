@@ -347,11 +347,20 @@ router.delete('/taikhoannganhang/:id', requireAuth, requirePermission('DANHMUC',
 router.get('/phieuthu', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'phieuthu'), async (req, res) => {
   const pool = await getPool();
   const coNH = await coBangTKNH(pool);   // v6.24
+  /* v7.83: phiếu thu "Chuyển thẳng" (v6.54) tự sinh một PHIẾU CHI đi kèm — cặp chứng từ đó phải
+     nhìn thấy được ngay trên danh sách, không thì người dùng mở từng phiếu mới biết tiền đã đi đâu.
+     Dò cột thay vì gõ cứng: bản CSDL chưa chạy migration_v675 vẫn chạy bình thường, chỉ là không
+     có cột này (cùng quy tắc với coBangTKNH / coCotLoaiPhieu). */
+  const coCT = await coCotChuyenThang(pool);
   const rows = (await pool.request().query(`
     SELECT t.*, tk.MaTK, tk.TenTK, l.TenLoai AS TenLoaiTK, p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
            ${coNH ? ', nh.TenNganHang, nh.SoTaiKhoan' : ''}
+           ${coCT ? `, pc.SoPhieu AS SoPhieuChiKem, pc.NgayChi AS NgayChiKem,
+                       ISNULL(nccK.TenNCC, pc.TenDoiTuong) AS TenNhanChuyenThang` : ''}
     FROM PhieuThu t
     ${coNH ? 'LEFT JOIN DanhMucTaiKhoanNganHang nh ON nh.TaiKhoanNHID = t.TaiKhoanNHID' : ''}
+    ${coCT ? `LEFT JOIN PhieuChi pc ON pc.PhieuChiID = t.PhieuChiKemID
+              LEFT JOIN NhaCungCap nccK ON nccK.NCC_ID = pc.NCC_ID` : ''}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan l ON l.LoaiTKID = tk.LoaiTKID
     LEFT JOIN PhieuBanHang p ON p.PhieuBHID = t.PhieuBHID
@@ -497,12 +506,19 @@ router.delete('/phieuthu/:id', requireAuth, requirePermission('CONGNO', 'delete'
 router.get('/phieuchi', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'phieuchi'), async (req, res) => {
   const pool = await getPool();
   const coNH = await coBangTKNH(pool);   // v6.24
+  /* v7.83: chiều NGƯỢC của cột "phiếu chi kèm" ở danh sách phiếu thu — cùng một cặp chứng từ, nhìn
+     từ phía phiếu chi. Làm luôn cả hai chiều: chỉ một chiều thì người đứng ở màn phiếu chi vẫn
+     không biết khoản này sinh ra từ phiếu thu nào, mà phiếu chi kiểu này KHÔNG sửa/xóa được từ đây
+     (v6.54) nên càng cần chỉ rõ phải sang phiếu thu mà sửa. */
+  const coCT = await coCotChuyenThang(pool);
   const rows = (await pool.request().query(`
     SELECT c.*, tk.MaTK, tk.TenTK, l.TenLoai AS TenLoaiTK, l.TinhChiPhiKD,
            ncc.TenNCC, ngc.TenNha AS TenNhaGiaCong, u.HoTen AS NguoiTao
            ${coNH ? ', nh.TenNganHang, nh.SoTaiKhoan' : ''}
+           ${coCT ? ', pt.SoPhieu AS SoPhieuThuKem, pt.NgayThu AS NgayThuKem, pt.TenDoiTuong AS TenNguoiNopKem' : ''}
     FROM PhieuChi c
     ${coNH ? 'LEFT JOIN DanhMucTaiKhoanNganHang nh ON nh.TaiKhoanNHID = c.TaiKhoanNHID' : ''}
+    ${coCT ? 'LEFT JOIN PhieuThu pt ON pt.PhieuThuID = c.PhieuThuKemID' : ''}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan l ON l.LoaiTKID = tk.LoaiTKID
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
@@ -1656,10 +1672,13 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
            ${cotAT(cT, 't', 'DienGiai', 'NVARCHAR(500)')},
            ${cotAT(cTK, 'tk', 'MaTK', 'NVARCHAR(30)')},
            ${cotAT(cTK, 'tk', 'TenTK', 'NVARCHAR(150)')},
-           p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao
+           p.SoPhieu AS SoPhieuBH, u.HoTen AS NguoiTao,
+           ${/* v7.83: phieu chi di kem cua phieu thu CHUYEN THANG (v6.54). Do cot nhu moi cot khac. */''}
+           ${cT.has('PhieuChiKemID') ? 'pc.SoPhieu AS SoPhieuChiKem' : "CAST(NULL AS NVARCHAR(30)) AS SoPhieuChiKem"}
     FROM PhieuThu t
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
     LEFT JOIN PhieuBanHang p ON p.PhieuBHID = ${cT.has('PhieuBHID') ? 't.PhieuBHID' : 'NULL'}
+    ${cT.has('PhieuChiKemID') ? 'LEFT JOIN PhieuChi pc ON pc.PhieuChiID = t.PhieuChiKemID' : ''}
     LEFT JOIN Users u ON u.UserID = ${cT.has('NguoiTaoID') ? 't.NguoiTaoID' : 'NULL'}
     ${khach ? "WHERE t.LoaiDoiTuong = N'KhachHang' AND LTRIM(RTRIM(ISNULL(t.TenDoiTuong,''))) = @k" : ''}
     ORDER BY ${cT.has('NgayThu') ? 't.NgayThu DESC,' : ''} t.PhieuThuID DESC`)).recordset;
@@ -1673,6 +1692,7 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
     { header: 'Hình thức', key: 'HinhThuc', width: 14 },
     { header: 'Tài khoản', key: 'TenTaiKhoan', width: 22 },
     { header: 'Thu cho phiếu BH', key: 'SoPhieuBH', width: 16 },
+    { header: 'Phiếu chi kèm', key: 'SoPhieuChiKem', width: 15 },
     { header: 'Diễn giải', key: 'DienGiai', width: 34 },
     { header: 'Người lập', key: 'NguoiTao', width: 16 }
   ];
@@ -1681,7 +1701,8 @@ async function sheetPhieuThu(pool, wb, tienIch, khach) {
   rows.forEach(r => ws.addRow({
     SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayThu), TenDoiTuong: r.TenDoiTuong || '',
     LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
-    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), SoPhieuBH: r.SoPhieuBH || '', DienGiai: r.DienGiai || '',
+    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), SoPhieuBH: r.SoPhieuBH || '',
+    SoPhieuChiKem: r.SoPhieuChiKem || '', DienGiai: r.DienGiai || '',
     NguoiTao: r.NguoiTao || ''
   }));
   if (rows.length) {
@@ -1713,10 +1734,13 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId, nhaGiaCongId) {
            ${cotAT(cC, 'c', 'LoaiPhieu', 'NVARCHAR(30)')},
            ${cotAT(cTK, 'tk', 'MaTK', 'NVARCHAR(30)')},
            ${cotAT(cTK, 'tk', 'TenTK', 'NVARCHAR(150)')},
-           ncc.TenNCC, ${cC.has('NhaGiaCongID') ? 'ngc.TenNha AS TenNhaGiaCong' : "CAST(NULL AS NVARCHAR(150)) AS TenNhaGiaCong"}, u.HoTen AS NguoiTao
+           ncc.TenNCC, ${cC.has('NhaGiaCongID') ? 'ngc.TenNha AS TenNhaGiaCong' : "CAST(NULL AS NVARCHAR(150)) AS TenNhaGiaCong"}, u.HoTen AS NguoiTao,
+           ${/* v7.83: chieu nguoc — phieu thu da sinh ra phieu chi nay (cap chuyen thang v6.54). */''}
+           ${cC.has('PhieuThuKemID') ? 'pt.SoPhieu AS SoPhieuThuKem' : "CAST(NULL AS NVARCHAR(30)) AS SoPhieuThuKem"}
     FROM PhieuChi c
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = ${cC.has('NCC_ID') ? 'c.NCC_ID' : 'NULL'}
     ${cC.has('NhaGiaCongID') ? 'LEFT JOIN NhaGiaCong ngc ON ngc.NhaGiaCongID = c.NhaGiaCongID' : ''}
+    ${cC.has('PhieuThuKemID') ? 'LEFT JOIN PhieuThu pt ON pt.PhieuThuID = c.PhieuThuKemID' : ''}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN Users u ON u.UserID = ${cC.has('NguoiTaoID') ? 'c.NguoiTaoID' : 'NULL'}
     ${locNGC ? 'WHERE c.NhaGiaCongID = @ngc' : (nccId ? 'WHERE c.NCC_ID = @n' : '')}
@@ -1731,6 +1755,7 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId, nhaGiaCongId) {
     { header: 'Hình thức', key: 'HinhThuc', width: 14 },
     { header: 'Tài khoản', key: 'TenTaiKhoan', width: 22 },
     { header: 'Loại phiếu', key: 'LoaiPhieu', width: 16 },
+    { header: 'Phiếu thu kèm', key: 'SoPhieuThuKem', width: 15 },
     { header: 'Diễn giải', key: 'DienGiai', width: 34 },
     { header: 'Người lập', key: 'NguoiTao', width: 16 }
   ];
@@ -1742,7 +1767,8 @@ async function sheetPhieuChi(pool, wb, tienIch, nccId, nhaGiaCongId) {
     /* Cot "Doi tuong" gom ca NCC va nha gia cong — mot phieu chi chi thuoc mot trong hai. */
     SoPhieu: r.SoPhieu, Ngay: ngayVN(r.NgayChi), TenNCC: r.TenNCC || r.TenNhaGiaCong || '',
     LoaiDoiTuong: r.LoaiDoiTuong || '', SoTien: so(r.SoTien), HinhThuc: r.HinhThuc || '',
-    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), LoaiPhieu: r.LoaiPhieu || '', DienGiai: r.DienGiai || '',
+    TenTaiKhoan: [r.MaTK, r.TenTK].filter(Boolean).join(' - '), LoaiPhieu: r.LoaiPhieu || '',
+    SoPhieuThuKem: r.SoPhieuThuKem || '', DienGiai: r.DienGiai || '',
     NguoiTao: r.NguoiTao || ''
   }));
   if (rows.length) {
