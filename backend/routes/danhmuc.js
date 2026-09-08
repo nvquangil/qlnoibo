@@ -87,6 +87,9 @@ router.use('/nhacungcap', buildCrudRouter({
     { name: 'DiaChi', sqlType: sql.NVarChar },
     { name: 'SDT', sqlType: sql.NVarChar },
     { name: 'MaSoThue', sqlType: sql.NVarChar },
+    /* v7.81: đối tác vừa mua vừa bán — trỏ tới đúng dòng trong Danh mục khách hàng để xem công nợ
+       2 chiều. Để trống = nhà cung cấp thuần tuý. Xem migration_v696.sql. */
+    { name: 'KhachHangID', sqlType: sql.Int, tuyChon: true },
     { name: 'GhiChu', sqlType: sql.NVarChar }
   ]
 }));

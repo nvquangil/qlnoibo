@@ -39,6 +39,37 @@ function buildCrudRouter(config) {
   const router = express.Router();
   const { table, idCol, columns, moduleCode, orderBy } = config;
 
+  /* ================================================================================================
+     v7.81 — CỘT `tuyChon`: chỉ ghi nếu CSDL ĐÃ CÓ cột đó.
+     Thêm một cột mới vào danh mục (kèm migration) mà ghi thẳng là: ai chưa chạy migration sẽ gặp
+     "Invalid column name" ở NÚT LƯU — tức màn danh mục đó hỏng hẳn cho tới khi chạy migration, dù
+     mọi thứ khác không liên quan. Các route khác trong hệ thống đều dò cột bằng COL_LENGTH trước khi
+     dùng; crudFactory trước đây chưa có nên khai cột mới ở đây là một cái bẫy.
+     `GET` không cần lo: nó dùng `SELECT *`.
+     Nhớ kết quả dò theo (bảng, cột) — cấu trúc CSDL không đổi giữa chừng lúc chạy.
+     ================================================================================================ */
+  const __demCot = new Map();
+  async function coCot(pool, ten) {
+    const khoa = table + '.' + ten;
+    if (__demCot.has(khoa)) return __demCot.get(khoa);
+    let co = false;
+    try {
+      const r = (await pool.request().query(`SELECT COL_LENGTH('${table}', '${ten}') AS c`)).recordset[0];
+      co = !!(r && r.c != null);
+    } catch (e) { co = false; }
+    __demCot.set(khoa, co);
+    return co;
+  }
+  /* Danh sách cột dùng được cho lần ghi này (bỏ các cột `tuyChon` mà CSDL chưa có). */
+  async function cotDungDuoc(pool) {
+    const ra = [];
+    for (const c of columns) {
+      if (c.tuyChon && !(await coCot(pool, c.name))) continue;
+      ra.push(c);
+    }
+    return ra;
+  }
+
   /* Doc gia tri mot cot tu req.body, co chuan hoa neu cot khai trim/duyNhat. */
   const layGiaTri = (c, body) => {
     const v = body[c.name];
@@ -83,7 +114,7 @@ function buildCrudRouter(config) {
       await kiemTrung(pool, req.body, null);   // v7.36: chan tao ban thu hai cung ten
       const request = pool.request();
       const cols = [], params = [];
-      columns.forEach(c => {
+      (await cotDungDuoc(pool)).forEach(c => {   // v7.81: bỏ cột tuỳ chọn mà CSDL chưa có
         const val = layGiaTri(c, req.body);    // v7.36: chuan hoa khoang trang truoc khi ghi
         if (c.required && (val === undefined || val === null || val === '')) {
           throw new Error(`Thiếu trường bắt buộc: ${c.name}`);
@@ -109,7 +140,7 @@ function buildCrudRouter(config) {
       await kiemTrung(pool, req.body, parseInt(req.params.id, 10) || 0);
       const request = pool.request().input('__id', sql.Int, req.params.id);
       const sets = [];
-      columns.forEach(c => {
+      (await cotDungDuoc(pool)).forEach(c => {   // v7.81: bỏ cột tuỳ chọn mà CSDL chưa có
         const val = layGiaTri(c, req.body);   // v7.36: chuan hoa khoang trang truoc khi ghi
         request.input(c.name, c.sqlType, val === undefined ? null : val);
         sets.push(`${c.name} = @${c.name}`);

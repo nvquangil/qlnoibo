@@ -474,6 +474,7 @@ window.ModuleCongNo = (function () {
   async function renderCongNoKH(perm) {
     const body = document.getElementById('cnBody');
     const rows = (await apiGet('/api/congno/congnokh')).data || [];
+    const dt2c = await mapDoiTac2Chieu();   // v7.81: khách nào đồng thời là nhà cung cấp
     const t = rows.reduce((a, r) => ({
       PhaiThu: a.PhaiThu + Number(r.PhaiThu || 0), DaThu: a.DaThu + Number(r.DaThu || 0),
       DieuChinh: a.DieuChinh + Number(r.DieuChinh || 0), ConNo: a.ConNo + Number(r.ConNo || 0)
@@ -487,14 +488,22 @@ window.ModuleCongNo = (function () {
       </div>
       <div class="empty-hint" style="text-align:left;">Phải thu = tổng <b>phiếu bán hàng</b> (chưa hủy) + điều chỉnh · Đã thu = tổng <b>phiếu thu</b> · Bấm tên khách để xem sổ chi tiết.</div>
       <table><thead><tr><th>Khách hàng</th><th>Phải thu (phiếu BH)</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn nợ</th><th>Số phiếu BH</th><th>Số phiếu thu</th><th>Bán gần nhất</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
-        <td><a href="javascript:void(0)" class="act-ct" data-khach="${escapeHtml(r.TenKhach)}"><b>${escapeHtml(r.TenKhach)}</b></a></td>
+      ${/* v7.81: khách nào đồng thời là NHÀ CUNG CẤP thì có thêm nút mở bảng công nợ 2 chiều —
+           gom cả phiếu bán hàng, phiếu nhập kho, phiếu thu, phiếu chi vào một bảng. */''}
+      <tbody>${rows.map(r => {
+        const cap = dt2c.get(String(r.TenKhach || '').trim().toLowerCase());
+        return `<tr>
+        <td><a href="javascript:void(0)" class="act-ct" data-khach="${escapeHtml(r.TenKhach)}"><b>${escapeHtml(r.TenKhach)}</b></a>
+          ${cap ? `<button type="button" class="btn small secondary act-2c" data-kh="${cap.khachHangID}"
+              title="Đối tác này vừa là khách vừa là nhà cung cấp — xem cả hai chiều trong một bảng"
+              style="margin-left:6px;padding:0 6px;">↔ 2 chiều</button>` : ''}</td>
         <td style="text-align:right;">${fmtNumber(r.PhaiThu)}</td>
         <td style="text-align:right;">${r.DieuChinh ? fmtNumber(r.DieuChinh) : ''}</td>
         <td style="text-align:right;">${fmtNumber(r.DaThu)}</td>
         <td style="text-align:right;"><b style="color:${Number(r.ConNo) > 0 ? '#c0392b' : '#137333'};">${fmtNumber(r.ConNo)}</b></td>
         <td style="text-align:center;">${r.SoPhieu || 0}</td><td style="text-align:center;">${r.SoPhieuThu || 0}</td>
-        <td>${r.LanCuoi ? fmtDate(r.LanCuoi) : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có công nợ khách hàng nào</td></tr>'}
+        <td>${r.LanCuoi ? fmtDate(r.LanCuoi) : ''}</td></tr>`;
+      }).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có công nợ khách hàng nào</td></tr>'}
         ${/* v6.47: data-tong để wireTableSort() luôn giữ dòng này ở cuối bảng. */''}
         ${rows.length ? `<tr data-tong style="font-weight:bold;background:#f1f3f4;"><td>TỔNG</td><td style="text-align:right;">${fmtNumber(t.PhaiThu)}</td>
           <td style="text-align:right;">${fmtNumber(t.DieuChinh)}</td><td style="text-align:right;">${fmtNumber(t.DaThu)}</td>
@@ -503,6 +512,11 @@ window.ModuleCongNo = (function () {
     wireTableSort(body);   // v6.47: bấm tiêu đề cột để sắp xếp
     body.querySelector('#btnXuat').addEventListener('click', () => taiFile('/api/congno/export?loai=kh', 'cong_no_khach_hang.xlsx'));
     body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietKH(a.dataset.khach)));
+    /* v7.81: nút "↔ 2 chiều". stopPropagation để bấm nút không kích hoạt luôn link tên khách bên cạnh. */
+    body.querySelectorAll('.act-2c').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      soDoiTac2Chieu(b.dataset.kh);
+    }));
   }
 
   /* Mở SỔ CHI TIẾT công nợ của MỘT khách. Gọi từ 2 chỗ: bảng "Công nợ khách hàng" ở đây và
@@ -544,6 +558,67 @@ window.ModuleCongNo = (function () {
       taiFile('/api/congno/export?loai=kh&khach=' + encodeURIComponent(khach), 'cong_no_khach.xlsx'));
     noiDayXuatSo(modal, 'loai=kh&khach=' + encodeURIComponent(khach), 'so_chi_tiet_cong_no.xlsx');   // v7.34
     noiDaySoPhieu(modal, () => soChiTietKH(khach));   // v6.55
+  }
+
+  /* ================================================================================================
+     v7.81 — SỔ CÔNG NỢ 2 CHIỀU: khách hàng ĐỒNG THỜI là nhà cung cấp.
+     Một bảng duy nhất gom đủ 4 loại chứng từ của đối tác đó — phiếu bán hàng, phiếu nhập kho (vải /
+     phụ kiện / hàng hoá), phiếu thu, phiếu chi — kèm 3 số: phải thu, phải trả, chênh lệch.
+
+     ⚠️ HAI CỘT TIỀN RIÊNG, KHÔNG GỘP: bên bán làm tăng PHẢI THU, bên mua làm tăng PHẢI TRẢ. Gộp vào
+     một cột lũy kế là lấy tiền bán trừ tiền mua — sai hoàn toàn. Xem soDoiTac2Chieu() ở backend.
+     Đây chỉ là cách XEM: hai sổ một chiều và bản in Sổ kế toán giữ nguyên, không sinh chứng từ bù trừ.
+     ================================================================================================ */
+  async function soDoiTac2Chieu(khachHangId, quayLai) {
+    let d;
+    try { d = (await apiGet('/api/congno/doitac/chitiet?khachHangId=' + encodeURIComponent(khachHangId))).data; }
+    catch (err) { toast('Không mở được sổ công nợ 2 chiều: ' + err.message, 'error'); return; }
+    const cl = Number(d.chenhLech) || 0;
+    const modal = openModal(`
+      <h3>Công nợ 2 chiều: ${escapeHtml(d.tenKhachHang || '')}</h3>
+      <p class="empty-hint" style="text-align:left;">Đối tác này vừa là <b>khách hàng</b> vừa là <b>nhà cung cấp</b>${d.tenNCC ? ` (NCC: ${escapeHtml(d.tenNCC)})` : ''}. Bảng dưới gom cả hai chiều.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="flex:1;min-width:170px;border:1px solid #cfd8dc;border-radius:6px;padding:8px 10px;background:#fff;">
+          <div style="font-size:12px;color:#5f6368;">Họ nợ mình (phải thu)</div>
+          <div style="font-size:19px;font-weight:700;color:#c0392b;">${fmtNumber(d.phaiThu)} đ</div></div>
+        <div style="flex:1;min-width:170px;border:1px solid #cfd8dc;border-radius:6px;padding:8px 10px;background:#fff;">
+          <div style="font-size:12px;color:#5f6368;">Mình nợ họ (phải trả)</div>
+          <div style="font-size:19px;font-weight:700;color:#1565c0;">${fmtNumber(d.phaiTra)} đ</div></div>
+        <div style="flex:1;min-width:190px;border:1px solid #cfd8dc;border-radius:6px;padding:8px 10px;background:#f1f8e9;">
+          <div style="font-size:12px;color:#5f6368;">Chênh lệch</div>
+          <div style="font-size:19px;font-weight:700;color:${cl < 0 ? '#1565c0' : '#c0392b'};">${fmtNumber(Math.abs(cl))} đ</div>
+          <div style="font-size:12px;color:#5f6368;">${cl === 0 ? 'hai bên cân nhau' : (cl > 0 ? 'họ còn nợ mình' : 'mình còn nợ họ')}</div></div>
+      </div>
+      <div style="max-height:56vh;overflow:auto;">
+      <table><thead><tr><th>Ngày</th><th>Chiều</th><th>Loại</th><th>Số phiếu</th>
+        <th class="num">Phải thu</th><th class="num">Phải trả</th><th class="num">Chênh lệch lũy kế</th><th>Diễn giải</th></tr></thead>
+      <tbody>${(d.rows || []).map(r => `<tr>
+        <td>${fmtDate(r.Ngay)}</td>
+        <td>${r.Ben === 'ThuVe'
+          ? '<span class="badge" style="background:#fdecea;color:#c0392b;">Bán / thu</span>'
+          : '<span class="badge" style="background:#e8f0fe;color:#1565c0;">Mua / chi</span>'}</td>
+        <td>${escapeHtml(r.Loai || '')}</td>
+        <td>${oSoPhieu(r)}</td>
+        <td style="text-align:right;">${Number(r.PhaiThu) ? fmtNumber(r.PhaiThu) : ''}</td>
+        <td style="text-align:right;">${Number(r.PhaiTra) ? fmtNumber(r.PhaiTra) : ''}</td>
+        <td style="text-align:right;"><b>${fmtNumber(r.ChenhLech)}</b></td>
+        <td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
+        || '<tr><td colspan="8" class="empty-hint">Chưa có phát sinh nào ở cả hai chiều</td></tr>'}</tbody></table></div>
+      <div class="empty-hint" style="text-align:left;">Đây là bảng để <b>xem và đối chiếu</b>. Muốn cấn trừ thật thì vẫn lập phiếu thu / phiếu chi như bình thường — hệ thống không tự sinh chứng từ bù trừ.</div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong2c">Đóng</button></div>`);
+    modal.querySelector('#btnDong2c').addEventListener('click', quayLai || closeModal);
+    noiDaySoPhieu(modal, () => soDoiTac2Chieu(khachHangId, quayLai));
+  }
+
+  /* Danh sách đối tác đã ghép — nạp MỘT lần cho mỗi lần vẽ bảng công nợ, để biết dòng nào có nút
+     "2 chiều". Lỗi / chưa chạy migration thì trả map rỗng: bảng công nợ vẫn chạy y như cũ. */
+  async function mapDoiTac2Chieu() {
+    try {
+      const ds = (await apiGet('/api/congno/doitac')).data || [];
+      const m = new Map();
+      ds.forEach(x => m.set(String(x.tenKhachHang || '').trim().toLowerCase(), x));
+      return m;
+    } catch (e) { return new Map(); }
   }
 
   /* ================================================================================================

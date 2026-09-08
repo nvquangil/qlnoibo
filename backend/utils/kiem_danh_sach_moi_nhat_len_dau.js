@@ -177,6 +177,7 @@ const SO_SAP_JS = [
   ['routes/congno.js', 'so chi tiet cong no NCC'],
   ['routes/congno.js', 'SO QUY chi tiet'],
   ['routes/congno.js', 'so cong no NHA GIA CONG'],
+  ['routes/congno.js', 'so doi tac 2 chieu (v7.81)'],
   ['routes/baocao.js', 'the kho hang hoa'],
   ['routes/baocao.js', 'the kho vai'],
   ['routes/baocao.js', 'the kho phu kien']
@@ -184,12 +185,13 @@ const SO_SAP_JS = [
 const sCongNo2 = doc('routes/congno.js');
 /* Dem: moi cho sap TANG theo ngay phai di kem mot lan dao chieu. */
 const demSapTang = (src) => (src.match(/\.sort\(\(a, b\) => new Date\(a\./g) || []).length;
-const demDao = (src) => (src.match(/rows\.slice\(\)\.reverse\(\)|rows\.reverse\(\)/g) || []).length;
-bang(demSapTang(bo(sCongNo2)), 4, 'congno.js: co 4 so sap tang theo ngay');
-bang(demDao(bo(sCongNo2)), 4, 'congno.js: CA 4 so deu co dao chieu (truoc v7.80 chi co 3 — sot so quy)');
+/* Nhan ca `rows.` lan `dong.` — so doi tac 2 chieu (v7.81) dat ten bien la `dong`. */
+const demDao = (src) => (src.match(/(rows|dong)\.slice\(\)\.reverse\(\)|(rows|dong)\.reverse\(\)/g) || []).length;
+bang(demSapTang(bo(sCongNo2)), 5, 'congno.js: co 5 so sap tang theo ngay (4 so cu + so doi tac 2 chieu v7.81)');
+bang(demDao(bo(sCongNo2)), 5, 'congno.js: CA 5 so deu co dao chieu (truoc v7.80 chi co 3 — sot so quy)');
 bang(demSapTang(bo(sBaoCao)), 3, 'baocao.js: co 3 so sap tang theo ngay');
 bang(demDao(bo(sBaoCao)), 3, 'baocao.js: ca 3 so deu co dao chieu');
-kiem(SO_SAP_JS.length === 7, 'tong 7 so co so du luy ke — tat ca da mo i nhat len dau');
+kiem(SO_SAP_JS.length === 8, 'tong 8 so co so du luy ke — tat ca da mo i nhat len dau');
 
 /* Rieng SO QUY: kiem tan goc cau tra ve. */
 kiem(/data: \{ ten, dauKy, rows: rows\.slice\(\)\.reverse\(\), soDu:/.test(sCongNo2),

@@ -945,6 +945,112 @@ router.get('/congnoncc/chitiet', requireAuth, requirePermission('CONGNO', 'view'
 });
 
 /* ================================================================================================
+   7a-bis. v7.81 — CONG NO DOI TAC 2 CHIEU (khach hang DONG THOI la nha cung cap)
+   ------------------------------------------------------------------------------------------------
+   Co doi tac vua MUA cua minh (ho no minh = PHAI THU) vua BAN cho minh (minh no ho = PHAI TRA).
+   Nguyen chot: gom phieu ban hang, phieu nhap kho, phieu thu, phieu chi cua doi tac do vao CUNG MOT
+   BANG; hien du 3 so: phai thu, phai tra, chenh lech. CHI DE XEM — khong sinh chung tu bu tru.
+
+   ⚠️ DUNG LAI soChiTietKH() + soChiTietNCC(), khong viet lai cau SQL nao. Hai so do da gom du moi
+   nguon chung tu (ban hang, nhap lai, nhap vai/phu kien/hang hoa, tra hang NCC, thu, chi, dieu chinh)
+   va da qua nhieu lan sua; viet ban thu hai la chac chan som muon lech so voi hai so goc.
+
+   ⚠️⚠️ CAI DE SAI NHAT — DAU CUA `PhatSinh`/`ThanhToan` O HAI SO LA NGUOC NGHIA NHAU:
+       so KHACH : PhatSinh = ban hang  -> tang PHAI THU ;  ThanhToan = minh THU tien  -> giam phai thu
+       so NCC   : PhatSinh = mua hang  -> tang PHAI TRA ;  ThanhToan = minh CHI tien  -> giam phai tra
+   Cong thang hai cot vao mot cot luy ke la SAI HOAN TOAN (tien ban hang tru vao tien mua hang).
+   Nen bang chung giu HAI cot rieng: `PhaiThu` va `PhaiTra`, moi cot co luy ke rieng, va chenh lech
+   = luy ke phai thu − luy ke phai tra (duong = ho no minh, am = minh no ho).
+   ================================================================================================ */
+async function coCotKhachHangIDcuaNCC(pool) {
+  try {
+    const r = (await pool.request().query(`SELECT COL_LENGTH('NhaCungCap','KhachHangID') AS c`)).recordset[0];
+    return !!(r && r.c != null);
+  } catch (e) { return false; }
+}
+
+/* Danh sach cac doi tac DA GHEP + 3 so tong cua tung doi tac. */
+async function dsDoiTac2Chieu(pool) {
+  if (!(await coCotKhachHangIDcuaNCC(pool))) return { chuaChayMigration: true, rows: [] };
+  const cap = (await pool.request().query(`
+    SELECT ncc.NCC_ID, ncc.TenNCC, kh.KhachHangID, kh.TenKhachHang
+    FROM NhaCungCap ncc JOIN KhachHang kh ON kh.KhachHangID = ncc.KhachHangID
+    WHERE ncc.KhachHangID IS NOT NULL
+    ORDER BY kh.TenKhachHang`)).recordset;
+  const rows = [];
+  for (const c of cap) {
+    const kq = await soDoiTac2Chieu(pool, c.KhachHangID, c);
+    rows.push({
+      khachHangID: c.KhachHangID, tenKhachHang: c.TenKhachHang,
+      nccId: c.NCC_ID, tenNCC: c.TenNCC,
+      phaiThu: kq.phaiThu, phaiTra: kq.phaiTra, chenhLech: kq.chenhLech, soDong: kq.rows.length
+    });
+  }
+  return { chuaChayMigration: false, rows };
+}
+
+/* So gop cua MOT doi tac. `capBiet` (tuy chon) = dong ghep da tra cuu san, khoi hoi CSDL lai. */
+async function soDoiTac2Chieu(pool, khachHangId, capBiet) {
+  const cap = capBiet || (await pool.request().input('id', sql.Int, khachHangId).query(`
+    SELECT ncc.NCC_ID, ncc.TenNCC, kh.KhachHangID, kh.TenKhachHang
+    FROM KhachHang kh LEFT JOIN NhaCungCap ncc ON ncc.KhachHangID = kh.KhachHangID
+    WHERE kh.KhachHangID = @id`)).recordset[0];
+  if (!cap) return null;
+
+  const soKH = await soChiTietKH(pool, String(cap.TenKhachHang || '').trim());
+  const soNCC = cap.NCC_ID ? await soChiTietNCC(pool, cap.NCC_ID) : { rows: [] };
+
+  /* Ca hai so tra ve MOI NHAT TRUOC (chung da .reverse()). Lat lai CU -> MOI de cong luy ke. */
+  const dong = [
+    ...(soKH.rows || []).slice().reverse().map(r => ({
+      Ngay: r.Ngay, Loai: r.Loai, SoPhieu: r.SoPhieu, DienGiai: r.DienGiai,
+      Ben: 'ThuVe', CtLoai: r.CtLoai, CtID: r.CtID,
+      PhaiThu: so(r.PhatSinh) - so(r.ThanhToan), PhaiTra: 0
+    })),
+    ...(soNCC.rows || []).slice().reverse().map(r => ({
+      Ngay: r.Ngay, Loai: r.Loai, SoPhieu: r.SoPhieu, DienGiai: r.DienGiai,
+      Ben: 'TraDi', CtLoai: r.CtLoai, CtID: r.CtID,
+      PhaiThu: 0, PhaiTra: so(r.PhatSinh) - so(r.ThanhToan)
+    }))
+  ].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay)
+    || String(a.SoPhieu || '').localeCompare(String(b.SoPhieu || '')));
+
+  let lkThu = 0, lkTra = 0;
+  dong.forEach(r => {
+    lkThu = lam2(lkThu + r.PhaiThu);
+    lkTra = lam2(lkTra + r.PhaiTra);
+    r.LuyKeThu = lkThu; r.LuyKeTra = lkTra; r.ChenhLech = lam2(lkThu - lkTra);
+  });
+  /* v7.79/v7.80: ngay MOI NHAT len dau — dao SAU khi cong luy ke. */
+  return {
+    khachHangID: cap.KhachHangID, tenKhachHang: cap.TenKhachHang,
+    nccId: cap.NCC_ID || null, tenNCC: cap.TenNCC || '',
+    rows: dong.slice().reverse(),
+    phaiThu: lkThu, phaiTra: lkTra, chenhLech: lam2(lkThu - lkTra)
+  };
+}
+
+router.get('/doitac', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
+  const pool = await getPool();
+  const kq = await dsDoiTac2Chieu(pool);
+  res.json({
+    success: true, data: kq.rows,
+    canhBao: kq.chuaChayMigration
+      ? 'Chưa chạy database/migration_v696.sql — chưa khai được đối tác vừa là khách vừa là nhà cung cấp.'
+      : null
+  });
+});
+
+router.get('/doitac/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
+  const pool = await getPool();
+  const id = parseInt(req.query.khachHangId, 10);
+  if (!id) return res.status(400).json({ success: false, message: 'Thiếu khách hàng.' });
+  const d = await soDoiTac2Chieu(pool, id);
+  if (!d) return res.status(404).json({ success: false, message: 'Không tìm thấy khách hàng.' });
+  res.json({ success: true, data: d });
+});
+
+/* ================================================================================================
    7b. SO QUY (v6.24) — TIEN MAT + TUNG TAI KHOAN NGAN HANG
    So du = So du dau ky + tong THU - tong CHI. KHONG luu bang so quy rieng: luon tinh lai tu chung tu
    nen khong bao gio lech voi phieu thu/chi.

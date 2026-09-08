@@ -11,7 +11,14 @@ window.ModuleDanhMuc = (function () {
     { key: 'phulieu', label: 'Phụ liệu', api: '/api/danhmuc/phulieu', idCol: 'PhuLieuID', custom: 'phulieu' },
     { key: 'nhagiacong', label: 'Nhà gia công / In thêu', api: '/api/danhmuc/nhagiacong', idCol: 'NhaGiaCongID', custom: 'nhagiacong' },
     { key: 'nhacungcap', label: 'Nhà cung cấp', api: '/api/danhmuc/nhacungcap', idCol: 'NCC_ID',
-      fields: [{ name: 'TenNCC', label: 'Tên nhà cung cấp', required: true }, { name: 'DiaChi', label: 'Địa chỉ' }, { name: 'SDT', label: 'SĐT' }, { name: 'MaSoThue', label: 'Mã số thuế' }] },
+      fields: [{ name: 'TenNCC', label: 'Tên nhà cung cấp', required: true }, { name: 'DiaChi', label: 'Địa chỉ' }, { name: 'SDT', label: 'SĐT' }, { name: 'MaSoThue', label: 'Mã số thuế' },
+               /* v7.81: đối tác vừa bán cho mình vừa mua của mình -> chọn đúng dòng bên Danh mục
+                  khách hàng để xem công nợ 2 chiều. Để trống = nhà cung cấp thuần tuý.
+                  `type:'number'` để lúc lưu ô trống thành NULL chứ không phải chuỗi rỗng. */
+               { name: 'KhachHangID', label: 'Đồng thời là khách hàng (để xem công nợ 2 chiều)',
+                 type: 'number', optionsApi: '/api/danhmuc/khachhang',
+                 optionsValue: 'KhachHangID', optionsLabel: 'TenKhachHang',
+                 optionsRong: '— không, chỉ là nhà cung cấp —' }] },
     /* v7.45: thêm 4 ô THÔNG TIN XUẤT HÓA ĐƠN (migration_v689). Hóa đơn GTGT xuất từ phiếu bán hàng
        đọc thẳng từ đây, để trống thì tự lùi về tên/địa chỉ của phiếu.
        ⚠️ "Tên khách hàng" KHÔNG dùng cho hóa đơn: nó là khóa gom công nợ (congno.js gom theo chuỗi
@@ -359,12 +366,31 @@ window.ModuleDanhMuc = (function () {
     } catch (err) { toast(err.message, 'error'); }
   }
 
-  function openForm(tab, row, perm) {
+  /* v7.81 — Ô CHỌN LẤY DANH SÁCH TỪ MỘT DANH MỤC KHÁC (`optionsApi`).
+     Dùng cho "Nhà cung cấp → Đồng thời là khách hàng": phải chọn ĐÚNG dòng trong danh mục khách,
+     không gõ tay tên — gõ tay là sớm muộn lệch một dấu cách rồi ghép nhầm tiền của hai đối tác.
+     Nạp lỗi (chưa có quyền xem danh mục kia, hoặc chưa chạy migration) thì để danh sách rỗng và vẫn
+     mở được form — KHÔNG chặn việc sửa các ô còn lại. */
+  async function napOptions(fields) {
+    for (const f of fields) {
+      if (!f.optionsApi || f.options) continue;
+      try {
+        const ds = (await apiGet(f.optionsApi)).data || [];
+        f.options = [{ value: '', label: f.optionsRong || '— không —' }]
+          .concat(ds.map(x => ({ value: x[f.optionsValue], label: String(x[f.optionsLabel] || '') })));
+      } catch (e) { f.options = [{ value: '', label: f.optionsRong || '— không —' }]; }
+    }
+  }
+
+  async function openForm(tab, row, perm) {
     const isEdit = !!row;
+    await napOptions(tab.fields);   // v7.81
     const html = `
       <h3>${isEdit ? 'Sửa' : 'Thêm'} - ${tab.label}</h3>
       <form id="dmForm">
-        ${tab.fields.map(f => `<div class="form-row"><label>${f.label}${f.required ? ' *' : ''}</label>
+        ${tab.fields.map(f => (f.options || f.type)
+          ? fieldHtml(f, row)      // v7.81: ô chọn / checkbox / số / ngày -> dùng bộ dựng ô chung
+          : `<div class="form-row"><label>${f.label}${f.required ? ' *' : ''}</label>
           <input name="${f.name}" value="${escapeHtml(row ? row[f.name] : '')}" ${f.required ? 'required' : ''}></div>`).join('')}
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="btnCancel">Hủy</button>
