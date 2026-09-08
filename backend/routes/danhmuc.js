@@ -418,6 +418,10 @@ router.put('/cauhinh', requireAuth, requirePermission('DANHMUC', 'edit'), async 
    ================================================================================================ */
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 const { capNhatMaHang, coCotTenHoaDon } = require('../utils/maHangCapNhat');
+/* v7.88: giá nhập dùng CHUNG với báo cáo Tồn kho hàng hóa — xem utils/giaNhapHangHoa.js.
+   `donViChinhLaGop` lấy từ banHangCommon (bản định nghĩa dùng chung), không tự viết lại. */
+const { mapGiaNhap, giaTheoDvChinh } = require('../utils/giaNhapHangHoa');
+const { donViChinhLaGop } = require('../utils/banHangCommon');
 
 const chuanMaHang = (x) => String(x == null ? '' : x).trim().toUpperCase();
 
@@ -435,6 +439,22 @@ router.get('/hanghoa', requireAuth, requirePermission('DANHMUC', 'view'), async 
     LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
     LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
     ORDER BY h.MaHang`)).recordset;
+  /* ================================================================================================
+     v7.88 — COT GIA NHAP (chi de XEM, khong khai tay, khong them cot CSDL).
+     Nguyen: "danh muc hang hoa (ma hang) them cot gia nhap" + "nhap tu san xuat lay tu gia thanh
+     1 cai". Dung LAI dung cong thuc cua bao cao Ton kho hang hoa (utils/giaNhapHangHoa.js):
+       - hang mua ngoai -> binh quan gia quyen tu phieu nhap NCC, da theo DVT CHINH
+       - hang tu san xuat -> gia thanh 1 cai da chot o GiaVonHangHoa, phai NHAN he so neu don vi
+         chinh la don vi GOP thi moi cung don vi voi cot Gia ban
+     ⚠️ Viet cong thuc rieng o day la Danh muc va Bao cao cung goi "gia nhap" ma ra hai so khac nhau.
+     ================================================================================================ */
+  const gnMap = await mapGiaNhap(pool);
+  rows.forEach(r => {
+    const gn = gnMap.get(r.MaHangID);
+    const gia = giaTheoDvChinh(gn, r, donViChinhLaGop);
+    r.GiaNhap = gia == null ? null : Math.round(gia * 100) / 100;
+    r.NguonGiaNhap = gn ? gn.nguon : null;
+  });
   res.json({ success: true, data: rows });
 });
 

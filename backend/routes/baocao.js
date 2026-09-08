@@ -41,6 +41,7 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
    nhap lai KHONG cong vao ton (no giam XuatCai), nhung PHAI cong vao NhapKy/NhapSauKy vi hai con so
    do dung de LUI tu ton hien tai. */
 const nhapLai = require('../utils/nhapLaiHangHoa');
+const { mapGiaNhap } = require('../utils/giaNhapHangHoa');   // v7.88: dùng chung với Danh mục hàng hóa
 
 const router = express.Router();
 
@@ -171,48 +172,11 @@ async function baoCaoTonHangHoa(pool, ky) {
       .query(sqlNhapPhieu.replace('BETWEEN @a AND @b', '> @a AND p.NgayNhap <= @b'))).recordset;
   }
 
-  /* --- GIA NHAP (v6.91) ---
-     A) HANG MUA NGOAI: BINH QUAN GIA QUYEN tren toan bo phieu nhap tu NCC (chua huy):
-          gia = SUM(ThanhTien) / SUM(SoLuongChinh)
-        Chia cho SoLuongChinh (KHONG phai SoLuong) de gia ra dung DON VI CHINH — cung don vi voi cot
-        Ton, nho vay Gia tri ton = Ton x Gia nhap moi khop.
-        Chi tinh dong CO tien (ThanhTien > 0): dong gia 0 keo binh quan tut xuong sai.
-     B) HANG NHA SAN XUAT: phieu loai 'SanXuat' luon co DonGia = 0 (nhapkho.js: khong sinh cong no ao),
-        nen KHONG the lay gia tu phieu. Phai lay GIA THANH cua lenh SX ma phieu do gan vao ->
-        bang GiaVonHangHoa (nut "Nạp từ lệnh SX" o Bao cao gia von tinh san va chot lai o day).
-        Uu tien A truoc: ma nao vua mua ngoai vua tu san xuat thi tien that da bo ra la o phieu NCC. */
-  let giaNhapRs = [];
-  if (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) {
-    const coGiaVon = await coBang(pool, 'GiaVonHangHoa');
-    giaNhapRs = (await pool.request().query(`
-      SELECT h.MaHangID,
-             bq.SoLuong AS SLMua, bq.SoTien AS TienMua,
-             ${coGiaVon ? 'gv.GiaVon, gv.NguonGia, gv.MaDHNguon' : 'NULL AS GiaVon, NULL AS NguonGia, NULL AS MaDHNguon'}
-      FROM TheKhoHangHoa h
-      OUTER APPLY (
-        SELECT ISNULL(SUM(ct.SoLuongChinh), 0) AS SoLuong, ISNULL(SUM(ct.ThanhTien), 0) AS SoTien
-        FROM PhieuNhapKhoHangChiTiet ct
-        JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
-        WHERE ct.MaHangID = h.MaHangID AND p.TrangThai <> N'Đã hủy'
-          AND p.LoaiNhap = N'NhaCungCap' AND ISNULL(ct.ThanhTien, 0) > 0
-      ) bq
-      ${coGiaVon ? 'LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID' : ''}`)).recordset;
-  }
-  const giaNhapMap = new Map();
-  giaNhapRs.forEach(r => {
-    const slMua = so(r.SLMua), tienMua = so(r.TienMua);
-    if (slMua > 0 && tienMua > 0) {
-      giaNhapMap.set(r.MaHangID, { gia: tienMua / slMua, nguon: 'Phiếu nhập (BQGQ)' });
-    } else if (so(r.GiaVon) > 0) {
-      /* GiaVonHangHoa.GiaVon la gia 1 DON VI GOC (cung don vi voi GiaBan). Cot Ton theo DON VI CHINH;
-         ma nao co don vi chinh la don vi GOP thi phai nhan he so de ve cung don vi. */
-      giaNhapMap.set(r.MaHangID, {
-        gia: so(r.GiaVon),
-        goc: true,
-        nguon: r.NguonGia === 'Lệnh SX' ? (r.MaDHNguon ? 'Lệnh SX ' + r.MaDHNguon : 'Lệnh SX') : (r.NguonGia || 'Khai tay')
-      });
-    }
-  });
+  /* --- GIA NHAP (v6.91, ⚠️ v7.88 DA CHUYEN sang utils/giaNhapHangHoa.js) ---
+     Chuyen di de Danh muc -> Hang hoa dung LAI DUNG con so nay. KHONG chep cong thuc ve day: hai
+     ban la hai man hinh cung goi "gia nhap" ma ra hai so khac nhau, nguoi dung khong biet tin cai
+     nao. Toan bo giai thich (2 nguon, thu tu uu tien, don vi) nam trong util do. */
+  const giaNhapMap = await mapGiaNhap(pool);
 
   /* --- XUAT 1: phieu ban hang (duong tru ton duy nhat tu v6.23) --- */
   const sqlXuatBH = `

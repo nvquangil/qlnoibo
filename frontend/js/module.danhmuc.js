@@ -159,6 +159,14 @@ window.ModuleDanhMuc = (function () {
         { name: 'DonViQuyDoi', label: 'ĐVT quy đổi', options: optDV },
         { name: 'LoaiRi', label: 'Tỷ lệ (1 ĐVT quy đổi = ? ĐVT chính)', type: 'number' },
         { name: 'GiaBan', label: 'Giá bán (1 ĐVT chính)', type: 'number' },
+        /* v7.88: GIÁ NHẬP — hệ thống TỰ TÍNH, không gõ tay (`chiXem`), cùng ĐVT với Giá bán nên đặt
+           ngay cạnh là so được lãi. Nguồn: hàng mua ngoài lấy bình quân gia quyền từ phiếu nhập NCC;
+           hàng tự sản xuất lấy giá thành 1 cái đã chốt ở Báo cáo → Giá vốn. Cùng một con số với
+           báo cáo Tồn kho hàng hóa (utils/giaNhapHangHoa.js) — hai màn không được lệch nhau. */
+        { name: 'GiaNhap', label: 'Giá nhập (1 ĐVT chính)', chiXem: true,
+          dinhDang: (r) => (r.GiaNhap == null
+            ? '<span class="empty-hint" style="padding:0;">chưa có</span>'
+            : `${fmtNumber(r.GiaNhap)}${r.NguonGiaNhap ? `<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.NguonGiaNhap)}</div>` : ''}`) },
         /* `cot` = tên trường DÙNG ĐỂ HIỆN trong bảng. Ô chọn lưu ID, mà cột bảng in thẳng giá trị
            trường -> không khai `cot` là cả cột hiện ra dãy số vô nghĩa. */
         { name: 'TheKhoDanhMucID', label: 'Danh mục thẻ kho', options: optDM, cot: 'TenTheKho' }
@@ -224,9 +232,11 @@ window.ModuleDanhMuc = (function () {
     const cols = fields.map(f => f.name);
     body.innerHTML = `
       <div class="toolbar">${searchBoxHtml()}${perm.canCreate ? `<button class="btn" id="btnAdd">+ Thêm mới</button>` : ''}</div>
-      ${/* v7.86: ô chọn lưu ID nhưng bảng phải hiện TÊN — trường nào khai `cot` thì lấy trường đó. */''}
+      ${/* v7.86: ô chọn lưu ID nhưng bảng phải hiện TÊN — trường nào khai `cot` thì lấy trường đó.
+           v7.88: `chiXem` = cột CHỈ ĐỂ XEM (số do hệ thống tự tính) — có trong bảng nhưng KHÔNG có
+           trong form; `dinhDang` = hàm dựng ô, dùng cho cột tiền. */''}
       <table><thead><tr>${cols.map(c => `<th>${fields.find(f=>f.name===c).label}</th>`).join('')}<th style="width:120px">Thao tác</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>${fields.map(f => `<td>${escapeHtml(r[f.cot || f.name])}</td>`).join('')}<td>${rowActions(perm)}</td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="empty-hint">Chưa có dữ liệu</td></tr>`}</tbody></table>`;
+      <tbody>${rows.map(r => `<tr>${fields.map(f => `<td>${f.dinhDang ? f.dinhDang(r) : escapeHtml(r[f.cot || f.name])}</td>`).join('')}<td>${rowActions(perm)}</td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="empty-hint">Chưa có dữ liệu</td></tr>`}</tbody></table>`;
     if (perm.canCreate) document.getElementById('btnAdd').addEventListener('click', () => openCustomForm(tab, fields, null, perm));
     wireRowActions(body, rows, tab, perm, fields);
     wireTableSearch(body);
@@ -429,10 +439,13 @@ window.ModuleDanhMuc = (function () {
   }
 
   function openCustomForm(tab, fields, row, perm, extraHtml, onSubmit) {
+    /* v7.88: cột `chiXem` (số hệ thống tự tính, vd Giá nhập) KHÔNG được vào form — dựng ra ô nhập
+       cho một con số không sửa được là mời người dùng gõ vào rồi bấm Lưu và tưởng đã đổi. */
+    const oNhap = fields.filter(f => !f.chiXem);
     const html = `
       <h3>${row ? 'Sửa' : 'Thêm'} - ${tab.label}</h3>
       <form id="dmForm">
-        ${fields.map(f => fieldHtml(f, row)).join('')}
+        ${oNhap.map(f => fieldHtml(f, row)).join('')}
         ${extraHtml || ''}
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="btnCancel">Hủy</button>
@@ -445,7 +458,7 @@ window.ModuleDanhMuc = (function () {
       e.preventDefault();
       const fd = new FormData(e.target);
       const body = {};
-      fields.forEach(f => { body[f.name] = fd.get(f.name); });
+      oNhap.forEach(f => { body[f.name] = fd.get(f.name); });
       try {
         if (onSubmit) { await onSubmit(body, row); }
         else if (row) await apiPut(`${tab.api}/${row[tab.idCol]}`, body);
