@@ -2458,9 +2458,12 @@ async function tinhGiaThanh(pool, order) {
      Giá vốn đã CHỐT trong GiaVonHangHoa thì KHÔNG đổi (đúng nguyên tắc kế toán: giá vốn chốt tại
      thời điểm bán) — muốn cập nhật thì bấm lại "Nạp từ lệnh SX".
 
-     `tongCong` giữ nghĩa "tiền của cả lệnh" để dòng TỔNG CHI PHÍ vẫn = giá thành × SL:
-         tongCong = chi phí sản xuất + (chi phí chung × SL)
-     Chưa có SL thì không nhân được -> chỉ cộng phần sản xuất, và giaThanh1SP để null như cũ.
+     ⚠️ v7.89.1 — THỨ TỰ TRÌNH BÀY. Bản đầu để "chi phí chung × SL" cộng vào TỔNG, rồi dòng giá
+     thành lại hiện "+ 6.000" -> Nguyen đọc ra là CỘNG HAI LẦN (số thì đúng, nhưng bảng số liệu mà
+     đọc ra hiểu sai thì coi như sai). Nay đảo lại cho mỗi dòng suy ra từ dòng ngay trên:
+         chi phí sản xuất  ->  GIÁ THÀNH 1 SP (= SX ÷ SL + chi phí chung)  ->  TỔNG = giá thành × SL
+     Nên `tongCong` tính TỪ giá thành, để phép nhân hiện trên màn hình là ĐÚNG TỪNG ĐỒNG.
+     Chưa có SL thì không nhân được -> chỉ có phần sản xuất, và giaThanh1SP để null như cũ.
      ================================================================================================ */
   const tongChung = tong(chiPhiChung, 'SoTien');        // = chi phí chung cho 1 SP
   const tongSanXuat = lam2(tongVai + tongPK + tongGC + tongMay + tongIn + tongCat);
@@ -2502,11 +2505,13 @@ async function tinhGiaThanh(pool, order) {
   const slCat = catStage ? await getTongSLCatForOrder(pool, donHangId) : 0;
   const slDungTinh = slNhapKho > 0 ? slNhapKho : slCat;
   const nguonSL = slNhapKho > 0 ? nguonNhap : (slCat > 0 ? 'SL cắt (chưa nhập kho)' : 'chưa có số liệu');
-  /* v7.89: TỔNG CHI PHÍ của cả lệnh = phần sản xuất + chi phí chung NHÂN với SL (chi phí chung nay
-     là tiền của 1 SP). Nhờ vậy dòng TỔNG vẫn đúng bằng giá thành × SL — hai con số trên cùng một
-     bảng mà không khớp nhau là người đọc mất tin cả bảng.
-     Chưa có SL thì không nhân được -> chỉ có phần sản xuất (và giaThanh1SP để null như cũ). */
-  const tongCong = lam2(tongSanXuat + tongChung * slDungTinh);
+  /* v7.89: giá thành 1 SP = chia PHẦN SẢN XUẤT rồi mới CỘNG chi phí chung (chi phí chung đã là số
+     của 1 SP). v7.89.1: tính ra đây để `tongCong` dựng TỪ nó. */
+  const giaThanh1SP = slDungTinh > 0 ? lam2(tongSanXuat / slDungTinh + tongChung) : null;
+  /* v7.89.1: TỔNG CHI PHÍ CẢ LỆNH = giá thành × SL. Lấy đúng con số giá thành đang hiện (đã làm
+     tròn) chứ không tính lại từ đầu — phép nhân in trên màn hình phải đúng từng đồng, kẻo lại
+     thành một chỗ nữa để người đọc nghi ngờ. */
+  const tongCong = giaThanh1SP != null ? lam2(giaThanh1SP * slDungTinh) : tongSanXuat;
 
   return {
     order: {
@@ -2519,17 +2524,15 @@ async function tinhGiaThanh(pool, order) {
     tong: {
       vai: tongVai, phuKien: tongPK, giaCong: tongGC, mayNhaLam: tongMay, inThe: tongIn,
       boPhanCat: tongCat,
-      /* v7.89: `chiPhiChung` = tiền cho MỘT sản phẩm; `chiPhiChungCaLenh` = nhân với SL. Trả cả hai
-         để màn hình khỏi tự nhân (tự nhân là sớm muộn lệch với backend). */
-      chiPhiChung: tongChung, chiPhiChungCaLenh: lam2(tongChung * slDungTinh),
-      sanXuat: tongSanXuat, tongCong
+      /* v7.89: `chiPhiChung` = tiền cho MỘT sản phẩm. v7.89.1: bỏ `chiPhiChungCaLenh` — chính con
+         số đó đặt cạnh dòng giá thành làm người đọc tưởng chi phí chung bị cộng hai lần. */
+      chiPhiChung: tongChung, sanXuat: tongSanXuat, tongCong
     },
     slNhapKho, slCat, slDungTinh, nguonSL,
     /* v6.91.1: SL nhập kho từ phiếu ĐÃ quy về CÁI, nên nhãn đơn vị phải là "Cái" chứ không phải ĐVT
        của lệnh SX — để trống chỗ này là người đọc tưởng giá thành tính trên Ri. */
     donViSLDungTinh: (slNhapKho > 0 && nguonNhap.indexOf('phiếu') >= 0) ? 'Cái' : null,
-    /* v7.89: chia PHẦN SẢN XUẤT rồi mới CỘNG chi phí chung (chi phí chung đã là số của 1 SP). */
-    giaThanh1SP: slDungTinh > 0 ? lam2(tongSanXuat / slDungTinh + tongChung) : null
+    giaThanh1SP
   };
 }
 // Danh sách lệnh SX để chọn (kèm tổng chi phí nhanh — chỉ để nhìn, chi tiết mở từng lệnh).

@@ -103,12 +103,14 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
   console.log('\n  --- SL = 100, chi phi SX = 300.000, chi phi chung = 2.000/SP ---');
   bang(d.tong.sanXuat, 300000, 'chi phi san xuat KHONG gom chi phi chung');
   bang(d.tong.chiPhiChung, 2000, 'chi phi chung = tien cho 1 SP (nguyen so da khai)');
-  bang(d.tong.chiPhiChungCaLenh, 200000, 'chi phi chung ca lenh = 2.000 x 100');
+  bang(d.tong.chiPhiChungCaLenh, undefined,
+    '⚠️ v7.89.1: BO `chiPhiChungCaLenh` — chinh con so do dat canh dong gia thanh lam nguoi doc '
+    + 'tuong chi phi chung bi cong hai lan');
   bang(d.giaThanh1SP, 5000,
     '⚠️ gia thanh = 300.000/100 + 2.000 = 5.000 (KHONG phai (300.000+2.000)/100 = 3.020)');
-  bang(d.tong.tongCong, 500000, 'TONG CHI PHI = 300.000 + 200.000');
+  bang(d.tong.tongCong, 500000, 'TONG CHI PHI CA LENH = 5.000 x 100');
   bang(d.tong.tongCong, d.giaThanh1SP * d.slDungTinh,
-    '⚠️ TONG CHI PHI dung bang GIA THANH x SL (hai so tren cung bang phai cong ra duoc nhau)');
+    '⚠️ v7.89.1: TONG duoc DUNG TU gia thanh -> phep nhan in tren man hinh dung TUNG DONG');
 
   console.log('\n  --- Doi chieu voi cong thuc CU (de thay ro da doi) ---');
   const cu = (300000 + 2000) / 100;
@@ -119,7 +121,7 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
   bang(d.slDungTinh, 0, 'khong co SL nhap kho lan SL cat -> 0');
   bang(d.giaThanh1SP, null, 'gia thanh de NULL nhu cu, khong chia cho 0');
   bang(d.tong.tongCong, 300000, 'tong chi phi chi con phan san xuat (chua nhan duoc chi phi chung)');
-  bang(d.tong.chiPhiChungCaLenh, 0, 'chi phi chung ca lenh = 0 khi chua co SL');
+  bang(d.tong.chiPhiChungCaLenh, undefined, 'khong con truong chiPhiChungCaLenh');
 
   console.log('\n  --- Chi phi chung = 0 thi ket qua y nhu truoc khi doi ---');
   const F2 = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatForOrder',
@@ -206,13 +208,20 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
     order: { MaDH: 'DH01', TenSanPham: 'Áo thu' },
     vai: [], phuKien: [], giaCong: [], mayNhaLam: [], inThe: [], boPhanCat: [], chiPhiChung: [],
     tong: { vai: 300000, phuKien: 0, giaCong: 0, mayNhaLam: 0, inThe: 0, boPhanCat: 0,
-      chiPhiChung: 2000, chiPhiChungCaLenh: 200000, sanXuat: 300000, tongCong: 500000 },
+      chiPhiChung: 2000, sanXuat: 300000, tongCong: 500000 },
     slDungTinh: 100, nguonSL: 'SL nhập kho', giaThanh1SP: 5000
   });
   kiem(/khai cho <b>1 sản phẩm<\/b>/.test(html), 'ghi rõ chi phí chung khai cho 1 SẢN PHẨM');
   kiem(/CHI PHÍ SẢN XUẤT/.test(html), 'có dòng CHI PHÍ SẢN XUẤT tách riêng');
-  kiem(/× 100 = 200.000/.test(html), 'hiện luôn chi phí chung × SL để đối chiếu dòng TỔNG');
   kiem(/300.000 ÷ 100 \+ 2.000/.test(html), 'viết rõ phép tính giá thành ngay trên bảng');
+  kiem(/TỔNG CHI PHÍ CẢ LỆNH[\s\S]{0,140}= 5.000 × 100/.test(html),
+    '⚠️ v7.89.1: TỔNG viết là "giá thành × SL" — suy ra từ dòng ngay trên');
+  /* ⚠️ Chính chỗ Nguyen báo lỗi: chi phí chung KHÔNG được hiện thêm một lần đã nhân SL. */
+  kiem(!/× 100 = 200.000/.test(html),
+    '⚠️ KHÔNG còn dòng "chi phí chung × SL" cạnh mục 7 (đó là chỗ đọc ra thành cộng hai lần)');
+  /* Thứ tự đọc: giá thành phải đứng TRƯỚC tổng, để mỗi dòng suy ra từ dòng ngay trên. */
+  kiem(html.indexOf('GIÁ THÀNH 1 SẢN PHẨM') < html.indexOf('TỔNG CHI PHÍ CẢ LỆNH'),
+    'GIÁ THÀNH đứng TRƯỚC TỔNG (tổng là hệ quả, không phải nguồn)');
 
   console.log('\n=== 4. Bump ?v= ===');
   const v = (sIndex.match(/module\.qlsx\.js\?v=([\d.]+)/) || [])[1];

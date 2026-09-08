@@ -2120,17 +2120,21 @@ window.ModuleQLSX = (function () {
         <tr><td style="background:#f5f6f8;"><b>5. In thêu</b></td><td style="text-align:right;">${tien(t.inThe)}</td></tr>
         ${/* v6.17: + tiền bàn cắt (bộ phận cắt) — cùng công thức bảng lương trải vải cắt. */''}
         <tr><td style="background:#f5f6f8;"><b>6. Bộ phận cắt (tiền bàn cắt)</b></td><td style="text-align:right;">${tien(t.boPhanCat)}</td></tr>
-        ${/* v7.89: chi phí chung là tiền của MỘT sản phẩm -> hiện cả 2 con số, kẻo đọc nhầm dòng này
-             là tổng cả lệnh rồi thấy TỔNG CHI PHÍ không cộng ra được. */''}
+        ${/* ⚠️ v7.89.1 — THỨ TỰ ĐỌC. Bản trước để "chi phí chung × SL" cộng vào TỔNG rồi dòng giá
+             thành lại "+ 6.000" -> đọc ra là cộng hai lần (số vẫn đúng, nhưng bảng số liệu mà đọc ra
+             hiểu sai thì coi như sai). Nay MỖI DÒNG SUY RA TỪ DÒNG NGAY TRÊN:
+               chi phí sản xuất -> GIÁ THÀNH 1 SP -> TỔNG CẢ LỆNH = giá thành × SL
+             Không còn chỗ nào hiện chi phí chung hai lần. */''}
         <tr style="font-weight:700;background:#eef3f8;"><td>CHI PHÍ SẢN XUẤT (1+…+6)</td><td style="text-align:right;">${tien(t.sanXuat)}</td></tr>
         <tr><td style="background:#f5f6f8;"><b>7. Chi phí chung</b> <span style="font-weight:400;font-size:12px;color:#5f6368;">— khai cho <b>1 sản phẩm</b></span></td>
-          <td style="text-align:right;">${tien(t.chiPhiChung)}${d.slDungTinh > 0
-            ? `<div style="font-size:11px;color:#5f6368;">× ${fmtNumber(d.slDungTinh)} = ${tien(t.chiPhiChungCaLenh)}</div>` : ''}</td></tr>
-        <tr style="font-weight:700;background:#e8f5e9;"><td>TỔNG CHI PHÍ <span style="font-weight:400;font-size:12px;">(sản xuất + chi phí chung × SL)</span></td>
-          <td style="text-align:right;">${tien(t.tongCong)}</td></tr>
+          <td style="text-align:right;">${tien(t.chiPhiChung)}</td></tr>
         <tr style="font-weight:700;background:#fff8e1;"><td>GIÁ THÀNH 1 SẢN PHẨM${d.slDungTinh > 0
             ? ` <span style="font-weight:400;font-size:12px;">= ${tien(t.sanXuat)} ÷ ${fmtNumber(d.slDungTinh)} + ${tien(t.chiPhiChung)}</span>` : ''}</td>
           <td style="text-align:right;">${d.giaThanh1SP != null ? tien(d.giaThanh1SP) : '<span style="color:#c0392b;">chưa có SL hoàn thành</span>'}</td></tr>
+        <tr style="font-weight:700;background:#e8f5e9;"><td>TỔNG CHI PHÍ CẢ LỆNH${d.giaThanh1SP != null
+            ? ` <span style="font-weight:400;font-size:12px;">= ${tien(d.giaThanh1SP)} × ${fmtNumber(d.slDungTinh)}</span>`
+            : ' <span style="font-weight:400;font-size:12px;">(chưa có SL — mới có phần sản xuất)</span>'}</td>
+          <td style="text-align:right;">${tien(t.tongCong)}</td></tr>
       </table>
       ${bang('1. Vải theo từng cây đã cắt', ['Mã cây', 'Loại vải / màu', 'KG-mét dùng', 'Đơn giá', 'Thành tiền'], dongVai, t.vai)}
       ${bang('2. Phụ kiện đã xuất cho lệnh', ['Mã PK', 'Tên phụ kiện', 'Số lượng', 'Đơn giá', 'Thành tiền'], dongPK, t.phuKien)}
