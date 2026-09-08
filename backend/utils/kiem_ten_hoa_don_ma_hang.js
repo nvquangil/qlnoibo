@@ -41,10 +41,16 @@ kiem(/ALTER TABLE TheKhoHangHoa ADD TenHoaDon NVARCHAR\(255\) NULL/.test(sMigrat
   'migration_v690 them cot TenHoaDon');
 kiem(/IF COL_LENGTH\('TheKhoHangHoa', 'TenHoaDon'\) IS NULL/.test(sMigration),
   'migration chay lai duoc (co IF COL_LENGTH)');
-/* Bai hoc feedback: migration moi PHAI gop luon vao CAI_DAT_DAY_DU.sql, keo cai moi thieu cot. */
+/* Bai hoc feedback: migration moi PHAI gop luon vao CAI_DAT_DAY_DU.sql, keo cai moi thieu cot.
+   ⚠️ SUA CACH DO (v7.82): truoc day chi soi trong khoi CREATE TABLE TheKhoHangHoa. Nhung
+   CAI_DAT_DAY_DU.sql la file SINH RA (tao_file_cai_dat.js = schema.sql + toan bo migration theo thu
+   tu), nen cot them sau nam o phan ALTER phia duoi chu KHONG bao gio duoc chen vao CREATE TABLE.
+   Do sai cho -> bao do trong khi cai moi VAN du cot. Nay chap nhan CA HAI dang, mien la file gop co
+   duong them cot. */
 const khoiTKHH = sCaiDat.slice(sCaiDat.indexOf('CREATE TABLE TheKhoHangHoa'),
   sCaiDat.indexOf('CREATE TABLE TheKhoChiTietMau'));
-kiem(/TenHoaDon\s+NVARCHAR\(255\) NULL/.test(khoiTKHH),
+kiem(/TenHoaDon\s+NVARCHAR\(255\) NULL/.test(khoiTKHH)
+  || /ALTER TABLE TheKhoHangHoa ADD TenHoaDon NVARCHAR\(255\) NULL/.test(sCaiDat),
   'CAI_DAT_DAY_DU.sql: TheKhoHangHoa da co TenHoaDon (cai moi khong thieu cot)');
 
 console.log('\n=== 2. MOT ban do cot duy nhat (khong moi file tu viet mot ham) ===');
@@ -121,7 +127,10 @@ kiem(/tenHoaDon: d\.tenHoaDon \|\| ''/.test(sFeNk), 'FE phieu nhap: gui len tron
 kiem(/tenHoaDon: r\.TenHoaDon \|\| ''/.test(sFeNk), 'FE phieu nhap: mo Sua phieu -> dien san');
 kiem(/if \(mh\.TenHoaDon !== undefined\) d\.tenHoaDon = mh\.TenHoaDon \|\| ''/.test(sFeNk),
   'FE phieu nhap: go trung ma co san -> dien lai ten da khai (khong xoa trang)');
-kiem(/module\.nhapkho\.js\?v=7\.46/.test(sIndex), 'index.html bump module.nhapkho.js?v=7.46');
+/* ⚠️ KHONG ghim cung so phien ban: file nay se con duoc bump vi ly do khac, ghim cung thi test do
+   oan moi lan bump. Chi doi >= 7.46 (tuc la DA bump tu ban nay tro di). */
+kiem(parseFloat((sIndex.match(/module\.nhapkho\.js\?v=([\d.]+)/) || [])[1] || 0) >= 7.46,
+  'index.html bump module.nhapkho.js?v= >= 7.46');
 
 console.log('\n=== 4. CAC duong DOC deu tra TenHoaDon ===');
 kiem(/\$\{cotTenHDdm\}/.test(sNhapKho), 'GET /nhapkho/danhmuc tra TenHoaDon (de dien lai khi go trung ma)');

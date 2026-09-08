@@ -1041,6 +1041,111 @@ router.get('/doitac', requireAuth, requirePermission('CONGNO', 'view'), requireC
   });
 });
 
+/* ================================================================================================
+   v7.82 — XUAT EXCEL cong no 2 chieu.
+   Hai sheet:
+     · "Cong no 2 chieu" — so gop cua MOT doi tac: du 4 loai chung tu + 3 so tong.
+     · "Tong hop"        — moi doi tac da ghep mot dong (chi khi xuat TAT CA).
+   Dung lai dauTrang/dongTieuDeCot/ketBang nhu moi file Excel khac -> ke bang + dinh dang so giong het
+   cac file dang co (quy tac: xem ghi chu o ketBang()).
+   ⚠️ Cot "Chenh lech luy ke" doc TU DUOI LEN (file xep moi nhat len tren, giong man hinh) — phai ghi
+   ro tren file, khong thi nguoi doc tuong cot do sai.
+   ================================================================================================ */
+function sheetDoiTac2Chieu(wb, tienIch, d) {
+  const { dauTrang, dongTieuDeCot, ketBang, ngayVN } = tienIch;
+  const ws = wb.addWorksheet('Công nợ 2 chiều');
+  const cot = [
+    { header: 'Ngày', key: 'Ngay', width: 11 },
+    { header: 'Chiều', key: 'Ben', width: 12 },
+    { header: 'Loại chứng từ', key: 'Loai', width: 20 },
+    { header: 'Số phiếu', key: 'SoPhieu', width: 16 },
+    { header: 'Phải thu (họ nợ mình)', key: 'PhaiThu', width: 20 },
+    { header: 'Phải trả (mình nợ họ)', key: 'PhaiTra', width: 20 },
+    { header: 'Chênh lệch lũy kế', key: 'ChenhLech', width: 18 },
+    { header: 'Diễn giải', key: 'DienGiai', width: 34 }
+  ];
+  dauTrang(ws, cot.length, 'SỔ CÔNG NỢ 2 CHIỀU',
+    `Đối tác: ${d.tenKhachHang || ''}${d.tenNCC ? '  ·  Nhà cung cấp: ' + d.tenNCC : ''}`);
+  const gc = ws.addRow([]);
+  gc.getCell(1).value = 'Xếp theo ngày MỚI NHẤT lên trên. Cột "Chênh lệch lũy kế" là số dư sau từng '
+    + 'chứng từ, đọc từ dưới lên. Dương = họ còn nợ mình, âm = mình còn nợ họ.';
+  gc.getCell(1).font = { italic: true, size: 9, color: { argb: 'FF5F6368' } };
+  ws.mergeCells(gc.number, 1, gc.number, cot.length);
+
+  const dongTD = dongTieuDeCot(ws, cot).number;
+  (d.rows || []).forEach(r => ws.addRow({
+    Ngay: ngayVN(r.Ngay),
+    Ben: r.Ben === 'ThuVe' ? 'Bán / thu' : 'Mua / chi',
+    Loai: r.Loai || '', SoPhieu: r.SoPhieu || '',
+    /* Ghi 0 thanh o TRONG cho de doc — nhung van la SO o cac o co gia tri, de SUM duoc. */
+    PhaiThu: so(r.PhaiThu) || null, PhaiTra: so(r.PhaiTra) || null,
+    ChenhLech: so(r.ChenhLech), DienGiai: r.DienGiai || ''
+  }));
+  const tong = ws.addRow({
+    Ngay: '', Ben: '', Loai: 'TỔNG', SoPhieu: '',
+    PhaiThu: so(d.phaiThu), PhaiTra: so(d.phaiTra), ChenhLech: so(d.chenhLech),
+    DienGiai: so(d.chenhLech) === 0 ? 'hai bên cân nhau'
+      : (so(d.chenhLech) > 0 ? 'họ còn nợ mình' : 'mình còn nợ họ')
+  });
+  tong.font = { bold: true };
+  ketBang(ws, cot.length, dongTD);
+  return ws;
+}
+
+function sheetTongHopDoiTac(wb, tienIch, rows) {
+  const { dauTrang, dongTieuDeCot, ketBang } = tienIch;
+  const ws = wb.addWorksheet('Tổng hợp đối tác');
+  const cot = [
+    { header: 'Khách hàng', key: 'TenKhachHang', width: 30 },
+    { header: 'Nhà cung cấp', key: 'TenNCC', width: 30 },
+    { header: 'Phải thu (họ nợ mình)', key: 'PhaiThu', width: 20 },
+    { header: 'Phải trả (mình nợ họ)', key: 'PhaiTra', width: 20 },
+    { header: 'Chênh lệch', key: 'ChenhLech', width: 18 },
+    { header: 'Ai còn nợ ai', key: 'Ket', width: 20 }
+  ];
+  dauTrang(ws, cot.length, 'CÔNG NỢ 2 CHIỀU — TỔNG HỢP', 'Các đối tác vừa là khách hàng vừa là nhà cung cấp');
+  const dongTD = dongTieuDeCot(ws, cot).number;
+  rows.forEach(r => ws.addRow({
+    TenKhachHang: r.tenKhachHang || '', TenNCC: r.tenNCC || '',
+    PhaiThu: so(r.phaiThu), PhaiTra: so(r.phaiTra), ChenhLech: so(r.chenhLech),
+    Ket: so(r.chenhLech) === 0 ? 'cân nhau' : (so(r.chenhLech) > 0 ? 'họ nợ mình' : 'mình nợ họ')
+  }));
+  if (rows.length) {
+    const t = ws.addRow({
+      TenKhachHang: 'TỔNG', TenNCC: '',
+      PhaiThu: lam2(rows.reduce((s, r) => s + so(r.phaiThu), 0)),
+      PhaiTra: lam2(rows.reduce((s, r) => s + so(r.phaiTra), 0)),
+      ChenhLech: lam2(rows.reduce((s, r) => s + so(r.chenhLech), 0)), Ket: ''
+    });
+    t.font = { bold: true };
+  }
+  ketBang(ws, cot.length, dongTD);
+  return ws;
+}
+
+/* ?khachHangId=<id> -> so cua 1 doi tac (kem sheet tong hop);  khong kem -> chi sheet tong hop. */
+router.get('/doitac/export', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const id = parseInt(req.query.khachHangId, 10) || 0;
+    const wb = new ExcelJS.Workbook();
+    const tienIch = taoTienIch();
+    let ten = 'tat_ca';
+    if (id) {
+      const d = await soDoiTac2Chieu(pool, id);
+      if (!d) return res.status(404).json({ success: false, message: 'Không tìm thấy khách hàng.' });
+      sheetDoiTac2Chieu(wb, tienIch, d);
+      ten = d.tenKhachHang || String(id);
+    }
+    const ds = await dsDoiTac2Chieu(pool);
+    sheetTongHopDoiTac(wb, tienIch, ds.rows || []);
+    return await guiFile(res, wb, `cong_no_2_chieu_${khongDau(ten)}.xlsx`);
+  } catch (err) {
+    console.error('[congno GET /doitac/export] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi xuất Excel: ' + err.message });
+  }
+});
+
 router.get('/doitac/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
   const pool = await getPool();
   const id = parseInt(req.query.khachHangId, 10);

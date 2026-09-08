@@ -551,14 +551,104 @@ window.ModuleCongNo = (function () {
       ${/* v6.47: xuất riêng sổ của khách này. v7.34: thêm khối kỳ + nút xuất mẫu sổ kế toán. */''}
       ${khoiXuatSoHtml()}
       <div class="modal-actions">
+        <button type="button" class="btn small secondary" id="btnInSo">🖨️ In</button>
         <button type="button" class="btn small secondary" id="btnXuatCT" title="File gồm: sổ chi tiết + chi tiết từng dòng hàng của phiếu bán hàng + danh sách phiếu thu">⬇️ Xuất Excel sổ này (kèm chứng từ)</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    /* v7.82: in đúng những dòng đang xem. */
+    modal.querySelector('#btnInSo').addEventListener('click', () => inSoCongNo({
+      tieuDe: 'SỔ CHI TIẾT CÔNG NỢ KHÁCH HÀNG', doiTuong: khach,
+      dongTom: [`<b>Còn nợ:</b> ${fmtNumber(d.conNo)} đ`],
+      cot: COT_SO_1CHIEU(d.rows || []), rows: d.rows || [],
+      tenFile: 'So cong no - ' + khach
+    }));
     modal.querySelector('#btnXuatCT').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=kh&khach=' + encodeURIComponent(khach), 'cong_no_khach.xlsx'));
     noiDayXuatSo(modal, 'loai=kh&khach=' + encodeURIComponent(khach), 'so_chi_tiet_cong_no.xlsx');   // v7.34
     noiDaySoPhieu(modal, () => soChiTietKH(khach));   // v6.55
   }
+
+  /* ================================================================================================
+     v7.82 — IN SỔ CÔNG NỢ. Một bộ dựng bản in dùng CHUNG cho cả ba sổ (khách hàng / nhà cung cấp /
+     đối tác 2 chiều) — ba sổ khác nhau ở TÊN CỘT và cách lấy giá trị, phần còn lại (đầu phiếu, kẻ
+     bảng, dòng tổng, chỗ ký) giống hệt nhau nên không có lý do viết ba lần.
+
+     ⚠️ In ĐÚNG những dòng đang xem trên màn hình (mảng `rows` đã nhận về), KHÔNG gọi lại API với
+     tham số khác — in ra một tập dữ liệu khác với cái người dùng vừa đối chiếu là nguồn cãi nhau.
+     Thứ tự giữ nguyên mới-nhất-trên-đầu như màn hình; có ghi chú để người đọc biết cột lũy kế phải
+     đọc từ dưới lên (giống file Excel).
+     ================================================================================================ */
+  function inSoCongNo(opt) {
+    const cot = opt.cot || [];
+    const rows = opt.rows || [];
+    const soCot = cot.length;
+    const oTong = (c) => (typeof c.tong === 'function' ? c.tong() : '');
+    printHtml(opt.tenFile || 'So cong no', `
+      <h2 style="text-align:center;margin:0 0 4px;">${escapeHtml(opt.tieuDe || 'SỔ CÔNG NỢ')}</h2>
+      <table style="margin-top:8px;">
+        <tr><td style="width:50%;"><b>Đối tượng:</b> ${escapeHtml(opt.doiTuong || '')}</td>
+            <td><b>Ngày in:</b> ${fmtDate(new Date())}</td></tr>
+        ${(opt.dongTom || []).map(d => `<tr><td colspan="2">${d}</td></tr>`).join('')}
+      </table>
+      <div style="font-style:italic;font-size:11px;color:#5f6368;margin-top:6px;">
+        Xếp theo ngày mới nhất lên trên. Cột lũy kế là số dư sau từng chứng từ — đọc từ dưới lên.</div>
+      <table style="margin-top:6px;width:100%;border-collapse:collapse;" border="1" cellpadding="4">
+        <thead><tr><th style="width:34px;">TT</th>
+          ${cot.map(c => `<th${c.rong ? ` style="width:${c.rong};"` : ''}>${escapeHtml(c.nhan)}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${rows.map((r, i) => `<tr>
+            <td style="text-align:center;">${i + 1}</td>
+            ${cot.map(c => `<td${c.phai ? ' style="text-align:right;"' : ''}>${c.o(r)}</td>`).join('')}
+          </tr>`).join('') || `<tr><td colspan="${soCot + 1}" style="text-align:center;">Chưa có phát sinh nào</td></tr>`}
+          ${rows.length ? `<tr style="font-weight:700;background:#f1f3f4;">
+            <td colspan="${1 + cot.findIndex(c => c.tong)}" style="text-align:right;">TỔNG</td>
+            ${cot.filter((c, i) => i >= cot.findIndex(x => x.tong)).map(c => `<td style="text-align:right;">${oTong(c)}</td>`).join('')}
+          </tr>` : ''}
+        </tbody>
+      </table>
+      ${/* Dùng CLASS .p-sign của printHtml, không tự khai style — mọi phiếu trong hệ thống có cùng
+           một khối chỗ ký, sửa 1 chỗ là đổi hết. */''}
+      <div class="p-sign">
+        <div><div class="line">Người lập</div></div>
+        <div><div class="line">Kế toán</div></div>
+        <div><div class="line">Đối tượng xác nhận</div></div>
+      </div>`, { extraStyle: 'th,td{font-size:11.5px;padding:3px 5px;} h2{font-size:17px;}' });
+  }
+
+  /* Hai bộ cột — chỉ khác nhau ở đây. `tong` đánh dấu cột nào bắt đầu có dòng tổng ở cuối.
+
+     Sổ MỘT CHIỀU dùng cho 3 màn (khách hàng / nhà cung cấp / nhà gia công): cùng một cấu trúc dữ liệu
+     (Ngay, Loai, SoPhieu, PhatSinh, ThanhToan, LuyKe, DienGiai) nhưng TÊN CỘT trên màn hình khác nhau
+     ("Số phiếu" vs "Số phiếu / HĐ" vs "Lệnh SX / Số phiếu"; "Thanh toán" vs "Đã trả") — bản in phải
+     ghi ĐÚNG tên người dùng đang thấy, nên nhận `nhan` để đổi nhãn thay vì nhân bản cả bộ cột.
+     ⚠️ Dòng TỔNG của cột lũy kế lấy `rows[0].LuyKe` — số dư của chứng từ MỚI NHẤT, vì sổ xếp
+     mới-nhất-trên-đầu (v7.79). Cộng dồn cả cột lũy kế là vô nghĩa. */
+  const COT_SO_1CHIEU = (rows, nhan) => [
+    { nhan: 'Ngày', rong: '78px', o: r => fmtDate(r.Ngay) },
+    { nhan: 'Loại', o: r => escapeHtml(r.Loai || '') },
+    { nhan: (nhan && nhan.soPhieu) || 'Số phiếu', o: r => escapeHtml(r.SoPhieu || '') },
+    { nhan: 'Phát sinh', phai: true, o: r => (Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''),
+      tong: () => fmtNumber(rows.reduce((s, r) => s + (Number(r.PhatSinh) || 0), 0)) },
+    { nhan: (nhan && nhan.thanhToan) || 'Thanh toán', phai: true, o: r => (Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''),
+      tong: () => fmtNumber(rows.reduce((s, r) => s + (Number(r.ThanhToan) || 0), 0)) },
+    { nhan: 'Còn nợ lũy kế', phai: true, o: r => `<b>${fmtNumber(r.LuyKe)}</b>`,
+      tong: () => fmtNumber((rows[0] || {}).LuyKe || 0) },
+    { nhan: 'Diễn giải', o: r => escapeHtml(r.DienGiai || '') }
+  ];
+  const COT_SO_2CHIEU = (d) => [
+    { nhan: 'Ngày', rong: '78px', o: r => fmtDate(r.Ngay) },
+    { nhan: 'Chiều', rong: '72px', o: r => (r.Ben === 'ThuVe' ? 'Bán / thu' : 'Mua / chi') },
+    { nhan: 'Loại chứng từ', o: r => escapeHtml(r.Loai || '') },
+    { nhan: 'Số phiếu', o: r => escapeHtml(r.SoPhieu || '') },
+    { nhan: 'Phải thu', phai: true, o: r => (Number(r.PhaiThu) ? fmtNumber(r.PhaiThu) : ''),
+      tong: () => fmtNumber(d.phaiThu) },
+    { nhan: 'Phải trả', phai: true, o: r => (Number(r.PhaiTra) ? fmtNumber(r.PhaiTra) : ''),
+      tong: () => fmtNumber(d.phaiTra) },
+    { nhan: 'Chênh lệch lũy kế', phai: true, o: r => `<b>${fmtNumber(r.ChenhLech)}</b>`,
+      tong: () => fmtNumber(d.chenhLech) },
+    { nhan: 'Diễn giải', o: r => escapeHtml(r.DienGiai || '') }
+  ];
 
   /* ================================================================================================
      v7.81 — SỔ CÔNG NỢ 2 CHIỀU: khách hàng ĐỒNG THỜI là nhà cung cấp.
@@ -605,8 +695,24 @@ window.ModuleCongNo = (function () {
         <td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="8" class="empty-hint">Chưa có phát sinh nào ở cả hai chiều</td></tr>'}</tbody></table></div>
       <div class="empty-hint" style="text-align:left;">Đây là bảng để <b>xem và đối chiếu</b>. Muốn cấn trừ thật thì vẫn lập phiếu thu / phiếu chi như bình thường — hệ thống không tự sinh chứng từ bù trừ.</div>
-      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong2c">Đóng</button></div>`);
+      <div class="modal-actions">
+        ${/* v7.82: file gồm sheet sổ 2 chiều của đối tác này + sheet tổng hợp mọi đối tác đã ghép. */''}
+        <button type="button" class="btn small secondary" id="btnIn2c">🖨️ In</button>
+        <button type="button" class="btn small secondary" id="btnXuat2c"
+          title="File gồm: sổ 2 chiều của đối tác này + bảng tổng hợp tất cả đối tác đã ghép">⬇️ Xuất Excel</button>
+        <button type="button" class="btn secondary" id="btnDong2c">Đóng</button></div>`);
+    modal.querySelector('#btnIn2c').addEventListener('click', () => inSoCongNo({
+      tieuDe: 'SỔ CÔNG NỢ 2 CHIỀU',
+      doiTuong: (d.tenKhachHang || '') + (d.tenNCC ? '  ·  NCC: ' + d.tenNCC : ''),
+      dongTom: [`<b>Phải thu:</b> ${fmtNumber(d.phaiThu)} đ &nbsp;·&nbsp; <b>Phải trả:</b> ${fmtNumber(d.phaiTra)} đ`
+        + ` &nbsp;·&nbsp; <b>Chênh lệch:</b> ${fmtNumber(Math.abs(cl))} đ (${cl === 0 ? 'cân nhau' : (cl > 0 ? 'họ còn nợ mình' : 'mình còn nợ họ')})`],
+      cot: COT_SO_2CHIEU(d), rows: d.rows || [],
+      tenFile: 'So cong no 2 chieu - ' + (d.tenKhachHang || '')
+    }));
     modal.querySelector('#btnDong2c').addEventListener('click', quayLai || closeModal);
+    modal.querySelector('#btnXuat2c').addEventListener('click', () => taiFile(
+      '/api/congno/doitac/export?khachHangId=' + encodeURIComponent(khachHangId),
+      'cong_no_2_chieu.xlsx'));
     noiDaySoPhieu(modal, () => soDoiTac2Chieu(khachHangId, quayLai));
   }
 
@@ -807,9 +913,17 @@ window.ModuleCongNo = (function () {
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
       ${khoiXuatSoHtml() /* v7.34 */}
       <div class="modal-actions">
+        <button type="button" class="btn small secondary" id="btnInSoNCC">🖨️ In</button>
         <button type="button" class="btn small secondary" id="btnXuatCT">⬇️ Xuất Excel sổ này</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    /* v7.82: in đúng những dòng đang xem, giữ đúng nhãn cột của màn NCC. */
+    modal.querySelector('#btnInSoNCC').addEventListener('click', () => inSoCongNo({
+      tieuDe: 'SỔ CHI TIẾT CÔNG NỢ NHÀ CUNG CẤP', doiTuong: d.tenNCC || '',
+      dongTom: [`<b>Còn nợ:</b> ${fmtNumber(d.conNo)} đ`],
+      cot: COT_SO_1CHIEU(d.rows || [], { soPhieu: 'Số phiếu / HĐ', thanhToan: 'Đã trả' }),
+      rows: d.rows || [], tenFile: 'So cong no NCC - ' + (d.tenNCC || '')
+    }));
     modal.querySelector('#btnXuatCT').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=ncc&nccId=' + encodeURIComponent(nccId), 'cong_no_ncc.xlsx'));
     noiDayXuatSo(modal, 'loai=ncc&nccId=' + encodeURIComponent(nccId), 'so_chi_tiet_cong_no_ncc.xlsx');   // v7.34
@@ -884,9 +998,17 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
         || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
       <div class="modal-actions">
+        <button type="button" class="btn small secondary" id="btnInSoGC">🖨️ In</button>
         <button type="button" class="btn small secondary" id="btnXuatCTGC" title="Sổ chi tiết của nhà này + sheet phiếu chi">⬇️ Xuất Excel sổ này</button>
         <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+    /* v7.82: sổ gia công / in thêu cũng in được — cùng bộ dựng, chỉ đổi nhãn cột. */
+    modal.querySelector('#btnInSoGC').addEventListener('click', () => inSoCongNo({
+      tieuDe: 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', doiTuong: d.tenNha || '',
+      dongTom: [`<b>Còn nợ:</b> ${fmtNumber(d.conNo)} đ`],
+      cot: COT_SO_1CHIEU(d.rows || [], { soPhieu: 'Lệnh SX / Số phiếu', thanhToan: 'Đã trả' }),
+      rows: d.rows || [], tenFile: 'So cong no gia cong - ' + (d.tenNha || '')
+    }));
     modal.querySelector('#btnXuatCTGC').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=gc&nhaGiaCongId=' + encodeURIComponent(nhaId), 'cong_no_gia_cong.xlsx'));
     noiDaySoPhieu(modal, () => soChiTietGiaCong(nhaId));   // phiếu chi bấm được
