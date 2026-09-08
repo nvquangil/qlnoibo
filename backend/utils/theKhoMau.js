@@ -50,4 +50,54 @@ async function capNhatAnhDaiDien(pool, tran, maHangId, anh) {
   return true;
 }
 
-module.exports = { damBaoDongMau, capNhatAnhDaiDien };
+/* ================================================================================================
+   v7.85 — CO AN MA HANG KHOI DANH SACH THE KHO (migration_v697).
+
+   Bo tich "Tao the kho luon khi luu" tren phieu nhap kho = danh dau AN, KHONG xoa gi ca (Nguyen
+   chot: "chi la khong hien o ben the kho", ma hang / ton kho giu nguyen). Tich lai = bo an.
+
+   ⚠️ CHAN AN MA DA CO SO LIEU THE KHO THAT. Mot ma hang xuat hien tren NHIEU phieu nhap. Ma dung
+   lau nay, the kho da khai day du, chi can mot lan lap phieu moi lo bo tich la ca ma bien mat khoi
+   danh sach — nguoi dung khong hieu vi sao. Nen: dong mau nao co So cat / Nhap tay / Xuat khac 0
+   thi ma do KHONG bi an, va bao lai ten ma de nguoi dung biet.
+   ================================================================================================ */
+let __coCotAn = null;
+async function coCotAnTheKho(pool) {
+  if (__coCotAn === null) {
+    try {
+      const r = (await pool.request().query(
+        `SELECT COL_LENGTH('TheKhoHangHoa','AnTheKho') AS t`)).recordset[0] || {};
+      __coCotAn = r.t != null;
+    } catch (e) { __coCotAn = false; }
+  }
+  return __coCotAn;
+}
+
+/* Dat / bo co an cho mot danh sach MaHangID.
+   Tra ve { daDoi: [MaHangID], boQua: [MaHangID] } — boQua = ma co so lieu the kho that (chi khi an).
+   Chua chay migration -> tra ve rong, khong nem loi (phieu nhap kho van luu binh thuong). */
+async function datAnTheKho(pool, tran, maHangIds, an) {
+  const ds = [...new Set((maHangIds || []).map(Number).filter(x => x > 0))];
+  if (!ds.length || !await coCotAnTheKho(pool)) return { daDoi: [], boQua: [] };
+  const rq = () => (tran ? new sql.Request(tran) : pool.request());
+  const danhSach = ds.join(',');
+
+  let boQua = [];
+  if (an) {
+    /* ⚠️ Doc TheKhoChiTietMau (so lieu KHAI TAY tren the kho), KHONG doc vw_TonTheoMau: view do gom
+       ca so luong tu PHIEU NHAP, ma phieu nhap thi ma nao cung co => khong ma nao an duoc ca. */
+    boQua = (await rq().query(`
+      SELECT DISTINCT MaHangID FROM TheKhoChiTietMau
+      WHERE MaHangID IN (${danhSach})
+        AND (ISNULL(SoCatCai,0) <> 0 OR ISNULL(NhapCai,0) <> 0 OR ISNULL(XuatCai,0) <> 0)`))
+      .recordset.map(r => r.MaHangID);
+  }
+  const daDoi = ds.filter(id => !boQua.includes(id));
+  if (daDoi.length) {
+    await rq().input('an', sql.Bit, an ? 1 : 0)
+      .query(`UPDATE TheKhoHangHoa SET AnTheKho = @an WHERE MaHangID IN (${daDoi.join(',')})`);
+  }
+  return { daDoi, boQua };
+}
+
+module.exports = { damBaoDongMau, capNhatAnhDaiDien, coCotAnTheKho, datAnTheKho };

@@ -152,8 +152,16 @@ async function chay(dsGhi) {
     kiem(daiMoi.indexOf('class="' + c + '"') === -1,
       `dai moi KHONG chua o ${c} (v6.99: ma da co khong duoc sua cap ma hang)`));
   kiem(/anhDaiDien: d\.anhDaiDien \|\| null/.test(sFeNK), 'payload van gui anh dai dien len backend');
-  kiem(/taoTheKho: !!\(\$\('#nkfTaoThe'\)/.test(sFeNK) && /id="nkfTaoThe" checked/.test(sFeNK),
-    'o tich "Tao the kho luon khi luu" van mac dinh BAT');
+  /* ⚠️ v7.85: o tich khong con `checked` CUNG nua — no theo trang thai an/hien cua phieu dang sua.
+     Nhung Y DINH cu van phai giu: LAP PHIEU MOI thi o tich BAT SAN. Kiem dung y dinh do, khong ghim
+     lai chuoi HTML (ghim chuoi la lan sau doi cach viet lai do oan). */
+  kiem(/taoTheKho: !!\(\$\('#nkfTaoThe'\)/.test(sFeNK), 'payload gui taoTheKho theo o tich');
+  kiem(/id="nkfTaoThe" \$\{dangAnTheKho \? '' : 'checked'\}/.test(sFeNK),
+    'o tich theo trang thai an/hien cua phieu (v7.85)');
+  /* KHONG dung `\([^)]*\)`: ve phai co ngoac LONG NHAU ((sua.chiTiet || []).filter(...)) nen lop
+     ngoac dong som — do kieu do la bao SAI trong khi code dung. */
+  kiem(/const dsAn = sua \? .*? : \[\];/.test(sFeNK) && /dsAn\.length &&/.test(sFeNK),
+    'LAP PHIEU MOI (sua = null) -> dsAn rong -> dangAnTheKho = false -> o tich van BAT SAN');
 
   /* ============================================================================================
      4. Mo the kho tu phieu -> form SUA cho ma da co

@@ -14,6 +14,7 @@ const { layHangDangGiu } = require('./banhang');
 const nhapLai = require('../utils/nhapLaiHangHoa');
 // v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) dung chung cho moi route.
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
+const { coCotAnTheKho } = require('../utils/theKhoMau');   // v7.85: cờ ẩn khỏi danh sách Thẻ kho
 
 const router = express.Router();
 
@@ -312,8 +313,15 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
      trả NULL để giao diện chạy như cũ. KHÔNG thêm vào view vw_TonKhoHangHoa: view đó là phép tính
      tồn kho, nhét thông tin danh mục vào là phải sửa view mỗi lần thêm một ô. */
   const cotTenHD = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
+  /* v7.85 (migration_v697): cờ ẩn khỏi danh sách Thẻ kho.
+     ⚠️ TRẢ VỀ CHỨ KHÔNG LỌC Ở ĐÂY. Endpoint này đang được 8 màn hình dùng chung (Bán hàng, Đơn
+     khách, Báo giá, Hàng mẫu...) — lọc ở backend là hàng vừa nhập biến mất khỏi màn Bán hàng, đúng
+     cái Nguyen bảo phải giữ nguyên ("mã hàng, tồn kho vẫn còn nguyên"). Việc bỏ đi nằm ở ĐÚNG MỘT
+     chỗ: hàm vẽ bảng của tab Thẻ kho (renderItems trong module.khohang.js). */
+  const cotAn = (await coCotAnTheKho(pool)) ? 'ISNULL(h.AnTheKho, 0)' : 'CAST(0 AS BIT)';
   const tongHop = await pool.request().query(`
-    SELECT v.*, h.CreatedAt, ${lanLuu} AS LanLuuCuoi, ${cotCongKhai} AS CongKhai, ${cotTenHD} AS TenHoaDon
+    SELECT v.*, h.CreatedAt, ${lanLuu} AS LanLuuCuoi, ${cotCongKhai} AS CongKhai, ${cotTenHD} AS TenHoaDon,
+           ${cotAn} AS AnTheKho
     FROM vw_TonKhoHangHoa v
     JOIN TheKhoHangHoa h ON h.MaHangID = v.MaHangID
     ORDER BY CASE WHEN ISNULL(v.TongTon, 0) <= 0 THEN 1 ELSE 0 END,

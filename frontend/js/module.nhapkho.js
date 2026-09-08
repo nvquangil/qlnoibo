@@ -184,6 +184,11 @@
        theo phiếu đó, và lần "+ Lập phiếu" tiếp theo lại thấy lệnh SX đã gán = gán trùng được. */
     dm = (await apiGet('/api/nhapkho/danhmuc' + (id ? '?phieuNKID=' + id : ''))).data;
     const h = sua ? sua.header : null;
+    /* v7.85: phiếu đang SỬA có mã nào bị ẩn khỏi Thẻ kho không? MỌI dòng đều ẩn thì coi như phiếu
+       này đã bỏ tích — bỏ tích ô cho khớp. Còn một dòng đang hiện thì vẫn để tích, kẻo lưu một cái
+       là ẩn luôn cả mã đang dùng bình thường. */
+    const dsAn = sua ? (sua.chiTiet || []).filter(x => x.MaHangID) : [];
+    const dangAnTheKho = !!(dsAn.length && dsAn.every(x => Number(x.AnTheKho) === 1));
     const soPhieu = h ? h.SoPhieu : ((await apiGet('/api/nhapkho/next-sophieu')).data || '');
     const homNay = homNayISO();
 
@@ -235,7 +240,11 @@
                để ý thì lưu xong lại phải bấm "Tạo thẻ kho" thủ công. */''}
           <label style="display:flex;gap:5px;align-items:center;font-size:13px;white-space:nowrap;color:#c62828;font-weight:600;"
                  title="Tạo dòng màu + ghi ảnh vào Thẻ kho hàng hóa. KHÔNG ghi số lượng — tồn kho lấy từ chính phiếu này.">
-            <input type="checkbox" id="nkfTaoThe" checked> Tạo thẻ kho luôn khi lưu
+            ${/* v7.85: mở form SỬA thì ô tích phải theo ĐÚNG trạng thái hiện tại. Trước đây luôn
+                 `checked` cứng, nên mở lại một phiếu đang bị ẩn rồi bấm Lưu là mã hiện lại trong
+                 Thẻ kho mà người dùng không hề bấm gì — thay đổi im lặng, khó lần ra.
+                 Bỏ tích = ẩn mã khỏi danh sách Thẻ kho (mã hàng + tồn kho giữ nguyên). */''}
+            <input type="checkbox" id="nkfTaoThe" ${dangAnTheKho ? '' : 'checked'}> Tạo thẻ kho luôn khi lưu
           </label>
         </div>
         <div class="empty-hint" style="margin:0 0 6px;">

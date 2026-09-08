@@ -30,7 +30,7 @@ const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { so, tien, laDonViGop, donViChinhLaGop, slSangCai, sinhSoPhieu } = require('../utils/banHangCommon');
 const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
-const { damBaoDongMau, capNhatAnhDaiDien } = require('../utils/theKhoMau');
+const { damBaoDongMau, capNhatAnhDaiDien, datAnTheKho, coCotAnTheKho } = require('../utils/theKhoMau');
 // v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) — dung chung, khong tu viet lai.
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 
@@ -274,10 +274,13 @@ async function docPhieu(pool, id) {
      ma khong ai biet la kieu loi te nhat. */
   // v7.46: TenHoaDon (migration_v690) — chua chay migration thi tra NULL, form chay nhu cu.
   const cotTenHD = (await coCotTenHoaDon(pool)) ? 'hh.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255)) AS TenHoaDon';
+  /* v7.85: tra ve co AN de form SUA PHIEU tich/bo tich cho DUNG trang thai hien tai. Khong tra ve
+     thi form luon hien o tich SAN — mo phieu dang bi an ra roi bam Luu la ma hien lai am tham. */
+  const cotAn = (await coCotAnTheKho(pool)) ? 'ISNULL(hh.AnTheKho, 0) AS AnTheKho' : 'CAST(0 AS BIT) AS AnTheKho';
   const ct = (await pool.request().input('id', sql.Int, id).query(`
     SELECT ct.*, hh.MaHang, hh.TenHang, hh.LoaiRi, hh.DonViCoBan, hh.DonViQuyDoi, ms.TenMau,
            -- v6.98: cac truong CAP MA HANG de form Sua phieu dien san dong khai (khoi sang man khac)
-           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode, ${cotTenHD}
+           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode, ${cotTenHD}, ${cotAn}
     FROM PhieuNhapKhoHangChiTiet ct
     LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
@@ -456,6 +459,33 @@ async function taoTheKhoTuDong(pool, tran, dsGhi) {
   return { soMau, soAnh, soAnhMau };
 }
 
+/* ================================================================================================
+   v7.85 — O TICH LA CONG TAC HAI CHIEU, KHONG PHAI "CHI LAM KHI TICH".
+
+   Nguyen: "sua phieu bo dau tich tao the kho di la se khong co trong danh sach the kho. ma hang,
+   ton kho van con nguyen chi la khong hien o ben the kho."
+
+   Truoc day bo tich chi la KHONG LAM GI — nen lo de nguyen dau tich luc lap phieu thi khong co
+   duong nao go ma hang do ra khoi danh sach The kho. Nay:
+       bo tich  -> danh dau AN (TheKhoHangHoa.AnTheKho = 1). KHONG xoa dong mau, KHONG xoa anh.
+       tich lai -> bo an + tao/cap nhat dong mau nhu cu.
+   Ma hang, ton kho, ban hang KHONG doi — xem migration_v697.
+   ================================================================================================ */
+async function dongBoCoAnTheKho(pool, tran, dsGhi, taoTheKho) {
+  const ids = dsGhi.map(d => d.maHangId).filter(Boolean);
+  const kq = await datAnTheKho(pool, tran, ids, taoTheKho === false);
+  /* Doi ID sang MA HANG de bao cho nguoi doc hieu duoc. */
+  const tenTheoId = new Map(dsGhi.filter(d => d.maHangId).map(d => [Number(d.maHangId), d.maHang]));
+  const ten = (ds) => ds.map(id => tenTheoId.get(Number(id))).filter(Boolean);
+  return { an: taoTheKho === false, daDoi: ten(kq.daDoi), boQua: ten(kq.boQua) };
+}
+/* Cau thong bao dung chung cho POST va PUT — hai ban chu khac nhau la nguoi dung tuong hai viec. */
+function loiNhanCoAn(co) {
+  if (!co.an) return co.daDoi.length ? ` Đã hiện lại ${co.daDoi.length} mã trong danh sách Thẻ kho.` : '';
+  return (co.daDoi.length ? ` Đã ẩn ${co.daDoi.length} mã khỏi danh sách Thẻ kho (${co.daDoi.join(', ')}) — mã hàng và tồn kho giữ nguyên.` : '')
+    + (co.boQua.length ? ` KHÔNG ẩn ${co.boQua.join(', ')} vì thẻ kho của mã này đã có số liệu khai tay (số cắt / nhập / xuất).` : '');
+}
+
 /* INSERT mot dong + cong ton. Dung CHUNG cho POST va PUT — hai ban sao khac nhau la duong chac chan
    de ton kho lech (da tung xay ra o repo nay).
    v6.89: CHI insert dong phieu. Ton kho khong ghi o day nua — view doc thang tu bang nay. */
@@ -517,6 +547,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
 
     // v6.96: tich "Tao the kho" -> tao luon dong mau + ghi anh (khong ghi so luong)
     const tk = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
+    const co = await dongBoCoAnTheKho(pool, tran, dsGhi, b.taoTheKho);   // v7.85
 
     await tran.commit();
     const maMoi = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
@@ -527,6 +558,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
         + (maMoi.length ? ` Đã sinh ${maMoi.length} mã hàng mới (${maMoi.join(', ')}).` : '')
         + (tk.soMau ? ` Đã tạo ${tk.soMau} dòng màu trong thẻ kho.` : '')
         + (tk.soAnhMau ? ` Đã ghi ${tk.soAnhMau} ảnh màu.` : '')
+        + loiNhanCoAn(co)
         + (tk.soAnh ? ` Đã cập nhật ảnh đại diện cho ${tk.soAnh} mã.` : '')
     });
   } catch (err) {
@@ -570,6 +602,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     for (const d of dsGhi) await ghiDong(pool, tran, req.params.id, d);
     // v6.96: sua phieu cung dong bo lai the kho (them mau moi / doi anh); khong dung den so luong.
     const tk2 = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
+    const co2 = await dongBoCoAnTheKho(pool, tran, dsGhi, b.taoTheKho);   // v7.85
 
     await new sql.Request(tran)
       .input('id', sql.Int, req.params.id)
@@ -594,6 +627,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
         + (maMoi2.length ? ` Đã sinh ${maMoi2.length} mã hàng mới: ${maMoi2.join(', ')}.` : '')
         + (tk2.soMau ? ` Đã tạo thêm ${tk2.soMau} dòng màu trong thẻ kho.` : '')
         + (tk2.soAnhMau ? ` Đã ghi ${tk2.soAnhMau} ảnh màu.` : '')
+        + loiNhanCoAn(co2)
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }

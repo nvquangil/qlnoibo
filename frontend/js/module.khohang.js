@@ -182,7 +182,16 @@ window.ModuleKhoHang = (function () {
   async function renderItems(perm) {
     const body = document.getElementById('khBody');
     const res = await apiGet('/api/khohang/items');
-    const { tongHop, chiTiet } = res.data;
+    const { chiTiet } = res.data;
+    /* ⚠️ v7.85 — CHỖ DUY NHẤT lọc bỏ mã đã ẩn (migration_v697, cờ TheKhoHangHoa.AnTheKho).
+       Nguyen: bỏ tích "Tạo thẻ kho" khi sửa phiếu nhập ⇒ mã đó không nằm trong danh sách Thẻ kho
+       nữa, nhưng MÃ HÀNG VÀ TỒN KHO GIỮ NGUYÊN. Nên lọc ở đây chứ KHÔNG lọc ở backend: cùng một
+       endpoint `/api/khohang/items` đang nuôi cả Bán hàng, Đơn khách, Báo giá, Hàng mẫu — lọc ở
+       backend là hàng vừa nhập biến mất khỏi màn Bán hàng.
+       Muốn hiện lại: sửa phiếu nhập kho, tích lại ô "Tạo thẻ kho luôn khi lưu". */
+    const tatCaMa = res.data.tongHop || [];
+    const tongHop = tatCaMa.filter(r => !Number(r.AnTheKho));
+    const soMaAn = tatCaMa.length - tongHop.length;
     if (res.data.tyLeCK) tyLeCK = res.data.tyLeCK;   // v6.21: tỷ lệ CK dùng chung
     // v5.4 (muc 1): "Loai hang" (NhaSanXuat/DatNgoai) doi ten hien thi thanh "Nguon hang" de nhuong lai
     // nhan "Loai hang" cho truong nhom san pham MOI (TenNhom, vd Quan be trai/gai) - xem migration_v54.sql.
@@ -198,6 +207,13 @@ window.ModuleKhoHang = (function () {
         <a class="btn small secondary" href="/api/khohang/items/export">⬇️ Xuất Excel</a>
         ${perm.canCreate ? '<button type="button" class="btn small" id="btnAddNew" style="margin-left:auto;">+ Tạo thẻ kho mới</button>' : ''}
       </div>
+      ${/* v7.85: nói rõ có bao nhiêu mã đang bị ẩn + chỉ đúng đường lấy lại — không thì người dùng
+           đếm thiếu mã mà không biết vì sao, và cũng không biết mở lại ở đâu. */''}
+      ${soMaAn ? `<div class="empty-hint" style="text-align:left;background:#fff8e1;border:1px solid #ffe0b2;border-radius:6px;padding:6px 10px;">
+        Đang <b>ẩn ${fmtNumber(soMaAn)} mã</b> khỏi danh sách này (đã bỏ tích "Tạo thẻ kho" trên phiếu nhập).
+        Mã hàng và tồn kho vẫn còn nguyên, bán hàng vẫn dùng được.
+        Muốn hiện lại: vào tab <b>Phiếu nhập kho</b> → Sửa phiếu → tích lại <b>"Tạo thẻ kho luôn khi lưu"</b>.
+      </div>` : ''}
       ${/* v6.21: tỷ lệ CK ĐÁNH CHUNG cho mọi mã hàng — sửa 1 chỗ, cả bảng + bảng kê in + Excel đổi theo. */''}
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;">
         <b style="font-size:13px;">Tỷ lệ chiết khấu dùng chung:</b>
