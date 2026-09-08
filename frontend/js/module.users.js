@@ -194,7 +194,9 @@ window.ModuleUsers = (function () {
       const rows = res.data;
       document.getElementById('matrixHolder').innerHTML = `
         <h3 style="margin-top:0;">1. Theo phân hệ (được vào phân hệ nào, được Thêm/Sửa/Xóa trong đó không)</h3>
-        <table><thead><tr><th>Phân hệ</th><th>Xem</th><th>Thêm</th><th>Sửa</th><th>Xóa</th></tr></thead>
+        ${/* v7.84: data-nostt — MA TRẬN PHÂN QUYỀN, không phải danh sách. Đánh số "1,2,3" cho các
+             phân hệ chẳng nói lên điều gì, chỉ chiếm chỗ của các ô tích. */''}
+        <table data-nostt><thead><tr><th>Phân hệ</th><th>Xem</th><th>Thêm</th><th>Sửa</th><th>Xóa</th></tr></thead>
         <tbody>${rows.map(r => `<tr data-mid="${r.ModuleID}">
           <td>${escapeHtml(r.TenModule)}</td>
           <td><input type="checkbox" class="cv" ${r.CanView ? 'checked' : ''}></td>
@@ -241,7 +243,7 @@ window.ModuleUsers = (function () {
         ${Object.keys(byModule).map(mc => `
           <div class="card">
             <b>${escapeHtml(mc)}</b>
-            <table style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
+            <table data-nostt style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
             <tbody>${byModule[mc].map(r => `<tr data-cnid="${r.ChucNangID}">
                 <td>${escapeHtml(r.TenChucNang)}${nhanNangLuc(r)}</td>
                 <td><input type="checkbox" class="cn-view" ${r.CanView ? 'checked' : ''}></td>
@@ -296,7 +298,7 @@ window.ModuleUsers = (function () {
       matrixHolder.innerHTML = `
         <h3 style="margin-top:0;">1. Theo phân hệ (ghi đè riêng cho user này, bỏ qua nhóm)</h3>
         <p style="color:#5f6368;font-size:13px;margin-top:-6px;">Chỉ tick "Ghi đè riêng" cho phân hệ nào muốn đặt quyền KHÁC với (các) nhóm mà user này đang thuộc. Không tick = user vẫn dùng đúng quyền tính theo nhóm như bình thường.</p>
-        <table><thead><tr><th>Phân hệ</th><th>Ghi đè riêng</th><th>Xem</th><th>Thêm</th><th>Sửa</th><th>Xóa</th></tr></thead>
+        <table data-nostt><thead><tr><th>Phân hệ</th><th>Ghi đè riêng</th><th>Xem</th><th>Thêm</th><th>Sửa</th><th>Xóa</th></tr></thead>
         <tbody>${rows.map(r => `<tr data-mid="${r.ModuleID}">
           <td>${escapeHtml(r.TenModule)}</td>
           <td><input type="checkbox" class="ov" ${r.HasOverride ? 'checked' : ''}></td>
@@ -345,7 +347,7 @@ window.ModuleUsers = (function () {
         ${Object.keys(byModule).map(mc => `
           <div class="card">
             <b>${escapeHtml(mc)}</b>
-            <table style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:80px">Ghi đè</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
+            <table data-nostt style="margin-top:8px;"><thead><tr><th>Chức năng</th><th style="width:80px">Ghi đè</th><th style="width:70px">Xem</th><th style="width:70px">Sửa</th><th style="width:70px">Xóa</th></tr></thead>
             <tbody>${byModule[mc].map(r => `<tr data-cnid="${r.ChucNangID}"${laNangLuc(r) ? ' data-nangluc="1"' : ''}>
                 <td>${escapeHtml(r.TenChucNang)}${nhanNangLuc(r)}</td>
                 <td><input type="checkbox" class="cn-ov" ${r.HasOverride ? 'checked' : ''}></td>

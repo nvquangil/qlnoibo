@@ -672,7 +672,8 @@ window.ModuleQLSX = (function () {
         <tr><td><b>Công đoạn hiện tại:</b> ${escapeHtml(order.TenCongDoan || '')}</td><td><b>Trạng thái:</b> ${statusWithStage(order.TrangThai, order.TenCongDoan, order.TenNhaGiaCong, order.MaCongDoan)} (${order.PhanTramHoanThanh}%)</td></tr>
       </tbody></table>
       <h4>Báo cáo năng suất Cắt / Nhập kho</h4>
-      <table><thead><tr><th>SL yêu cầu cắt</th><th>SL cắt thực tế</th><th>SL nhập kho thực tế</th></tr></thead>
+      ${/* v7.84: data-nostt — bảng năng suất chỉ có ĐÚNG MỘT dòng số, không phải danh sách. */''}
+      <table data-nostt><thead><tr><th>SL yêu cầu cắt</th><th>SL cắt thực tế</th><th>SL nhập kho thực tế</th></tr></thead>
       <tbody><tr><td>${fmtNumber(ns.slYeuCauCat)}</td><td>${fmtNumber(ns.slCatThucTe)}</td><td>${ns.slNhapKhoThucTe > 0 ? fmtNumber(ns.slNhapKhoThucTe) : 'Chưa nhập kho'}</td></tr></tbody></table>
       <h4>Xuất vải kèm đơn hàng (tổng ${fmtNumber(vx.tongKG)} KG)</h4>
       <table><thead><tr><th style="width:38px;">STT</th><th>Ngày xuất</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG xuất</th></tr></thead>
@@ -1719,7 +1720,9 @@ window.ModuleQLSX = (function () {
         <tr><td colspan="3"><b>Mã rập (sơ đồ):</b> ${escapeHtml(o.MaRap || '')}</td></tr>
       </tbody></table>
       ${lenhAnhBlock(o)}
-      <table style="margin-top:8px;"><thead><tr><th style="width:120px;"></th>${th}</tr></thead><tbody>
+      ${/* v7.84: data-nostt — MA TRẬN size × (vải chính/phối/số lượng), dòng là loại thông tin chứ
+           không phải bản ghi. */''}
+      <table data-nostt style="margin-top:8px;"><thead><tr><th style="width:120px;"></th>${th}</tr></thead><tbody>
         <tr><td><b>Vải chính</b></td>${rChinh}</tr>
         <tr><td><b>Vải phối</b></td>${rPhoi}</tr>
         <tr><td><b>Số lượng</b></td>${rSL}</tr>
@@ -4967,7 +4970,7 @@ window.ModuleQLSX = (function () {
       ${bangThongTinBaoCao(order, anhSpHtml, (cv.find(x => x.DonViTinh) || {}).DonViTinh || 'Cái')}
 
       <h3>Báo cáo năng suất Cắt / Nhập kho</h3>
-      <table><thead><tr><th>SL yêu cầu cắt</th><th>SL cắt thực tế</th><th>Hao hụt cắt (%)</th><th>SL nhập kho thực tế</th><th>Hao hụt cắt→nhập kho (%)</th></tr></thead>
+      <table data-nostt><thead><tr><th>SL yêu cầu cắt</th><th>SL cắt thực tế</th><th>Hao hụt cắt (%)</th><th>SL nhập kho thực tế</th><th>Hao hụt cắt→nhập kho (%)</th></tr></thead>
       <tbody><tr>
         <td>${fmtNumber(ns.slYeuCauCat)}</td><td>${fmtNumber(ns.slCatThucTe)}</td><td>${haoHutCat != null ? haoHutCat + '%' : '-'}</td>
         <td>${slNhapKhoHtml}</td><td>${haoHutNhapKho != null ? haoHutNhapKho + '%' : '-'}</td>

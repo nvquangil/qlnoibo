@@ -393,7 +393,9 @@ window.ModuleBaoCao = (function () {
         || '<tr><td colspan="6" class="empty-hint">Chưa có quỹ nào</td></tr>'}</tbody></table>
 
       <h3 style="margin:16px 0 6px;font-size:15px;">B. Công nợ tại ngày ${fmtDate(ky.denNgay)}</h3>
-      <table><thead><tr><th style="width:60%;">Khoản mục</th><th>Số tiền</th></tr></thead><tbody>
+      ${/* v7.84: data-nostt — đây là bảng CHỈ TIÊU / SỐ TIỀN có dòng nhóm in đậm và dòng con thụt
+           lề, không phải danh sách bản ghi. Đánh STT vào là phá luôn cấu trúc phân cấp. */''}
+      <table data-nostt><thead><tr><th style="width:60%;">Khoản mục</th><th>Số tiền</th></tr></thead><tbody>
         <tr style="font-weight:bold;background:#e6f4ea;"><td>PHẢI THU KHÁCH HÀNG</td>${oTien(cn.PhaiThu)}</tr>
         <tr><td style="padding-left:24px;">Tổng phiếu bán hàng (lũy kế đến cuối kỳ)</td>${oTien(cn.PhaiThu_BanHang)}</tr>
         <tr><td style="padding-left:24px;">Điều chỉnh công nợ</td>${oTien(cn.PhaiThu_DieuChinh)}</tr>
@@ -478,7 +480,7 @@ window.ModuleBaoCao = (function () {
       </div>
 
       <h3 style="margin:14px 0 6px;font-size:15px;">A. Kết quả kinh doanh</h3>
-      <table style="max-width:760px;"><thead><tr><th style="width:65%;">Chỉ tiêu</th><th>Số tiền</th></tr></thead><tbody>
+      <table data-nostt style="max-width:760px;"><thead><tr><th style="width:65%;">Chỉ tiêu</th><th>Số tiền</th></tr></thead><tbody>
         ${dongCT('Tổng tiền hàng (đã trừ chiết khấu shop)', t.TongTienHang, false, false, false)}
         ${dongCT('Chiết khấu NPP', t.TienCKNPP, false, true, true)}
         ${dongCT('DOANH THU THUẦN <span style="font-weight:normal;font-size:11px;">(chưa gồm thuế GTGT)</span>', t.DoanhThuThuan, true, false, false)}

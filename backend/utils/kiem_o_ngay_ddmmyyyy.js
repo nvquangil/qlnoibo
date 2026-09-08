@@ -240,8 +240,12 @@ if (!JSDOM) {
    ================================================================================================ */
 console.log('\n=== 4. Ma nguon ===');
 const sachCommon = bo(sCommon), sachDash = bo(sDash);
-kiem(/function enhanceInputs\(root\) \{ enhanceSelects\(root\); enhanceDatalists\(root\); enhanceONgay\(root\); \}/.test(sachCommon),
-  'enhanceInputs goi enhanceONgay -> tu ap cho MOI o ngay (trong modal lan ngoai modal)');
+/* ⚠️ KHONG ghim ca dong `enhanceInputs`: day la cho GOM moi bo nang cap DOM tai cho, con duoc them
+   nua (v7.84 them themCotStt). Ghim ca dong thi lan them sau nao cung do oan. Chi kiem: trong than
+   ham CO goi enhanceONgay. */
+const thanEnhanceInputs = (sachCommon.match(/function enhanceInputs\(root\) \{[^}]*\}/) || [''])[0];
+kiem(/enhanceONgay\(root\)/.test(thanEnhanceInputs),
+  'enhanceInputs goi enhanceONgay -> tu ap cho MOI o ngay (trong modal lan ngoai modal)', thanEnhanceInputs);
 kiem(/oNgay\.dataset\.ngayEnhanced != null \|\| oNgay\.dataset\.nosearch != null/.test(sachCommon),
   'co co danh dau + duong opt-out (goi lai khong boc hai lan)');
 kiem(/if \(oNgay\.required\) \{ oChu\.required = true; oNgay\.required = false; \}/.test(sachCommon),

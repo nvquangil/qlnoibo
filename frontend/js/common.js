@@ -900,8 +900,186 @@ function enhanceOneDatalist(input) {
   });
 }
 
+/* ==================================================================================================
+   v7.84 — CỘT STT TỰ ĐỘNG CHO MỌI BẢNG.
+
+   Nguyen: "chỉ cần làm cột stt cho các bảng còn lại". Quét ra 215 bảng, 95 đã có STT, thiếu 120.
+
+   VÌ SAO LÀM TỰ ĐỘNG THAY VÌ SỬA TAY 120 CHỖ:
+     · 120 chỗ sửa tay là 120 cơ hội quên đổi `colspan` của dòng "chưa có dữ liệu" (lệch 1 ô, không
+       vỡ JS, chỉ xô lệch bảng — đúng lớp lỗi vừa gặp ở v7.83);
+     · bảng thêm mới sau này lại phải nhớ, mà không ai nhớ;
+     · lọc / sắp xếp phải đánh lại số — sửa tay thì mỗi màn một kiểu.
+   Đi cùng đường với `enhanceONgay` của v7.76 (mọi ô ngày dd/mm/yyyy): một bộ nâng cấp DOM tại chỗ,
+   cưỡi trên đúng hai móc sẵn có (`openModal` bọc `.modal-body`, MutationObserver theo `.content`).
+
+   QUY TẮC BỎ QUA — bảng nào KHÔNG nên có STT thì khai `data-nostt` ngay trên thẻ <table> (hoặc trên
+   một thẻ bọc ngoài). Dùng cho ma trận phân quyền, bảng thống kê một dòng, bảng khai cấu hình.
+   Chọn cách "mặc định CÓ, khai để BỎ" chứ không ngược lại: bảng mới sinh ra là tự có STT, còn nếu
+   mặc định phải khai `data-stt` thì y như cũ — thêm bảng là quên.
+
+   ⚠️ ĐÁNH LẠI SỐ THEO DÒNG ĐANG HIỆN (Nguyen chọn): lọc còn 5 dòng thì STT là 1..5, đọc liền mạch
+   và đếm được ngay còn bao nhiêu dòng. `wireTableSearch` ẩn dòng bằng `style.display`, còn
+   `wireTableSort` thì đổi thứ tự `<tr>` — nên phải theo dõi CẢ thuộc tính CẢ childList.
+   ================================================================================================== */
+const STT_NHAN = 'STT';
+/* Ô "trải hết bảng" = dòng thông báo (chưa có dữ liệu / không tìm thấy) hoặc dòng ghi chú cuối bảng.
+   Những dòng này KHÔNG được thêm ô mới — phải NỚI colspan, kẻo bảng lệch đúng 1 ô.
+
+   ⚠️ `soCot > 1` là điều kiện BẮT BUỘC: bảng CHỈ CÓ MỘT CỘT (danh mục "Tên loại phụ kiện", "Tên
+   mẫu"...) thì mọi dòng dữ liệu đều là "một ô, colspan 1 >= 1" — thiếu điều kiện này là cả bảng
+   không dòng nào được thêm ô STT, mà lại còn bị nới colspan thành 2. Đã vỡ đúng như vậy khi làm. */
+function __oTraiHet(tr, soCot) {
+  const o = tr.children;
+  if (o.length !== 1) return null;
+  if (o[0].classList && o[0].classList.contains('empty-hint')) return o[0];   // dòng "chưa có dữ liệu"
+  if (soCot > 1 && (parseInt(o[0].getAttribute('colspan'), 10) || 1) >= soCot) return o[0];
+  return null;
+}
+/* Dòng TỔNG (`data-tong`, quy ước sẵn có của wireTableSort) vẫn cần một ô cho thẳng cột, nhưng
+   KHÔNG được đánh số — nó không phải bản ghi thứ n của danh sách. */
+function __dongKhongDanhSo(tr) {
+  return tr.hasAttribute('data-tong') || !!(tr.querySelector && tr.querySelector('.empty-hint'));
+}
+function __soCotCuaBang(table) {
+  const hd = table.querySelector(':scope > thead > tr');
+  if (!hd) return 0;
+  return [...hd.children].reduce((s, c) => s + (parseInt(c.getAttribute('colspan'), 10) || 1), 0);
+}
+/* Bảng đã có STT chưa? Nhận cả 'STT' / 'TT' / '#', và nhận cả khi cột đầu là ô TÍCH CHỌN (nhiều
+   bảng chọn nhiều dòng có <th> rỗng đứng trước STT) -> soi 3 ô đầu, không chỉ ô số 1. */
+function __daCoStt(table) {
+  const hd = table.querySelector(':scope > thead > tr');
+  if (!hd) return false;
+  return [...hd.children].slice(0, 3).some(th => /^(STT|TT|#)$/i.test(th.textContent.trim()));
+}
+/* Đánh lại số theo các <tr> ĐANG HIỆN. Chỉ ghi khi khác -> hội tụ sau một lượt, observer không
+   tự kích lại vô hạn (vẫn có cờ __dangDanhSo chặn tái nhập cho chắc). */
+function danhLaiStt(table) {
+  if (!table || table.__dangDanhSo) return;
+  const cot = table.__cotStt;
+  if (cot == null) return;
+  table.__dangDanhSo = true;
+  try {
+    let i = 0;
+    table.querySelectorAll(':scope > tbody > tr').forEach(tr => {
+      const o = tr.children[cot];
+      if (!o || !o.hasAttribute('data-stt')) return;              // dòng thông báo / dòng gộp ô
+      if (tr.style.display === 'none' || tr.hidden) { if (o.textContent !== '') o.textContent = ''; return; }
+      const s = String(++i);
+      if (o.textContent !== s) o.textContent = s;
+    });
+  } finally { table.__dangDanhSo = false; }
+}
+/* Gắn (hoặc gắn lại) bộ theo dõi cho một bảng. Theo dõi CHÍNH `<tbody>`, mà nhiều màn hình vẽ lại
+   bằng cách thay nguyên `tbody` -> node đang theo dõi bị bỏ khỏi cây và observer thành vô dụng.
+   Nên mỗi lần quét lại đều kiểm: tbody đang theo dõi còn nằm trong bảng không, không thì gắn lại. */
+function __gioTheoDoiStt(table) {
+  const tbs = [...table.querySelectorAll(':scope > tbody')];
+  const conNguyen = table.__obSttTbody && table.__obSttTbody.length === tbs.length
+    && table.__obSttTbody.every((tb, i) => tb === tbs[i]);
+  if (conNguyen) return;
+  try {
+    if (table.__obStt) table.__obStt.disconnect();
+    let hen = null;
+    const gopNhip = () => { clearTimeout(hen); hen = setTimeout(() => capNhatSttSauKhiDoi(table), 30); };
+    const ob = new MutationObserver(gopNhip);
+    tbs.forEach(tb => ob.observe(tb, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden']
+    }));
+    table.__obStt = ob;
+    table.__obSttTbody = tbs;
+  } catch (e) { /* trình duyệt không cho -> vẫn có STT, chỉ là không tự đánh lại khi lọc */ }
+}
+/* Chèn cột STT vào MỘT bảng. Chạy lại nhiều lần không chèn hai lần (cờ __cotStt). */
+function themCotSttMotBang(table) {
+  if (!table || table.__khongStt) return;
+  if (table.hasAttribute('data-nostt') || table.closest('[data-nostt]')) { table.__khongStt = true; return; }
+  if (table.__cotStt != null) {
+    /* Đã xử lý rồi. NHƯNG nhiều màn vẽ lại bằng cách thay sạch innerHTML của <table> — lúc đó cờ
+       còn mà cột STT đã bay mất, nếu chỉ tin cờ thì bảng đó vĩnh viễn không có STT nữa. Kiểm lại
+       tiêu đề: còn STT thì chỉ soát lại bộ theo dõi, mất rồi thì xoá cờ để chèn lại từ đầu. */
+    if (__daCoStt(table)) { __gioTheoDoiStt(table); capNhatSttSauKhiDoi(table); return; }
+    table.__cotStt = null;
+    if (table.__obStt) { try { table.__obStt.disconnect(); } catch (e) {} }
+    table.__obSttTbody = null;
+  }
+  const thead = table.querySelector(':scope > thead');
+  const hangDau = thead && thead.querySelector(':scope > tr');
+  if (!hangDau || !hangDau.querySelector('th')) { table.__khongStt = true; return; }
+  if (__daCoStt(table)) {
+    /* Đã có STT sẵn (95 bảng cũ): KHÔNG chèn thêm, nhưng vẫn nhận việc đánh lại số khi lọc —
+       trước đây các bảng đó in cứng i+1 nên lọc xong số nhảy cách quãng. */
+    const iStt = [...hangDau.children].findIndex(th => /^(STT|TT|#)$/i.test(th.textContent.trim()));
+    table.__cotStt = iStt;
+    const soCotCu = __soCotCuaBang(table);
+    table.querySelectorAll(':scope > tbody > tr').forEach(tr => {
+      const o = tr.children[iStt];
+      if (o && !__oTraiHet(tr, soCotCu) && !__dongKhongDanhSo(tr)) o.setAttribute('data-stt', '1');
+    });
+  } else {
+    const soCot = __soCotCuaBang(table);
+    /* ownerDocument, KHÔNG phải `document`: bản in nằm trong iframe (một document khác) — tạo thẻ
+       bằng document của trang chính rồi nhét sang là trông chờ trình duyệt tự nhận nuôi. */
+    const d = table.ownerDocument;
+    const th = d.createElement('th');
+    th.textContent = STT_NHAN;
+    th.style.width = '46px';
+    /* Sắp xếp theo STT là vô nghĩa (và đánh nhau với việc đánh lại số) -> wireTableSort bỏ qua. */
+    th.setAttribute('data-nosort', '1');
+    /* thead nhiều hàng (tiêu đề nhóm): ô STT phải cao trọn cả khối tiêu đề, không thì lệch. */
+    const soHangTD = thead.querySelectorAll(':scope > tr').length;
+    if (soHangTD > 1) th.rowSpan = soHangTD;
+    hangDau.insertBefore(th, hangDau.firstChild);
+    table.__cotStt = 0;
+    /* tbody + tfoot: dòng thường thì THÊM ô, dòng trải hết bảng thì NỚI colspan. */
+    table.querySelectorAll(':scope > tbody > tr, :scope > tfoot > tr').forEach(tr => {
+      const oTrai = __oTraiHet(tr, soCot);
+      if (oTrai) { oTrai.setAttribute('colspan', String((parseInt(oTrai.getAttribute('colspan'), 10) || 1) + 1)); return; }
+      const td = d.createElement('td');
+      if (!__dongKhongDanhSo(tr)) td.setAttribute('data-stt', '1');
+      td.style.textAlign = 'center';
+      tr.insertBefore(td, tr.firstChild);
+    });
+  }
+  danhLaiStt(table);
+  /* Theo dõi chính bảng này: thêm/bớt/đổi thứ tự dòng (childList) và ẩn/hiện dòng (attributes). */
+  __gioTheoDoiStt(table);
+}
+/* Dòng MỚI được thêm vào bảng đã có STT thì chưa có ô STT -> vá rồi mới đánh lại số. */
+function capNhatSttSauKhiDoi(table) {
+  if (table.__dangDanhSo) return;
+  const cot = table.__cotStt;
+  if (cot == null) return;
+  const soCot = __soCotCuaBang(table);
+  table.__dangDanhSo = true;
+  try {
+    table.querySelectorAll(':scope > tbody > tr, :scope > tfoot > tr').forEach(tr => {
+      if (__oTraiHet(tr, soCot)) return;
+      const o = tr.children[cot];
+      if (o && o.hasAttribute('data-stt')) return;
+      if (o && __dongKhongDanhSo(tr) && tr.children.length >= __soCotCuaBang(table)) return;
+      const td = table.ownerDocument.createElement('td');
+      if (!__dongKhongDanhSo(tr)) td.setAttribute('data-stt', '1');
+      td.style.textAlign = 'center';
+      tr.insertBefore(td, tr.children[cot] || null);
+    });
+  } finally { table.__dangDanhSo = false; }
+  danhLaiStt(table);
+}
+// Quét mọi bảng trong 1 vùng. Gọi lại bao nhiêu lần cũng được.
+function themCotStt(root) {
+  if (!root || !root.querySelectorAll) return;
+  try {
+    if (root.tagName === 'TABLE') themCotSttMotBang(root);
+    /* Gọi qua hàm mũi tên, KHÔNG truyền thẳng tên hàm: forEach còn đưa cả index + mảng vào tham số
+       thứ 2/3, thêm tham số cho themCotSttMotBang sau này là dính bẫy im lặng. */
+    root.querySelectorAll('table').forEach(t => themCotSttMotBang(t));
+  } catch (e) { /* không để lỗi cột STT làm gián đoạn cả màn hình */ }
+}
+
 /* Gọi CẢ HAI ở mọi nơi đang gọi enhanceSelects — để không có màn nào được bọc nửa vời. */
-function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); enhanceONgay(root); }
+function enhanceInputs(root) { enhanceSelects(root); enhanceDatalists(root); enhanceONgay(root); themCotStt(root); }
 
 /* ================================================================================================
    v7.77 — XEM ẢNH TO CÓ NÚT ✕ (làm cho ĐIỆN THOẠI).
@@ -1673,6 +1851,12 @@ function printHtml(title, bodyHtml, opts) {
     </style></head>
     <body>${opts.noLetterhead ? '' : (opts.logo ? COMPANY_LETTERHEAD_LOGO_HTML : COMPANY_LETTERHEAD_HTML)}${bodyHtml}</body></html>`);
   doc.close();
+
+  /* v7.84 — CỘT STT trên bảng của BẢN IN. Bản in dựng trong iframe (một `document` KHÁC), nên
+     MutationObserver theo `.content` của trang chính không với tới đây — phải gọi thẳng.
+     Gọi NGAY SAU doc.close() và TRƯỚC khi đo trang: thêm một cột là đổi bề rộng/chiều cao bảng,
+     đo trước rồi chèn sau thì số trang tính ra sai. Phiếu nào không muốn có thì <table data-nostt>. */
+  try { themCotStt(doc); } catch (e) { /* thiếu cột STT không được làm hỏng bản in */ }
 
   /* ================================================================================================
      v6.73 — ĐÁNH SỐ TRANG "Trang k / n" CHO MỌI PHIẾU IN.

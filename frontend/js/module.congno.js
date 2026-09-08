@@ -129,9 +129,14 @@ window.ModuleCongNo = (function () {
           ar.style.cssText = 'font-size:10px;color:#1a73e8;';
           th.appendChild(ar);
 
+          /* ⚠️ v7.84: lấy chỉ số cột TẠI LÚC BẤM (`th.cellIndex`), KHÔNG dùng `idx` chụp lúc gắn tay.
+             Cột STT tự động (common.js) chèn thêm một <th> SAU khi wireTableSort đã gắn, nên mọi chỉ
+             số chụp trước đó lệch đi 1 — bấm "Ngày" mà sắp theo "Loại". `cellIndex` là số sống nên
+             thêm/bớt cột bao nhiêu lần cũng đúng. */
+          const cot = th.cellIndex >= 0 ? th.cellIndex : idx;
           const tong = Array.from(tbody.rows).filter(tr => tr.hasAttribute('data-tong'));
           const ds = Array.from(tbody.rows).filter(tr => !tr.hasAttribute('data-tong') && !tr.querySelector('.empty-hint'));
-          const lay = tr => (tr.cells[idx] ? tr.cells[idx].innerText.trim() : '');
+          const lay = tr => (tr.cells[cot] ? tr.cells[cot].innerText.trim() : '');
           ds.sort((a, b) => {
             const x = lay(a), y = lay(b);
             const nx = ngayHoa(x), ny = ngayHoa(y);
