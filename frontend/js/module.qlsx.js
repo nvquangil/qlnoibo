@@ -1952,14 +1952,23 @@ window.ModuleQLSX = (function () {
     const orders = (await apiGet('/api/qlsx/giathanh')).data || [];
     body.innerHTML = `
       <h3 style="margin-top:0;">Giá thành sản phẩm</h3>
+      ${/* v7.89: giá thành 1 SP = (chi phí sản xuất ÷ SL) + chi phí chung. Chi phí chung nay là số
+           của MỘT sản phẩm, không chia nữa — nói rõ ngay đây để không ai khai nhầm tổng cả lệnh. */''}
       <p class="empty-hint">Chọn 1 lệnh sản xuất để bóc tách chi phí: <b>vải đã cắt × đơn giá từng cây</b> · <b>phụ kiện × đơn giá</b>
-        · <b>gia công ngoài / may nhà làm</b> · <b>in thêu</b> · <b>chi phí chung</b> (nhập tay).
-        Giá thành 1 SP = tổng chi phí ÷ SL hoàn thành (ưu tiên SL nhập kho).</p>
-      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã hàng</th><th>Tổng SL</th><th>Chi phí chung</th><th style="width:210px">Thao tác</th></tr></thead>
+        · <b>gia công ngoài / may nhà làm</b> · <b>in thêu</b> · <b>chi phí chung</b> (nhập tay).<br>
+        <b>Giá thành 1 SP = (chi phí sản xuất ÷ SL hoàn thành) + chi phí chung.</b>
+        Chi phí chung khai theo <b>1 sản phẩm</b>, không phải tổng cả lệnh.</p>
+      ${/* v7.89: cột "Mã hàng" đổi thành "Mã rập"; "Tổng SL" lấy SỔ CẮT theo vải chính, không lấy
+           TongSoLuong khai ở Ra lệnh SX (số khai chỉ là kế hoạch, giá thành phải soi số cắt thật). */''}
+      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã rập</th><th>Tổng SL (sổ cắt — vải chính)</th><th>Chi phí chung</th><th style="width:210px">Thao tác</th></tr></thead>
       <tbody>${orders.map(o => `<tr>
         <td><a href="#" class="act-gt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem/in Lệnh sản xuất">${escapeHtml(o.MaDH)}</a></td>
-        <td>${escapeHtml(o.TenSanPham || '')}</td><td>${escapeHtml(o.MaSanPham || '')}</td>
-        <td style="text-align:right;">${fmtNumber(o.TongSoLuong)}</td>
+        <td>${escapeHtml(o.TenSanPham || '')}</td><td>${escapeHtml(o.MaRap || '')}</td>
+        ${/* Chưa ghi sổ cắt thì nói rõ, KHÔNG lùi về số khai ở Ra lệnh SX — lùi âm thầm là người
+             đọc tưởng đã cắt xong đủ số đó. */''}
+        <td style="text-align:right;">${Number(o.TongSLCatChinh) > 0
+          ? fmtNumber(o.TongSLCatChinh)
+          : '<span class="empty-hint" style="padding:0;">chưa ghi sổ cắt</span>'}</td>
         <td>${Number(o.SoChiPhiChung) > 0 ? `<span class="badge green">${o.SoChiPhiChung} dòng</span>` : '<span class="badge">Chưa khai</span>'}</td>
         <td><button class="btn small secondary act-gt" data-madh="${escapeHtml(o.MaDH)}">💰 Tính giá thành</button></td>
       </tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
@@ -2111,9 +2120,16 @@ window.ModuleQLSX = (function () {
         <tr><td style="background:#f5f6f8;"><b>5. In thêu</b></td><td style="text-align:right;">${tien(t.inThe)}</td></tr>
         ${/* v6.17: + tiền bàn cắt (bộ phận cắt) — cùng công thức bảng lương trải vải cắt. */''}
         <tr><td style="background:#f5f6f8;"><b>6. Bộ phận cắt (tiền bàn cắt)</b></td><td style="text-align:right;">${tien(t.boPhanCat)}</td></tr>
-        <tr><td style="background:#f5f6f8;"><b>7. Chi phí chung</b></td><td style="text-align:right;">${tien(t.chiPhiChung)}</td></tr>
-        <tr style="font-weight:700;background:#e8f5e9;"><td>TỔNG CHI PHÍ</td><td style="text-align:right;">${tien(t.tongCong)}</td></tr>
-        <tr style="font-weight:700;background:#fff8e1;"><td>GIÁ THÀNH 1 SẢN PHẨM${d.slDungTinh > 0 ? ` (÷ ${fmtNumber(d.slDungTinh)})` : ''}</td>
+        ${/* v7.89: chi phí chung là tiền của MỘT sản phẩm -> hiện cả 2 con số, kẻo đọc nhầm dòng này
+             là tổng cả lệnh rồi thấy TỔNG CHI PHÍ không cộng ra được. */''}
+        <tr style="font-weight:700;background:#eef3f8;"><td>CHI PHÍ SẢN XUẤT (1+…+6)</td><td style="text-align:right;">${tien(t.sanXuat)}</td></tr>
+        <tr><td style="background:#f5f6f8;"><b>7. Chi phí chung</b> <span style="font-weight:400;font-size:12px;color:#5f6368;">— khai cho <b>1 sản phẩm</b></span></td>
+          <td style="text-align:right;">${tien(t.chiPhiChung)}${d.slDungTinh > 0
+            ? `<div style="font-size:11px;color:#5f6368;">× ${fmtNumber(d.slDungTinh)} = ${tien(t.chiPhiChungCaLenh)}</div>` : ''}</td></tr>
+        <tr style="font-weight:700;background:#e8f5e9;"><td>TỔNG CHI PHÍ <span style="font-weight:400;font-size:12px;">(sản xuất + chi phí chung × SL)</span></td>
+          <td style="text-align:right;">${tien(t.tongCong)}</td></tr>
+        <tr style="font-weight:700;background:#fff8e1;"><td>GIÁ THÀNH 1 SẢN PHẨM${d.slDungTinh > 0
+            ? ` <span style="font-weight:400;font-size:12px;">= ${tien(t.sanXuat)} ÷ ${fmtNumber(d.slDungTinh)} + ${tien(t.chiPhiChung)}</span>` : ''}</td>
           <td style="text-align:right;">${d.giaThanh1SP != null ? tien(d.giaThanh1SP) : '<span style="color:#c0392b;">chưa có SL hoàn thành</span>'}</td></tr>
       </table>
       ${bang('1. Vải theo từng cây đã cắt', ['Mã cây', 'Loại vải / màu', 'KG-mét dùng', 'Đơn giá', 'Thành tiền'], dongVai, t.vai)}
@@ -2123,7 +2139,7 @@ window.ModuleQLSX = (function () {
       ${bang('5. In thêu', ['Nhà in thêu', 'Hạng mục', 'SL nhận', 'Đơn giá', 'Thành tiền'], dongIn, t.inThe)}
       ${bang(`6. Bộ phận cắt — tiền bàn cắt (mét sơ đồ × khổ vải × số lớp × ${fmtNumber(d.donGiaCat || 0)})`,
     ['Sổ cắt', 'Ngày cắt', 'Mét sơ đồ', 'Khổ vải', 'Tổng lớp', 'Đơn giá', 'Thành tiền'], dongCat, t.boPhanCat)}
-      ${bang('7. Chi phí chung', ['Tên chi phí', 'Ghi chú', 'Số tiền'], dongCPC, t.chiPhiChung)}
+      ${bang('7. Chi phí chung — số tiền khai cho MỘT sản phẩm', ['Tên chi phí', 'Ghi chú', 'Số tiền / 1 SP'], dongCPC, t.chiPhiChung)}
       <p style="font-size:11px;color:#666;margin-top:8px;">Vải: KG/mét đã dùng khai ở sổ cắt × đơn giá nhập của chính cây đó (cây chưa khai thì tạm lấy KG đã xuất cho lệnh — có dấu ⚠️).
         Phụ kiện: SL đã xuất cho lệnh × đơn giá của lần nhập gần nhất (phiếu xuất không có cột đơn giá).
         May nhà làm dùng đúng công thức bảng lương khoán may; in thêu theo đơn giá hạng mục đã chọn ở Giao in thêu.</p>`;

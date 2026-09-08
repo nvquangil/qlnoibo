@@ -2442,8 +2442,28 @@ async function tinhGiaThanh(pool, order) {
   const tongMay = tong(mayNhaLam, 'ThanhTien');
   const tongIn = tong(inThe, 'ThanhTien');
   const tongCat = tong(boPhanCat, 'ThanhTien');   // v6.17
-  const tongChung = tong(chiPhiChung, 'SoTien');
-  const tongCong = lam2(tongVai + tongPK + tongGC + tongMay + tongIn + tongCat + tongChung);
+  /* ================================================================================================
+     ⚠️ v7.89 — CHI PHÍ CHUNG LÀ SỐ CHO **MỘT SẢN PHẨM**, KHÔNG CHIA NỮA.
+
+     Nguyen: "hiện tại đang tính chung giá tổng số lượng xong mới chia ra thành giá thành 1 sản phẩm
+     nhưng chi phí chung đang để cộng vào giá tổng số lượng. Thay đổi thành giá thành = giá 1 sản
+     phẩm + chi phí chung".
+
+         Trước:  giá thành 1 SP = (chi phí sản xuất + chi phí chung) ÷ SL
+         Nay:    giá thành 1 SP = (chi phí sản xuất ÷ SL) + chi phí chung
+
+     ⚠️ Ý NGHĨA CỦA DỮ LIỆU ĐÃ KHAI ĐỔI THEO. Các dòng ChiPhiChungDonHang cũ được khai với nghĩa
+     "tổng cho cả lệnh"; từ bản này chúng được đọc là "cho 1 sản phẩm". Lệnh cũ nào đã khai chi phí
+     chung sẽ thấy giá thành tăng vọt — phải khai lại theo đơn vị 1 sản phẩm.
+     Giá vốn đã CHỐT trong GiaVonHangHoa thì KHÔNG đổi (đúng nguyên tắc kế toán: giá vốn chốt tại
+     thời điểm bán) — muốn cập nhật thì bấm lại "Nạp từ lệnh SX".
+
+     `tongCong` giữ nghĩa "tiền của cả lệnh" để dòng TỔNG CHI PHÍ vẫn = giá thành × SL:
+         tongCong = chi phí sản xuất + (chi phí chung × SL)
+     Chưa có SL thì không nhân được -> chỉ cộng phần sản xuất, và giaThanh1SP để null như cũ.
+     ================================================================================================ */
+  const tongChung = tong(chiPhiChung, 'SoTien');        // = chi phí chung cho 1 SP
+  const tongSanXuat = lam2(tongVai + tongPK + tongGC + tongMay + tongIn + tongCat);
 
   /* SL hoàn thành: ưu tiên SL NHẬP KHO thực tế; chưa nhập kho thì lấy SL cắt (báo rõ đang lấy nguồn nào).
 
@@ -2482,6 +2502,11 @@ async function tinhGiaThanh(pool, order) {
   const slCat = catStage ? await getTongSLCatForOrder(pool, donHangId) : 0;
   const slDungTinh = slNhapKho > 0 ? slNhapKho : slCat;
   const nguonSL = slNhapKho > 0 ? nguonNhap : (slCat > 0 ? 'SL cắt (chưa nhập kho)' : 'chưa có số liệu');
+  /* v7.89: TỔNG CHI PHÍ của cả lệnh = phần sản xuất + chi phí chung NHÂN với SL (chi phí chung nay
+     là tiền của 1 SP). Nhờ vậy dòng TỔNG vẫn đúng bằng giá thành × SL — hai con số trên cùng một
+     bảng mà không khớp nhau là người đọc mất tin cả bảng.
+     Chưa có SL thì không nhân được -> chỉ có phần sản xuất (và giaThanh1SP để null như cũ). */
+  const tongCong = lam2(tongSanXuat + tongChung * slDungTinh);
 
   return {
     order: {
@@ -2491,12 +2516,20 @@ async function tinhGiaThanh(pool, order) {
       MaRap: await getMaRapCuaDon(pool, donHangId), DonViTinhLenh: await getDonViTinhCuaDon(pool, donHangId)
     },
     vai, phuKien, giaCong, mayNhaLam, inThe, boPhanCat, chiPhiChung, donGiaCat,
-    tong: { vai: tongVai, phuKien: tongPK, giaCong: tongGC, mayNhaLam: tongMay, inThe: tongIn, boPhanCat: tongCat, chiPhiChung: tongChung, tongCong },
+    tong: {
+      vai: tongVai, phuKien: tongPK, giaCong: tongGC, mayNhaLam: tongMay, inThe: tongIn,
+      boPhanCat: tongCat,
+      /* v7.89: `chiPhiChung` = tiền cho MỘT sản phẩm; `chiPhiChungCaLenh` = nhân với SL. Trả cả hai
+         để màn hình khỏi tự nhân (tự nhân là sớm muộn lệch với backend). */
+      chiPhiChung: tongChung, chiPhiChungCaLenh: lam2(tongChung * slDungTinh),
+      sanXuat: tongSanXuat, tongCong
+    },
     slNhapKho, slCat, slDungTinh, nguonSL,
     /* v6.91.1: SL nhập kho từ phiếu ĐÃ quy về CÁI, nên nhãn đơn vị phải là "Cái" chứ không phải ĐVT
        của lệnh SX — để trống chỗ này là người đọc tưởng giá thành tính trên Ri. */
     donViSLDungTinh: (slNhapKho > 0 && nguonNhap.indexOf('phiếu') >= 0) ? 'Cái' : null,
-    giaThanh1SP: slDungTinh > 0 ? Math.round((tongCong / slDungTinh) * 100) / 100 : null
+    /* v7.89: chia PHẦN SẢN XUẤT rồi mới CỘNG chi phí chung (chi phí chung đã là số của 1 SP). */
+    giaThanh1SP: slDungTinh > 0 ? lam2(tongSanXuat / slDungTinh + tongChung) : null
   };
 }
 // Danh sách lệnh SX để chọn (kèm tổng chi phí nhanh — chỉ để nhìn, chi tiết mở từng lệnh).
@@ -2506,6 +2539,22 @@ router.get('/giathanh', requireAuth, requirePermission('QLSX', 'view'), requireC
     SELECT d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham, d.TongSoLuong, d.TrangThai,
            (SELECT COUNT(*) FROM ChiPhiChungDonHang cp WHERE cp.DonHangID = d.DonHangID) AS SoChiPhiChung
     FROM DonHangSanXuat d ORDER BY d.DonHangID DESC`)).recordset;
+  /* v7.89: MÃ RẬP thay cho Mã hàng — dùng util maRapTheoDon (bản công thức duy nhất từ v7.67, gộp
+     cả nguồn "Ghi tiến độ"), lấy MỘT lần cho cả danh sách. */
+  const mrMap = await maRapTheoDon(pool);
+  /* v7.89: TỔNG SL = tổng SL SỔ CẮT theo VẢI CHÍNH, không phải TongSoLuong khai ở Ra lệnh SX.
+     Nguyen: giá thành phải soi theo số CẮT THẬT. getTongSLCatForOrder() đã lọc đúng màu chính
+     (nguồn KieuVai của phiếu xuất kho vải, cùng luật với Bảng kê BTP) — KHÔNG viết lại phép lọc đó
+     ở đây, hai luật khác nhau là hai màn ra hai con số.
+     ⚠️ Mỗi lệnh tốn ~2 truy vấn nên chạy theo LÔ song song, không tuần tự 300 lượt nối đuôi. */
+  const LO = 8;
+  for (let i = 0; i < rows.length; i += LO) {
+    await Promise.all(rows.slice(i, i + LO).map(async (r) => {
+      r.MaRap = mrMap[r.DonHangID] || '';
+      try { r.TongSLCatChinh = await getTongSLCatForOrder(pool, r.DonHangID); }
+      catch (e) { r.TongSLCatChinh = null; }   // lỗi 1 lệnh không được làm hỏng cả danh sách
+    }));
+  }
   res.json({ success: true, data: rows });
 });
 router.get('/giathanh/:maDH', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {

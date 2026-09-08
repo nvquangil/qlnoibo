@@ -82,8 +82,11 @@ kiem(/\$\{fmtNumber\(n\)\} \$\{dvChinh\} \$\{dauPhep\} \$\{fmtNumber\(he\)\} = /
    phai hien thi so luong quy doi. Nay chi chan mau "(<dau phep><bien>" tuc ghep thang so quy doi. */
 kiem(!/\(×\$\{|\(÷\$\{/.test(sQlsx),
   'module.qlsx.js khong tu ghep chuoi SO LUONG quy doi co ngoac o cho nao khac');
-kiem(/GIÁ THÀNH 1 SẢN PHẨM\$\{d\.slDungTinh > 0 \? ` \(÷ /.test(sQlsx),
-  'ngoai le da biet: nhan "GIÁ THÀNH 1 SẢN PHẨM (÷ N)" cua bang gia thanh GIU NGUYEN ngoac');
+/* v7.89: nhan do da doi thanh "GIÁ THÀNH 1 SẢN PHẨM = <SX> ÷ <SL> + <chi phi chung>" (chi phi chung
+   nay cong theo 1 SP, khong chia nua) — khong con cap ngoac "(÷ N)" nao de phai mien tru. Chi con
+   kiem dung Y DINH: dong nhan van viet ro phep tinh ra cho nguoi doc. */
+kiem(/GIÁ THÀNH 1 SẢN PHẨM/.test(sQlsx) && /÷ \$\{fmtNumber\(d\.slDungTinh\)\} \+ /.test(sQlsx),
+  'nhan "GIÁ THÀNH 1 SẢN PHẨM" viet ro phep tinh (SX ÷ SL + chi phi chung)');
 
 console.log('\n=== 6. Bump ?v= ===');
 const v = (sIndex.match(/common\.js\?v=([\d.]+)/) || [])[1];
