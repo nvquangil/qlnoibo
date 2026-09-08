@@ -427,7 +427,8 @@ router.get('/hanghoa', requireAuth, requirePermission('DANHMUC', 'view'), async 
   const cotTenHD = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255)) AS TenHoaDon';
   const rows = (await pool.request().query(`
     SELECT h.MaHangID, h.MaHang, h.TenHang, ${cotTenHD}, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, h.GiaBan,
-           nsp.TenNhom, tk.TenTheKho,
+           ${/* v7.86: tra ve CA ID — form Sua can ID de chon san dung danh muc, bang thi hien TenTheKho. */''}
+           h.TheKhoDanhMucID, nsp.TenNhom, tk.TenTheKho,
            -- de man hinh biet ma nao dang duoc dung (khong xoa duoc) ma khong phai bam thu
            (SELECT COUNT(*) FROM PhieuNhapKhoHangChiTiet ct WHERE ct.MaHangID = h.MaHangID) AS SoDongNhapKho
     FROM TheKhoHangHoa h
@@ -456,9 +457,12 @@ router.post('/hanghoa', requireAuth, requirePermission('DANHMUC', 'create'), asy
     .input('DonViQuyDoi', sql.NVarChar, String(b.DonViQuyDoi || '').trim() || null)
     .input('LoaiRi', sql.Int, he)
     .input('GiaBan', sql.Decimal(14, 2), b.GiaBan === '' || b.GiaBan == null ? 0 : b.GiaBan)
-    .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, DonViCoBan, DonViQuyDoi, LoaiRi, GiaBan, LoaiHang${coTenHD ? ', TenHoaDon' : ''})
+    /* v7.86: THEM MOI cung phai luu duoc danh muc. Truoc day chi PUT nhan TheKhoDanhMucID, nen tao ma
+       o day xong van phai mo lai form Sua de chon danh muc — cung mot o ma hai duong xu ly khac nhau. */
+    .input('TheKhoDanhMucID', sql.Int, b.TheKhoDanhMucID || null)
+    .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, DonViCoBan, DonViQuyDoi, LoaiRi, GiaBan, LoaiHang, TheKhoDanhMucID${coTenHD ? ', TenHoaDon' : ''})
             OUTPUT INSERTED.MaHangID, INSERTED.MaHang, INSERTED.TenHang
-            VALUES (@MaHang, @TenHang, @DonViCoBan, @DonViQuyDoi, @LoaiRi, @GiaBan, N'DatNgoai'${coTenHD ? ', @TenHoaDon' : ''})`);
+            VALUES (@MaHang, @TenHang, @DonViCoBan, @DonViQuyDoi, @LoaiRi, @GiaBan, N'DatNgoai', @TheKhoDanhMucID${coTenHD ? ', @TenHoaDon' : ''})`);
   res.json({ success: true, data: r.recordset[0] });
 });
 
@@ -473,10 +477,13 @@ router.put('/hanghoa/:id', requireAuth, requirePermission('DANHMUC', 'edit'), as
       maHang: b.MaHang, tenHang: b.TenHang,
       donViCoBan: b.DonViCoBan, donViQuyDoi: b.DonViQuyDoi, loaiRi: b.LoaiRi,
       giaBan: b.GiaBan, nhomSanPhamId: b.NhomSanPhamID,
-      theKhoDanhMucId: b.TheKhoDanhMucID, maBarcode: b.MaBarcode,
+      maBarcode: b.MaBarcode,
       /* v7.46: chi truyen khoa `tenHoaDon` khi form CO gui — util phan biet "gui rong = xoa" voi
          "khong gui = giu nguyen" bang hasOwnProperty, nen dat san undefined la thanh "xoa". */
-      ...(Object.prototype.hasOwnProperty.call(b, 'TenHoaDon') ? { tenHoaDon: b.TenHoaDon } : {})
+      ...(Object.prototype.hasOwnProperty.call(b, 'TenHoaDon') ? { tenHoaDon: b.TenHoaDon } : {}),
+      /* v7.86: y het nhu tren cho DANH MUC THE KHO — o chon co muc "— khong —" nen phai xoa duoc,
+         nhung client nao khong gui truong nay thi tuyet doi khong duoc coi la xoa. */
+      ...(Object.prototype.hasOwnProperty.call(b, 'TheKhoDanhMucID') ? { theKhoDanhMucId: b.TheKhoDanhMucID } : {})
     });
     const tin = [];
     if (kq.doiMa) {

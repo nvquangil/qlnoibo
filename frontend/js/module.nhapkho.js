@@ -247,6 +247,21 @@
             <input type="checkbox" id="nkfTaoThe" ${dangAnTheKho ? '' : 'checked'}> Tạo thẻ kho luôn khi lưu
           </label>
         </div>
+        ${/* v7.86: DANH MỤC ÁP CHO CẢ PHIẾU. Một phiếu nhập thường toàn hàng cùng một danh mục, mà
+             mỗi mã mới lại phải chọn lại ở dòng khai của nó — chọn sót một dòng là mã đó rơi ra
+             ngoài danh mục, không ai để ý cho tới lúc mở catalogue.
+             ⚠️ CHỈ áp cho MÃ MỚI. Mã đã có trong danh mục thì thông tin cấp mã hàng sửa ở
+             Danh mục → Hàng hóa (quy tắc v6.99) — áp bừa ở đây là lưu phiếu một cái đổi luôn danh
+             mục của hàng đang bán. Vẫn đổi lại được từng dòng ở ô "Danh mục thẻ kho" của dòng khai. */''}
+        <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px;">
+          <label style="font-size:13px;white-space:nowrap;">Danh mục thẻ kho cho <b>mã mới</b>:</label>
+          <select id="nkfDmChung" style="min-width:200px;">
+            <option value="">— chọn để áp cho cả phiếu —</option>
+            ${(dm.theKho || []).map(x => `<option value="${x.TheKhoDanhMucID}">${escapeHtml(x.TenTheKho)}</option>`).join('')}
+          </select>
+          <span class="empty-hint" style="padding:0;">Chọn một lần, áp cho mọi mã mới của phiếu.
+            Mã <b>đã có</b> trong danh mục không bị đổi. Muốn khác nhau thì sửa lại ở từng dòng khai.</span>
+        </div>
         <div class="empty-hint" style="margin:0 0 6px;">
           Mã <b>chưa có</b> trong danh mục → gõ vào rồi khai <b>Tên hàng + ĐVT chính + ĐVT quy đổi +
           tỷ lệ</b> ở dòng phụ; lưu phiếu là <b>sinh mã luôn</b>, xuất/bán được ngay.
@@ -287,6 +302,28 @@
     }
     $('#nkfLoai').onchange = apLoai;
     $('#nkfHuy').onclick = () => closeModal();
+
+    /* v7.86: DANH MỤC ÁP CHO CẢ PHIẾU (chỉ mã MỚI — xem ghi chú ở chỗ dựng ô).
+       Nhớ lại lựa chọn để dòng thêm sau cũng theo, nhưng CHỈ ĐIỀN KHI Ô CÒN TRỐNG: người dùng đã
+       chỉnh riêng một dòng thì lần vẽ sau không được ghi đè lại. */
+    let dmChungPhieu = '';
+    const apDmChoMaMoi = (ghiDe) => {
+      if (!ghiDe && !dmChungPhieu) return;            // chưa chọn gì thì đừng đụng vào dòng nào
+      dongForm.forEach(d => {
+        if (d.maHangId) return;                       // mã ĐÃ CÓ -> không đụng
+        if (!ghiDe && d.theKhoDanhMucId) return;      // dòng đã chọn riêng -> giữ nguyên
+        d.theKhoDanhMucId = dmChungPhieu || null;
+      });
+    };
+    const oDmChung = $('#nkfDmChung');
+    if (oDmChung) oDmChung.onchange = () => {
+      dmChungPhieu = oDmChung.value || '';
+      apDmChoMaMoi(true);      // bấm chọn là một hành động rõ ràng -> ghi đè cả các dòng đã chọn
+      veDong();
+      const n = dongForm.filter(d => !d.maHangId).length;
+      toast(dmChungPhieu ? `Đã áp danh mục cho ${n} dòng mã mới.` : 'Đã bỏ danh mục ở các dòng mã mới.', 'success');
+    };
+
     const themDong = () => {
       /* v6.97: dòng mới THỪA HƯỞNG mã hàng của dòng cuối — nhập nhiều màu của cùng một mã là việc hay
          làm nhất ở đây, nên chỉ cần đổi Màu + Số lượng. KHÔNG copy màu / số lượng / ảnh màu: đó là
@@ -367,6 +404,9 @@
     }
 
     function veDong() {
+      /* v7.86: mã mới GÕ SAU khi đã chọn danh mục chung cũng phải được áp — chạy trước dongBoMaMoi()
+         để dòng khai có giá trị rồi mới toả sang các dòng cùng mã. */
+      apDmChoMaMoi(false);
       dongBoMaMoi();
       const sx = $('#nkfLoai').value === 'SanXuat';
       $('#nkfBang').innerHTML = `

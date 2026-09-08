@@ -144,6 +144,12 @@ window.ModuleDanhMuc = (function () {
     if (tab.custom === 'hanghoa') {
       const dsDV = await apiGet('/api/danhmuc/donvitinh').then(r => (r.data || []).map(x => x.TenDonVi).filter(Boolean)).catch(() => []);
       const optDV = dsDV.map(v => ({ value: v, label: v }));
+      /* v7.86: DANH MỤC THẺ KHO ngay tại đây. Trước phải sang Kho hàng hóa → Thẻ kho mới đổi được
+         danh mục của một mã, trong khi đây mới là chỗ người dùng vào để sửa cấp mã hàng.
+         Lỗi nạp danh sách thì để MỘT lựa chọn rỗng — vẫn sửa được các ô khác, không chặn cả form. */
+      const dsDM = await apiGet('/api/danhmuc/thekhodanhmuc').then(r => r.data || []).catch(() => []);
+      const optDM = [{ value: '', label: '— không —' }]
+        .concat(dsDM.map(x => ({ value: String(x.TheKhoDanhMucID), label: x.TenTheKho || '' })));
       return renderSimpleWithSelect(body, tab, rows, perm, [
         { name: 'MaHang', label: 'Mã hàng', type: 'text', required: true },
         { name: 'TenHang', label: 'Tên hàng (nội bộ)', type: 'text', required: true },
@@ -152,7 +158,10 @@ window.ModuleDanhMuc = (function () {
         { name: 'DonViCoBan', label: 'ĐVT chính', options: optDV },
         { name: 'DonViQuyDoi', label: 'ĐVT quy đổi', options: optDV },
         { name: 'LoaiRi', label: 'Tỷ lệ (1 ĐVT quy đổi = ? ĐVT chính)', type: 'number' },
-        { name: 'GiaBan', label: 'Giá bán (1 ĐVT chính)', type: 'number' }
+        { name: 'GiaBan', label: 'Giá bán (1 ĐVT chính)', type: 'number' },
+        /* `cot` = tên trường DÙNG ĐỂ HIỆN trong bảng. Ô chọn lưu ID, mà cột bảng in thẳng giá trị
+           trường -> không khai `cot` là cả cột hiện ra dãy số vô nghĩa. */
+        { name: 'TheKhoDanhMucID', label: 'Danh mục thẻ kho', options: optDM, cot: 'TenTheKho' }
       ]);
     }
 
@@ -215,8 +224,9 @@ window.ModuleDanhMuc = (function () {
     const cols = fields.map(f => f.name);
     body.innerHTML = `
       <div class="toolbar">${searchBoxHtml()}${perm.canCreate ? `<button class="btn" id="btnAdd">+ Thêm mới</button>` : ''}</div>
+      ${/* v7.86: ô chọn lưu ID nhưng bảng phải hiện TÊN — trường nào khai `cot` thì lấy trường đó. */''}
       <table><thead><tr>${cols.map(c => `<th>${fields.find(f=>f.name===c).label}</th>`).join('')}<th style="width:120px">Thao tác</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>${cols.map(c => `<td>${escapeHtml(r[c])}</td>`).join('')}<td>${rowActions(perm)}</td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="empty-hint">Chưa có dữ liệu</td></tr>`}</tbody></table>`;
+      <tbody>${rows.map(r => `<tr>${fields.map(f => `<td>${escapeHtml(r[f.cot || f.name])}</td>`).join('')}<td>${rowActions(perm)}</td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="empty-hint">Chưa có dữ liệu</td></tr>`}</tbody></table>`;
     if (perm.canCreate) document.getElementById('btnAdd').addEventListener('click', () => openCustomForm(tab, fields, null, perm));
     wireRowActions(body, rows, tab, perm, fields);
     wireTableSearch(body);

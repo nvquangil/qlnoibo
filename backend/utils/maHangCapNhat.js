@@ -69,6 +69,10 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
      truong nay: gui '' = xoa, khong gui = giu nguyen. */
   const guiTenHD = Object.prototype.hasOwnProperty.call(f, 'tenHoaDon');
   const coTenHD = guiTenHD && !!pool && await coCotTenHoaDon(pool).catch(() => false);
+  /* v7.86: TheKhoDanhMucID cung phai XOA duoc — day la O CHON co muc "— khong —", chon xong ma
+     ISNULL giu lai gia tri cu thi nguoi dung bam Luu may lan cung khong bo duoc danh muc.
+     Cung cach lam voi TenHoaDon: chi coi la "de trong = xoa" khi form CO gui truong nay len. */
+  const guiDM = Object.prototype.hasOwnProperty.call(f, 'theKhoDanhMucId');
   await rq()
     .input('TenHoaDon', sql.NVarChar, guiTenHD ? (String(f.tenHoaDon || '').trim() || null) : null)
     .input('id', sql.Int, maHangId)
@@ -89,7 +93,7 @@ async function capNhatMaHang(pool, tran, maHangId, f) {
               LoaiRi          = ISNULL(@LoaiRi, LoaiRi),
               GiaBan          = ISNULL(@GiaBan, GiaBan),
               NhomSanPhamID   = ISNULL(@NhomSanPhamID, NhomSanPhamID),
-              TheKhoDanhMucID = ISNULL(@TheKhoDanhMucID, TheKhoDanhMucID),
+              TheKhoDanhMucID = ${guiDM ? '@TheKhoDanhMucID' : 'ISNULL(@TheKhoDanhMucID, TheKhoDanhMucID)'},
               MaBarcode       = ISNULL(@MaBarcode, MaBarcode)
               ${coTenHD ? ', TenHoaDon = @TenHoaDon' : ''}
             WHERE MaHangID = @id`);
