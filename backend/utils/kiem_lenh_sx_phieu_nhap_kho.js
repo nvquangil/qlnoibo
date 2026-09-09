@@ -152,6 +152,12 @@ async function chayDanhMuc(query) {
     anhNho: (x) => x, enhanceInputs: () => {}, taiFile: () => {}, choAnhTai: async () => {},
     statusWithStage: (t) => String(t || ''), docSoTienBangChu: () => ''
   });
+  /* v7.92: renderOrders nay dung boDau() de dung chuoi tim kiem. LAY BAN THAT tu common.js chu
+     KHONG go lai o day — go lai la hai ban cong thuc, sua mot ben test van xanh. */
+  const sCommon = doc('../frontend/js/common.js');
+  const nguonBoDau = catKhoi(sCommon, 'function boDau(', '{', '}');
+  kiem(!!nguonBoDau, 'cat duoc boDau() that tu common.js');
+  w2.eval(nguonBoDau + '\nwindow.boDau = boDau;');
   const sTest = sFeQlsx.replace('return { render, getTabs, printLenhSanXuat };',
     'return { render, getTabs, printLenhSanXuat, __t: { renderOrders, bangThongTinBaoCao } };');
   kiem(sTest !== sFeQlsx, 'mo duoc renderOrders + bangThongTinBaoCao cho test');
@@ -177,9 +183,14 @@ async function chayDanhMuc(query) {
   await T.renderOrders({ canEdit: true, canDelete: true }, { canEdit: true }, { canView: true });
   const t4 = w2.document.getElementById('qBody').querySelector('table');
   const sCot4 = [...t4.querySelectorAll('thead th')].length;
-  const h4 = [...t4.querySelectorAll('tbody tr')];
-  bang(h4.length, 1, 'khong co lenh -> 1 hang thong bao');
+  /* v7.92: tbody con them mot hang "Khong tim thay" DUNG SAN nhung LUON AN (display:none) — dung
+     san la de bo cot STT noi colspan cho no. Chi dem cac hang DANG HIEN. */
+  const h4 = [...t4.querySelectorAll('tbody tr')].filter(tr => tr.style.display !== 'none');
+  bang(h4.length, 1, 'khong co lenh -> 1 hang thong bao DANG HIEN');
   bang(soO(h4[0]), sCot4, `hang thong bao trai du ${sCot4} o`);
+  const hAn = [...t4.querySelectorAll('tbody tr')].filter(tr => tr.style.display === 'none');
+  bang(hAn.length, 1, 'va dung 1 hang an san cho tim kiem');
+  bang(hAn.length ? soO(hAn[0]) : 0, sCot4, `hang "Khong tim thay" cung trai du ${sCot4} o`);
 
   /* ============================================================================================
      4. BAN IN cua lenh

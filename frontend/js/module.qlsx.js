@@ -732,6 +732,27 @@ window.ModuleQLSX = (function () {
     return null;
   }
 
+  /* ================================================================================================
+     v7.92 — TÌM KIẾM TOÀN DANH SÁCH LỆNH SX
+     Nguyen: "Danh sách lệnh sản xuất thêm chức năng tìm kiếm, gõ ký tự bất kỳ tìm kiếm trong toàn bộ
+     danh sách bất kể cột nào".
+
+     ⚠️ KHÔNG dùng `tr.textContent` (cách của wireTableSearch) cho bảng NÀY. Cột Thao tác của nó chứa
+     6 nút chữ — "Ghi tiến độ / In lệnh SX / In phiếu / In tài liệu KT / Sửa / Xóa" — nên gõ "in",
+     "s", "o"... là KHỚP HẾT MỌI DÒNG, tìm kiếm thành vô dụng. Cột STT cũng vậy: gõ "1" ra gần hết
+     bảng. Vì thế dựng sẵn chuỗi tìm từ ĐÚNG CÁC TRƯỜNG DỮ LIỆU của lệnh, cất vào `data-tim`.
+     Nhớ: thêm cột hiển thị mới thì thêm luôn trường tương ứng vào đây. */
+  function chuoiTim(o) {
+    return boDau([
+      o.MaDH, o.TenSanPham, o.MaRap, o.TenKhachHang,
+      o.TongSoLuong, fmtNumber(o.TongSoLuong),
+      fmtDate(o.NgayDat), fmtDate(o.NgayGiaoDuKien),
+      o.TenCongDoan, o.TenNhaGiaCong,
+      o.PhanTramHoanThanh + '%', o.TrangThai,
+      o.SoPhieuNhapKho, fmtDate(o.NgayNhapKho)
+    ].filter(x => x != null && x !== '').join('  '));
+  }
+
   async function renderOrders(perm, permTiendo, permTLKT) {
     const body = document.getElementById('qBody');
     const res = await apiGet('/api/qlsx/orders');
@@ -759,6 +780,10 @@ window.ModuleQLSX = (function () {
           ${chip('qua', '#fdecea', '#c0392b', soQua, 'Quá hạn')}
           ${chip('sap', '#fff8e1', '#a06800', soSap, 'Sắp đến hạn (≤5 ngày)')}
           ${chip('', '#f1f3f4', '#3c4043', rows.length, 'Tất cả')}
+          ${/* v7.92: ô tìm kiếm nằm CÙNG hàng với các chip lọc để thấy ngay là hai thứ này ăn khớp
+               với nhau (lọc Quá hạn xong gõ tìm là tìm TRONG nhóm quá hạn, không phải bỏ lọc). */''}
+          <input type="text" id="qTim" placeholder="🔍 Gõ để tìm trong toàn bộ danh sách..."
+                 autocomplete="off" style="min-width:280px;flex:1;max-width:420px;">
           <span id="dlDangLoc" style="color:#1a73e8;"></span>
         </div>
       </div>
@@ -769,7 +794,7 @@ window.ModuleQLSX = (function () {
       ${/* v6.48.2: tô màu bằng CLASS (.dl-qua/.dl-sap trong style.css) chứ không đặt style thẳng vào
            <tr>. Nền vẽ ở <td>, mà quy tắc :hover của bảng cũng nhắm vào <td> — nền đặt ở <tr> nằm
            DƯỚI nền của <td> nên rê chuột vào là màu cảnh báo biến mất. */''}
-      <tbody>${rows.map(o => { const n = nhomCua(o); const dl = tinhDeadline(o); return `<tr data-dl="${n}" class="${n ? 'dl-' + n : ''}">
+      <tbody>${rows.map(o => { const n = nhomCua(o); const dl = tinhDeadline(o); return `<tr data-dl="${n}" data-tim="${escapeHtml(chuoiTim(o))}" class="${n ? 'dl-' + n : ''}">
         <td>${o.AnhSanPham ? `<a href="${escapeHtml(o.AnhSanPham)}" target="_blank" rel="noopener" title="Bấm để xem ảnh lớn"><img src="${escapeHtml(o.AnhSanPham)}" style="width:44px;height:44px;object-fit:cover;border-radius:4px;"></a>` : ''}</td>
         ${/* Danh sách CHỈ HIỂN THỊ — sửa thì bấm nút Sửa để mở form chi tiết. */''}
         <td>${escapeHtml(o.MaDH)}</td><td>${escapeHtml(o.TenSanPham)}</td><td>${escapeHtml(o.MaRap || '')}</td><td>${escapeHtml(o.TenKhachHang)}</td>
@@ -795,16 +820,39 @@ window.ModuleQLSX = (function () {
     /* v6.48.1: bấm con số để lọc bảng. Bấm lại đúng nhóm đang lọc thì bỏ lọc — không phải đi tìm
        nút "Tất cả" mỗi lần. Dòng "chưa có lệnh nào" không có data-dl nên luôn hiện, không bị lọc mất. */
     let dangLoc = '';
+    /* Tách thành TỪNG TỪ và bắt buộc khớp HẾT: gõ "hong kong ao" ra được lệnh áo của khách Hồng Kông
+       dù trong dữ liệu hai mẩu đó nằm ở hai cột khác nhau. So nguyên chuỗi thì chỉ cần gõ thừa một
+       dấu cách giữa hai cột là mất sạch kết quả, người dùng tưởng "không có lệnh nào". */
+    let tuTim = [];
+    /* v7.92: dòng "Không tìm thấy" dựng SẴN lúc này (trước khi themCotStt chạy) — bộ cột STT tự động
+       nới `colspan` cho các dòng trải hết bảng, dựng sau là dòng này hụt đúng một ô. */
+    const oTrong = document.createElement('tr');
+    oTrong.style.display = 'none';
+    oTrong.innerHTML = '<td colspan="13" class="empty-hint">Không tìm thấy lệnh sản xuất nào khớp.</td>';
+    const tb = body.querySelector('table tbody');
+    if (tb) tb.appendChild(oTrong);
+
+    /* ⚠️ MỘT HÀM DUY NHẤT quyết định dòng nào hiện — chip deadline VÀ ô tìm kiếm cùng ghi vào
+       `tr.style.display`. Tách thành hai bộ lọc chạy riêng thì bộ nào chạy sau sẽ HIỆN LẠI những dòng
+       bộ kia vừa ẩn (vd đang lọc "Quá hạn", gõ tìm rồi xóa hết chữ là bảng bung ra đủ mọi lệnh). */
     const apLoc = () => {
+      let hien = 0;
       body.querySelectorAll('table tbody tr[data-dl]').forEach(tr => {
-        tr.style.display = (!dangLoc || tr.dataset.dl === dangLoc) ? '' : 'none';
+        const hopNhom = !dangLoc || tr.dataset.dl === dangLoc;
+        const kho = tr.dataset.tim || '';
+        const hopChu = tuTim.every(t => kho.includes(t));
+        const ok = hopNhom && hopChu;
+        tr.style.display = ok ? '' : 'none';
+        if (ok) hien++;
       });
+      const dangCoLoc = !!dangLoc || tuTim.length > 0;
+      oTrong.style.display = (dangCoLoc && !hien) ? '' : 'none';
       body.querySelectorAll('.dl-loc').forEach(a => {
         a.style.outline = (a.dataset.loc === dangLoc && dangLoc) ? '2px solid #1a73e8' : '';
       });
       const el = body.querySelector('#dlDangLoc');
-      if (el) el.textContent = dangLoc
-        ? `(đang lọc — bấm lại để bỏ lọc)`
+      if (el) el.textContent = dangCoLoc
+        ? `(hiện ${hien}/${rows.length} lệnh${dangLoc ? ' — bấm lại con số để bỏ lọc' : ''})`
         : '';
     };
     body.querySelectorAll('.dl-loc').forEach(a => a.addEventListener('click', () => {
@@ -812,6 +860,11 @@ window.ModuleQLSX = (function () {
       dangLoc = (l && l === dangLoc) ? '' : l;
       apLoc();
     }));
+    const oTim = body.querySelector('#qTim');
+    if (oTim) oTim.addEventListener('input', () => {
+      tuTim = boDau(oTim.value).split(/\s+/).filter(Boolean);
+      apLoc();
+    });
 
     body.querySelectorAll('.act-progress').forEach(b => b.addEventListener('click', () => openProgressForm(b.dataset.madh, perm)));
     body.querySelectorAll('.act-printlenh').forEach(b => b.addEventListener('click', () => printLenhSanXuat(b.dataset.madh)));
@@ -1603,12 +1656,8 @@ window.ModuleQLSX = (function () {
      AN TOÀN: nếu công ty CHƯA khai bộ phận nào tên kỹ thuật thì trả về TOÀN BỘ danh sách như cũ —
      tránh trường hợp danh sách rỗng làm không nhập nổi lệnh sản xuất. */
   function nhanVienKyThuat() {
-    // Bỏ dấu bằng cách LỌC THEO MÃ KÝ TỰ (0x300–0x36F là các dấu thanh/mũ sau normalize('NFD')),
-    // KHÔNG dùng regex chứa ký tự dấu — tránh hỏng khi file bị lưu lại bằng bảng mã khác.
-    const chuan = (s) => Array.from(String(s == null ? '' : s).normalize('NFD'))
-      .filter(c => { const m = c.codePointAt(0); return m < 0x300 || m > 0x36f; })
-      .join('').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
-    const ds = (dm.nhanVien || []).filter(nv => chuan(nv.TenBoPhan).includes('ky thuat'));
+    // v7.92: dùng boDau() của common.js — bản công thức bỏ dấu DUY NHẤT (trước đây chép riêng ở đây).
+    const ds = (dm.nhanVien || []).filter(nv => boDau(nv.TenBoPhan).includes('ky thuat'));
     return ds.length ? ds : (dm.nhanVien || []);
   }
 

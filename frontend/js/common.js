@@ -1750,6 +1750,20 @@ function ganBamDongXemChiTiet(root) {
   });
 }
 
+/* v7.92 — BỎ DẤU TIẾNG VIỆT để so khớp tìm kiếm. Bản công thức DUY NHẤT của cả hệ thống.
+
+   Người dùng gõ nhanh thường KHÔNG bỏ dấu ("ao thun", "hong kong"), mà dữ liệu trong máy thì có dấu
+   đầy đủ — so khớp thẳng là gõ mãi không ra, rồi kết luận "tìm kiếm hỏng".
+
+   ⚠️ Lọc dấu THEO MÃ KÝ TỰ (0x300–0x36F sau normalize('NFD')), KHÔNG viết regex chứa ký tự dấu:
+   file lưu lại bằng bảng mã khác là lớp dấu trong regex thành rác, hàm im lặng trả sai.
+   'đ' KHÔNG phải là 'd' + dấu nên NFD không tách được — phải thay tay. */
+function boDau(s) {
+  return Array.from(String(s == null ? '' : s).normalize('NFD'))
+    .filter(c => { const m = c.codePointAt(0); return m < 0x300 || m > 0x36f; })
+    .join('').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
+}
+
 function searchBoxHtml(id) {
   return `<input type="text" id="${id || 'dmSearchBox'}" placeholder="Gõ để tìm..." autocomplete="off" style="min-width:220px;">`;
 }
@@ -1769,10 +1783,12 @@ function wireTableSearch(body, id) {
   noResultRow.innerHTML = `<td colspan="${colCount}" class="empty-hint">Không tìm thấy kết quả phù hợp.</td>`;
   tbody.appendChild(noResultRow);
   input.addEventListener('input', () => {
-    const q = input.value.trim().toLowerCase();
+    /* v7.92: so khớp KHÔNG DẤU — gõ "ao thun" vẫn ra "Áo thun". Chỉ NỚI RỘNG kết quả, không loại
+       bớt dòng nào so với bản cũ. */
+    const q = boDau(input.value);
     let anyVisible = false;
     rows.forEach(tr => {
-      const match = !q || tr.textContent.toLowerCase().includes(q);
+      const match = !q || boDau(tr.textContent).includes(q);
       tr.style.display = match ? '' : 'none';
       if (match) anyVisible = true;
     });
