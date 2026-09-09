@@ -59,7 +59,13 @@ kiem(/const STT_NHAN = 'STT'/.test(sCommon), 'nhan cot khai o MOT cho (STT_NHAN)
    document / MutationObserver / setTimeout that. Thieu co nay thi eval chay o ngu canh Node. */
 const dom = new JSDOM('<body><div class="content"></div></body>', { runScripts: 'outside-only' });
 const w = dom.window;
-w.eval("const STT_NHAN = 'STT';\n" + nguon
+/* v7.90: bo STT nay con dung STT_RONG (be rong o STT khai o mot cho). Thieu la ham nem
+   ReferenceError, ma themCotStt boc try/catch nen NUOT LOI -> bang khong co STT va test bao
+   "khong chen duoc cot" rat kho lan. Doc thang tu common.js chu khong go lai so. */
+const STT_RONG = (sCommon.match(/const STT_RONG = '([^']+)'/) || [])[1];
+kiem(!!STT_RONG, 'be rong o STT khai o MOT cho (STT_RONG)', String(STT_RONG));
+const DAU = `const STT_NHAN = 'STT'; const STT_RONG = '${STT_RONG}';\n`;
+w.eval(DAU + nguon
   + '\nwindow.__stt = { themCotStt, danhLaiStt, capNhatSttSauKhiDoi };');
 const S = w.__stt;
 const D = w.document;
@@ -327,7 +333,7 @@ console.log('\n=== 9b. Chay tren bang THAT (renderPhieuThu / renderCongNoKH) ===
   /* wireTableSearch / wireTableSort THAT — day moi la cho de va nhau voi cot STT. */
   const thanTimKiem = catKhoi(sCommon, 'function wireTableSearch(body, id) {', '{', '}');
   w2.eval(thanTimKiem + "\nwindow.__timKiem = wireTableSearch;");
-  w2.eval("const STT_NHAN = 'STT';\n" + nguon + '\nwindow.__stt = { themCotStt, danhLaiStt };');
+  w2.eval(DAU + nguon + '\nwindow.__stt = { themCotStt, danhLaiStt };');
   const sTest = sFeCongNo.replace('return { render, getTabs, soChiTietKH };',
     'return { render, getTabs, soChiTietKH, __t: { renderPhieuThu, renderCongNoKH, wireTableSort } };');
   w2.eval(sTest);

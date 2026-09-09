@@ -182,12 +182,26 @@ window.ModulePhuKien = (function () {
      Bề rộng cột do <colgroup> quyết định nên tiêu đề LUÔN thẳng cột: tên phụ kiện dài nhất -> rộng
      nhất; các cột số hẹp lại. Số cột trong pkColsHtml PHẢI khớp số <th> của pkHeadHtml và số <td>
      của pkRowTemplate — cả 3 cùng đọc opts.showLoaiFilter / opts.showDonGia. */
+  /* v7.90 — BỀ RỘNG. Nguyen: "cột ô phụ kiện cho rộng gấp đôi", "cột quy đổi cho ngắn 1/2",
+     "các ô thể hiện hàng hóa, phụ kiện cho to để dễ nhìn".
+     Ô PHỤ KIỆN là ô người dùng gõ để tìm và đọc tên dài nhất -> rộng nhất bảng.
+     QUY ĐỔI và GIÁ QUY ĐỔI chỉ để ĐỐI CHIẾU (chỉ đọc, số ngắn) -> cắt còn ~một nửa, nhường chỗ.
+     ⚠️ Tổng % phải đúng 100 (cột nút để px, không tính vào). Cột STT do common.js chèn cũng tự
+     thêm một <col> 38px từ v7.90 — không phải khai ở đây. */
   function pkColsHtml(opts) {
     opts = opts || {};
     if (opts.showLoaiFilter) {   // Phiếu NHẬP: có cột Loại PK để lọc nhanh
-      return `<colgroup><col style="width:14%"><col style="width:24%"><col style="width:9%"><col style="width:8%"><col style="width:11%">${opts.showDonGia ? '<col style="width:9%"><col style="width:11%">' : ''}<col style="width:${opts.showDonGia ? '14' : '34'}%"><col style="width:42px"></colgroup>`;
+      return opts.showDonGia
+        /* Loại 12 · Phụ kiện 32 · SL 8 · ĐVT 8 · Quy đổi 6 · Đơn giá 9 · Giá quy đổi 6 · Ghi chú 19 */
+        ? '<colgroup><col style="width:12%"><col style="width:32%"><col style="width:8%"><col style="width:8%"><col style="width:6%"><col style="width:9%"><col style="width:6%"><col style="width:19%"><col style="width:42px"></colgroup>'
+        /* Loại 12 · Phụ kiện 40 · SL 9 · ĐVT 8 · Quy đổi 6 · Ghi chú 25 */
+        : '<colgroup><col style="width:12%"><col style="width:40%"><col style="width:9%"><col style="width:8%"><col style="width:6%"><col style="width:25%"><col style="width:42px"></colgroup>';
     }
-    return `<colgroup><col style="width:32%"><col style="width:10%"><col style="width:9%"><col style="width:13%">${opts.showDonGia ? '<col style="width:10%"><col style="width:12%">' : ''}<col style="width:${opts.showDonGia ? '14' : '36'}%"><col style="width:42px"></colgroup>`;
+    return opts.showDonGia
+      /* Phụ kiện 40 · SL 9 · ĐVT 8 · Quy đổi 6 · Đơn giá 10 · Giá quy đổi 6 · Ghi chú 21 */
+      ? '<colgroup><col style="width:40%"><col style="width:9%"><col style="width:8%"><col style="width:6%"><col style="width:10%"><col style="width:6%"><col style="width:21%"><col style="width:42px"></colgroup>'
+      /* Phụ kiện 44 · SL 10 · ĐVT 9 · Quy đổi 7 · Ghi chú 30 */
+      : '<colgroup><col style="width:44%"><col style="width:10%"><col style="width:9%"><col style="width:7%"><col style="width:30%"><col style="width:42px"></colgroup>';
   }
   function pkHeadHtml(opts) {
     opts = opts || {};

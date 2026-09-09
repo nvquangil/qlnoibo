@@ -923,6 +923,10 @@ function enhanceOneDatalist(input) {
    `wireTableSort` thì đổi thứ tự `<tr>` — nên phải theo dõi CẢ thuộc tính CẢ childList.
    ================================================================================================== */
 const STT_NHAN = 'STT';
+/* v7.90 — BỀ RỘNG Ô STT. Nguyen: "cột stt thể hiện mỗi số thôi để kích thước đủ 2 số là được".
+   38px = đủ 2 chữ số + đúng chữ "STT" ở tiêu đề; padding bóp lại còn 4px hai bên (mặc định của ô
+   trong `.phieu-ke` là 11px mỗi bên, tức riêng padding đã ăn 22px — hơn cả chỗ đặt 2 chữ số). */
+const STT_RONG = '38px';
 /* Ô "trải hết bảng" = dòng thông báo (chưa có dữ liệu / không tìm thấy) hoặc dòng ghi chú cuối bảng.
    Những dòng này KHÔNG được thêm ô mới — phải NỚI colspan, kẻo bảng lệch đúng 1 ô.
 
@@ -1012,6 +1016,9 @@ function themCotSttMotBang(table) {
        trước đây các bảng đó in cứng i+1 nên lọc xong số nhảy cách quãng. */
     const iStt = [...hangDau.children].findIndex(th => /^(STT|TT|#)$/i.test(th.textContent.trim()));
     table.__cotStt = iStt;
+    /* v7.90: nhớ rằng cột này CÓ SẴN trong mã nguồn -> về sau tuyệt đối không chèn ô vào dòng mới,
+       chỉ đánh dấu lại (xem ghi chú ở capNhatSttSauKhiDoi). */
+    table.__sttCoSan = true;
     const soCotCu = __soCotCuaBang(table);
     table.querySelectorAll(':scope > tbody > tr').forEach(tr => {
       const o = tr.children[iStt];
@@ -1019,12 +1026,29 @@ function themCotSttMotBang(table) {
     });
   } else {
     const soCot = __soCotCuaBang(table);
+    table.__sttCoSan = false;   // v7.90: cột do CHÍNH bộ này sinh ra -> được phép chèn ô cho dòng mới
     /* ownerDocument, KHÔNG phải `document`: bản in nằm trong iframe (một document khác) — tạo thẻ
        bằng document của trang chính rồi nhét sang là trông chờ trình duyệt tự nhận nuôi. */
     const d = table.ownerDocument;
+    /* ================================================================================================
+       ⚠️ v7.90 — CHÈN CẢ <col> VÀO <colgroup>, KHÔNG CHỈ <th>/<td>.
+
+       v7.84 quên mất chỗ này. `<colgroup>` gán bề rộng THEO VỊ TRÍ, nên chèn thêm một cột ở đầu mà
+       không chèn `<col>` là TOÀN BỘ bề rộng lệch đi một cột: ở lưới phụ kiện, STT ăn 32% của ô Phụ
+       kiện, ô Phụ kiện tụt xuống 10% của Số lượng, Quy đổi phình lên 36% của Ghi chú, còn Ghi chú
+       nhận 42px của nút X. Đúng ba thứ Nguyen báo ("STT dài, ô phụ kiện hẹp, quy đổi rộng") — và nó
+       vỡ ở MỌI bảng có colgroup (phụ kiện, kho vải, QLSX), không riêng một màn.
+       ================================================================================================ */
+    table.querySelectorAll(':scope > colgroup').forEach(cg => {
+      const col = d.createElement('col');
+      col.style.width = STT_RONG;
+      cg.insertBefore(col, cg.firstChild);
+    });
     const th = d.createElement('th');
     th.textContent = STT_NHAN;
-    th.style.width = '46px';
+    th.style.width = STT_RONG;
+    /* Ô STT chỉ chứa 1–3 chữ số nên bóp padding lại, kẻo riêng padding đã rộng hơn phần chữ. */
+    th.style.padding = '6px 4px';
     /* Sắp xếp theo STT là vô nghĩa (và đánh nhau với việc đánh lại số) -> wireTableSort bỏ qua. */
     th.setAttribute('data-nosort', '1');
     /* thead nhiều hàng (tiêu đề nhóm): ô STT phải cao trọn cả khối tiêu đề, không thì lệch. */
@@ -1039,6 +1063,7 @@ function themCotSttMotBang(table) {
       const td = d.createElement('td');
       if (!__dongKhongDanhSo(tr)) td.setAttribute('data-stt', '1');
       td.style.textAlign = 'center';
+      td.style.padding = '6px 4px';
       tr.insertBefore(td, tr.firstChild);
     });
   }
@@ -1046,7 +1071,16 @@ function themCotSttMotBang(table) {
   /* Theo dõi chính bảng này: thêm/bớt/đổi thứ tự dòng (childList) và ẩn/hiện dòng (attributes). */
   __gioTheoDoiStt(table);
 }
-/* Dòng MỚI được thêm vào bảng đã có STT thì chưa có ô STT -> vá rồi mới đánh lại số. */
+/* Dòng MỚI được thêm vào bảng thì chưa có ô STT -> vá rồi mới đánh lại số.
+
+   ⚠️ v7.90 — CHỈ ĐƯỢC CHÈN Ô Ở BẢNG DO CHÍNH BỘ NÀY SINH RA CỘT STT (`__sttCoSan === false`).
+
+   Bảng nào TỰ CÓ SẴN cột STT trong mã nguồn (Tồn cây vải, Thẻ kho, DMS... — 95 bảng) thì màn hình
+   thường vẽ lại `tbody` khi lọc/tìm kiếm, và các ô mới KHÔNG mang dấu `data-stt`. Bản v7.84 lấy dấu
+   đó làm căn cứ "dòng này thiếu ô STT" nên CHÈN THÊM một ô nữa: dòng thành 19 ô trong khi tiêu đề
+   có 18 -> cả bảng xô lệch sang phải đúng một cột.
+   Đúng lỗi Nguyen báo: "tồn cây vải, để không tìm kiếm thì phom đúng, tìm kiếm thì phom sai".
+   Cột đã có sẵn thì việc duy nhất phải làm là ĐÁNH DẤU LẠI ô đó rồi đánh số — không đụng cấu trúc. */
 function capNhatSttSauKhiDoi(table) {
   if (table.__dangDanhSo) return;
   const cot = table.__cotStt;
@@ -1058,10 +1092,16 @@ function capNhatSttSauKhiDoi(table) {
       if (__oTraiHet(tr, soCot)) return;
       const o = tr.children[cot];
       if (o && o.hasAttribute('data-stt')) return;
-      if (o && __dongKhongDanhSo(tr) && tr.children.length >= __soCotCuaBang(table)) return;
+      if (__dongKhongDanhSo(tr)) return;      // dòng TỔNG / dòng thông báo: không đánh số, không đụng
+      if (table.__sttCoSan) {
+        /* Cột vốn có sẵn -> ô đã tồn tại, chỉ thiếu dấu. Vá dấu, TUYỆT ĐỐI không chèn ô. */
+        if (o) o.setAttribute('data-stt', '1');
+        return;
+      }
       const td = table.ownerDocument.createElement('td');
-      if (!__dongKhongDanhSo(tr)) td.setAttribute('data-stt', '1');
+      td.setAttribute('data-stt', '1');
       td.style.textAlign = 'center';
+      td.style.padding = '6px 4px';
       tr.insertBefore(td, tr.children[cot] || null);
     });
   } finally { table.__dangDanhSo = false; }

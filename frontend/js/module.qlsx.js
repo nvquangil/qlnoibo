@@ -2239,7 +2239,9 @@ window.ModuleQLSX = (function () {
         <div class="form-row"><label>Ghi chú</label><input id="knGhiChu" value="${escapeHtml(rec.GhiChu || '')}"></div>
       </div>
       <div class="lap-wrap"><table class="lap-table">
-        <colgroup><col><col style="width:170px"></colgroup>
+        ${/* v7.90: THIẾU MỘT <col>. Bảng 3 cột mà colgroup chỉ có 2 -> 170px rơi vào cột "Màu" thay
+             vì ô nhập số. Cột STT chỉ chứa 1–3 chữ số nên 38px là đủ (chuẩn chung v7.90). */''}
+        <colgroup><col style="width:38px"><col><col style="width:170px"></colgroup>
         <thead><tr><th style="width:38px;">STT</th><th>Màu</th><th>SL nhập đợt này</th></tr></thead>
         <tbody>${rows.map((m, __i) => `<tr data-knrow data-mau="${m.MauSacID}"><td style="text-align:center;">${__i + 1}</td>
           <td>${escapeHtml(m.TenMau || '')}</td>
@@ -2373,12 +2375,16 @@ window.ModuleQLSX = (function () {
         <div class="form-row"><label>Ghi chú</label><input id="smGhiChu" value="${escapeHtml(rec.GhiChu || '')}"></div>
       </div>
       <div class="lap-wrap"><table class="lap-table">
-        <colgroup><col><col style="width:170px"></colgroup>
+        ${/* v7.90: thiếu một <col> y như lưới Kho nhập ở trên. */''}
+        <colgroup><col style="width:38px"><col><col style="width:170px"></colgroup>
         <thead><tr><th style="width:38px;">STT</th><th>Màu</th><th>SL lũy kế (cái)</th></tr></thead>
         <tbody>${rows.map((m, __i) => `<tr data-smrow data-mau="${m.MauSacID}"><td style="text-align:center;">${__i + 1}</td>
           <td>${escapeHtml(m.TenMau || '')}</td>
           <td class="col-so"><input class="sm-sl" type="number" min="0" value="${m.SoLuongLuyKe != null ? m.SoLuongLuyKe : ''}"></td></tr>`).join('')
-          || '<tr><td colspan="2" class="empty-hint">Lần ghi nhận này không có dòng màu nào.</td></tr>'}</tbody></table></div>
+          // v7.90: colspan phải là 3 (bảng có 3 cột) — để 2 là dòng thông báo hụt một ô.
+          // ⚠️ Chỗ này nằm BÊN TRONG một biểu thức của template, không phải phần chữ, nên ghi chú
+          //    phải viết bằng dấu gạch chéo đôi. Bọc kiểu chèn-biểu-thức là đứt biểu thức, vỡ file.
+          || '<tr><td colspan="3" class="empty-hint">Lần ghi nhận này không có dòng màu nào.</td></tr>'}</tbody></table></div>
       <div class="toolbar" style="margin-top:6px;"><span class="empty-hint" style="padding:0;">Tổng: <b id="smTong">0</b> cái</span></div>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="smHuy">Hủy</button>
