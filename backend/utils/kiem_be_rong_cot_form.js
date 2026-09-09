@@ -53,7 +53,7 @@ function catKhoi(s, moc, mo, dong) {
 }
 
 /* Nap THAT bo STT ra chay. */
-const TEN = ['function __oTraiHet(', 'function __dongKhongDanhSo(', 'function __soCotCuaBang(',
+const TEN = ['function __oTraiHet(', 'function __dongKhongDanhSo(', 'function __laDongDuLieu(', 'function __soCotCuaBang(',
   'function __daCoStt(', 'function danhLaiStt(', 'function __gioTheoDoiStt(',
   'function themCotSttMotBang(', 'function capNhatSttSauKhiDoi(', 'function themCotStt('];
 const nguon = TEN.map(t => catKhoi(sCommon, t, '{', '}')).join('\n');
@@ -152,6 +152,60 @@ t.querySelector('tbody').innerHTML = '<tr><td>a</td><td>1</td></tr><tr><td>b</td
 w.__stt.capNhatSttSauKhiDoi(t);
 bang([...t.querySelectorAll('tbody tr')].map(soO), [3, 3], 'dong moi duoc va them o STT nhu cu');
 bang([...t.querySelectorAll('tbody tr')].map(tr => tr.children[0].textContent), ['1', '2'], 'danh so 1,2');
+
+/* ================================================================================================
+   3b. ⚠️ v7.91 — BAN IN PHIEU BAN HANG: KHONG DUOC GHI DE NHAN CUA DONG TONG
+   ------------------------------------------------------------------------------------------------
+   Nguyen gui anh ban in: cac dong "TỔNG CỘNG / CK NPP / TỔNG TIỀN HÀNG / THUẾ GTGT / TỔNG TIỀN SAU
+   THUẾ" MAT SACH NHAN, thay bang 2,3,4,5,6.
+   Vi ban in do TU CO cot STT -> nhanh __sttCoSan danh dau `data-stt` len o dau cua MOI dong roi
+   danhLaiStt() ghi de. O dau cua dong tong lai chinh la O NHAN (gop nhieu cot) -> nhan bi xoa.
+   Mat nhan tren chung tu GIAO CHO KHACH la hong nang nhat trong ca nhom loi nay.
+   ================================================================================================ */
+console.log('\n=== 3b. ⚠️ Ban in phieu ban hang: giu nguyen nhan dong TONG ===');
+w = moiTruong(); D = w.document;
+/* Dung lai dung phom ban in: 10 cot, 1 dong hang, roi 5 dong tong co o nhan gop cot. */
+const NHAN = ['TỔNG CỘNG', 'CK NPP (17% × tổng cộng)', 'TỔNG TIỀN HÀNG', 'THUẾ GTGT (0%)',
+  'TỔNG TIỀN SAU THUẾ GTGT'];
+D.querySelector('.content').innerHTML = `<table>
+  <thead><tr><th>STT</th><th>MÃ + ẢNH</th><th>TÊN HÀNG</th><th>ĐVT</th><th>SỐ LƯỢNG</th>
+    <th>ĐVT QUY ĐỔI</th><th>GIÁ BÁN LẺ</th><th>CK SHOP</th><th>GIÁ BÁN</th><th>THÀNH TIỀN</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>A26T0221</td><td>Áo sơ mi BT 2 túi ngực</td><td>Cái</td><td>5</td>
+      <td>1 Ri5</td><td>115.000</td><td>33%</td><td>77.050</td><td>385.250</td></tr>
+    <tr><td colspan="4">${NHAN[0]}</td><td>46</td><td colspan="4"></td><td>5.458.490</td></tr>
+    <tr><td colspan="9">${NHAN[1]}</td><td>927.943</td></tr>
+    <tr><td colspan="9">${NHAN[2]}</td><td>4.530.547</td></tr>
+    <tr><td colspan="9">${NHAN[3]}</td><td>0</td></tr>
+    <tr><td colspan="9">${NHAN[4]}</td><td>4.530.547</td></tr>
+  </tbody></table>`;
+w.__stt.themCotStt(D.querySelector('.content'));
+t = D.querySelector('table');
+const hangIn = [...t.querySelectorAll('tbody tr')];
+bang(hangIn[0].children[0].textContent, '1', 'dong hang that van duoc danh so 1');
+bang(hangIn.slice(1).map(tr => tr.children[0].textContent), NHAN,
+  '⚠️ 5 dong TONG GIU NGUYEN NHAN — khong bi thay bang 2,3,4,5,6');
+kiem(!hangIn.slice(1).some(tr => /^[0-9]+$/.test(tr.children[0].textContent.trim())),
+  'khong dong tong nao bi ghi mot con so vao o nhan');
+bang(t.querySelectorAll('thead th').length, 10, 'ban in tu co STT -> KHONG chen them cot');
+bang(hangIn.map(soO), [10, 10, 10, 10, 10, 10], 'moi dong van du 10 o');
+
+console.log('\n  --- Bang KHONG co STT san + co dong tong gop o ---');
+w = moiTruong(); D = w.document;
+D.querySelector('.content').innerHTML = `<table>
+  <thead><tr><th>Tên</th><th>SL</th><th>Tiền</th></tr></thead>
+  <tbody>
+    <tr><td>a</td><td>1</td><td>10</td></tr>
+    <tr><td>b</td><td>2</td><td>20</td></tr>
+    <tr><td colspan="2">TỔNG CỘNG</td><td>30</td></tr>
+  </tbody></table>`;
+w.__stt.themCotStt(D.querySelector('.content'));
+t = D.querySelector('table');
+const h2 = [...t.querySelectorAll('tbody tr')];
+bang(h2.map(soO), [4, 4, 4], 'moi dong du 4 o sau khi chen STT');
+bang(h2.map(tr => tr.children[0].textContent), ['1', '2', ''],
+  '⚠️ 2 dong hang danh so 1,2; dong TONG de TRONG o STT');
+bang(h2[2].children[1].textContent, 'TỔNG CỘNG', 'nhan TỔNG CỘNG con nguyen ven');
 
 /* ================================================================================================
    4. LUOI PHU KIEN — Quy doi ngan 1/2, o Phu kien rong ra

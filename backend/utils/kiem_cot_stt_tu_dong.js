@@ -45,7 +45,7 @@ function catKhoi(s, moc, mo, dong) {
   }
   return '';
 }
-const TEN = ['function __oTraiHet(', 'function __dongKhongDanhSo(', 'function __soCotCuaBang(',
+const TEN = ['function __oTraiHet(', 'function __dongKhongDanhSo(', 'function __laDongDuLieu(', 'function __soCotCuaBang(',
   'function __daCoStt(', 'function danhLaiStt(', 'function __gioTheoDoiStt(',
   'function themCotSttMotBang(', 'function capNhatSttSauKhiDoi(', 'function themCotStt('];
 const nguon = TEN.map(t => {
@@ -265,8 +265,12 @@ const sCongNo = doc('../frontend/js/module.congno.js');
 kiem(/const cot = th\.cellIndex >= 0 \? th\.cellIndex : idx;/.test(sCongNo),
   'wireTableSort doc th.cellIndex LUC BAM, khong dung idx chup luc gan');
 kiem(!/tr\.cells\[idx\]/.test(sCongNo), 'khong con cho nao dung idx chup san de lay o');
-/* Ca frontend khong duoc con cho nao lay o theo chi so cung. */
-const files = fs.readdirSync(path.join(G, '../frontend/js')).filter(f => f.endsWith('.js'));
+/* Ca frontend khong duoc con cho nao lay o theo chi so cung.
+   ⚠️ TRU common.js: no la CHINH BO DUNG COT STT, viec cua no la thao tac o theo vi tri
+   (`tr.children[0]`, `tr.children[cot]`). Cam chinh cai may dem o thi con gi de dem. Cac module
+   MAN HINH thi tuyet doi khong duoc — chen cot la lech het. */
+const files = fs.readdirSync(path.join(G, '../frontend/js'))
+  .filter(f => f.endsWith('.js') && f !== 'common.js');
 const xau = [];
 files.forEach(f => {
   const s = doc('../frontend/js/' + f);

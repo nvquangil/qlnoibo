@@ -945,6 +945,33 @@ function __oTraiHet(tr, soCot) {
 function __dongKhongDanhSo(tr) {
   return tr.hasAttribute('data-tong') || !!(tr.querySelector && tr.querySelector('.empty-hint'));
 }
+/* ==================================================================================================
+   ⚠️ v7.91 — "DÒNG NÀY CÓ PHẢI MỘT BẢN GHI KHÔNG?"
+
+   Nguyen: bản in Phiếu xuất kho kiêm biên bản bàn giao — các dòng TỔNG ở cuối bảng MẤT SẠCH NHÃN,
+   thay vào đó là 2, 3, 4, 5, 6.
+
+   Vì sao: bản in đó TỰ CÓ cột STT, nên nhánh `__sttCoSan` đi đánh dấu `data-stt` lên ô đầu của MỌI
+   dòng trong tbody rồi `danhLaiStt` GHI ĐÈ chữ trong ô đó bằng số thứ tự. Các dòng tổng ("Tổng
+   cộng", "Cộng tiền hàng", "Thuế GTGT"...) có ô nhãn GỘP NHIỀU CỘT nằm ngay ở vị trí cột STT —
+   thế là nhãn bị xoá, thay bằng số. Mất nhãn trên chứng từ GIAO CHO KHÁCH là lỗi nặng nhất trong
+   nhóm này, và nó đã có từ v7.84 chứ không phải mới.
+
+   `__oTraiHet` không bắt được vì dòng tổng có NHIỀU ô (nhãn + các cột tiền), không phải một ô.
+
+   DẤU HIỆU CHẮC CHẮN của một dòng dữ liệu: ô đầu KHÔNG gộp cột, và cả dòng có ĐỦ số ô bằng số cột
+   của bảng. Dòng tổng bao giờ cũng hụt ô (vì đã gộp) hoặc mở đầu bằng ô gộp.
+   ================================================================================================== */
+function __laDongDuLieu(tr, soCot) {
+  if (__dongKhongDanhSo(tr)) return false;
+  if (__oTraiHet(tr, soCot)) return false;
+  const o0 = tr.children[0];
+  if (!o0) return false;
+  if ((parseInt(o0.getAttribute('colspan'), 10) || 1) > 1) return false;   // mở đầu bằng ô gộp
+  const soO = [...tr.children].reduce((s, c) => s + (parseInt(c.getAttribute('colspan'), 10) || 1), 0);
+  if (soCot > 0 && soO < soCot) return false;                              // hụt ô -> có ô gộp ở giữa
+  return true;
+}
 function __soCotCuaBang(table) {
   const hd = table.querySelector(':scope > thead > tr');
   if (!hd) return 0;
@@ -1020,9 +1047,11 @@ function themCotSttMotBang(table) {
        chỉ đánh dấu lại (xem ghi chú ở capNhatSttSauKhiDoi). */
     table.__sttCoSan = true;
     const soCotCu = __soCotCuaBang(table);
+    /* ⚠️ v7.91: CHỈ đánh dấu ô của DÒNG DỮ LIỆU. Dòng tổng có ô nhãn gộp cột nằm đúng vị trí cột
+       STT — đánh dấu vào đó là danhLaiStt() ghi đè, XOÁ MẤT nhãn "TỔNG CỘNG" trên bản in. */
     table.querySelectorAll(':scope > tbody > tr').forEach(tr => {
       const o = tr.children[iStt];
-      if (o && !__oTraiHet(tr, soCotCu) && !__dongKhongDanhSo(tr)) o.setAttribute('data-stt', '1');
+      if (o && __laDongDuLieu(tr, soCotCu)) o.setAttribute('data-stt', '1');
     });
   } else {
     const soCot = __soCotCuaBang(table);
@@ -1061,7 +1090,8 @@ function themCotSttMotBang(table) {
       const oTrai = __oTraiHet(tr, soCot);
       if (oTrai) { oTrai.setAttribute('colspan', String((parseInt(oTrai.getAttribute('colspan'), 10) || 1) + 1)); return; }
       const td = d.createElement('td');
-      if (!__dongKhongDanhSo(tr)) td.setAttribute('data-stt', '1');
+      /* v7.91: dòng tổng vẫn được THÊM ô cho thẳng cột, nhưng KHÔNG đánh dấu -> không bị ghi số. */
+      if (__laDongDuLieu(tr, soCot)) td.setAttribute('data-stt', '1');
       td.style.textAlign = 'center';
       td.style.padding = '6px 4px';
       tr.insertBefore(td, tr.firstChild);
@@ -1086,13 +1116,19 @@ function capNhatSttSauKhiDoi(table) {
   const cot = table.__cotStt;
   if (cot == null) return;
   const soCot = __soCotCuaBang(table);
+  /* ⚠️ v7.91: SỐ Ô KỲ VỌNG của một dòng dữ liệu KHÁC NHAU ở hai loại bảng.
+     Bảng có STT sẵn: dòng đủ `soCot` ô. Bảng do bộ này chèn cột: dòng MỚI chưa có ô STT nên mới
+     chỉ có `soCot - 1` ô — lấy `soCot` mà so là dòng nào cũng bị coi là "dòng tổng" và không được
+     chèn ô nữa (đã làm vỡ đúng như vậy lúc đầu). */
+  const soCotMong = table.__sttCoSan ? soCot : Math.max(1, soCot - 1);
   table.__dangDanhSo = true;
   try {
     table.querySelectorAll(':scope > tbody > tr, :scope > tfoot > tr').forEach(tr => {
       if (__oTraiHet(tr, soCot)) return;
       const o = tr.children[cot];
       if (o && o.hasAttribute('data-stt')) return;
-      if (__dongKhongDanhSo(tr)) return;      // dòng TỔNG / dòng thông báo: không đánh số, không đụng
+      /* v7.91: dòng TỔNG / thông báo -> không đánh số, và tuyệt đối không ghi đè ô nhãn của nó. */
+      if (!__laDongDuLieu(tr, soCotMong)) return;
       if (table.__sttCoSan) {
         /* Cột vốn có sẵn -> ô đã tồn tại, chỉ thiếu dấu. Vá dấu, TUYỆT ĐỐI không chèn ô. */
         if (o) o.setAttribute('data-stt', '1');
