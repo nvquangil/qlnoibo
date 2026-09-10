@@ -1386,6 +1386,19 @@ router.delete('/orders/:maDH/sodo/:id', requireAuth, requirePermission('QLSX', '
     const pool = await getPool();
     const order = await getOrderByMaDH(pool, req.params.maDH);
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    /* v7.98: NÓI RÕ AI ĐANG GIỮ sơ đồ này thay vì để FK ném lỗi rồi đoán.
+       Từ migration_v699, ChiDinhVaiSX.SoDoID cũng trỏ vào đây (trước chỉ có TienDoSanXuat.SoDoID),
+       nên câu "có thể đã có lần Ghi tiến độ Cắt dùng sơ đồ này" ở nhánh catch cũ giờ có thể chỉ SAI
+       CHỖ — người dùng đi tìm ở sổ cắt trong khi thứ đang giữ là một dòng chỉ định vải. */
+    if (await coCotQLSX(pool, 'ChiDinhVaiSX', 'SoDoID')) {
+      const nCD = (await pool.request().input('id', sql.Int, req.params.id)
+        .query('SELECT COUNT(*) AS n FROM ChiDinhVaiSX WHERE SoDoID=@id')).recordset[0];
+      if (Number(nCD.n) > 0) {
+        return res.status(400).json({ success: false,
+          message: `Không xóa được: có ${nCD.n} dòng Chỉ định vải SX đang dùng sơ đồ này để tính định lượng. `
+            + 'Vào Chỉ định vải SX bỏ chọn sơ đồ ở các dòng đó (hoặc đổi sang sơ đồ khác) rồi xóa lại.' });
+      }
+    }
     await pool.request().input('id', sql.Int, req.params.id).input('donHangId', sql.Int, order.DonHangID)
       .query('DELETE FROM DonHangChiTietSoDo WHERE ID=@id AND DonHangID=@donHangId');
     res.json({ success: true });
@@ -1510,6 +1523,27 @@ router.put('/orders/:maDH/nhagiacongchitiet/:id/nhan', requireAuth, requirePermi
 // KHONG lien quan cau truc vai (go tu do) cua Ra lenh SX. La nguon KHOA xuat kho vai (xem khovai.js).
 // v5.47.2: Loai vai/Mau GO TU DO — neu chua co trong danh muc thi TU TAO (mot so vai chua co, chi dinh
 // xong moi di mua). Sau nay nhap cay vai voi dung Loai vai/Mau nay -> gate xuat kho khop duoc.
+/* ================================================================================================
+   v7.98 — BẢN DANH SÁCH "KIỂU VẢI CHỈ ĐỊNH" DUY NHẤT.
+
+   Trước v7.98 cột này là NHỊ PHÂN Chính/Phối và chỗ ghi ép cứng bằng
+       it.kieu === 'Phối' ? 'Phối' : 'Chính'
+   nghĩa là gửi lên 'Phụ' thì backend âm thầm ghi thành 'Chính' — dòng vải phụ biến mất vào vải chính
+   mà không báo gì. Nay Nguyen cần 3 kiểu (Chính / Phụ / Phối) nên danh sách phải nằm ĐÚNG MỘT CHỖ.
+
+   ⚠️ THÊM KIỂU THỨ TƯ thì phải sửa kèm 3 chỗ nữa, KHÔNG chỉ mảng này (xem migration_v699.sql):
+     - routes/khovai.js  : 4 cột tổng đang cộng riêng từng kiểu (thiếu kiểu = mất số, không báo lỗi)
+     - frontend module.qlsx.js  : <select class="cdv-kieu">
+     - frontend module.khovai.js: cờ `coChiDinh` + dòng "Vải ... yêu cầu"
+   ChiDinhVaiSX.Kieu là NVARCHAR(10) và KHÔNG có CHECK constraint, nên CSDL sẽ nhận bất kỳ chuỗi nào —
+   chặn duy nhất là hàm này. Giá trị lạ -> quy về 'Chính' (mặc định cũ), không ném lỗi làm hỏng cả
+   lần lưu chỉ vì một ô chọn sai.
+   ================================================================================================ */
+const KIEU_VAI_HOP_LE = ['Chính', 'Phụ', 'Phối'];
+function KIEU_VAI_CHI_DINH(v) {
+  const s = String(v == null ? '' : v).trim();
+  return KIEU_VAI_HOP_LE.includes(s) ? s : 'Chính';
+}
 function slugMaMauQ(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
     .toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 26) || 'MAU';
@@ -1615,14 +1649,51 @@ router.get('/chidinhvaisx', requireAuth, requirePermission('QLSX', 'view'), requ
        TongKGChiDinh  - tổng SL chỉ định của TẤT CẢ các bản (nhiều bản có tên -> cộng hết)
        TongKGDaXuat   - tổng KG đã xuất thực tế theo các phiếu xuất của đơn
      Frontend so 2 số này để hiện Chưa xuất / Xuất một phần / Đã xuất kho. */
+  /* ================================================================================================
+     v8.01 — SO ĐÚNG THỨ NGUYÊN. Truoc day cot "Xuat kho vai" so SUM(SoKGYeuCau) voi SUM(KGXuat)
+     ma BO QUA DVTVaiYeuCau. Don vi ben chi dinh GO TU DO tu danh muc (Kg / Met / Ri / Cay...), nen
+     khai "SL yeu cau = 500, don vi = Met" roi dem so voi 120 kg da xuat => "Xuat mot phan 120/500"
+     VINH VIEN, khong bao gio het. Nguyen bao dung loi nay.
+
+     Nay chia thanh RO theo thu nguyen, so tung ro rieng. Phieu xuat ghi CA kg CA met
+     (PhieuXuatVaiChiTiet.KGXuat + .SoMet, ca hai co tu migration_v646) nen ro nao cung co so de so.
+
+       ro MET  : chi dinh = SUM(v.SoMet)            <-> da xuat = SUM(ct.SoMet)
+       ro KG   : chi dinh = SUM(v.SoKGYeuCau) cua dong co don vi LA KG  <-> da xuat = SUM(ct.KGXuat)
+       ro KHAC : dong co SL nhung don vi khong phai kg va khong khai met -> KHONG SO DUOC, chi dem so
+                 dong de frontend noi ro "khong co can cu", thay vi phan bua la thieu.
+
+     ⚠️ Chi co DUNG MOT phep kiem chuoi: "don vi co phai kg khong". Mac dinh AN TOAN la KHONG so
+     duoc — don vi la va thi thua nhan khong biet, chu khong doan roi xep nham ro.
+     Cot mac dinh cua DVTVaiYeuCau la N'Kg' nen phan lon dong that se roi vao ro KG.
+     ================================================================================================ */
+  const DVT_LA_KG = "LOWER(LTRIM(RTRIM(ISNULL(v.DVTVaiYeuCau, N'Kg')))) IN (N'kg', N'kgs', N'kilo', N'kilogam', N'kilogram')";
   const rows = (await pool.request().query(`
     SELECT d.DonHangID, d.MaDH, d.TenSanPham,
       CASE WHEN EXISTS (SELECT 1 FROM ChiDinhVaiSX v WHERE v.DonHangID=d.DonHangID) THEN 1 ELSE 0 END AS DaChiDinh,
       (SELECT COUNT(*) FROM PhieuXuatVai p WHERE p.DonHangID = d.DonHangID) AS SoPhieuXuat,
+      /* giu ten cu de khong lam vo cho nao khac dang doc field nay */
       ISNULL((SELECT SUM(v.SoKGYeuCau) FROM ChiDinhVaiSX v WHERE v.DonHangID = d.DonHangID), 0) AS TongKGChiDinh,
       ISNULL((SELECT SUM(ct.KGXuat) FROM PhieuXuatVaiChiTiet ct
               JOIN PhieuXuatVai p ON p.PhieuXuatID = ct.PhieuXuatID
-              WHERE p.DonHangID = d.DonHangID), 0) AS TongKGDaXuat
+              WHERE p.DonHangID = d.DonHangID), 0) AS TongKGDaXuat,
+      /* --- v8.01: ba ro --- */
+      ISNULL((SELECT SUM(v.SoKGYeuCau) FROM ChiDinhVaiSX v
+              WHERE v.DonHangID = d.DonHangID AND ISNULL(v.SoKGYeuCau, 0) > 0 AND ${DVT_LA_KG}), 0) AS ChiDinhKg,
+      ISNULL((SELECT SUM(v.SoMet) FROM ChiDinhVaiSX v
+              WHERE v.DonHangID = d.DonHangID AND ISNULL(v.SoMet, 0) > 0), 0) AS ChiDinhMet,
+      (SELECT COUNT(*) FROM ChiDinhVaiSX v
+        WHERE v.DonHangID = d.DonHangID AND ISNULL(v.SoMet, 0) <= 0
+          AND ISNULL(v.SoKGYeuCau, 0) > 0 AND NOT (${DVT_LA_KG})) AS SoDongKhongSoDuoc,
+      ISNULL((SELECT SUM(ct.SoMet) FROM PhieuXuatVaiChiTiet ct
+              JOIN PhieuXuatVai p ON p.PhieuXuatID = ct.PhieuXuatID
+              WHERE p.DonHangID = d.DonHangID), 0) AS TongMetDaXuat,
+      /* --- v8.01: trang thai SO DO do cong doan Ky thuat khai (DonHangChiTietSoDo) ---
+         Tach rieng "co dong so do" va "dong DA KHAI MET": dinh luong vai (v7.98) can MetSoDoDai,
+         co so do ma trong met thi mo form ra chi thay dong canh bao — cot nay noi truoc. */
+      (SELECT COUNT(*) FROM DonHangChiTietSoDo sd WHERE sd.DonHangID = d.DonHangID) AS SoSoDo,
+      (SELECT COUNT(*) FROM DonHangChiTietSoDo sd
+        WHERE sd.DonHangID = d.DonHangID AND ISNULL(sd.MetSoDoDai, 0) > 0) AS SoSoDoCoMet
     FROM DonHangSanXuat d ORDER BY d.DonHangID DESC`)).recordset;
   res.json({ success: true, data: rows });
 });
@@ -2028,15 +2099,25 @@ router.get('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'view')
   const order = await getOrderByMaDH(pool, req.params.maDH);
   if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
   const ten = req.query.ten != null ? String(req.query.ten) : '';   // v5.54: lọc theo BẢN
+  /* v7.98: tra them SoDoID / SoLop / PhanTramHaoHut (dinh luong vai — migration_v699). Dung
+     coCotQLSX() (helper CO SAN trong file nay, co cache) de man hinh KHONG TRANG khi CSDL chua chay
+     migration: thieu cot thi tra NULL va frontend tu an dai "Dinh luong". */
+  const coDL = await coCotQLSX(pool, 'ChiDinhVaiSX', 'SoDoID');
   const rows = (await pool.request().input('id', sql.Int, order.DonHangID).input('ten', sql.NVarChar, ten).query(`
     SELECT cd.Id, cd.Kieu, cd.LoaiVaiID, cd.MauSacID, cd.SoKGYeuCau, cd.SoMet, cd.DVTVaiYeuCau, lv.TenLoaiVai, ms.TenMau
+      ${coDL ? ', cd.SoDoID, cd.SoLop, cd.PhanTramHaoHut'
+             : ", CAST(NULL AS INT) AS SoDoID, CAST(NULL AS DECIMAL(10,2)) AS SoLop, CAST(NULL AS DECIMAL(6,2)) AS PhanTramHaoHut"}
     FROM ChiDinhVaiSX cd
     LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = cd.LoaiVaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = cd.MauSacID
     WHERE cd.DonHangID=@id AND ISNULL(cd.TenPhieu, N'')=@ten ORDER BY cd.Kieu, cd.Id`)).recordset;
   const _sd = await getSoDoList(pool, order.DonHangID);   // v5.52
   const MaRap = [...new Set(_sd.map(s => s.MaRap).filter(Boolean))].join(', ');
-  res.json({ success: true, data: { order: { MaDH: order.MaDH, TenSanPham: order.TenSanPham, MaRap }, ten, rows } });
+  /* v7.98: tra LUON ca danh sach so do — truoc day goi getSoDoList roi chi lay MaRap rot mat phan
+     con lai. Form dinh luong can MetSoDoDai/KhoVaiSoDo cua tung so do de tinh, khong the goi API
+     khac vi mo hinh so do la "nhieu dong o cap don hang" (migration_v513). */
+  const soDo = _sd.map(s => ({ ID: s.ID, MetSoDoDai: s.MetSoDoDai, KhoVaiSoDo: s.KhoVaiSoDo, MaRap: s.MaRap, GhiChu: s.GhiChu }));
+  res.json({ success: true, data: { order: { MaDH: order.MaDH, TenSanPham: order.TenSanPham, MaRap }, ten, rows, soDo, coDinhLuong: coDL } });
 });
 router.put('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'chidinhvaisx'), async (req, res) => {
   try {
@@ -2049,6 +2130,10 @@ router.put('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'edit')
     // Ghi đè theo BẢN: xóa dòng của bản cũ rồi chèn lại với tên bản mới (hỗ trợ đổi tên).
     await pool.request().input('id', sql.Int, order.DonHangID).input('ot', sql.NVarChar, oldTen)
       .query(`DELETE FROM ChiDinhVaiSX WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ot`);
+    /* v7.98: co cot dinh luong hay chua (migration_v699). Chua chay migration thi VAN LUU BINH THUONG
+       phan chi dinh, chi bo qua 3 cot moi — khong de man hinh chet vi thieu cot. */
+    const coDL = await coCotQLSX(pool, 'ChiDinhVaiSX', 'SoDoID');
+    const soHoacNull = (v) => (v === '' || v == null || isNaN(Number(v))) ? null : Number(v);
     for (const it of items) {
       const lv = await resolveLoaiVaiId(pool, it.tenLoaiVai);   // gõ tự do -> tự tạo trong danh mục nếu chưa có
       const ms = await resolveMauSacIdQ(pool, it.tenMau);
@@ -2056,14 +2141,19 @@ router.put('/chidinhvaisx/:maDH', requireAuth, requirePermission('QLSX', 'edit')
       await pool.request()
         .input('dh', sql.Int, order.DonHangID)
         .input('ten', sql.NVarChar, ten)
-        .input('kieu', sql.NVarChar, it.kieu === 'Phối' ? 'Phối' : 'Chính')
+        .input('kieu', sql.NVarChar, KIEU_VAI_CHI_DINH(it.kieu))
         .input('lv', sql.Int, lv)
         .input('ms', sql.Int, ms)
         .input('kg', sql.Decimal(10, 2), (it.soKG === '' || it.soKG == null) ? null : Number(it.soKG))
         .input('met', sql.Decimal(10, 2), (it.soMet === '' || it.soMet == null) ? null : Number(it.soMet))   // v5.50
         .input('dvt', sql.NVarChar, it.dvt || 'Kg')
-        .query(`INSERT INTO ChiDinhVaiSX (DonHangID, TenPhieu, Kieu, LoaiVaiID, MauSacID, SoKGYeuCau, SoMet, DVTVaiYeuCau)
-                VALUES (@dh, @ten, @kieu, @lv, @ms, @kg, @met, @dvt)`);
+        .input('sodo', sql.Int, coDL ? soHoacNull(it.soDoId) : null)
+        .input('solop', sql.Decimal(10, 2), coDL ? soHoacNull(it.soLop) : null)
+        .input('hh', sql.Decimal(6, 2), coDL ? soHoacNull(it.phanTramHaoHut) : null)
+        .query(`INSERT INTO ChiDinhVaiSX (DonHangID, TenPhieu, Kieu, LoaiVaiID, MauSacID, SoKGYeuCau, SoMet, DVTVaiYeuCau
+                  ${coDL ? ', SoDoID, SoLop, PhanTramHaoHut' : ''})
+                VALUES (@dh, @ten, @kieu, @lv, @ms, @kg, @met, @dvt
+                  ${coDL ? ', @sodo, @solop, @hh' : ''})`);
     }
     /* ============================================================================================
        v7.37 TANG 2b — CANH BAO NGAY LUC KHAI, khong de nguoi khai tu phat hien luc di xuat kho.
@@ -2539,9 +2629,16 @@ async function tinhGiaThanh(pool, order) {
 router.get('/giathanh', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
   const pool = await getPool();
   const rows = (await pool.request().query(`
+    /* v7.93: kèm CÔNG ĐOẠN + NHÀ GIA CÔNG để cột Trạng thái ở màn Giá thành hiện y hệt Danh sách
+       lệnh SX ("Đang sản xuất - May (Nhà A)") — cùng một hàm dựng statusWithStage, hai màn không
+       được nói hai kiểu về cùng một lệnh. Cách JOIN chép nguyên của GET /orders. */
     SELECT d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham, d.TongSoLuong, d.TrangThai,
+           c.TenCongDoan, c.MaCongDoan, ncc1.TenNha AS TenNhaGiaCong,
            (SELECT COUNT(*) FROM ChiPhiChungDonHang cp WHERE cp.DonHangID = d.DonHangID) AS SoChiPhiChung
-    FROM DonHangSanXuat d ORDER BY d.DonHangID DESC`)).recordset;
+    FROM DonHangSanXuat d
+    LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
+    LEFT JOIN NhaGiaCong ncc1 ON ncc1.NhaGiaCongID = d.NhaGiaCongID
+    ORDER BY d.DonHangID DESC`)).recordset;
   /* v7.89: MÃ RẬP thay cho Mã hàng — dùng util maRapTheoDon (bản công thức duy nhất từ v7.67, gộp
      cả nguồn "Ghi tiến độ"), lấy MỘT lần cho cả danh sách. */
   const mrMap = await maRapTheoDon(pool);

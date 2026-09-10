@@ -168,9 +168,11 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
   const w = dom.window;
   const DL = { '/api/qlsx/giathanh': { data: [
     { DonHangID: 1, MaDH: 'DH01', TenSanPham: 'Áo thu', MaSanPham: 'AO01', MaRap: 'R-123',
-      TongSoLuong: 999, TongSLCatChinh: 480, SoChiPhiChung: 2 },
+      TongSoLuong: 999, TongSLCatChinh: 480, SoChiPhiChung: 2,
+      TrangThai: 'Hoàn thành', TenCongDoan: 'Nhập kho', MaCongDoan: 'NHAPKHO', TenNhaGiaCong: null },
     { DonHangID: 2, MaDH: 'DH02', TenSanPham: 'Áo đông', MaSanPham: 'AO02', MaRap: '',
-      TongSoLuong: 500, TongSLCatChinh: 0, SoChiPhiChung: 0 }
+      TongSoLuong: 500, TongSLCatChinh: 0, SoChiPhiChung: 0,
+      TrangThai: 'Đang sản xuất', TenCongDoan: 'May', MaCongDoan: 'MAY', TenNhaGiaCong: 'Nhà A' }
   ] } };
   Object.assign(w, {
     apiGet: async (u) => DL[u] || { data: [] }, apiPost: async () => ({}), apiPut: async () => ({}),
@@ -180,8 +182,15 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
     wireTableSearch: () => {}, openModal: () => w.document.createElement('div'), closeModal: () => {},
     printHtml: () => {}, homNayISO: () => '2026-09-08', uploadFile: async () => '', anhNho: (x) => x,
     enhanceInputs: () => {}, taiFile: () => {}, choAnhTai: async () => {},
-    statusWithStage: (t) => String(t || ''), docSoTienBangChu: () => ''
+    docSoTienBangChu: () => ''
   });
+  /* v7.93: cot Trang thai dung CHINH statusWithStage cua common.js — cat ban THAT ra chay, khong
+     stub, khong go lai: stub kieu (t)=>String(t) se cho qua ca truong hop mat cong doan/nha gia
+     cong ma van bao xanh. */
+  const sCommonGT = doc('../frontend/js/common.js');
+  const nguonSWS = catKhoi(sCommonGT, 'function statusWithStage(', '{', '}');
+  kiem(!!nguonSWS, 'cat duoc statusWithStage() that tu common.js');
+  w.eval(nguonSWS + '\nwindow.statusWithStage = statusWithStage;');
   const sTest = sFe.replace('return { render, getTabs, printLenhSanXuat };',
     'return { render, getTabs, printLenhSanXuat, __t: { renderGiaThanh, buildGiaThanhBody } };');
   w.eval(sTest);
@@ -202,6 +211,25 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
   bang(hang[0].children[iSL].textContent.trim(), '480', 'hiện SL sổ cắt (480), không phải 999 khai ở lệnh');
   kiem(hang[1].children[iSL].textContent.includes('chưa ghi sổ cắt'),
     '⚠️ chưa ghi sổ cắt -> nói rõ, KHÔNG lùi về 500 khai ở Ra lệnh SX');
+
+  console.log('\n  --- v7.93: cột TRẠNG THÁI ---');
+  const iTT = dauCot.indexOf('Trạng thái');
+  kiem(iTT >= 0, 'có cột "Trạng thái"', dauCot.join(' | '));
+  bang(hang[0].children[iTT].textContent.trim(), 'Hoàn thành', 'lệnh xong -> "Hoàn thành"');
+  kiem(/badge ok/.test(hang[0].children[iTT].innerHTML), 'dùng badge xanh của statusWithStage');
+  /* ⚠️ Hai màn cùng một lệnh phải nói GIỐNG NHAU — Danh sách lệnh SX hiện kèm công đoạn và nhà
+     gia công, màn Giá thành mà chỉ hiện "Đang sản xuất" trống trơn là hai màn mâu thuẫn nhau. */
+  bang(hang[1].children[iTT].textContent.trim(), 'Đang sản xuất - May (Nhà A)',
+    '⚠️ đang chạy -> kèm CÔNG ĐOẠN + NHÀ GIA CÔNG, y hệt Danh sách lệnh SX');
+  kiem(/statusWithStage\(o\.TrangThai, o\.TenCongDoan, o\.TenNhaGiaCong, o\.MaCongDoan\)/.test(sFe),
+    'gọi statusWithStage đủ 4 tham số (thiếu là mất phần công đoạn)');
+  /* Backend phải TRẢ 3 trường đó, không thì frontend gọi đủ tham số cũng vô nghĩa. */
+  kiem(/c\.TenCongDoan, c\.MaCongDoan, ncc1\.TenNha AS TenNhaGiaCong/.test(rtList),
+    'GET /giathanh trả TenCongDoan + MaCongDoan + TenNhaGiaCong');
+  kiem(/LEFT JOIN CongDoanSanXuat c ON c\.StageID = d\.CongDoanHienTaiID/.test(rtList)
+    && /LEFT JOIN NhaGiaCong ncc1 ON ncc1\.NhaGiaCongID = d\.NhaGiaCongID/.test(rtList),
+    'JOIN chép đúng của GET /orders (LEFT JOIN — lệnh chưa có công đoạn vẫn phải ra)');
+  kiem(/d\.TrangThai/.test(rtList), 'GET /giathanh trả TrangThai');
 
   console.log('\n  --- Bảng bóc tách: nói rõ chi phí chung là của 1 SP ---');
   const html = T.buildGiaThanhBody({
@@ -225,7 +253,7 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
 
   console.log('\n=== 4. Bump ?v= ===');
   const v = (sIndex.match(/module\.qlsx\.js\?v=([\d.]+)/) || [])[1];
-  kiem(v && parseFloat(v) >= 7.89, 'index.html: module.qlsx.js?v= >= 7.89', String(v));
+  kiem(v && parseFloat(v) >= 7.93, 'index.html: module.qlsx.js?v= >= 7.93', String(v));
 
   console.log('\n================================================================');
   console.log(`KET QUA: ${dat} dat / ${truot} truot`);

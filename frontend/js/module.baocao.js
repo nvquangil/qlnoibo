@@ -353,6 +353,10 @@ window.ModuleBaoCao = (function () {
     const res = await apiGet(`/api/baocao/taichinh?tuNgay=${ky.tuNgay}&denNgay=${ky.denNgay}`);
     const d = res.data || {};
     const quy = d.quy || [], tq = d.tongQuy || {}, cn = d.congNo || {}, tk = d.theoTK || [];
+    /* v7.94: tiền chuyển thẳng — không qua quỹ nên nằm NGOÀI mục A, hiện thành một dòng ghi nhớ. */
+    const ct = d.chuyenThang || {};
+    /* v7.95: chuyển quỹ nội bộ — nằm TRONG mục A (khác chuyển thẳng), chỉ ghi chú ở dòng TỔNG. */
+    const cq = d.chuyenQuyNoiBo || {};
     if (d.canhBao) toast(d.canhBao, 'info');
     const mau = v => Number(v) < 0 ? '#c0392b' : '#137333';
 
@@ -391,6 +395,28 @@ window.ModuleBaoCao = (function () {
         <td style="text-align:right;color:#c0392b;">${fmtNumber(q.Chi)} <span style="font-size:11px;color:#5f6368;">(${q.SoPhieuChi})</span></td>
         <td style="text-align:right;"><b>${fmtNumber(q.CuoiKy)}</b></td></tr>`).join('')
         || '<tr><td colspan="6" class="empty-hint">Chưa có quỹ nào</td></tr>'}</tbody></table>
+      ${/* v7.94: tiền CHUYỂN THẲNG đã bị loại khỏi bảng trên (không qua quỹ). Nói ngay ở đây kèm con
+           số, kẻo người quen nhìn bảng cũ tưởng số thu/chi tự dưng hụt đi mà không rõ vì sao.
+           Không có phiếu chuyển thẳng nào trong kỳ thì không hiện dòng này — đỡ rác. */''}
+      ${(Number(ct.Thu) || Number(ct.Chi)) ? `<div class="empty-hint" style="margin-top:6px;">
+        ↪️ Ngoài bảng trên, trong kỳ còn <b>${fmtNumber(ct.Thu)} đ</b> tiền
+        <a href="javascript:void(0)" class="bc-quy" data-khoa="ChuyenThang">chuyển thẳng</a>
+        (${ct.SoPhieuThu} phiếu thu ↔ ${ct.SoPhieuChi} phiếu chi) — khách trả thẳng cho nhà cung cấp /
+        chi phí, <b>không qua quỹ</b> nên không tính vào số dư.</div>` : ''}
+      ${/* v7.95 — CHUYỂN QUỸ NỘI BỘ: NGƯỢC HẲN dòng chuyển thẳng ở trên, đừng đọc lẫn.
+           Chuyển thẳng thì tiền KHÔNG qua quỹ nên bị loại khỏi bảng. Chuyển quỹ thì tiền CÓ THẬT
+           trong quỹ, chỉ đổi chỗ — nên vẫn nằm TRONG bảng và số dư từng quỹ đổi thật (rút 50tr từ
+           BIDV về két thì BIDV giảm thật, két tăng thật).
+           Điều cần cảnh báo là ở dòng TỔNG: đúng 50tr đó được đếm HAI LẦN (một lần là chi của BIDV,
+           một lần là thu của két) trong khi công ty không thu cũng không chi đồng nào. Ghi rõ để
+           người đọc trừ ra khi muốn biết dòng tiền THẬT vào/ra công ty. */''}
+      ${(Number(cq.Thu) || Number(cq.Chi)) ? `<div class="empty-hint" style="margin-top:6px;">
+        🔄 Trong hai cột Thu/Chi của bảng trên có <b>${fmtNumber(cq.Thu)} đ</b>
+        <a href="javascript:void(0)" class="bc-quy" data-khoa="ChuyenQuy">chuyển quỹ nội bộ</a>
+        (${cq.SoPhieuThu} phiếu thu ↔ ${cq.SoPhieuChi} phiếu chi) — tiền <b>đổi chỗ giữa 2 quỹ của mình</b>,
+        số dư từng quỹ đổi thật nên vẫn tính, nhưng <b>không phải tiền vào/ra công ty</b>:
+        muốn biết dòng tiền thật thì trừ khoản này khỏi cả cột Thu và cột Chi.
+        ${Number(cq.Lech) ? `<b style="color:#c0392b;">⚠️ Đang lệch ${fmtNumber(cq.Lech)} đ giữa vế thu và vế chi — có vế bị xóa/sửa ngoài luồng, số dư một quỹ đang sai.</b>` : ''}</div>` : ''}
 
       <h3 style="margin:16px 0 6px;font-size:15px;">B. Công nợ tại ngày ${fmtDate(ky.denNgay)}</h3>
       ${/* v7.84: data-nostt — đây là bảng CHỈ TIÊU / SỐ TIỀN có dòng nhóm in đậm và dòng con thụt

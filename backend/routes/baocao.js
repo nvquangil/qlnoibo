@@ -433,6 +433,56 @@ async function baoCaoTonPhuKien(pool, ky) {
 }
 
 /* ================================================================================================
+   v7.94 — TEN NHOM cua muc C "Dong tien theo loai tai khoan"  (BAN CONG THUC DUY NHAT)
+   ------------------------------------------------------------------------------------------------
+   Nguyen: "(chua phan loai) la tien chuyen thang tu khach hang sang nha cung cap hoac chi phi" —
+   roi: "toi dang thay chua phan loai co ca phieu chi tra nha cung cap va chuyen thang. tach ra
+   lam 2. chuyen thang va tra nha cung cap".
+
+   Nhom "(chua phan loai)" cu gom chung BA thu khac han nhau, chi vi cung BO TRONG loai tai khoan:
+     · CHUYEN THANG   — khach tra thang cho NCC / chi phi, tien KHONG he qua quy minh (v6.54);
+     · TRA NHA CUNG CAP — chi that, chi la khong khai loai tai khoan;
+     · phieu quen khai loai — cai duy nhat dang goi la "chua phan loai".
+   Gop ba thu do vao mot dong thi nhin con so khong the ket luan duoc gi.
+
+   ⚠️ Phieu DA KHAI loai tai khoan thi GIU NGUYEN ten loai do, KE CA phieu chuyen thang: chuyen
+   thang tra tien dien van la chi phi dien. Vi vay nhanh `lt.TenLoai` phai dung TRUOC — dao thu tu
+   la keo cac khoan dang xep dung ra khoi muc chi phi cua no.
+
+   ⚠️ DUNG CHUNG cho bang muc C va popup chi tiet (/taichinh/chitiet): popup loc theo DUNG chuoi ten
+   nhom nay, viet hai ban la bam vao dong ra bang trong ma khong hieu vi sao.
+   ================================================================================================ */
+const HT_CHUYEN_THANG = 'Chuyển thẳng';
+const NHOM_CHUYEN_THANG = 'Chuyển thẳng (không qua quỹ)';
+const NHOM_TRA_NCC = 'Trả nhà cung cấp';
+const NHOM_CHUA_PL = '(chưa phân loại)';
+const NHOM_CHUYEN_QUY = 'Chuyển quỹ nội bộ';        // v7.95
+const laChuyenThang = (h) => String(h || '').trim() === HT_CHUYEN_THANG;
+/* `p` = bi danh bang phieu (t = PhieuThu, c = PhieuChi). `laChi` = true thi moi co nhanh
+   "Tra nha cung cap" — PhieuThu khong tra cho NCC, de nhanh do o ca hai ben la mo duong cho mot
+   phieu thu lac vao nhom chi. Cau nay LUON di kem 2 LEFT JOIN tk + lt (bi danh dung ten `tk`/`lt`).
+
+   v7.95: `coCQ` = CSDL da co cot LaChuyenQuy (migration_v698) hay chua. PHAI truyen vao, khong duoc
+   viet cung `${p}.LaChuyenQuy` vao cau: ban chua chay migration se no "Invalid column name" va lam
+   VO CA bao cao tai chinh, khong chi mat mot dong.
+
+   ⚠️ THU TU NHANH KHONG DUOC DAO:
+     1. lt.TenLoai      — phieu DA khai loai tai khoan thi giu nguyen loai do (chuyen thang tra tien
+                          dien van la chi phi dien). Chuyen quy KHONG bao gio co loai (TaiKhoanID
+                          luon NULL, xem POST /chuyenquy) nen khong bi nhanh nay hut.
+     2. chuyen thang    — theo HinhThuc.
+     3. CHUYEN QUY      — theo co LaChuyenQuy. Phai dung TRUOC nhanh "Tra nha cung cap": phieu chi
+                          chuyen quy co LoaiDoiTuong = N'Khac' nen thuc te khong dam, nhung dat sau
+                          la mo san duong cho lan sau ai doi LoaiDoiTuong.
+     4. tra NCC / chua phan loai. */
+const SQL_NHOM_DONG_TIEN = (p, laChi, coCQ) => `
+      CASE WHEN lt.TenLoai IS NOT NULL THEN lt.TenLoai
+           WHEN ${p}.HinhThuc = N'${HT_CHUYEN_THANG}' THEN N'${NHOM_CHUYEN_THANG}'
+           ${coCQ ? `WHEN ISNULL(${p}.LaChuyenQuy, 0) = 1 THEN N'${NHOM_CHUYEN_QUY}'` : ''}
+           ${laChi ? `WHEN ${p}.LoaiDoiTuong = N'NhaCungCap' THEN N'${NHOM_TRA_NCC}'` : ''}
+           ELSE N'${NHOM_CHUA_PL}' END`;
+
+/* ================================================================================================
    4. BAO CAO TAI CHINH
    Gom 3 phan:
      A. QUY (tien mat + tung tai khoan ngan hang): dau ky - thu - chi - cuoi ky
@@ -445,7 +495,12 @@ async function baoCaoTaiChinh(pool, ky) {
   /* CSDL chua chay migration_v669 thi khong co cot TaiKhoanNHID. KHONG duoc dua CAST(NULL AS INT)
      vao GROUP BY (SQL Server loi 164) — bo han cot ay khoi GROUP BY roi gan null o JS. */
   const cot = coTKNH ? 'TaiKhoanNHID' : 'CAST(NULL AS INT)';
-  const groupBy = coTKNH ? 'HinhThuc, TaiKhoanNHID' : 'HinhThuc';
+  /* v7.95: gom thêm theo LaChuyenQuy (migration_v698) để tách được phần chuyển quỹ nội bộ ra khỏi
+     dòng TỔNG. Chưa chạy migration thì trả 0 — cùng cách xử lý cột thiếu như TaiKhoanNHID ở trên,
+     và KHÔNG đưa hằng số vào GROUP BY (SQL Server lỗi 164). */
+  const coCQ = await coCot(pool, 'PhieuThu', 'LaChuyenQuy') && await coCot(pool, 'PhieuChi', 'LaChuyenQuy');
+  const cotCQ = coCQ ? 'ISNULL(LaChuyenQuy, 0)' : '0';
+  const groupBy = (coTKNH ? 'HinhThuc, TaiKhoanNHID' : 'HinhThuc') + (coCQ ? ', ISNULL(LaChuyenQuy, 0)' : '');
 
   /* ---------- A. QUY ---------- */
   const cfg = (await pool.request().query(
@@ -453,7 +508,7 @@ async function baoCaoTaiChinh(pool, ky) {
   const quyTMDauKyGoc = so(cfg && cfg.ConfigValue);   // so du tien mat khai o cau hinh (tinh tu dau)
 
   const sqlPS = (bang, cotNgay) => `
-    SELECT HinhThuc, ${cot} AS TaiKhoanNHID,
+    SELECT HinhThuc, ${cot} AS TaiKhoanNHID, ${cotCQ} AS LaChuyenQuy,
            SUM(CASE WHEN ${cotNgay} <  @tu THEN SoTien ELSE 0 END) AS Truoc,
            SUM(CASE WHEN ${cotNgay} >= @tu AND ${cotNgay} <= @den THEN SoTien ELSE 0 END) AS TrongKy,
            COUNT(CASE WHEN ${cotNgay} >= @tu AND ${cotNgay} <= @den THEN 1 END) AS SoPhieu
@@ -464,6 +519,13 @@ async function baoCaoTaiChinh(pool, ky) {
     'SELECT TaiKhoanNHID, TenNganHang, SoTaiKhoan, ChuTaiKhoan, SoDuDauKy FROM DanhMucTaiKhoanNganHang ORDER BY TenNganHang')).recordset : [];
 
   const laTM = h => String(h || '').trim() !== 'Chuyển khoản';
+  /* ⚠️ v7.94: TIEN CHUYEN THANG KHONG QUA QUY, PHAI LOAI KHOI MUC A.
+     `laTM` chi hoi "co phai chuyen khoan khong", nen hinh thuc 'Chuyển thẳng' (v6.54) roi thang vao
+     Quy tien mat. Cap thu/chi cua no triet tieu nen SO DU van dung — dung cai do ma bao khong sao
+     la nham: hai cot THU va CHI (va ca so phieu trong ngoac) dang bi thoi phong bang tien chua he
+     vao ket. Thang 5 trieu khach tra thang cho NCC lam so quy bao "thu 5 trieu, chi 5 trieu".
+     Bo ca hai ve khoi quy -> so du dau ky / cuoi ky KHONG doi, chi hai cot phat sinh ve dung. */
+  const quaQuy = h => !laChuyenThang(h);
   const cong = (arr, dk, truong) => arr.filter(dk).reduce((s, x) => s + so(x[truong]), 0);
 
   const quy = [];
@@ -478,7 +540,7 @@ async function baoCaoTaiChinh(pool, ky) {
       SoPhieuThu: cong(thu, dk, 'SoPhieu'), SoPhieuChi: cong(chi, dk, 'SoPhieu')
     });
   };
-  themQuy('Quỹ tiền mặt', '', quyTMDauKyGoc, x => laTM(x.HinhThuc), 'TienMat');
+  themQuy('Quỹ tiền mặt', '', quyTMDauKyGoc, x => quaQuy(x.HinhThuc) && laTM(x.HinhThuc), 'TienMat');
   nh.forEach(t => themQuy(t.TenNganHang, t.SoTaiKhoan, so(t.SoDuDauKy),
     x => !laTM(x.HinhThuc) && x.TaiKhoanNHID === t.TaiKhoanNHID, String(t.TaiKhoanNHID)));
   const leThu = thu.filter(x => !laTM(x.HinhThuc) && !x.TaiKhoanNHID);
@@ -486,6 +548,51 @@ async function baoCaoTaiChinh(pool, ky) {
   if (leThu.length || leChi.length) {
     themQuy('Chuyển khoản (chưa gán tài khoản)', '', 0, x => !laTM(x.HinhThuc) && !x.TaiKhoanNHID, 'ChuaGan');
   }
+  /* v7.94: chuyen thang phai di THANH CAP (phieu thu sinh ra dung mot phieu chi, v6.54) thi bo ca
+     hai ve khoi quy moi khong lam lech so du. Ban CSDL chua chay migration_v675 tung ghi duoc phieu
+     thu 'Chuyển thẳng' MA KHONG co phieu chi di kem — nhung phieu mo coi do truoc day am tham cong
+     vao quy, gio bi bo ra, so du se KHAC ban cu. Do va bao thang, dung de nguoi doc tu phat hien. */
+  const ctThuKy = cong(thu, x => laChuyenThang(x.HinhThuc), 'TrongKy');
+  const ctChiKy = cong(chi, x => laChuyenThang(x.HinhThuc), 'TrongKy');
+  const ctThuTruoc = cong(thu, x => laChuyenThang(x.HinhThuc), 'Truoc');
+  const ctChiTruoc = cong(chi, x => laChuyenThang(x.HinhThuc), 'Truoc');
+  const lechCT = tien((ctThuTruoc + ctThuKy) - (ctChiTruoc + ctChiKy));
+  /* ⚠️ Con so nay dem theo HINH THUC phieu, tuc TAT CA tien chuyen thang. No KHONG bang dong
+     "Chuyển thẳng (không qua quỹ)" o muc C: dong do chi gom phieu chuyen thang CHUA khai loai tai
+     khoan, con phieu da khai (vd chuyen thang tra tien dien) van nam o dung muc chi phi cua no.
+     Vi vay link "xem chi tiet" phai tro toi khoa RIENG `ChuyenThang`, khong tro vao dong muc C. */
+  const chuyenThang = {
+    Thu: tien(ctThuKy), Chi: tien(ctChiKy), Lech: lechCT,
+    SoPhieuThu: cong(thu, x => laChuyenThang(x.HinhThuc), 'SoPhieu'),
+    SoPhieuChi: cong(chi, x => laChuyenThang(x.HinhThuc), 'SoPhieu')
+  };
+
+  /* ================================================================================================
+     v7.95 — CHUYEN QUY NOI BO trong muc A.
+
+     KHAC HAN chuyen thang o tren, va day la cho de nham nhat:
+       · chuyen thang  -> tien KHONG he qua quy nao  => phai BO ca hai ve khoi quy (lam o `quaQuy`)
+       · chuyen quy    -> tien CO THAT trong quy, chi doi cho => phai GIU trong tung quy
+     Rut 50 trieu tu BIDV ve ket thi so du BIDV giam that 50, ket tang that 50. Bo ra la so du hai
+     quy deu sai. Vi vay `themQuy` KHONG loc gi theo LaChuyenQuy — co y de nguyen.
+
+     Nhung dong TONG cong ca cot Thu va cot Chi cua moi quy lai thi 50 trieu do bi dem HAI LAN: mot
+     lan la "chi" cua BIDV, mot lan la "thu" cua ket — trong khi cong ty khong thu ma cung khong chi
+     dong nao. Nen tra rieng con so nay de UI ghi ro o dong TONG: "trong do chuyen noi bo: X".
+     Khong tru san vao dong TONG o backend: nguoi doc can thay CA hai so (tong tho va phan noi bo)
+     de doi chieu voi so quy tung quy, tru san la mat duong kiem.
+     ================================================================================================ */
+  const laCQ = (x) => Number(x.LaChuyenQuy) === 1;
+  const chuyenQuyNoiBo = {
+    Thu: tien(cong(thu, laCQ, 'TrongKy')),
+    Chi: tien(cong(chi, laCQ, 'TrongKy')),
+    SoPhieuThu: cong(thu, laCQ, 'SoPhieu'),
+    SoPhieuChi: cong(chi, laCQ, 'SoPhieu'),
+    /* Thu != Chi la co ve mo coi (mot ve bi xoa truc tiep tren CSDL, hoac ban CSDL cu tung go tay
+       hai phieu roi). Cap do POST /chuyenquy sinh ra luon bang nhau. */
+    Lech: tien(cong(thu, laCQ, 'TrongKy') - cong(chi, laCQ, 'TrongKy')),
+    CoCot: coCQ
+  };
 
   /* ---------- B. CONG NO tai NGAY CUOI KY ---------- */
   const phaiThu = (await rqKy(pool, ky).query(`
@@ -508,17 +615,27 @@ async function baoCaoTaiChinh(pool, ky) {
       (SELECT ISNULL(SUM(SoTien),0) FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL AND Ngay <= @den) AS DieuChinh`)).recordset[0];
 
   /* ---------- C. DONG TIEN THEO LOAI TAI KHOAN ---------- */
+  /* v7.94: xep nhom bang SQL_NHOM_DONG_TIEN. Hai LEFT JOIN nay phai nam TRONG tung nhanh UNION
+     (khong gop ra ngoai nhu ban cu): cau CASE can biet dong dang xet la phieu THU hay phieu CHI,
+     ma ra den ngoai thi hai loai da tron vao nhau, khong con phan biet duoc nua. */
   const theoTK = (await rqKy(pool, ky).query(`
-    SELECT ISNULL(lt.TenLoai, N'(chưa phân loại)') AS TenLoai, ISNULL(lt.TinhChiPhiKD, 0) AS TinhChiPhiKD,
-           SUM(x.Thu) AS Thu, SUM(x.Chi) AS Chi
+    SELECT x.TenLoai, x.TinhChiPhiKD, SUM(x.Thu) AS Thu, SUM(x.Chi) AS Chi
     FROM (
-      SELECT TaiKhoanID, SoTien AS Thu, 0 AS Chi FROM PhieuThu WHERE NgayThu BETWEEN @tu AND @den
+      SELECT ${SQL_NHOM_DONG_TIEN('t', false, coCQ)} AS TenLoai, ISNULL(lt.TinhChiPhiKD, 0) AS TinhChiPhiKD,
+             t.SoTien AS Thu, 0 AS Chi
+      FROM PhieuThu t
+      LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
+      LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
+      WHERE t.NgayThu BETWEEN @tu AND @den
       UNION ALL
-      SELECT TaiKhoanID, 0 AS Thu, SoTien AS Chi FROM PhieuChi WHERE NgayChi BETWEEN @tu AND @den
+      SELECT ${SQL_NHOM_DONG_TIEN('c', true, coCQ)} AS TenLoai, ISNULL(lt.TinhChiPhiKD, 0) AS TinhChiPhiKD,
+             0 AS Thu, c.SoTien AS Chi
+      FROM PhieuChi c
+      LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
+      LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
+      WHERE c.NgayChi BETWEEN @tu AND @den
     ) x
-    LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = x.TaiKhoanID
-    LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
-    GROUP BY lt.TenLoai, lt.TinhChiPhiKD
+    GROUP BY x.TenLoai, x.TinhChiPhiKD
     ORDER BY SUM(x.Chi) DESC, SUM(x.Thu) DESC`)).recordset
     .map(r => ({ TenLoai: r.TenLoai, TinhChiPhiKD: !!r.TinhChiPhiKD, Thu: tien(r.Thu), Chi: tien(r.Chi) }));
 
@@ -540,8 +657,24 @@ async function baoCaoTaiChinh(pool, ky) {
       PhaiTra_DaTra: tien(phaiTra.DaTra), PhaiTra_DieuChinh: tien(phaiTra.DieuChinh)
     },
     theoTK,
-    canhBao: (!coGiaVai || !coGiaPK) ? 'Thiếu cột đơn giá nhập (VaiCay.DonGiaNhap / PhieuPhuKienChiTiet.DonGia) — phần công nợ đó tính bằng 0.' : null,
-    ghiChu: 'Số dư đầu kỳ của quỹ = số dư khai trong danh mục + toàn bộ phiếu thu/chi phát sinh TRƯỚC ngày bắt đầu kỳ. Công nợ lấy tại NGÀY CUỐI KỲ (lũy kế từ đầu).'
+    chuyenThang,
+    chuyenQuyNoiBo,   // v7.95
+    /* Gop nhieu canh bao vao MOT chuoi — man hinh chi co mot cho hien. */
+    canhBao: [
+      (!coGiaVai || !coGiaPK) ? 'Thiếu cột đơn giá nhập (VaiCay.DonGiaNhap / PhieuPhuKienChiTiet.DonGia) — phần công nợ đó tính bằng 0.' : '',
+      /* v7.95: cặp chuyển quỹ luôn bằng nhau khi lập qua form. Lệch = có vế bị xóa/sửa ngoài luồng
+         (gõ tay 2 phiếu rời, hoặc xóa trực tiếp trên CSDL) -> số dư một quỹ đang sai đúng bằng đó. */
+      chuyenQuyNoiBo.Lech ? `Có ${Math.abs(chuyenQuyNoiBo.Lech).toLocaleString('vi-VN')} đ "Chuyển quỹ nội bộ" lệch giữa vế thu và vế chi trong kỳ`
+        + ' — cặp phiếu do chức năng Chuyển quỹ sinh ra luôn khớp, nên lệch nghĩa là có vế bị xóa hoặc sửa ngoài luồng.'
+        + ' Số dư của một trong hai quỹ đang sai đúng bằng khoản này.' : '',
+      lechCT ? `Có ${Math.abs(lechCT).toLocaleString('vi-VN')} đ tiền "Chuyển thẳng" chưa thành cặp thu–chi (lũy kế đến cuối kỳ)`
+        + ' — nhiều khả năng là phiếu thu chuyển thẳng lập khi CSDL chưa chạy migration_v675 nên không sinh phiếu chi đi kèm.'
+        + ' Số dư quỹ đang KHÔNG tính phần này; kiểm lại các phiếu thu hình thức "Chuyển thẳng" không có phiếu chi kèm.' : ''
+    ].filter(Boolean).join(' · ') || null,
+    ghiChu: 'Số dư đầu kỳ của quỹ = số dư khai trong danh mục + toàn bộ phiếu thu/chi phát sinh TRƯỚC ngày bắt đầu kỳ.'
+      + ' Công nợ lấy tại NGÀY CUỐI KỲ (lũy kế từ đầu).'
+      + ' Tiền "Chuyển thẳng" (khách trả thẳng cho NCC / chi phí) KHÔNG qua quỹ nên không nằm trong mục A;'
+      + ' xem ở mục C, dòng "' + NHOM_CHUYEN_THANG + '".'
   };
 }
 
@@ -625,12 +758,20 @@ async function baoCaoKinhDoanh(pool, ky) {
 
   /* Phieu chi KHONG gan tai khoan (hoac tai khoan khong thuoc loai tinh CPKD) — bao cho nguoi dung
      biet co bao nhieu tien dang nam ngoai bao cao lai/lo, keo tuong lai/lo ao. */
+  /* ⚠️ v7.95: LOAI PHIEU CHI CHUYEN QUY NOI BO khoi con so nay.
+     `chiNgoai` tra loi cau "co bao nhieu tien dang nam ngoai bao cao lai/lo" — de nguoi doc biet
+     lai/lo co the dang ao. Ve chi cua mot lan chuyen quy KHONG bao gio co loai tai khoan (TaiKhoanID
+     luon NULL, xem POST /chuyenquy) nen no roi tron ven vao dieu kien TinhChiPhiKD = 0. Rut 50 trieu
+     tu ngan hang ve ket la bao cao bao "co 50 trieu chi chua vao chi phi" — trong khi 50 trieu do
+     van con nguyen trong ket, khong he la chi phi va cung khong the thanh chi phi. */
+  const coCotCQChi = await coCot(pool, 'PhieuChi', 'LaChuyenQuy');
   const chiNgoai = (await rqKy(pool, ky).query(`
     SELECT ISNULL(SUM(pc.SoTien),0) AS SoTien, COUNT(*) AS SoPhieu
     FROM PhieuChi pc
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = pc.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
-    WHERE pc.NgayChi BETWEEN @tu AND @den AND ISNULL(lt.TinhChiPhiKD, 0) = 0`)).recordset[0];
+    WHERE pc.NgayChi BETWEEN @tu AND @den AND ISNULL(lt.TinhChiPhiKD, 0) = 0
+      ${coCotCQChi ? 'AND ISNULL(pc.LaChuyenQuy, 0) = 0' : ''}`)).recordset[0];
 
   // Danh sach loai tai khoan DANG duoc tinh la chi phi KD — hien len UI de doi chieu voi gia von.
   const loaiCPKD = (await pool.request().query(
@@ -915,16 +1056,27 @@ router.get('/taichinh/chitiet', ...CN('taichinh'), async (req, res) => {
   const cotNH = coTKNH ? 'TaiKhoanNHID' : 'CAST(NULL AS INT)';
 
   const rq = () => pool.request().input('tu', sql.Date, ky.tuNgay).input('den', sql.Date, ky.denNgay);
+  /* ⚠️ v7.94: ten nhom phai lay tu SQL_NHOM_DONG_TIEN — CUNG cau voi bang muc C. Popup nay loc
+     `TenLoai === khoa`, ma `khoa` chinh la chuoi tren bang do; hai cau khac nhau la bam vao dong
+     "Chuyển thẳng (không qua quỹ)" ra bang TRONG.
+     ⚠️ v7.95: vi the `coCQ` o day PHAI do lai va truyen vao Y NHU ben baoCaoTaiChinh() — bo quen
+     tham so thi bang muc C co dong "Chuyển quỹ nội bộ" ma bam vao lai ra bang trong, dung cai bay
+     v7.94 da mac mot lan. */
+  const coCQ = await coCot(pool, 'PhieuThu', 'LaChuyenQuy') && await coCot(pool, 'PhieuChi', 'LaChuyenQuy');
   const dsThu = (await rq().query(`
     SELECT t.NgayThu AS Ngay, t.SoPhieu, t.SoTien, t.HinhThuc, t.DienGiai, ${cotNH} AS TaiKhoanNHID,
-           ISNULL(t.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK, ISNULL(lt.TenLoai, N'(chưa phân loại)') AS TenLoai
+           ISNULL(t.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK,
+           ${coCQ ? 'ISNULL(t.LaChuyenQuy, 0)' : '0'} AS LaChuyenQuy,
+           ${SQL_NHOM_DONG_TIEN('t', false, coCQ)} AS TenLoai
     FROM PhieuThu t
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
     WHERE t.NgayThu BETWEEN @tu AND @den`)).recordset;
   const dsChi = (await rq().query(`
     SELECT c.NgayChi AS Ngay, c.SoPhieu, c.SoTien, c.HinhThuc, c.DienGiai, ${cotNH} AS TaiKhoanNHID,
-           ISNULL(c.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK, ISNULL(lt.TenLoai, N'(chưa phân loại)') AS TenLoai
+           ISNULL(c.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK,
+           ${coCQ ? 'ISNULL(c.LaChuyenQuy, 0)' : '0'} AS LaChuyenQuy,
+           ${SQL_NHOM_DONG_TIEN('c', true, coCQ)} AS TenLoai
     FROM PhieuChi c
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
@@ -936,7 +1088,17 @@ router.get('/taichinh/chitiet', ...CN('taichinh'), async (req, res) => {
     loc = r => String(r.TenLoai) === khoa;
     tieuDe = 'Loại tài khoản: ' + khoa;
   } else if (khoa === 'TienMat') {
-    loc = r => laTM(r.HinhThuc); tieuDe = 'Quỹ tiền mặt';
+    /* v7.94: loai chuyen thang y HET muc A — khong thi tong cua popup khac hang tren bang. */
+    loc = r => !laChuyenThang(r.HinhThuc) && laTM(r.HinhThuc); tieuDe = 'Quỹ tiền mặt';
+  } else if (khoa === 'ChuyenThang') {
+    /* v7.94: khoa RIENG cho dong ghi nho duoi muc A. Loc theo HINH THUC (tat ca tien chuyen thang),
+       khac voi dong "Chuyển thẳng (không qua quỹ)" o muc C — dong do chi gom phieu chua khai loai. */
+    loc = r => laChuyenThang(r.HinhThuc); tieuDe = 'Chuyển thẳng — không qua quỹ';
+  } else if (khoa === 'ChuyenQuy') {
+    /* v7.95: khoa RIENG cho ghi chu "trong do chuyen noi bo" o dong TONG cua muc A. Loc theo CO
+       LaChuyenQuy, khong theo HinhThuc — hai ve cua mot lan chuyen quy co HinhThuc KHAC NHAU
+       ('Chuyển khoản' ben tru TKNH, 'Tiền mặt' ben cong ket), do la co y (xem migration_v698). */
+    loc = r => Number(r.LaChuyenQuy) === 1; tieuDe = 'Chuyển quỹ nội bộ — tiền đổi chỗ giữa 2 quỹ';
   } else if (khoa === 'ChuaGan') {
     loc = r => !laTM(r.HinhThuc) && !r.TaiKhoanNHID; tieuDe = 'Chuyển khoản (chưa gán tài khoản)';
   } else {

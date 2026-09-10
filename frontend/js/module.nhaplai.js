@@ -207,6 +207,29 @@
     const $ = (id) => document.getElementById(id);
     const dongHienTai = () => Array.from(document.querySelectorAll('#nlfBang tr[data-bct]'));
 
+    /* ================================================================================================
+       v7.99 — SL ĐÃ NHẬP PHẢI SỐNG NGOÀI BẢNG.
+
+       Từ v7.99 ô "Lọc mã hàng" ở chế độ "mọi phiếu" lọc Ở SERVER (vì bỏ chặn 200 dòng, khách nhiều
+       dòng thì phải lọc server mới nhẹ). Lọc ở server nghĩa là VẼ LẠI bảng — mà `layDong()` bản cũ
+       đọc SL trực tiếp từ DOM.
+       Nếu để nguyên: người dùng tích 5 mã, gõ tìm mã thứ 6 -> bảng vẽ lại -> 5 mã kia BIẾN MẤT khỏi
+       phiếu mà không một tiếng báo. Đó là lỗi nặng hơn hẳn lỗi đang sửa (hiện thiếu thì còn thấy,
+       mất số đã nhập thì lưu sai mà không ai biết).
+
+       Nên SL đã nhập giữ ở Map này, khóa theo PhieuBHChiTietID; bảng vẽ lại thì điền lại từ đây, và
+       `layDong()` đọc TỪ ĐÂY chứ không từ DOM. Cùng cách đã áp cho `ktGiaoViecByStage` ở QLSX.
+
+       ⚠️ XÓA MAP khi ĐỔI PHẠM VI dòng (đổi khách / đổi phiếu / bật-tắt "mọi phiếu") — giữ lại là
+       lưu cả mã thuộc phiếu khác mà người dùng không còn nhìn thấy. Chỉ GIỮ khi đổi CHỮ TÌM.
+       ================================================================================================ */
+    const daNhap = new Map();   // PhieuBHChiTietID -> { sl, con }
+    const ghiNhap = (bct, sl, con) => {
+      const n = Math.round(Number(sl) || 0);
+      if (n > 0) daNhap.set(Number(bct), { sl: n, con: Number(con) || 0 });
+      else daNhap.delete(Number(bct));
+    };
+
     $('nlfHuy').onclick = () => closeModal();
     $('nlfKhach').onchange = async () => {
       const ten = $('nlfKhach').value;
@@ -221,32 +244,56 @@
         `<option value="${p.PhieuBHID}">${escapeHtml(p.SoPhieu)} — ${fmtDate(p.NgayBan)} — ${fmtTien(p.TongThanhToan)} đ</option>`).join('');
       if ($('nlfMoiPhieu').checked) taiDong();
     };
-    $('nlfPhieu').onchange = taiDong;
-    $('nlfMoiPhieu').onchange = taiDong;
+    /* Đổi phiếu / bật-tắt "mọi phiếu" = ĐỔI PHẠM VI dòng -> KHÔNG giữ SL đã nhập (xem ghi chú ở daNhap). */
+    $('nlfPhieu').onchange = () => taiDong();
+    $('nlfMoiPhieu').onchange = () => taiDong();
+    /* ================================================================================================
+       v7.99 — MỘT handler duy nhất cho ô tìm, và nó quyết định lọc ở đâu:
+         · "mọi phiếu"  -> gọi lại server kèm `q` (chặn 200 đã bỏ, danh sách có thể vài nghìn dòng
+                           nên phải lọc ở server mới nhẹ). GIỮ SL đã nhập.
+         · một phiếu    -> ẩn/hiện tại chỗ, dữ liệu đã nạp đủ và nhỏ (một phiếu), không cần gọi lại.
+       Chữ tìm ở hai nhánh khớp nghĩa nhau: backend so trên `MaHang + ' ' + TenHang + ' ' + TenMau`
+       đã lowercase, y hệt chuỗi dựng vào `data-tim` bên dưới. Đổi một bên thì phải đổi bên kia.
+       ================================================================================================ */
+    let henTim = null;
     $('nlfTim').oninput = () => {
       const q = $('nlfTim').value.trim().toLowerCase();
+      if ($('nlfMoiPhieu').checked) {
+        clearTimeout(henTim);
+        henTim = setTimeout(() => taiDong({ giuChon: true }), 350);   // gõ xong mới gọi, không gọi từng ký tự
+        return;
+      }
       dongHienTai().forEach(tr => {
         tr.style.display = !q || tr.dataset.tim.includes(q) ? '' : 'none';
       });
     };
 
-    async function taiDong() {
+    async function taiDong(opt) {
       const ten = $('nlfKhach').value;
       const pid = $('nlfPhieu').value;
       const moiPhieu = $('nlfMoiPhieu').checked;
+      // v7.99: chỉ nhánh gõ tìm mới truyền giuChon; mọi lối khác là đổi phạm vi -> xóa SL đã nhập.
+      if (!(opt && opt.giuChon)) daNhap.clear();
       if (!ten) return;
       if (!moiPhieu && !pid) {
         $('nlfBang').innerHTML = '<div class="empty-hint">Chọn phiếu xuất để hiện các mã hàng trong phiếu đó.</div>';
         return;
       }
+      const q = $('nlfTim').value.trim();
       $('nlfBang').innerHTML = '<div class="empty-hint">Đang tải...</div>';
+      /* v7.99: chế độ "mọi phiếu" gửi `q` lên server (backend đã nhận sẵn tham số này từ trước,
+         chỉ là frontend chưa bao giờ gửi — nên trước đây gõ tìm không với tới được dòng bị chặt). */
       const kq = moiPhieu
-        ? await apiGet('/api/nhaplai/timmahang?tenKhach=' + encodeURIComponent(ten))
+        ? await apiGet('/api/nhaplai/timmahang?tenKhach=' + encodeURIComponent(ten)
+            + (q ? '&q=' + encodeURIComponent(q) : ''))
         : await apiGet(`/api/nhaplai/phieuxuat/${pid}/dong`);
       const ds = (kq.data || []).filter(r => Number(r.ConTraCai) > 0);
       if (!ds.length) {
-        $('nlfBang').innerHTML = '<div class="empty-hint">Không còn mã nào trả lại được (đã trả hết hoặc phiếu không có dòng nào).</div>';
-        $('nlfTong').innerHTML = '';
+        $('nlfBang').innerHTML = `<div class="empty-hint">${q && moiPhieu
+          ? 'Không có mã nào khớp "' + escapeHtml(q) + '" trong các phiếu đã mua của khách này.'
+          : 'Không còn mã nào trả lại được (đã trả hết hoặc phiếu không có dòng nào).'}</div>`;
+        capNhatGoiY(0, moiPhieu, q);
+        tinhTong();
         return;
       }
       $('nlfBang').innerHTML = `
@@ -272,29 +319,61 @@
                 <td class="num">${fmtNumber(r.DaTraCai)}</td>
                 <td class="num"><b>${fmtNumber(r.ConTraCai)}</b></td>
                 <td class="num">${fmtTien(r.GiaBan)}</td>
-                <td><input type="number" class="nl-sl" min="0" step="1" max="${r.ConTraCai}" value="" style="width:95px;"></td>
+                ${/* v7.99: dien lai SL tu daNhap - bang ve lai (do loc o server) khong duoc lam mat
+                     so nguoi dung da nhap.
+                     KHONG dat dau ` trong comment nay: no nam BEN TRONG template literal, mot dau `
+                     la dong som template -> SyntaxError, ca man hinh dung im. */''}
+                <td><input type="number" class="nl-sl" min="0" step="1" max="${r.ConTraCai}" value="${(daNhap.get(Number(r.PhieuBHChiTietID)) || {}).sl || ''}" style="width:95px;"></td>
               </tr>`).join('')}
           </tbody>
         </table>`;
+      // v7.99: tích lại các ô đã chọn sau khi vẽ lại.
+      $('nlfBang').querySelectorAll('tr[data-bct]').forEach(tr => {
+        const g = daNhap.get(Number(tr.dataset.bct));
+        if (g) tr.querySelector('.nl-tick').checked = true;
+      });
       /* Tich o = mac dinh tra HET so con lai. Nguoi dung go de lai so it hon.
          Bo tich thi xoa so - de o lai se bi tinh vao phieu du da bo tich (bug rat de gap). */
       $('nlfBang').querySelectorAll('.nl-tick').forEach(cb => cb.onchange = () => {
         const tr = cb.closest('tr'), o = tr.querySelector('.nl-sl');
         o.value = cb.checked ? tr.dataset.con : '';
+        ghiNhap(tr.dataset.bct, o.value, tr.dataset.con);   // v7.99
         tinhTong();
       });
       $('nlfBang').querySelectorAll('.nl-sl').forEach(o => o.oninput = () => {
         const tr = o.closest('tr');
         tr.querySelector('.nl-tick').checked = Number(o.value) > 0;
+        ghiNhap(tr.dataset.bct, o.value, tr.dataset.con);   // v7.99
         tinhTong();
       });
+      capNhatGoiY(ds.length, moiPhieu, q);
       tinhTong();
+    }
+
+    /* ================================================================================================
+       v7.99 — NÓI RÕ ĐANG HIỆN BAO NHIÊU DÒNG, thay cho việc âm thầm cắt ở 200.
+       Và nói rõ "đang chọn N mã": ở chế độ lọc-server, mã đã tích có thể KHÔNG còn trên bảng (nằm
+       ngoài chữ tìm hiện tại) mà vẫn được lưu — không ghi ra thì người dùng tưởng mình mất chọn.
+       ================================================================================================ */
+    let gySoDong = 0, gyMoiPhieu = false, gyQ = '';   // ngữ cảnh lần vẽ gần nhất
+    function capNhatGoiY(soDong, moiPhieu, q) {
+      if (arguments.length) { gySoDong = soDong; gyMoiPhieu = moiPhieu; gyQ = q || ''; }
+      const el = $('nlfGoiY');
+      if (!el) return;
+      const phan = ['Giá lấy nguyên từ phiếu xuất, không sửa được — để số tiền trả lại khớp đúng số đã ghi nợ.'];
+      if (gyMoiPhieu) {
+        phan.push(`Đang hiện <b>${fmtNumber(gySoDong)}</b> dòng${gyQ ? ' khớp "' + escapeHtml(gyQ) + '"' : ' (tất cả phiếu của khách)'}.`);
+        if (!gyQ && gySoDong > 500) phan.push('<b>Nhiều dòng — gõ vài chữ vào ô lọc cho nhẹ và dễ tìm.</b>');
+      }
+      if (daNhap.size) phan.push(`Đang chọn <b>${daNhap.size}</b> mã${gyMoiPhieu && gyQ ? ' (kể cả mã không khớp chữ tìm hiện tại — vẫn được lưu)' : ''}.`);
+      el.innerHTML = phan.join(' ');
     }
 
     /* Tong tinh o SERVER (POST /tinhthu) chu khong tu nhan o client: neu client tu tinh thi cong thuc
        se troi khoi backend luc nao khong biet - dung mot ban tinh duy nhat. */
     let hen = null;
     function tinhTong() {
+      capNhatGoiY();   // v7.99: cập nhật ngay "Đang chọn N mã" (không chờ 350ms tính tiền)
       clearTimeout(hen);
       hen = setTimeout(async () => {
         const dong = layDong();
@@ -309,11 +388,16 @@
           <span style="font-size:16px;color:#1565c0;">TỔNG TRỪ CÔNG NỢ: ${fmtTien(t.tongThanhToan)} đ</span>`;
       }, 250);
     }
+    /* ⚠️ v7.99: ĐỌC TỪ `daNhap`, KHÔNG đọc từ DOM nữa.
+       Từ v7.99 ô lọc ở chế độ "mọi phiếu" gọi lại server nên bảng bị vẽ lại, và dòng nằm ngoài chữ
+       tìm hiện tại KHÔNG có trong DOM. Bản cũ đọc DOM sẽ lưu thiếu đúng những mã đó — người dùng
+       tích 5 mã rồi gõ tìm mã thứ 6 là chỉ lưu được 1.
+       Backend vẫn kiểm lại từng dòng lúc lưu (POST /phieu dùng chung layDongDaBan) nên map này không
+       phải là chỗ tin cậy cuối cùng — chỉ là chỗ giữ ý người dùng cho đúng. */
     function layDong() {
-      return dongHienTai().map(tr => {
-        const sl = Math.round(Number(tr.querySelector('.nl-sl').value) || 0);
-        return sl > 0 ? { phieuBHChiTietID: Number(tr.dataset.bct), soLuongCai: sl } : null;
-      }).filter(Boolean);
+      return [...daNhap.entries()]
+        .map(([bct, g]) => ({ phieuBHChiTietID: Number(bct), soLuongCai: Math.round(Number(g.sl) || 0) }))
+        .filter(d => d.soLuongCai > 0);
     }
 
     $('nlfLuu').onclick = async () => {

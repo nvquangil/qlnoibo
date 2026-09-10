@@ -106,15 +106,18 @@ window.ModuleQLSX = (function () {
           title="Quét mọi lệnh SX: dòng chỉ định nào không ghép được cây vải nào trong kho, và danh mục nào bị trùng tên khác ID">🔍 Rà soát dữ liệu</button>
       </div>
       <p class="empty-hint">Khai KG vải yêu cầu theo từng loại vải/màu của đơn. Chỉ đơn ĐÃ chỉ định mới được chọn khi lập Phiếu xuất kho vải.</p>
-      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Chỉ định</th><th>Xuất kho vải</th><th style="width:330px">Thao tác</th></tr></thead>
+      ${/* v8.01: cot "So do (KT)" dat TRUOC cot "Chi dinh" — dung thu tu nghiep vu that:
+           Ky thuat khai so do -> chi dinh vai -> xuat kho. Nhin mot hang la biet dang tac o buoc nao. */''}
+      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Sơ đồ (KT)</th><th>Chỉ định</th><th>Xuất kho vải</th><th style="width:330px">Thao tác</th></tr></thead>
       <tbody>${orders.map(o => `<tr>
         <td><a href="#" class="act-cdv-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem phiếu In lệnh SX">${escapeHtml(o.MaDH)}</a></td><td>${escapeHtml(o.TenSanPham || '')}</td>
+        <td>${trangThaiSoDoHtml(o)}</td>
         <td>${o.DaChiDinh ? '<span class="badge green">Đã chỉ định</span>' : '<span class="badge">Chưa</span>'}</td>
         <td>${trangThaiXuatKhoHtml(o)}</td>
         <td><button class="btn small secondary act-cdv" data-madh="${escapeHtml(o.MaDH)}">Chỉ định vải (các bản)</button>
           ${/* v5.69: đã chỉ định thì xuất kho được luôn tại đây */''}
           ${o.DaChiDinh && coQuyenXuatVai() ? `<button class="btn small act-cdv-xuat" data-madh="${escapeHtml(o.MaDH)}" title="Lập Phiếu xuất kho vải cho đơn này">📦 Xuất kho</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="5" class="empty-hint">Chưa có đơn hàng</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có đơn hàng</td></tr>'}</tbody></table>`;   // v8.01: 5 -> 6 cột
     body.querySelectorAll('.act-cdv').forEach(b => b.addEventListener('click', () => openCdvBanList(b.dataset.madh, perm)));   // v5.54: mở danh sách BẢN chỉ định
     body.querySelectorAll('.act-cdv-lenh').forEach(b => b.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(b.dataset.madh); }));   // v5.53: click Mã ĐH → In lệnh SX
     body.querySelectorAll('.act-cdv-xuat').forEach(b => b.addEventListener('click', () => xuatKhoTheoChiDinh(b.dataset.madh)));   // v5.69
@@ -238,17 +241,62 @@ window.ModuleQLSX = (function () {
        đã xuất >= chỉ định             -> "Đã xuất kho"
      Lưu ý: chỉ định có thể khai theo kg HOẶC mét tùy dòng, còn kho xuất theo KG — nên con số này là
      ĐỐI CHIẾU THAM KHẢO, không phải căn cứ kế toán. Xem chi tiết từng màu ở form Tạo phiếu xuất. */
+  /* ================================================================================================
+     v8.01 — SO ĐÚNG THỨ NGUYÊN, KHÔNG CÒN ÉP HẾT VỀ KG.
+
+     Nguyen: "phiếu chỉ định vải theo mét nhưng cột xuất kho vải vẫn thể hiện theo kg nên nhiều lệnh
+     sẽ ghi xuất 1 phần" — đúng. Bản cũ so `TongKGChiDinh` (SUM SoKGYeuCau, BỎ QUA đơn vị) với
+     `TongKGDaXuat`. Khai "SL yêu cầu 500, đơn vị Mét" là đem 500 mét so với 120 kg ⇒ "Xuất một phần"
+     vĩnh viễn, không bao giờ hết.
+
+     Nay backend chia sẵn 3 rổ (xem GET /chidinhvaisx). Phiếu xuất ghi CẢ kg CẢ mét nên rổ nào cũng
+     có số để so. Ở đây chỉ việc so từng rổ CÓ YÊU CẦU:
+       · rổ nào chỉ định = 0 thì KHÔNG xét (đơn khai theo mét thì đừng đòi kg, và ngược lại)
+       · còn rổ thiếu  -> "Xuất một phần", ghi số theo ĐÚNG đơn vị của rổ đó
+       · mọi rổ có yêu cầu đều đạt -> "Đã xuất kho"
+       · chỉ định TOÀN đơn vị lạ (Ri/Cây/Kiện, không khai mét) -> "Đã xuất N phiếu", KHÔNG phán
+         đủ/thiếu. Thừa nhận không có căn cứ thì đúng hơn là phán bừa.
+     ================================================================================================ */
   function trangThaiXuatKhoHtml(o) {
     const soPhieu = Number(o.SoPhieuXuat) || 0;
-    const daXuat = Number(o.TongKGDaXuat) || 0;
-    const chiDinh = Number(o.TongKGChiDinh) || 0;
-    if (!soPhieu && !daXuat) return '<span class="badge">Chưa xuất</span>';
-    const so = `<div style="font-size:11px;color:#5f6368;">${fmtNumber(daXuat)}${chiDinh ? ' / ' + fmtNumber(chiDinh) : ''} kg · ${soPhieu} phiếu</div>`;
-    const nhan = (chiDinh > 0 && daXuat < chiDinh)
-      ? '<span class="badge warn">Xuất một phần</span>'
-      : '<span class="badge green">Đã xuất kho</span>';
+    const cdKg = Number(o.ChiDinhKg) || 0, cdMet = Number(o.ChiDinhMet) || 0;
+    const xKg = Number(o.TongKGDaXuat) || 0, xMet = Number(o.TongMetDaXuat) || 0;
+    const soDongLa = Number(o.SoDongKhongSoDuoc) || 0;
+    if (!soPhieu && !xKg && !xMet) return '<span class="badge">Chưa xuất</span>';
+
+    const ro = [];
+    if (cdMet > 0) ro.push({ ten: 'm', cd: cdMet, da: xMet });
+    if (cdKg > 0) ro.push({ ten: 'kg', cd: cdKg, da: xKg });
+    const thieu = ro.filter(r => r.da < r.cd);
+
+    let nhan, chiTiet;
+    if (!ro.length) {
+      /* Không rổ nào so được: hoặc chưa chỉ định gì, hoặc chỉ định toàn đơn vị lạ. */
+      nhan = '<span class="badge green">Đã xuất kho</span>';
+      chiTiet = `${soPhieu} phiếu`
+        + (soDongLa ? ` · <span style="color:#b06000;">${soDongLa} dòng chỉ định đơn vị khác, không đối chiếu được</span>` : '')
+        + (xMet ? ` · ${fmtNumber(xMet)} m` : '') + (xKg ? ` · ${fmtNumber(xKg)} kg` : '');
+    } else {
+      nhan = thieu.length ? '<span class="badge warn">Xuất một phần</span>' : '<span class="badge green">Đã xuất kho</span>';
+      chiTiet = ro.map(r => `${fmtNumber(r.da)} / ${fmtNumber(r.cd)} ${r.ten}`).join(' · ')
+        + ` · ${soPhieu} phiếu`
+        + (soDongLa ? ` · <span style="color:#b06000;">+${soDongLa} dòng đơn vị khác</span>` : '');
+    }
+    const so = `<div style="font-size:11px;color:#5f6368;">${chiTiet}</div>`;
     // v5.85: bấm vào trạng thái -> xem DANH SÁCH PHIẾU XUẤT đã lập cho đơn này.
     return `<a href="#" class="act-xem-phieuxuat" data-madh="${escapeHtml(o.MaDH)}" title="Xem các phiếu xuất kho vải của đơn này" style="text-decoration:none;">${nhan}${so}</a>`;
+  }
+
+  /* v8.01 — TRẠNG THÁI SƠ ĐỒ do công đoạn KỸ THUẬT khai (DonHangChiTietSoDo).
+     Tách riêng mức giữa "có sơ đồ nhưng chưa khai mét" vì ĐỊNH LƯỢNG VẢI (v7.98) cần `MetSoDoDai`:
+     thiếu mét thì mở form chỉ định ra chỉ thấy một dòng cam, mà không biết vì sao. Cột này nói trước. */
+  function trangThaiSoDoHtml(o) {
+    const n = Number(o.SoSoDo) || 0, coMet = Number(o.SoSoDoCoMet) || 0;
+    if (!n) return '<span class="badge">Chưa có sơ đồ</span>';
+    if (!coMet) return `<span class="badge warn">Có sơ đồ · chưa khai mét</span>`
+      + `<div style="font-size:11px;color:#5f6368;">${n} sơ đồ — chưa tính định lượng được</div>`;
+    return `<span class="badge green">${n} sơ đồ</span>`
+      + (coMet < n ? `<div style="font-size:11px;color:#b06000;">${n - coMet} sơ đồ chưa khai mét</div>` : '');
   }
 
   /* v5.85 — POPUP "CÁC PHIẾU ĐÃ XUẤT" của 1 đơn (bấm vào trạng thái Đã xuất kho / Xuất một phần).
@@ -415,16 +463,92 @@ window.ModuleQLSX = (function () {
       : { khachHangId: null, tenKhachHangTuDo: t };
   }
 
+  /* ================================================================================================
+     v7.98 — ĐỊNH LƯỢNG VẢI. BẢN CÔNG THỨC DUY NHẤT.
+
+     Nguyen chốt:  Tổng mét = (Mét sơ đồ + 0.03) × Số lớp × (1 + hao hụt%)
+     0.03 là MÉT (3cm đầu bàn mỗi lớp), KHÔNG phải cm — Nguyen đã xác nhận lại "(Mét sơ đồ + 0.03m)".
+     Mét sơ đồ = DonHangChiTietSoDo.MetSoDoDai, do công đoạn Kỹ thuật khai. Số lớp nhập tay.
+
+     Trả về CẢ 3 con số (cơ bản / hao hụt / tổng) chứ không chỉ tổng: form hiện đủ 3 để người khai
+     nhìn là biết máy hiểu "×2%" theo nghĩa CỘNG THÊM 2%, không phải lấy riêng 2%. Con số hiện ra tự
+     nó là bản kiểm chứng công thức — không cần tin lời ai.
+     ================================================================================================ */
+  const DAU_BAN_MET = 0.03;          // đầu bàn cộng vào chiều dài sơ đồ, mỗi lớp
+  const HAO_HUT_MAC_DINH = 2;        // %
+  /* Ô rỗng phải ra '' chứ không phải 0 — soTuDo() trả 0 cho ô rỗng (đúng cho ô SL, sai cho ô mà
+     "chưa nhập" và "nhập 0" khác nghĩa nhau). Nhận cả dấu phẩy như mọi ô số của form này. */
+  function soTuDoHoacRong(el) {
+    const s = el ? String(el.value == null ? '' : el.value).trim() : '';
+    return s === '' ? '' : soTuDo(s);
+  }
+  function tinhDinhLuongVai(metSoDo, soLop, phanTramHaoHut) {
+    const dai = Number(metSoDo) || 0;
+    const lop = Number(soLop) || 0;
+    const hhRaw = Number(phanTramHaoHut);
+    const hh = Number.isFinite(hhRaw) ? hhRaw : HAO_HUT_MAC_DINH;
+    const tron = (x) => Math.round((Number(x) || 0) * 100) / 100;
+    const coBan = (dai + DAU_BAN_MET) * lop;
+    const haoHut = coBan * hh / 100;
+    return { coBan: tron(coBan), haoHut: tron(haoHut), tong: tron(coBan + haoHut), phanTram: hh, hopLe: dai > 0 && lop > 0 };
+  }
+
   async function openChiDinhVaiSXForm(maDH, tenPhieu, perm, onDone) {
     tenPhieu = tenPhieu || '';
     const res = await apiGet('/api/qlsx/chidinhvaisx/' + encodeURIComponent(maDH) + '?ten=' + encodeURIComponent(tenPhieu));
     const { order, rows } = res.data;
     const _rows = rows;
+    // v7.98: danh sách sơ đồ của đơn + cờ CSDL đã chạy migration_v699 chưa (chưa thì ẩn dải định lượng).
+    const soDoList = Array.isArray(res.data.soDo) ? res.data.soDo : [];
+    const coDinhLuong = res.data.coDinhLuong !== false;
     let cdvIdx = 0;
+    /* v7.98: ô chọn Kiểu có 3 giá trị. Danh sách này phải khớp KIEU_VAI_HOP_LE ở routes/qlsx.js —
+       backend quy giá trị lạ về 'Chính', nên lệch tên ở đây là lặng lẽ mất kiểu khi lưu. */
+    const KIEU_VAI = ['Chính', 'Phụ', 'Phối'];
+    function kieuOptionsHtml(kieuHienTai) {
+      const dangChon = KIEU_VAI.includes(kieuHienTai) ? kieuHienTai : 'Chính';
+      return KIEU_VAI.map(k => `<option value="${k}"${k === dangChon ? ' selected' : ''}>${k}</option>`).join('');
+    }
+    /* Dải "Định lượng" nằm ở DÒNG THỨ HAI trong cùng một [data-cdvrow], không phải thêm cột.
+       Lý do: hàng trên đã 7 cột; nhồi thêm 4 ô nhập + 3 số + 1 nút nữa là ô nào cũng bị bóp đến mức
+       không đọc được số. Gộp vào cùng data-cdvrow để nút X xóa cả cụm và querySelector('.cdv-*')
+       của phần lưu KHÔNG phải đổi một dòng nào. */
+    function dinhLuongHtml(r) {
+      if (!coDinhLuong) return '';
+      if (!soDoList.length) {
+        return `<div class="cdv-dl" style="font-size:11px;color:#b06000;padding:4px 0 2px 2px;">
+          ⚠️ Đơn này chưa khai sơ đồ ở công đoạn Kỹ thuật (Ghi tiến độ → Kỹ thuật → Sơ đồ) nên chưa tính định lượng được.</div>`;
+      }
+      const sdChon = r && r.SoDoID != null ? String(r.SoDoID) : '';
+      /* v8.01: ô chọn sơ đồ BÓP LẠI 60% (230px -> 92px). Nhãn hiện ra chỉ giữ phần PHÂN BIỆT ĐƯỢC
+         (số thứ tự + mét), còn khổ vải + mã rập dồn vào tooltip của từng option — bóp bề rộng mà
+         vẫn để nhãn dài thì trình duyệt cắt mất chữ, đọc không ra sơ đồ nào. Mét là con số dùng để
+         tính nên phải thấy ngay, không được ẩn. */
+      const opts = soDoList.map((s, i) => {
+        const nhan = `SĐ ${i + 1} · ${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) + 'm' : 'chưa có mét'}`;
+        const dayDu = `Sơ đồ ${i + 1}`
+          + (s.MetSoDoDai != null ? ` — dài ${fmtNumber(s.MetSoDoDai)} m` : ' — chưa khai mét sơ đồ dài')
+          + (s.KhoVaiSoDo != null ? ` · khổ ${fmtNumber(s.KhoVaiSoDo)}` : '')
+          + (s.MaRap ? ` · mã rập ${s.MaRap}` : '')
+          + (s.GhiChu ? ` · ${s.GhiChu}` : '');
+        return `<option value="${s.ID}"${String(s.ID) === sdChon ? ' selected' : ''} title="${escapeHtml(dayDu)}">${escapeHtml(nhan)}</option>`;
+      }).join('');
+      const soLop = r && r.SoLop != null ? escapeHtml(String(r.SoLop)) : '';
+      const hh = r && r.PhanTramHaoHut != null ? escapeHtml(String(r.PhanTramHaoHut)) : String(HAO_HUT_MAC_DINH);
+      return `<div class="cdv-dl" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:#5f6368;background:#f7f9fc;border:1px dashed #dce3ea;border-radius:4px;padding:4px 6px;margin:2px 0 0;">
+        <b style="color:#1a73e8;">Định lượng</b>
+        <select class="cdv-sodo" title="Sơ đồ do công đoạn Kỹ thuật khai — đưa chuột vào từng dòng để xem khổ vải / mã rập" style="font-size:11px;padding:2px 4px;width:92px;flex:0 0 auto;"><option value="">— sơ đồ —</option>${opts}</select>
+        <span>×</span><input type="text" inputmode="decimal" class="cdv-solop" placeholder="số lớp" style="width:66px;font-size:11px;padding:2px 4px;" value="${soLop}">
+        <span>lớp · hao hụt</span><input type="text" inputmode="decimal" class="cdv-hh" style="width:46px;font-size:11px;padding:2px 4px;" value="${hh}"><span>%</span>
+        <span class="cdv-dl-ket" style="margin-left:2px;"></span>
+        <button type="button" class="btn small secondary cdv-dl-ap" style="font-size:11px;padding:2px 8px;" title="Ghi TỔNG vào ô &quot;SL yêu cầu (mét)&quot; của dòng này">= Áp dụng</button>
+      </div>`;
+    }
     function rowHtml(r) {
       const id = ++cdvIdx;
-      return `<div class="form-grid" data-cdvrow data-idx="${id}" style="grid-template-columns:110px 1.4fr 1.4fr 1fr .8fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;">
-        <div><label>Kiểu</label><select class="cdv-kieu"><option value="Chính" ${r && r.Kieu === 'Phối' ? '' : 'selected'}>Chính</option><option value="Phối" ${r && r.Kieu === 'Phối' ? 'selected' : ''}>Phối</option></select></div>
+      return `<div data-cdvrow data-idx="${id}" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #eee;">
+      <div class="form-grid" style="grid-template-columns:110px 1.4fr 1.4fr 1fr .8fr 1fr auto;gap:8px;align-items:end;">
+        <div><label>Kiểu</label><select class="cdv-kieu">${kieuOptionsHtml(r && r.Kieu)}</select></div>
         <div><label>Loại vải</label><input class="cdv-lv" list="dlCdvLoaiVai" value="${r ? escapeHtml(r.TenLoaiVai || '') : ''}" placeholder="Gõ tìm / gõ mới" autocomplete="off"></div>
         <div><label>Màu</label><input class="cdv-ms" list="dlCdvMau" value="${r ? escapeHtml(r.TenMau || '') : ''}" placeholder="Gõ tìm / gõ mới" autocomplete="off"></div>
         ${/* v6.44: GÕ TỰ DO cả 3 ô — màn này chỉ ĐƯA RA CHỈ ĐỊNH, chưa ràng buộc vào tồn kho hay
@@ -433,11 +557,14 @@ window.ModuleQLSX = (function () {
         <div><label>Đơn vị</label>${ensureDlCvDonVi()}<input class="cdv-dvt" list="dlCvDonVi" placeholder="Gõ tự do" autocomplete="off" value="${escapeHtml((r && r.DVTVaiYeuCau) || 'Kg')}"></div>
         <div><label>SL yêu cầu (mét)</label><input type="text" inputmode="decimal" class="cdv-met" placeholder="Gõ tự do" value="${r && r.SoMet != null ? escapeHtml(String(r.SoMet)) : ''}"></div>
         <div><button type="button" class="btn small danger cdv-remove">X</button></div>
+      </div>
+      ${dinhLuongHtml(r)}
       </div>`;
     }
     const modal = openModal(`
       <h3>Chỉ định vải SX — ${escapeHtml(order.MaDH)}${order.TenSanPham ? ' · ' + escapeHtml(order.TenSanPham) : ''}${order.MaRap ? ' · Mã rập: ' + escapeHtml(order.MaRap) : ''}</h3>
-      <p class="empty-hint">Loại vải/Màu: <b>gõ để tìm</b> trong danh mục HOẶC <b>gõ tên mới</b> (vải chưa có — chỉ định trước, mua sau; hệ thống tự thêm vào danh mục). Rõ <b>Chính/Phối</b> + SL yêu cầu. Độc lập với Ra lệnh SX.</p>
+      <p class="empty-hint">Loại vải/Màu: <b>gõ để tìm</b> trong danh mục HOẶC <b>gõ tên mới</b> (vải chưa có — chỉ định trước, mua sau; hệ thống tự thêm vào danh mục). Rõ <b>Chính / Phụ / Phối</b> + SL yêu cầu. Độc lập với Ra lệnh SX.
+        ${coDinhLuong && soDoList.length ? 'Dải <b>Định lượng</b> dưới mỗi dòng tính hộ số mét: (mét sơ đồ + 0.03) × số lớp, cộng % hao hụt — bấm <b>= Áp dụng</b> mới ghi vào ô mét.' : ''}</p>
       <datalist id="dlCdvLoaiVai">${dm.loaiVai.map(x => `<option value="${escapeHtml(x.TenLoaiVai)}"></option>`).join('')}</datalist>
       <datalist id="dlCdvMau">${dm.mauSac.map(x => `<option value="${escapeHtml(x.TenMau)}"></option>`).join('')}</datalist>
       <div class="form-row"><label>Tên bản chỉ định</label><input id="cdvTen" value="${escapeHtml(tenPhieu)}" placeholder="VD: Áo / Quần / Đợt 1 (để trống nếu chỉ 1 bản)" ${perm.canEdit ? '' : 'disabled'}></div>
@@ -450,6 +577,55 @@ window.ModuleQLSX = (function () {
     function wireRow(rowEl) {
       const rm = rowEl.querySelector('.cdv-remove');
       if (rm) rm.addEventListener('click', () => { if (modal.querySelectorAll('#cdvRows > [data-cdvrow]').length > 1) rowEl.remove(); });
+      wireDinhLuong(rowEl);   // v7.98
+    }
+    /* v7.98 — nối dây dải Định lượng của MỘT dòng.
+       Kết quả hiện ngay lúc gõ (3 con số), nhưng CHỈ ghi vào ô mét khi bấm "= Áp dụng": ô mét là ô
+       gõ tự do, người khai có quyền tự nhập số khác định lượng (vải tồn, vải ghép đợt...). Tự động
+       ghi đè mỗi lần gõ số lớp là xóa mất con số họ vừa nhập tay — im lặng và không lấy lại được. */
+    function wireDinhLuong(rowEl) {
+      const oSoDo = rowEl.querySelector('.cdv-sodo');
+      if (!oSoDo) return;                       // chưa chạy migration, hoặc đơn chưa khai sơ đồ
+      const oLop = rowEl.querySelector('.cdv-solop');
+      const oHH = rowEl.querySelector('.cdv-hh');
+      const oKet = rowEl.querySelector('.cdv-dl-ket');
+      const bAp = rowEl.querySelector('.cdv-dl-ap');
+      function metCuaSoDoDangChon() {
+        const sd = soDoList.find(s => String(s.ID) === String(oSoDo.value));
+        return sd ? sd.MetSoDoDai : null;
+      }
+      function tinh() {
+        return tinhDinhLuongVai(metCuaSoDoDangChon(), soTuDo(oLop.value), soTuDo(oHH.value));
+      }
+      function ve() {
+        const met = metCuaSoDoDangChon();
+        if (!oSoDo.value) { oKet.innerHTML = '<i>chọn sơ đồ để tính</i>'; return; }
+        if (met == null || Number(met) <= 0) {
+          oKet.innerHTML = '<span style="color:#b06000;">sơ đồ này chưa khai "Mét sơ đồ dài" ở Kỹ thuật</span>';
+          return;
+        }
+        const k = tinh();
+        if (!k.hopLe) { oKet.innerHTML = '<i>nhập số lớp</i>'; return; }
+        /* Hiện ĐỦ 3 số: cơ bản → hao hụt → tổng. Người khai đọc một lượt là thấy "×2%" nghĩa là
+           cộng thêm 2%, không phải lấy riêng 2%. */
+        oKet.innerHTML = `= (${fmtNumber(met)} + ${DAU_BAN_MET}) × ${fmtNumber(soTuDo(oLop.value))}`
+          + ` = <b>${fmtNumber(k.coBan)}</b> m &nbsp;+ hao hụt ${k.phanTram}% = <b>${fmtNumber(k.haoHut)}</b> m`
+          + ` &nbsp;⇒ <b style="color:#137333;">${fmtNumber(k.tong)} m</b>`;
+      }
+      [oSoDo, oLop, oHH].forEach(o => { o.addEventListener('input', ve); o.addEventListener('change', ve); });
+      if (bAp) bAp.addEventListener('click', () => {
+        if (!oSoDo.value) { toast('Chọn sơ đồ trước khi áp dụng.', 'error'); return; }
+        const met = metCuaSoDoDangChon();
+        if (met == null || Number(met) <= 0) { toast('Sơ đồ đang chọn chưa khai "Mét sơ đồ dài" ở công đoạn Kỹ thuật.', 'error'); return; }
+        const k = tinh();
+        if (!k.hopLe) { toast('Nhập số lớp (> 0) trước khi áp dụng.', 'error'); return; }
+        const oMet = rowEl.querySelector('.cdv-met');
+        oMet.value = String(k.tong);
+        oMet.style.background = '#e6f4ea';
+        setTimeout(() => { oMet.style.background = ''; }, 900);
+        toast(`Đã ghi ${fmtNumber(k.tong)} m vào dòng này.`, 'success');
+      });
+      ve();
     }
     modal.querySelectorAll('#cdvRows > [data-cdvrow]').forEach(wireRow);
     modal.querySelector('#cdvClose').addEventListener('click', closeModal);
@@ -468,7 +644,17 @@ window.ModuleQLSX = (function () {
           tenMau: (rowEl.querySelector('.cdv-ms').value || '').trim(),
           soKG: soTuDo(rowEl.querySelector('.cdv-kg').value),     // v6.44: ô chữ, hiểu cả dấu phẩy
           soMet: soTuDo(rowEl.querySelector('.cdv-met').value),
-          dvt: rowEl.querySelector('.cdv-dvt') ? rowEl.querySelector('.cdv-dvt').value : 'Kg'   // v5.53: đơn vị chọn theo list
+          dvt: rowEl.querySelector('.cdv-dvt') ? rowEl.querySelector('.cdv-dvt').value : 'Kg',   // v5.53: đơn vị chọn theo list
+          /* v7.98: gửi kèm ĐẦU VÀO định lượng để lần sau mở lại tính lại được (backend bỏ qua nếu
+             CSDL chưa chạy migration_v699).
+             ⚠️ Phải qua soTuDoHoacRong(), KHÔNG gửi thẳng .value: hai ô này gõ tự do như mọi ô số
+             khác của form nên "100,5" là hợp lệ, mà Number("100,5") = NaN -> backend ghi NULL và
+             số lớp vừa nhập biến mất không một tiếng báo.
+             Ô rỗng giữ nguyên '' -> backend ghi NULL, KHÔNG ghi 0: "0 lớp" và "chưa dùng định lượng"
+             là hai chuyện khác nhau. */
+          soDoId: rowEl.querySelector('.cdv-sodo') ? rowEl.querySelector('.cdv-sodo').value : '',
+          soLop: soTuDoHoacRong(rowEl.querySelector('.cdv-solop')),
+          phanTramHaoHut: soTuDoHoacRong(rowEl.querySelector('.cdv-hh'))
         };
       });
       const tenMoi = (modal.querySelector('#cdvTen') ? modal.querySelector('#cdvTen').value : '').trim();   // v5.54: tên bản
@@ -2009,10 +2195,15 @@ window.ModuleQLSX = (function () {
         Chi phí chung khai theo <b>1 sản phẩm</b>, không phải tổng cả lệnh.</p>
       ${/* v7.89: cột "Mã hàng" đổi thành "Mã rập"; "Tổng SL" lấy SỔ CẮT theo vải chính, không lấy
            TongSoLuong khai ở Ra lệnh SX (số khai chỉ là kế hoạch, giá thành phải soi số cắt thật). */''}
-      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã rập</th><th>Tổng SL (sổ cắt — vải chính)</th><th>Chi phí chung</th><th style="width:210px">Thao tác</th></tr></thead>
+      ${/* v7.93: cột TRẠNG THÁI của lệnh SX. Danh sách này liệt kê MỌI lệnh (kể cả Đã hủy, kể cả
+           lệnh mới ra chưa cắt), mà giá thành chỉ có nghĩa khi lệnh đã chạy xong — không nhìn thấy
+           trạng thái thì phải mở từng lệnh ra mới biết con số đang tính là của lệnh còn dở.
+           Dùng ĐÚNG statusWithStage của Danh sách lệnh SX để hai màn cùng một màu, một cách gọi. */''}
+      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã rập</th><th>Trạng thái</th><th>Tổng SL (sổ cắt — vải chính)</th><th>Chi phí chung</th><th style="width:210px">Thao tác</th></tr></thead>
       <tbody>${orders.map(o => `<tr>
         <td><a href="#" class="act-gt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem/in Lệnh sản xuất">${escapeHtml(o.MaDH)}</a></td>
         <td>${escapeHtml(o.TenSanPham || '')}</td><td>${escapeHtml(o.MaRap || '')}</td>
+        <td>${statusWithStage(o.TrangThai, o.TenCongDoan, o.TenNhaGiaCong, o.MaCongDoan)}</td>
         ${/* Chưa ghi sổ cắt thì nói rõ, KHÔNG lùi về số khai ở Ra lệnh SX — lùi âm thầm là người
              đọc tưởng đã cắt xong đủ số đó. */''}
         <td style="text-align:right;">${Number(o.TongSLCatChinh) > 0
@@ -2020,7 +2211,7 @@ window.ModuleQLSX = (function () {
           : '<span class="empty-hint" style="padding:0;">chưa ghi sổ cắt</span>'}</td>
         <td>${Number(o.SoChiPhiChung) > 0 ? `<span class="badge green">${o.SoChiPhiChung} dòng</span>` : '<span class="badge">Chưa khai</span>'}</td>
         <td><button class="btn small secondary act-gt" data-madh="${escapeHtml(o.MaDH)}">💰 Tính giá thành</button></td>
-      </tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
     body.querySelectorAll('.act-gt').forEach(b => b.addEventListener('click', () => openGiaThanhModal(b.dataset.madh, perm)));
     body.querySelectorAll('.act-gt-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(a.dataset.madh); }));
   }
@@ -3001,11 +3192,39 @@ window.ModuleQLSX = (function () {
         return `<div style="font-size:11px;color:#137333;margin-bottom:3px;">✔ ${escapeHtml(p.TenNhanVien)} (${fmtNumber(p.SoLuong)})</div>`;
       }
       return `<div class="ktgv-srow" data-pcmid="${p.ID}" style="display:flex;gap:4px;align-items:center;margin-bottom:4px;flex-wrap:wrap;background:#f1f8f1;border-radius:4px;padding:2px 3px;">
-        <div style="flex:1;min-width:110px;">${searchableSelectHtml(uid, nhanVienMay, 'NhanVienID', x => x.HoTen, p.NhanVienID || '')}</div>
-        <input type="number" min="0" class="ktgvs-sl" style="width:56px;" value="${p.SoLuong != null ? p.SoLuong : ''}">
+        ${/* v8.01: DONG DA LUU gio dung DUNG be rong voi dong nhap moi (o ten 150px co dinh, o SL
+             112px) — truoc day o ten dung flex:1 (gian het cho thua) va o SL chi 56px, khong nhin
+             het so co 4-5 chu so. v6.66.1 da noi rong o SL cho dong NHAP MOI nhung bo sot dong DA
+             LUU, nen mo lai xem thi cot so lai ngan. Dung ho loi "sua mot man, quen man cung ho". */''}
+        <div style="width:150px;min-width:120px;flex:0 0 auto;">${searchableSelectHtml(uid, nhanVienMay, 'NhanVienID', x => x.HoTen, p.NhanVienID || '')}</div>
+        <input type="number" min="0" class="ktgvs-sl" style="width:112px;" value="${p.SoLuong != null ? p.SoLuong : ''}">
         ${suaDuoc ? '<button type="button" class="btn small ktgvs-luu" title="Lưu sửa dòng này" style="padding:2px 6px;">💾</button>' : ''}
         ${xoaDuoc ? '<button type="button" class="btn small danger ktgvs-xoa" title="Xóa dòng đã giao" style="padding:2px 6px;">🗑️</button>' : ''}
       </div>`;
+    }
+    /* v7.96 — DÒNG "Tổng" NGAY TRONG Ô "Nhân viên & SL", tự cộng lúc đang gõ SL.
+       Cộng CẢ dòng đã lưu LẪN dòng đang nhập chưa lưu, vì con số người dùng cần là "công đoạn này đã
+       giao bao nhiêu cái" — chia ra 2 số thì lại phải tự cộng bằng đầu, đúng cái việc này sinh ra để bỏ.
+       Đọc từ Ô NHẬP đang hiển thị (.ktgvs-sl/.ktgv-sl) chứ không từ state: người dùng sửa SL của dòng
+       đã lưu mà chưa bấm 💾 thì state còn giá trị cũ, tổng lấy theo state sẽ lệch với cái đang nhìn.
+       Riêng trường hợp KHÔNG có quyền Sửa và KHÔNG có quyền Xóa thì dòng đã lưu hiện dạng CHỮ (xem
+       ktGiaoViecSavedRowHtml) — không có ô nhập nào để đọc, khi đó mới lấy từ phanCongMayList.
+       ⚠️ KHÔNG dùng cho việc khống chế "≤ tổng SL cắt màu chính" ở nút Lưu/Gửi — chỗ đó cố ý chỉ
+       đếm dòng MỚI (.ktgv-sl); đổi sang tổng này là đổi luật kiểm, không phải việc của v7.96. */
+    function capNhatTongKtGiaoViec(cellEl, congDoanMayId) {
+      if (!cellEl) return;
+      const oSo = cellEl.querySelector('.ktgv-tong-so');
+      if (!oSo) return;
+      let tong = 0;
+      if (coQuyenSuaTienDo() || coQuyenXoaTienDo()) {
+        cellEl.querySelectorAll('.ktgvs-sl').forEach(i => { tong += Number(i.value) || 0; });
+      } else {
+        phanCongMayList
+          .filter(p => String(p.DonGiaCongDoanMayID) === String(congDoanMayId))
+          .forEach(p => { tong += Number(p.SoLuong) || 0; });
+      }
+      cellEl.querySelectorAll('.ktgv-sl').forEach(i => { tong += Number(i.value) || 0; });
+      oSo.textContent = fmtNumber(Math.round(tong * 100) / 100);
     }
     function ktGiaoViecCellHtml(congDoanMayId) {
       // "Da giao" doc lai tu phanCongMayList da co san (lich su TOAN BO PhanCongMay cua don hang, xem
@@ -3015,10 +3234,15 @@ window.ModuleQLSX = (function () {
       const rows = ktGiaoViecByStage[congDoanMayId] || [];
       const daGiaoHtml = daGiao.length
         ? `<div class="ktgv-saved">${daGiao.map(ktGiaoViecSavedRowHtml).join('')}</div>` : '';
+      /* v7.96: dong "Tong" dat CO DINH o day bat ke o dang co bao nhieu dong (ke ca 0 dong) - moi dong
+         cua luoi cong doan may deu cao them dung 1 dong nhu nhau nen khong lam lech can dong giua 5 cot
+         (xem ghi chu v5.7 ve viec ep khoang cach dong o congDoanMayExistingRowsHtml). Gia tri de 0, wire
+         goi capNhatTongKtGiaoViec() ngay sau khi ve nen so that hien ra truoc khi nguoi dung kip nhin. */
       return `<div data-ktgvcell="${congDoanMayId}">
         ${daGiaoHtml}
         <div class="ktgv-rows">${rows.map(r => ktGiaoViecMiniRowHtml(congDoanMayId, r)).join('')}</div>
         <button type="button" class="btn small secondary ktgv-add" style="font-size:11px;padding:2px 8px;">+ NV</button>
+        <div class="ktgv-tong" style="font-size:11px;font-weight:600;color:#1a73e8;margin-top:4px;padding-top:3px;border-top:1px dashed var(--border);">Tổng: <span class="ktgv-tong-so">0</span></div>
       </div>`;
     }
     function wireKtGiaoViecCell(cellEl, congDoanMayId) {
@@ -3028,10 +3252,17 @@ window.ModuleQLSX = (function () {
         wireSearchableSelect('ktgv_' + congDoanMayId + '_' + idx, nhanVienMay, 'NhanVienID', p => p.HoTen, (match) => {
           if (row) row.nhanVienId = match ? match.NhanVienID : '';
         });
-        if (row) rowEl.querySelector('.ktgv-sl').addEventListener('input', (e) => { row.soLuong = e.target.value; });
+        /* v7.96: ô SL luôn được nối listener, KHÔNG còn nằm trong `if (row)` — dòng nào không tìm thấy
+           trong state (idx lệch) thì trước đây im lặng không cộng vào đâu cả; nay vẫn cập nhật "Tổng". */
+        const oSl = rowEl.querySelector('.ktgv-sl');
+        if (oSl) oSl.addEventListener('input', (e) => {
+          if (row) row.soLuong = e.target.value;
+          capNhatTongKtGiaoViec(cellEl, congDoanMayId);
+        });
         rowEl.querySelector('.ktgv-remove').addEventListener('click', () => {
           ktGiaoViecByStage[congDoanMayId] = (ktGiaoViecByStage[congDoanMayId] || []).filter(r => String(r.idx) !== String(idx));
           rowEl.remove();
+          capNhatTongKtGiaoViec(cellEl, congDoanMayId);
         });
       }
       cellEl.querySelectorAll('[data-ktgvrow]').forEach(wireRow);
@@ -3041,6 +3272,9 @@ window.ModuleQLSX = (function () {
         const pcmId = srow.dataset.pcmid;
         const p = phanCongMayList.find(x => String(x.ID) === String(pcmId));
         wireSearchableSelect('ktgvs_' + pcmId, nhanVienMay, 'NhanVienID', x => x.HoTen);
+        // v7.96: sửa SL của dòng ĐÃ LƯU cũng cập nhật "Tổng" ngay lúc gõ, không chờ bấm 💾.
+        const oSlS = srow.querySelector('.ktgvs-sl');
+        if (oSlS) oSlS.addEventListener('input', () => capNhatTongKtGiaoViec(cellEl, congDoanMayId));
         const bLuu = srow.querySelector('.ktgvs-luu');
         if (bLuu) bLuu.addEventListener('click', async () => {
           const nvId = getSearchableValue('ktgvs_' + pcmId);
@@ -3050,6 +3284,7 @@ window.ModuleQLSX = (function () {
             await apiPut(`/api/qlsx/orders/${encodeURIComponent(maDH)}/phancongmay/${pcmId}`, { nhanVienId: nvId, soLuong: sl || 0 });
             if (p) { p.NhanVienID = nvId; p.SoLuong = Number(sl) || 0; const nv = nhanVienMay.find(x => String(x.NhanVienID) === String(nvId)); if (nv) p.TenNhanVien = nv.HoTen; }
             toast('Đã lưu lại dòng giao việc.', 'success');
+            capNhatTongKtGiaoViec(cellEl, congDoanMayId);   // v7.96
             lamMoiBangLichSuMay();
           } catch (err) { toast(err.message, 'error'); }
         });
@@ -3061,6 +3296,7 @@ window.ModuleQLSX = (function () {
             phanCongMayList = phanCongMayList.filter(x => String(x.ID) !== String(pcmId));
             srow.remove();
             toast('Đã xóa dòng giao việc.', 'success');
+            capNhatTongKtGiaoViec(cellEl, congDoanMayId);   // v7.96
             lamMoiBangLichSuMay();
           } catch (err) { toast(err.message, 'error'); }
         });
@@ -3072,7 +3308,12 @@ window.ModuleQLSX = (function () {
         ktGiaoViecByStage[congDoanMayId].push(row);
         cellEl.querySelector('.ktgv-rows').insertAdjacentHTML('beforeend', ktGiaoViecMiniRowHtml(congDoanMayId, row));
         wireRow(cellEl.querySelector(`[data-ktgvrow][data-idx="${idx}"]`));
+        capNhatTongKtGiaoViec(cellEl, congDoanMayId);   // v7.96
       });
+      // v7.96: sơn số thật lên dòng "Tổng" NGAY sau khi nối dây (HTML để 0) — cả 2 đường vào đều gọi
+      // wireKtGiaoViecCell (Kỹ thuật: wireCongDoanMayChon; May: wireCongDoanMayReadonly) nên chỉ cần
+      // đặt ở đây là đủ cho cả hai màn, không phải nhớ gọi thêm ở chỗ vẽ.
+      capNhatTongKtGiaoViec(cellEl, congDoanMayId);
     }
     // v5.7: them cot thu 5 "Nhân viên & SL" (ktGiaoViecCellHtml) + BAT BUOC ep khoang cach dong deu nhau
     // qua inline style (margin-bottom/padding-bottom/border-bottom co dinh, KHONG con dua vao CSS

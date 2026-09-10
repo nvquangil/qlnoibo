@@ -42,9 +42,16 @@ window.ModulePayroll = (function () {
   function periodBar(onChange, extra) {
     const years = []; for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) years.push(y);
     return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      ${/* v8.00: hai o Nam/Thang BOP LAI vua bang so ky tu. Truoc day nhan option la "Nam 2026" va
+           "Thang 12" nen o chon rong ra theo chu, an cho cua cac nut ben canh — ma chu "Nam"/"Thang"
+           la du thua: nhan "Ky luong:" ngay ben trai da noi ro day la ky nao.
+           Dat flex:0 0 auto de flexbox KHONG keo gian hai o nay; con be rong thi de trinh duyet tu
+           do theo option dai nhat (2026 / T12) — dung nghia "ngan lai bang so ky tu".
+           KHONG dat dau backtick trong comment nay: no nam BEN TRONG template literal, mot dau
+           backtick la dong som template -> SyntaxError, ca man hinh dung im. */''}
       <label style="font-weight:600;">Kỳ lương:</label>
-      <select id="pNam">${years.map(y => `<option value="${y}" ${y === selNam ? 'selected' : ''}>Năm ${y}</option>`).join('')}</select>
-      <select id="pThang">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === selThang ? 'selected' : ''}>Tháng ${m}</option>`).join('')}</select>
+      <select id="pNam" style="flex:0 0 auto;" title="Năm">${years.map(y => `<option value="${y}" ${y === selNam ? 'selected' : ''}>${y}</option>`).join('')}</select>
+      <select id="pThang" style="flex:0 0 auto;" title="Tháng">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === selThang ? 'selected' : ''}>T${m}</option>`).join('')}</select>
       ${extra || ''}</div>`;
   }
   function wirePeriod(root, onChange) {
@@ -213,21 +220,57 @@ window.ModulePayroll = (function () {
       </fieldset>
       ${periodBar(null, `${perm.canEdit ? `<button class="btn small secondary" id="btnTongHop">🔄 Tổng hợp từ máy → bảng công</button>
         <button class="btn small secondary" id="btnCauHinhCC">⚙️ Cài đặt chấm công</button>
+        <button class="btn small secondary" id="btnNhomCC">👥 Nhóm chấm công</button>
         <button class="btn small secondary" id="btnRawCC">📄 Chi tiết đã kéo về</button>` : ''}
         ${perm.canDelete ? `<button class="btn small danger" id="btnXoaBangCC">🗑️ Xóa bảng công tháng</button>` : ''}`)}
-      <table><thead><tr><th>Mã NV</th><th>Họ tên</th><th>Bộ phận</th><th>Tổng công</th><th>Giờ tăng ca</th><th>Số ngày chấm</th><th style="width:120px">Thao tác</th></tr></thead>
-      <tbody>${cc.rows.map(r => `<tr>
-        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${escapeHtml(r.TenBoPhan || '')}</td>
+      ${/* v8.00: ô tìm kiếm cho bảng công tháng.
+           KHONG dung wireTableSearch co san: no so tren tr.textContent, ma cot Thao tac co nut
+           "Sua chi tiet" => go "chi" la khop MOI DONG. Nen dung data-tim dung tu cac truong du lieu
+           + boDau() (khong dau), giong cach v7.92 da lam cho danh sach lenh SX. */''}
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <input type="text" id="ccTim" placeholder="Gõ để tìm mã NV / họ tên / bộ phận / nhóm..." autocomplete="off" style="min-width:280px;">
+        <span class="empty-hint" style="padding:0;" id="ccDemTim"></span>
+      </div>
+      <table><thead><tr><th>Mã NV</th><th>Họ tên</th><th>Bộ phận</th><th>Nhóm chấm công</th><th>Tổng công</th><th>Giờ tăng ca</th><th>Số ngày chấm</th><th style="width:120px">Thao tác</th></tr></thead>
+      <tbody>${cc.rows.map(r => `<tr data-tim="${escapeHtml(boDau((r.MaNhanVien || '') + ' ' + (r.HoTen || '') + ' ' + (r.TenBoPhan || '') + ' ' + (r.TenNhom || '')))}">
+        ${/* v7.97: HỌ TÊN bấm được -> mở chi tiết chấm công của người đó. Trước đây chỉ vào được qua nút
+             "Sửa chi tiết" mà nút đó gate theo perm.canEdit, nên người CHỈ ĐƯỢC XEM không có đường nào
+             xem chi tiết. Link này chỉ cần quyền view (route GET /chamcong/:id vốn đã là 'view'). */''}
+        <td>${escapeHtml(r.MaNhanVien || '')}</td>
+        <td><a href="#" class="act-ccten" data-id="${r.NhanVienID}" data-ten="${escapeHtml(r.HoTen)}" title="Xem chi tiết chấm công tháng này" style="color:#1a73e8;text-decoration:none;font-weight:500;">${escapeHtml(r.HoTen)}</a></td>
+        <td>${escapeHtml(r.TenBoPhan || '')}</td>
+        ${/* v8.00: chua gan nhom = tinh theo cau hinh CHUNG. Ghi ro thay vi de trong, keo nguoi doc
+             tuong la thieu du lieu. */''}
+        <td>${r.TenNhom ? escapeHtml(r.TenNhom) : '<span style="color:#5f6368;font-size:12px;">(cấu hình chung)</span>'}</td>
         <td style="text-align:right;font-weight:600;">${num(r.TongCong)}</td><td style="text-align:right;">${num(r.TongGioTangCa)}</td><td style="text-align:right;">${num(r.SoNgay)}</td>
         <td>${perm.canEdit ? `<button class="btn small secondary act-ccedit" data-id="${r.NhanVienID}" data-ten="${escapeHtml(r.HoTen)}">Sửa chi tiết</button>` : ''}</td>
-      </tr>`).join('') || `<tr><td colspan="7" class="empty-hint">Chưa có dữ liệu chấm công.</td></tr>`}</tbody></table>
+      </tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Chưa có dữ liệu chấm công.</td></tr>`}</tbody></table>
       <h4 style="margin:16px 0 4px;">Chi tiết chấm công đã kéo về (giờ vào / giờ ra) — tháng ${selThang}/${selNam}</h4>
       <div style="overflow:auto;max-height:50vh;"><table style="font-size:13px;"><thead><tr><th>Ngày</th><th>Mã NV</th><th>Họ tên / Mã máy</th><th>Giờ vào</th><th>Giờ ra</th><th>Số lần</th></tr></thead>
       <tbody>${ccDetail.map(r => `<tr><td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen || ('(mã ' + (r.MaChamMay || '') + ' — chưa gán)'))}</td><td style="text-align:center;">${escapeHtml(r.GioVao || '')}</td><td style="text-align:center;">${escapeHtml(r.GioRa || '')}</td><td style="text-align:right;">${num(r.SoLan)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Chưa có dữ liệu kéo về trong tháng này.</td></tr>`}</tbody></table></div>`;
     wirePeriod(container, renderChamCong);
     const bAdd = container.querySelector('#btnAddMay'); if (bAdd) bAdd.addEventListener('click', () => openMayForm(null));
     // v5.60: cài đặt giờ vào/ra + tăng ca, xem chi tiết từng lần quẹt, xóa bảng công tháng.
-    const bCfg = container.querySelector('#btnCauHinhCC'); if (bCfg) bCfg.addEventListener('click', openCauHinhChamCong);
+    const bCfg = container.querySelector('#btnCauHinhCC'); if (bCfg) bCfg.addEventListener('click', () => openCauHinhChamCong());
+    const bNhom = container.querySelector('#btnNhomCC'); if (bNhom) bNhom.addEventListener('click', openNhomChamCong);   // v8.00
+    /* v8.00: ô tìm bảng công tháng. Ẩn/hiện tại chỗ (dữ liệu đã nạp đủ 1 tháng, không cần gọi lại
+       server). Dòng "không tìm thấy" phải dựng TRƯỚC khi themCotStt chạy thì colspan mới đúng — nên
+       ở đây chỉ ẩn/hiện dòng có sẵn và đếm, không chèn dòng mới (bài học v7.92). */
+    const oTim = container.querySelector('#ccTim');
+    if (oTim) {
+      const dsDong = Array.from(container.querySelectorAll('tbody tr[data-tim]'));
+      const oDem = container.querySelector('#ccDemTim');
+      oTim.addEventListener('input', () => {
+        const q = boDau(oTim.value);
+        let hien = 0;
+        dsDong.forEach(tr => {
+          const khop = !q || tr.dataset.tim.includes(q);
+          tr.style.display = khop ? '' : 'none';
+          if (khop) hien++;
+        });
+        oDem.textContent = q ? `Hiện ${hien}/${dsDong.length} người` : '';
+      });
+    }
     const bRaw = container.querySelector('#btnRawCC'); if (bRaw) bRaw.addEventListener('click', () => openRawChamCong());
     const bXoaCC = container.querySelector('#btnXoaBangCC');
     if (bXoaCC) bXoaCC.addEventListener('click', async () => {
@@ -242,6 +285,11 @@ window.ModulePayroll = (function () {
     container.querySelectorAll('.act-mayedit').forEach(b => b.addEventListener('click', () => openMayForm(mays.find(m => m.MayChamCongID == b.dataset.id))));
     container.querySelectorAll('.act-maydel').forEach(b => b.addEventListener('click', async () => { if (!confirm('Xóa máy này?')) return; try { await apiDelete('/api/payroll/maychamcong/' + b.dataset.id); toast('Đã xóa.', 'success'); renderChamCong(); } catch (e) { toast(e.message, 'error'); } }));
     container.querySelectorAll('.act-ccedit').forEach(b => b.addEventListener('click', () => openChamCongChiTiet(b.dataset.id, b.dataset.ten)));
+    // v7.97: cùng một hàm mở modal với nút "Sửa chi tiết" — một nghiệp vụ, một luồng, không viết bản thứ hai.
+    container.querySelectorAll('.act-ccten').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openChamCongChiTiet(a.dataset.id, a.dataset.ten);
+    }));
     container.querySelectorAll('.act-users').forEach(b => b.addEventListener('click', () => openDeviceUsers(b.dataset.id)));
     container.querySelectorAll('.act-maytest').forEach(b => b.addEventListener('click', () => testMay(b.dataset.id)));   // v5.59 Hikvision
     const bImp = container.querySelector('#btnImportCC'); const fImp = container.querySelector('#fileCC');
@@ -353,13 +401,25 @@ window.ModulePayroll = (function () {
 
   /* v5.60: CÀI ĐẶT CHẤM CÔNG — giờ vào/ra chuẩn, nghỉ trưa, bao nhiêu giờ = 1 công,
      cách xử lý khi KHÔNG đủ 1 công (chia theo giờ), và quy tắc tính TĂNG CA. */
-  async function openCauHinhChamCong() {
-    let cfg;
-    try { cfg = (await apiGet('/api/payroll/chamcong/cauhinh')).data || {}; }
+  /* v8.00: `nhomId` có thì form này khai giờ cho ĐÚNG MỘT NHÓM; không có thì khai cấu hình CHUNG
+     như trước. MỘT form phục vụ cả hai — viết bản thứ hai là hai bên trôi khỏi nhau, và người dùng
+     phải học hai layout cho cùng một việc.
+     Backend trả về bản ĐÃ GỘP (chung + nhóm) nên số hiện trên form chính là số sẽ được lưu — không
+     có chuyện bấm Lưu mà âm thầm đổi một ô mình chưa hề chạm vào. */
+  async function openCauHinhChamCong(nhomId, tenNhom) {
+    let cfg, daKhaiRieng = false;
+    try {
+      const res = await apiGet('/api/payroll/chamcong/cauhinh' + (nhomId ? '?nhomId=' + encodeURIComponent(nhomId) : ''));
+      cfg = res.data || {};
+      daKhaiRieng = !!res.daKhaiRieng;
+      if (res.nhom && res.nhom.TenNhom) tenNhom = res.nhom.TenNhom;
+    }
     catch (e) { toast(e.message, 'error'); return; }
     const f = (label, inner, hint) => `<div class="form-row" style="margin:0;"><label>${label}</label>${inner}${hint ? `<div style="font-size:11px;color:#5f6368;">${hint}</div>` : ''}</div>`;
     const modal = openModal(`
-      <h3>⚙️ Cài đặt chấm công</h3>
+      <h3>${nhomId ? '⏰ Cài giờ cho nhóm: ' + escapeHtml(tenNhom || '') : '⚙️ Cài đặt chấm công (chung toàn công ty)'}</h3>
+      ${nhomId ? `<p class="empty-hint" style="text-align:left;">Số đang hiện là giờ nhóm này <b>đang áp dụng thật</b>${daKhaiRieng ? ' (nhóm đã khai riêng)' : ' — hiện đang theo cấu hình chung, sửa và Lưu là nhóm có giờ riêng'}.
+        Ngày lễ/Tết <b>không khai ở đây</b> — lễ là lễ chung toàn công ty, cài ở "⚙️ Cài đặt chấm công".</p>` : ''}
       <form id="ccCfgForm">
         <fieldset style="border:1px solid #e0e0e0;border-radius:6px;padding:10px 12px;">
           <legend style="font-weight:600;">Giờ làm chuẩn → tính CÔNG</legend>
@@ -385,10 +445,10 @@ window.ModulePayroll = (function () {
             ${f('Tăng ca tối đa / ngày (giờ)', `<input type="number" step="0.5" min="0" id="cc_otMax" value="${cfg.otToiDaGioNgay != null ? cfg.otToiDaGioNgay : 6}">`, 'Chặn trên, tránh 1 lần quẹt sai thành tăng ca vô lý')}
             ${f('Tính cả phần đến sớm', `<label style="display:block;padding-top:6px;"><input type="checkbox" id="cc_otTruoc" ${cfg.tinhOtTruocGioVao ? 'checked' : ''}> Có tính giờ trước giờ vào là tăng ca</label>`)}
           </div>
-          <div class="form-row" style="margin-top:8px;"><label>Ngày lễ / Tết (mỗi dòng 1 ngày, dạng 2026-09-02)</label>
+          ${nhomId ? '' : `<div class="form-row" style="margin-top:8px;"><label>Ngày lễ / Tết (mỗi dòng 1 ngày, dạng 2026-09-02)</label>
             <textarea id="cc_ngayLe" rows="3" placeholder="2026-09-02&#10;2027-01-01">${escapeHtml((cfg.ngayLe || []).join('\n'))}</textarea>
             <div style="font-size:11px;color:#5f6368;">Tăng ca ngày lễ vào cột "Lễ/Tết"; Chủ nhật tự nhận diện vào cột "Chủ nhật".</div>
-          </div>
+          </div>`}
         </fieldset>
         <p class="empty-hint" style="margin-top:8px;">Sau khi lưu, bấm <b>🔄 Tổng hợp từ máy → bảng công</b> để áp cài đặt mới cho tháng đang xem (các dòng đã sửa tay không bị ghi đè).</p>
         <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Hủy</button><button type="submit" class="btn">Lưu cài đặt</button></div>
@@ -403,10 +463,149 @@ window.ModulePayroll = (function () {
         toiThieuTinhCongPhut: modal.querySelector('#cc_toiThieu').value,
         otBatDauSauPhut: modal.querySelector('#cc_otNguong').value, otLamTronGio: modal.querySelector('#cc_otTron').value,
         otToiDaGioNgay: modal.querySelector('#cc_otMax').value, tinhOtTruocGioVao: modal.querySelector('#cc_otTruoc').checked,
-        ngayLe: modal.querySelector('#cc_ngayLe').value.split('\n').map(s => s.trim()).filter(Boolean)
+        // v8.00: form của NHÓM không có ô ngày lễ (lễ là lễ chung) -> phải kiểm ô có tồn tại.
+        ngayLe: modal.querySelector('#cc_ngayLe')
+          ? modal.querySelector('#cc_ngayLe').value.split('\n').map(s => s.trim()).filter(Boolean) : [],
+        nhomId: nhomId || null   // v8.00
       };
-      try { await apiPost('/api/payroll/chamcong/cauhinh', payload); closeModal(); toast('Đã lưu cài đặt chấm công. Bấm "Tổng hợp từ máy" để áp dụng.', 'success'); }
+      try {
+        await apiPost('/api/payroll/chamcong/cauhinh', payload);
+        closeModal();
+        toast(nhomId
+          ? 'Đã lưu giờ cho nhóm. Bấm "Tổng hợp từ máy" để tính lại tháng đang xem theo giờ mới.'
+          : 'Đã lưu cài đặt chấm công. Bấm "Tổng hợp từ máy" để áp dụng.', 'success');
+        if (nhomId) openNhomChamCong();   // quay lại danh sách nhóm để thấy giờ vừa đổi
+      }
       catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  /* ================================================================================================
+     v8.00 — NHÓM CHẤM CÔNG. Mỗi nhóm một bộ giờ vào/ra, tự gán nhân viên vào.
+     Người CHƯA gán nhóm vẫn tính theo "⚙️ Cài đặt chấm công" chung như trước v8.00.
+     ================================================================================================ */
+  async function openNhomChamCong() {
+    let ds = [], chung = {};
+    try {
+      const res = await apiGet('/api/payroll/chamcong/nhom');
+      ds = res.data || []; chung = res.cauHinhChung || {};
+    } catch (e) { toast(e.message, 'error'); return; }
+    const modal = openModal(`
+      <h3>👥 Nhóm chấm công</h3>
+      <p class="empty-hint" style="text-align:left;">Mỗi nhóm một bộ <b>giờ vào / giờ ra</b> riêng. Nhân viên <b>chưa gán nhóm</b> tính theo cấu hình chung
+        (${escapeHtml(chung.gioVao || '')}–${escapeHtml(chung.gioRa || '')}).
+        <br>⚠️ Đổi giờ <b>không tự tính lại</b> tháng đã chốt — phải bấm <b>🔄 Tổng hợp từ máy → bảng công</b>, và lệnh đó giữ nguyên các dòng đã sửa tay.</p>
+      ${perm.canCreate ? `<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;">
+        <div class="form-row" style="margin:0;"><label>Tên nhóm mới</label><input id="nhTen" placeholder="VD: Ca ngày / Ca đêm" style="width:220px;"></div>
+        <div class="form-row" style="margin:0;flex:1;"><label>Ghi chú</label><input id="nhGhiChu" placeholder="không bắt buộc" style="width:100%;"></div>
+        <button type="button" class="btn small" id="nhThem">➕ Thêm nhóm</button>
+      </div>` : ''}
+      <table><thead><tr><th>Tên nhóm</th><th>Giờ vào</th><th>Giờ ra</th><th>Số nhân viên</th><th>Ghi chú</th><th style="width:240px">Thao tác</th></tr></thead>
+      <tbody>${ds.map(n => `<tr>
+        <td><b>${escapeHtml(n.TenNhom)}</b>${n.DaKhaiRieng ? '' : ' <span class="badge">theo cấu hình chung</span>'}</td>
+        <td style="text-align:center;">${escapeHtml(n.GioVao || '')}</td>
+        <td style="text-align:center;">${escapeHtml(n.GioRa || '')}</td>
+        <td style="text-align:right;">${num(n.SoNhanVien)}</td>
+        <td>${escapeHtml(n.GhiChu || '')}</td>
+        <td>${perm.canEdit ? `<button class="btn small secondary nh-gio" data-id="${n.NhomID}" data-ten="${escapeHtml(n.TenNhom)}">⏰ Cài giờ</button>
+             <button class="btn small secondary nh-nv" data-id="${n.NhomID}" data-ten="${escapeHtml(n.TenNhom)}">👤 Gán nhân viên</button>
+             <button class="btn small secondary nh-sua" data-id="${n.NhomID}" data-ten="${escapeHtml(n.TenNhom)}" data-gc="${escapeHtml(n.GhiChu || '')}">Sửa tên</button>` : ''}
+          ${perm.canDelete ? `<button class="btn small danger nh-xoa" data-id="${n.NhomID}" data-ten="${escapeHtml(n.TenNhom)}" data-sl="${n.SoNhanVien}">Xóa</button>` : ''}</td>
+      </tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Chưa có nhóm nào. Thêm nhóm rồi cài giờ và gán nhân viên.</td></tr>`}</tbody></table>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="nhDong">Đóng</button></div>`);
+    modal.querySelector('#nhDong').addEventListener('click', () => { closeModal(); renderChamCong(); });
+    const bThem = modal.querySelector('#nhThem');
+    if (bThem) bThem.addEventListener('click', async () => {
+      const ten = modal.querySelector('#nhTen').value.trim();
+      if (!ten) { toast('Nhập tên nhóm.', 'error'); return; }
+      try {
+        await apiPost('/api/payroll/chamcong/nhom', { tenNhom: ten, ghiChu: modal.querySelector('#nhGhiChu').value.trim() });
+        toast('Đã thêm nhóm. Tiếp: bấm "Cài giờ" rồi "Gán nhân viên".', 'success');
+        openNhomChamCong();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+    modal.querySelectorAll('.nh-gio').forEach(b => b.addEventListener('click', () =>
+      openCauHinhChamCong(b.dataset.id, b.dataset.ten)));
+    modal.querySelectorAll('.nh-nv').forEach(b => b.addEventListener('click', () =>
+      openGanNhanVienNhom(b.dataset.id, b.dataset.ten)));
+    modal.querySelectorAll('.nh-sua').forEach(b => b.addEventListener('click', async () => {
+      const ten = prompt('Tên nhóm:', b.dataset.ten);
+      if (ten == null || !ten.trim()) return;
+      try {
+        await apiPut('/api/payroll/chamcong/nhom/' + b.dataset.id, { tenNhom: ten.trim(), ghiChu: b.dataset.gc });
+        toast('Đã lưu.', 'success'); openNhomChamCong();
+      } catch (e) { toast(e.message, 'error'); }
+    }));
+    modal.querySelectorAll('.nh-xoa').forEach(b => b.addEventListener('click', async () => {
+      const sl = Number(b.dataset.sl) || 0;
+      if (!confirm(`Xóa nhóm "${b.dataset.ten}"?\n\n${sl > 0
+        ? sl + ' nhân viên đang thuộc nhóm này sẽ được GỠ RA (không xóa người), và chuyển về tính theo cấu hình chung.'
+        : 'Nhóm này chưa có nhân viên nào.'}`)) return;
+      try {
+        const r = await apiDelete('/api/payroll/chamcong/nhom/' + b.dataset.id);
+        toast(`Đã xóa nhóm. Gỡ ${(r.data || {}).goRaKhoiNhom || 0} nhân viên về cấu hình chung.`, 'success');
+        openNhomChamCong();
+      } catch (e) { toast(e.message, 'error'); }
+    }));
+  }
+
+  /* Gán nhân viên vào nhóm: tích chọn NHIỀU người. Một người chỉ thuộc ĐÚNG MỘT nhóm, nên danh sách
+     ghi rõ ai đang ở nhóm khác — tích vào là KÉO SANG nhóm này, không phải thuộc cả hai. */
+  async function openGanNhanVienNhom(nhomId, tenNhom) {
+    let ds = [];
+    try { ds = (await apiGet(`/api/payroll/chamcong/nhom/${encodeURIComponent(nhomId)}/nhanvien`)).data || []; }
+    catch (e) { toast(e.message, 'error'); return; }
+    const modal = openModal(`
+      <h3>👤 Gán nhân viên vào nhóm: ${escapeHtml(tenNhom || '')}</h3>
+      <p class="empty-hint" style="text-align:left;">Tích = thuộc nhóm này. Bỏ tích = gỡ khỏi nhóm (về tính theo cấu hình chung).
+        Người đang ở <b>nhóm khác</b> có ghi rõ tên nhóm đó — tích vào là <b>kéo sang</b> nhóm này.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <input type="text" id="gnTim" placeholder="Gõ để tìm mã / họ tên / bộ phận..." style="min-width:240px;">
+        <button type="button" class="btn small secondary" id="gnTatCa">Tích tất cả đang hiện</button>
+        <button type="button" class="btn small secondary" id="gnBoTatCa">Bỏ tích tất cả đang hiện</button>
+        <span class="empty-hint" style="padding:0;" id="gnDem"></span>
+      </div>
+      <div style="max-height:52vh;overflow:auto;">
+      <table data-nostt><thead><tr><th style="width:40px;"></th><th>Mã NV</th><th>Họ tên</th><th>Bộ phận</th><th>Nhóm hiện tại</th></tr></thead>
+      <tbody>${ds.map(r => `<tr data-tim="${escapeHtml(boDau((r.MaNhanVien || '') + ' ' + (r.HoTen || '') + ' ' + (r.TenBoPhan || '')))}">
+        <td style="text-align:center;"><input type="checkbox" class="gn-tick" data-id="${r.NhanVienID}" ${Number(r.DangThuocNhomNay) === 1 ? 'checked' : ''}></td>
+        <td>${escapeHtml(r.MaNhanVien || '')}</td>
+        <td>${escapeHtml(r.HoTen)}</td>
+        <td>${escapeHtml(r.TenBoPhan || '')}</td>
+        <td>${Number(r.DangThuocNhomNay) === 1 ? '<b style="color:#137333;">nhóm này</b>'
+              : (r.TenNhomHienTai ? '<span style="color:#b06000;">' + escapeHtml(r.TenNhomHienTai) + '</span>' : '<span style="color:#5f6368;">chưa gán</span>')}</td>
+      </tr>`).join('') || `<tr><td colspan="5" class="empty-hint">Không có nhân viên đang làm việc.</td></tr>`}</tbody></table></div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="gnHuy">Hủy</button><button type="button" class="btn" id="gnLuu">💾 Lưu danh sách</button></div>`);
+    const dong = () => Array.from(modal.querySelectorAll('tbody tr[data-tim]'));
+    const demLai = () => {
+      const n = modal.querySelectorAll('.gn-tick:checked').length;
+      modal.querySelector('#gnDem').textContent = `Đang tích: ${n} người`;
+    };
+    demLai();
+    modal.querySelectorAll('.gn-tick').forEach(cb => cb.addEventListener('change', demLai));
+    modal.querySelector('#gnTim').addEventListener('input', (e) => {
+      const q = boDau(e.target.value);
+      dong().forEach(tr => { tr.style.display = !q || tr.dataset.tim.includes(q) ? '' : 'none'; });
+    });
+    const datTich = (v) => {
+      dong().forEach(tr => {
+        if (tr.style.display === 'none') return;   // chỉ áp cho dòng ĐANG HIỆN, đúng nhãn nút
+        const cb = tr.querySelector('.gn-tick'); if (cb) cb.checked = v;
+      });
+      demLai();
+    };
+    modal.querySelector('#gnTatCa').addEventListener('click', () => datTich(true));
+    modal.querySelector('#gnBoTatCa').addEventListener('click', () => datTich(false));
+    modal.querySelector('#gnHuy').addEventListener('click', () => openNhomChamCong());
+    modal.querySelector('#gnLuu').addEventListener('click', async () => {
+      /* Đọc TOÀN BỘ ô tích, không chỉ dòng đang hiện: người bị ô tìm ẩn đi vẫn phải được giữ, kẻo
+         gõ tìm rồi bấm Lưu là gỡ sạch những người không khớp chữ tìm. */
+      const ids = Array.from(modal.querySelectorAll('.gn-tick:checked')).map(cb => cb.dataset.id);
+      try {
+        await apiPost(`/api/payroll/chamcong/nhom/${encodeURIComponent(nhomId)}/nhanvien`, { nhanVienIds: ids });
+        toast(`Đã gán ${ids.length} nhân viên vào nhóm. Bấm "Tổng hợp từ máy" để tính lại theo giờ nhóm.`, 'success');
+        openNhomChamCong();
+      } catch (e) { toast(e.message, 'error'); }
     });
   }
 
@@ -493,14 +692,41 @@ window.ModulePayroll = (function () {
   async function openChamCongChiTiet(nhanVienId, ten) {
     let rows = [];
     try { rows = (await apiGet(`/api/payroll/chamcong/${nhanVienId}?nam=${selNam}&thang=${selThang}`)).data || []; } catch (e) { toast(e.message, 'error'); return; }
+    /* v7.97: tổng cộng CHÍNH TỪ `rows` đang hiển thị — không gọi thêm API tổng hợp nào, để con số
+       dưới bảng không bao giờ lệch với các dòng ngay trên nó (cùng nguyên tắc đã áp cho sổ công nợ
+       v7.82: in/tổng đúng cái đang xem). Làm tròn 2 chữ số để 0.1+0.2 không ra 0.30000000000000004. */
+    const lamTron2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
+    const tongCC = rows.reduce((a, r) => ({
+      gioLam: a.gioLam + num(r.SoGioLam), cong: a.cong + num(r.SoCong),
+      tcT: a.tcT + num(r.GioTangCaThuong), tcCN: a.tcCN + num(r.GioTangCaChuNhat), tcLe: a.tcLe + num(r.GioTangCaLeTet)
+    }), { gioLam: 0, cong: 0, tcT: 0, tcCN: 0, tcLe: 0 });
+    Object.keys(tongCC).forEach(k => { tongCC[k] = lamTron2(tongCC[k]); });
+    const coSuaChamCong = !!perm.canEdit;
+    /* Xuất Excel: thẻ <a> tải trực tiếp (giống nút "File mẫu" đã có) — route là 'view' nên người chỉ
+       được xem cũng xuất được đúng bảng họ đang nhìn. */
+    const nutXuatExcel = `<a class="btn small secondary" style="margin-right:auto;" href="/api/payroll/chamcong/${encodeURIComponent(nhanVienId)}/excel?nam=${selNam}&thang=${selThang}">📊 Xuất Excel</a>`;
     const html = `<h3>Chấm công chi tiết — ${escapeHtml(ten)} (T${selThang}/${selNam})</h3>
       <table style="font-size:13px;"><thead><tr><th>Ngày</th><th>Mã</th><th>Giờ vào</th><th>Giờ ra</th><th>Giờ làm</th><th>Số công</th><th>Giờ TC thường</th><th>Giờ TC CN</th><th>Giờ TC lễ</th><th>Nguồn</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.MaCham || '')}</td>
         <td style="text-align:center;">${escapeHtml(fmtGio(r.GioVao))}</td>
         <td style="text-align:center;">${escapeHtml(fmtGio(r.GioRa))}</td>
         <td style="text-align:right;">${r.SoGioLam != null ? num(r.SoGioLam) : ''}</td>
-        <td style="text-align:right;font-weight:600;">${num(r.SoCong)}</td><td style="text-align:right;">${num(r.GioTangCaThuong)}</td><td style="text-align:right;">${num(r.GioTangCaChuNhat)}</td><td style="text-align:right;">${num(r.GioTangCaLeTet)}</td><td>${escapeHtml(r.Nguon || '')}</td></tr>`).join('') || `<tr><td colspan="10" class="empty-hint">Chưa có ngày chấm công.</td></tr>`}</tbody></table>
-      <h4 style="margin:14px 0 6px;">Thêm / sửa 1 ngày</h4>
+        <td style="text-align:right;font-weight:600;">${num(r.SoCong)}</td><td style="text-align:right;">${num(r.GioTangCaThuong)}</td><td style="text-align:right;">${num(r.GioTangCaChuNhat)}</td><td style="text-align:right;">${num(r.GioTangCaLeTet)}</td><td>${escapeHtml(r.Nguon || '')}</td></tr>`).join('') || `<tr><td colspan="10" class="empty-hint">Chưa có ngày chấm công.</td></tr>`}
+      ${/* v7.97 — DÒNG TỔNG.
+           Ô nhãn GỘP 4 CỘT (Ngày+Mã+Giờ vào+Giờ ra) rồi mới tới 5 cột số + 1 ô Nguồn = đủ 10 cột.
+           ⚠️ themCotStt() (common.js) chèn cột STT vào MỌI bảng: dòng này vẫn được thêm 1 ô cho thẳng
+           cột nhưng KHÔNG bị đánh dấu data-stt vì ô đầu là ô GỘP (__laDongDuLieu trả false) — nên nhãn
+           "TỔNG CỘNG" không bị danhLaiStt() ghi số lên. Đúng cái đã vỡ ở v7.91, nay đã có chốt. */''}
+      ${rows.length ? `<tr data-tong style="background:#f1f3f4;font-weight:600;">
+        <td colspan="4" style="text-align:right;">TỔNG CỘNG (${rows.length} ngày)</td>
+        <td style="text-align:right;">${fmtNumber(tongCC.gioLam)}</td>
+        <td style="text-align:right;">${fmtNumber(tongCC.cong)}</td>
+        <td style="text-align:right;">${fmtNumber(tongCC.tcT)}</td>
+        <td style="text-align:right;">${fmtNumber(tongCC.tcCN)}</td>
+        <td style="text-align:right;">${fmtNumber(tongCC.tcLe)}</td>
+        <td></td>
+      </tr>` : ''}</tbody></table>
+      ${coSuaChamCong ? `<h4 style="margin:14px 0 6px;">Thêm / sửa 1 ngày</h4>
       <form id="ccForm"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px;">
         <div class="form-row" style="margin:0;"><label>Ngày *</label><input type="date" id="d_ngay" required></div>
         <div class="form-row" style="margin:0;"><label>Mã (x / P / TS / KL / LT)</label><input id="d_ma" value="x"></div>
@@ -509,10 +735,14 @@ window.ModulePayroll = (function () {
         <div class="form-row" style="margin:0;"><label>Giờ TC chủ nhật</label><input type="number" step="0.5" id="d_tcCN" value="0"></div>
         <div class="form-row" style="margin:0;"><label>Giờ TC lễ</label><input type="number" step="0.5" id="d_tcLe" value="0"></div>
       </div>
-      <div class="modal-actions"><button type="button" class="btn secondary" id="btnClose">Đóng</button><button type="submit" class="btn">Lưu ngày</button></div></form>`;
+      <div class="modal-actions">${nutXuatExcel}<button type="button" class="btn secondary" id="btnClose">Đóng</button><button type="submit" class="btn">Lưu ngày</button></div></form>`
+      : `<div class="modal-actions">${nutXuatExcel}<button type="button" class="btn secondary" id="btnClose">Đóng</button></div>`}`;
     const modal = openModal(html);
     modal.querySelector('#btnClose').addEventListener('click', closeModal);
-    modal.querySelector('#ccForm').addEventListener('submit', async e => {
+    // v7.97: người chỉ có quyền XEM thì không có #ccForm — phải kiểm, không thì throw giữa chừng và
+    // modal "không có gì xảy ra" (đúng họ lỗi async handler tắt lặng đã ghi nhận nhiều lần).
+    const fCC = modal.querySelector('#ccForm');
+    if (fCC) fCC.addEventListener('submit', async e => {
       e.preventDefault();
       try {
         await apiPost('/api/payroll/chamcong/ngay', {

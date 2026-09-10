@@ -1136,7 +1136,12 @@ window.ModuleKhoVai = (function () {
           currentRolls = res.data.cayChoPhep;
           const cd = res.data.chiDinhVaiSX || {};
           const theoMau = res.data.chiDinhTheoMau || [];
-          const coChiDinh = (Number(cd.TongKGYeuCauChinh) || 0) > 0 || (Number(cd.TongKGYeuCauPhoi) || 0) > 0;
+          /* ⚠️ v7.98: PHẢI cộng cả kiểu 'Phụ'. Cờ này quyết định có hiện cả khối "Chỉ định vải SX
+             (tham khảo)" hay không — đơn nào chỉ định TOÀN vải phụ mà thiếu vế này thì thủ kho thấy
+             "chưa có chỉ định" trong khi chỉ định có thật, và mất luôn cả bảng chi tiết từng màu. */
+          const coChiDinh = (Number(cd.TongKGYeuCauChinh) || 0) > 0
+            || (Number(cd.TongKGYeuCauPhu) || 0) > 0
+            || (Number(cd.TongKGYeuCauPhoi) || 0) > 0;
           // v5.21 (yeu cau muc 6, "Hiển thị số lượng chỉ định từng mầu trong phần tạo phiếu xuất kho"):
           // bo sung bang chi tiet TUNG MAU (LoaiVai+MauSac) ben duoi dong tong Chinh/Phoi cu - lay tu
           // GET /orders/:donHangId/vaichophep (chiDinhTheoMau, xem backend/routes/khovai.js).
@@ -1155,7 +1160,9 @@ window.ModuleKhoVai = (function () {
           chiDinhInfoEl.innerHTML = coChiDinh ? `
             <div class="form-row" style="background:#f4f7fb;border:1px solid #dce3ea;border-radius:4px;padding:8px 10px;margin-bottom:8px;font-size:13px;">
               <b>Chỉ định vải SX (tham khảo):</b>
-              Vải chính yêu cầu ${fmtNumber(cd.TongKGYeuCauChinh)} kg${(Number(cd.TongMetChinh) || 0) ? ' / ' + fmtNumber(cd.TongMetChinh) + ' m' : ''} &nbsp;|&nbsp; Vải phối yêu cầu ${fmtNumber(cd.TongKGYeuCauPhoi)} kg${(Number(cd.TongMetPhoi) || 0) ? ' / ' + fmtNumber(cd.TongMetPhoi) + ' m' : ''}
+              ${/* v7.98: 3 kiểu. Vải phụ chỉ hiện khi CÓ số — đơn không dùng vải phụ thì dòng này
+                   giữ nguyên như trước, không thêm chữ "0 kg" vô nghĩa vào chỗ thủ kho đang đọc nhanh. */''}
+              Vải chính yêu cầu ${fmtNumber(cd.TongKGYeuCauChinh)} kg${(Number(cd.TongMetChinh) || 0) ? ' / ' + fmtNumber(cd.TongMetChinh) + ' m' : ''}${(Number(cd.TongKGYeuCauPhu) || 0) || (Number(cd.TongMetPhu) || 0) ? ` &nbsp;|&nbsp; Vải phụ yêu cầu ${fmtNumber(cd.TongKGYeuCauPhu)} kg${(Number(cd.TongMetPhu) || 0) ? ' / ' + fmtNumber(cd.TongMetPhu) + ' m' : ''}` : ''} &nbsp;|&nbsp; Vải phối yêu cầu ${fmtNumber(cd.TongKGYeuCauPhoi)} kg${(Number(cd.TongMetPhoi) || 0) ? ' / ' + fmtNumber(cd.TongMetPhoi) + ' m' : ''}
               &nbsp;|&nbsp; Đã xuất cho đơn này: ${fmtNumber(cd.TongKGDaXuat)} kg
               ${theoMauRows ? `
               <table style="width:100%;margin-top:6px;border-collapse:collapse;">

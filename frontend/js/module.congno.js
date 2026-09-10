@@ -222,6 +222,10 @@ window.ModuleCongNo = (function () {
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
         ${perm.canCreate ? '<button class="btn" id="btnAddThu">+ Tạo phiếu thu</button>' : ''}
+        ${/* v7.95: CHUYỂN QUỸ NỘI BỘ. Đặt ở đây (tab Phiếu thu) vì cặp phiếu do backend sinh ra lấy
+             PHIẾU THU làm vế chủ — xóa phiếu thu là mất cả cặp, còn vế chi thì không xóa/sửa lẻ được.
+             Người dùng cần tìm nó ở đúng nơi họ sẽ phải quay lại để xóa. */''}
+        ${perm.canCreate ? '<button class="btn small secondary" id="btnChuyenQuy" title="Rút tiền từ ngân hàng về két, hoặc chuyển khoản giữa 2 tài khoản">🔄 Chuyển quỹ nội bộ</button>' : ''}
         ${/* v7.32: xuất chi tiết PHIẾU THU ra Excel. Dùng CHUNG route /api/congno/export của công nợ
              (chỉ khác tham số) nên định dạng file, đầu trang, kẻ bảng đồng nhất với các file kia. */''}
         <button class="btn small secondary" id="btnXuatThu">⬇️ Xuất Excel</button>
@@ -235,7 +239,9 @@ window.ModuleCongNo = (function () {
       <tbody>${rows.map(r => `<tr>
         ${/* v6.56: bấm số phiếu -> popup chi tiết (có nút In luôn). */''}
         <td><a href="javascript:void(0)" class="act-ct-xem" data-loai="PT" data-id="${r.PhieuThuID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td><td>${fmtDate(r.NgayThu)}</td>
-        <td>${escapeHtml(r.TenDoiTuong || '')}${r.LoaiDoiTuong === 'Khac' ? ' <span class="badge">Khác</span>' : ''}</td>
+        ${/* v7.95: phiếu của cặp chuyển quỹ nhìn giống phiếu thu "Khác" bình thường — phải có nhãn
+             riêng, kẻo người dùng tưởng đây là tiền THU ĐƯỢC và đi tìm xem thu của ai. */''}
+        <td>${escapeHtml(r.TenDoiTuong || '')}${Number(r.LaChuyenQuy) === 1 ? ' <span class="badge" style="background:#e8f0fe;color:#1a73e8;">🔄 Chuyển quỹ</span>' : (r.LoaiDoiTuong === 'Khac' ? ' <span class="badge">Khác</span>' : '')}</td>
         <td>${escapeHtml(r.SoPhieuBH || '')}</td><td>${escapeHtml((r.MaTK ? r.MaTK + ' - ' : '') + (r.TenTK || ''))}</td>
         <td style="text-align:right;"><b>${fmtTien(r.SoTien)}</b></td>
         <td>${escapeHtml(r.HinhThuc || '')}${r.SoTaiKhoan ? `<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.TenNganHang || '')} — ${escapeHtml(r.SoTaiKhoan)}</div>` : ''}</td>
@@ -249,6 +255,8 @@ window.ModuleCongNo = (function () {
       taiFile('/api/congno/export?loai=phieuthu', 'phieu_thu.xlsx'));
     const btn = body.querySelector('#btnAddThu');
     if (btn) btn.addEventListener('click', () => formPhieuThu(null, perm));
+    const btnCQ = body.querySelector('#btnChuyenQuy');   // v7.95
+    if (btnCQ) btnCQ.addEventListener('click', () => formChuyenQuy(perm));
     body.querySelectorAll('.act-in').forEach(b => b.addEventListener('click', () =>
       inPhieuThuChi(rows.find(r => String(r.PhieuThuID) === b.dataset.id), 'Thu')));
     noiDaySoPhieu(body, () => renderPhieuThu(perm));   // v6.56: bấm số phiếu xem chi tiết
@@ -259,6 +267,86 @@ window.ModuleCongNo = (function () {
       try { await apiDelete('/api/congno/phieuthu/' + b.dataset.id); toast('Đã xóa.', 'success'); renderPhieuThu(perm); }
       catch (err) { toast(err.message, 'error'); }
     }));
+  }
+
+  /* ================================================================================================
+     v7.95 — FORM CHUYỂN QUỸ NỘI BỘ. MỘT form, backend sinh CẶP phiếu chi + phiếu thu.
+
+     Không cho khai hai phiếu rời ở đây, và cũng không mở đường "chỉ ghi một vế": một vế đứng lẻ là
+     quỹ lệch đúng bằng số tiền đó và không còn dấu vết để truy. Đó chính là tình trạng trước v7.95
+     khi phải gõ tay hai phiếu.
+
+     Sửa: KHÔNG sửa được (backend chặn). Muốn đổi thì xóa phiếu thu — phiếu chi đi kèm tự mất — rồi
+     lập lại. Nói thẳng điều đó ngay trên form để người dùng không mất công đi tìm nút Sửa.
+     ================================================================================================ */
+  async function formChuyenQuy(perm) {
+    if (!perm.canCreate) return;
+    const nh = (dm.nganHang || []);
+    const optNH = (macDinh) => nh.map(t => `<option value="${t.TaiKhoanNHID}"${macDinh && t.MacDinh ? ' selected' : ''}>${escapeHtml(t.TenNganHang + ' — ' + t.SoTaiKhoan + (t.ChuTaiKhoan ? ' (' + t.ChuTaiKhoan + ')' : ''))}</option>`).join('');
+    const oQuy = (pre, loaiMacDinh) => `
+      <select name="${pre}Loai" id="${pre}Loai">
+        <option value="TienMat"${loaiMacDinh === 'TienMat' ? ' selected' : ''}>Quỹ tiền mặt (két)</option>
+        <option value="NganHang"${loaiMacDinh === 'NganHang' ? ' selected' : ''}>Tài khoản ngân hàng</option>
+      </select>
+      <select name="${pre}TaiKhoanNHID" id="${pre}NH" style="margin-top:6px;">
+        <option value="">-- chọn tài khoản ngân hàng --</option>${optNH(true)}
+      </select>`;
+    const modal = openModal(`
+      <h3>🔄 Chuyển quỹ nội bộ</h3>
+      <p class="empty-hint" style="text-align:left;">Tiền <b>đổi chỗ giữa hai quỹ của mình</b>, không phải thu hay chi của công ty:
+        rút tiền từ ngân hàng về két, hoặc chuyển khoản giữa hai tài khoản.
+        Hệ thống sinh <b>1 phiếu chi</b> (trừ quỹ nguồn) và <b>1 phiếu thu</b> (cộng quỹ đích) buộc vào nhau.
+        <br>⚠️ Cặp phiếu này <b>không sửa trực tiếp</b> được. Cần đổi thì xóa phiếu thu (phiếu chi đi kèm tự mất) rồi lập lại.</p>
+      <form id="fCQ">
+        <div class="form-grid">
+          <div class="form-row"><label>Ngày *</label><input type="date" name="ngay" required value="${homNayISO()}"></div>
+          <div class="form-row"><label>Số tiền *</label><input type="number" step="1" min="1" name="soTien" required placeholder="VD: 50000000"></div>
+          <div class="form-row"><label>TỪ quỹ (bị trừ) *</label>${oQuy('tu', 'NganHang')}</div>
+          <div class="form-row"><label>ĐẾN quỹ (được cộng) *</label>${oQuy('den', 'TienMat')}</div>
+          <div class="form-row" style="grid-column:1/-1;"><label>Diễn giải thêm</label><input name="dienGiai" placeholder="VD: rút tiền trả lương công nhân"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="cqDong">Đóng</button>
+          <button type="submit" class="btn">💾 Lập cặp phiếu</button>
+        </div>
+      </form>`);
+    /* Ô chọn tài khoản ngân hàng chỉ có nghĩa khi quỹ là NGÂN HÀNG — ẩn/hiện theo ô loại, giống
+       pattern đã dùng cho ô số tài khoản của phiếu thu/chi (v6.24). */
+    function dongBo(pre) {
+      const oL = modal.querySelector('#' + pre + 'Loai');
+      const oN = modal.querySelector('#' + pre + 'NH');
+      const hien = oL.value === 'NganHang';
+      oN.style.display = hien ? '' : 'none';
+      if (!hien) oN.value = '';
+    }
+    ['tu', 'den'].forEach(pre => {
+      const oL = modal.querySelector('#' + pre + 'Loai');
+      oL.addEventListener('change', () => dongBo(pre));
+      dongBo(pre);
+    });
+    modal.querySelector('#cqDong').addEventListener('click', closeModal);
+    modal.querySelector('#fCQ').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const b = {
+        ngay: f.get('ngay'), soTien: f.get('soTien'),
+        tuLoai: f.get('tuLoai'), tuTaiKhoanNHID: f.get('tuTaiKhoanNHID') || null,
+        denLoai: f.get('denLoai'), denTaiKhoanNHID: f.get('denTaiKhoanNHID') || null,
+        dienGiai: f.get('dienGiai') || ''
+      };
+      /* Chặn ngay ở đây cho người dùng thấy lỗi tức thì; backend VẪN kiểm lại y hệt (không tin
+         client) — xem POST /chuyenquy. */
+      if (b.tuLoai === b.denLoai && String(b.tuTaiKhoanNHID || '') === String(b.denTaiKhoanNHID || '')) {
+        toast('Quỹ nguồn và quỹ đích đang là cùng một quỹ — chọn hai quỹ khác nhau.', 'error'); return;
+      }
+      try {
+        const kq = await apiPost('/api/congno/chuyenquy', b);
+        const d = kq.data || {};
+        closeModal();
+        toast(`Đã lập ${d.soPhieuChi || ''} (trừ ${d.tuQuy || ''}) và ${d.soPhieuThu || ''} (cộng ${d.denQuy || ''}).`, 'success');
+        renderPhieuThu(perm);
+      } catch (err) { toast(err.message, 'error'); }
+    });
   }
 
   async function formPhieuThu(row, perm) {

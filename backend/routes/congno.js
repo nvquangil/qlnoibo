@@ -124,6 +124,31 @@ async function phieuChiKem(pool, phieuThuId) {
     .query('SELECT PhieuChiKemID FROM PhieuThu WHERE PhieuThuID=@id')).recordset[0];
   return r ? r.PhieuChiKemID : null;
 }
+/* ================================================================================================
+   v7.95 — CHUYEN QUY NOI BO (migration_v698).
+   Do 1 lan roi nho, giong coCotChuyenThang: ban CSDL chua chay migration van chay binh thuong, chi
+   la khong dung duoc chuyen quy.
+   ================================================================================================ */
+let __coCotCQ = null;
+async function coCotChuyenQuy(pool) {
+  if (__coCotCQ === null) {
+    try {
+      const r = (await pool.request().query(
+        `SELECT COL_LENGTH('PhieuThu','LaChuyenQuy') AS t, COL_LENGTH('PhieuChi','LaChuyenQuy') AS c`)).recordset[0] || {};
+      __coCotCQ = r.t != null && r.c != null;
+    } catch (e) { __coCotCQ = false; }
+  }
+  return __coCotCQ;
+}
+/* Cap phieu nay la CHUYEN QUY hay CHUYEN THANG? Ca hai deu di thanh cap qua PhieuChiKemID/
+   PhieuThuKemID nen cac thong bao "khong sua/xoa le duoc" phai goi dung ten, khong thi nguoi dung
+   di tim phieu "chuyen thang" khong he ton tai. */
+async function laCapChuyenQuy(pool, phieuThuId) {
+  if (!await coCotChuyenQuy(pool)) return false;
+  const r = (await pool.request().input('id', sql.Int, phieuThuId)
+    .query('SELECT LaChuyenQuy FROM PhieuThu WHERE PhieuThuID=@id')).recordset[0];
+  return !!(r && r.LaChuyenQuy);
+}
 async function chuanHoaHinhThuc(pool, b) {
   const goc = String(b.hinhThuc || '').trim();
   /* v6.54: 'Chuyển thẳng' = tiền KHÔNG qua quỹ mình (khách trả thẳng cho NCC / trả hộ chi phí).
@@ -456,8 +481,11 @@ router.put('/phieuthu/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
      ngày/số tiền/đối tượng sang phiếu chi kia — sót một trường là hai phiếu lệch nhau, sổ quỹ hết
      triệt tiêu và công nợ NCC sai. Chặn lại và chỉ đường XÓA rồi LẬP LẠI: xóa đã tự gỡ cả cặp. */
   if (await phieuChiKem(pool, req.params.id)) {
+    /* v7.95: cặp có thể là CHUYỂN THẲNG (v6.54) hoặc CHUYỂN QUỸ NỘI BỘ (v7.95) — gọi đúng tên,
+       kẻo người dùng đi tìm một phiếu "chuyển thẳng" không hề tồn tại. */
+    const cq = await laCapChuyenQuy(pool, req.params.id);
     return res.status(400).json({ success: false,
-      message: 'Phiếu thu CHUYỂN THẲNG đi kèm một phiếu chi. Muốn sửa thì XÓA phiếu thu này (phiếu chi đi kèm tự mất) rồi lập lại.' });
+      message: `Phiếu thu ${cq ? 'CHUYỂN QUỸ NỘI BỘ' : 'CHUYỂN THẲNG'} đi kèm một phiếu chi. Muốn sửa thì XÓA phiếu thu này (phiếu chi đi kèm tự mất) rồi lập lại.` });
   }
   if (so(b.soTien) <= 0) return res.status(400).json({ success: false, message: 'Số tiền phải lớn hơn 0.' });
   const { hinhThuc, tknh, loiNH } = await chuanHoaHinhThuc(pool, b);
@@ -498,6 +526,125 @@ router.delete('/phieuthu/:id', requireAuth, requirePermission('CONGNO', 'delete'
   if (pcId) await pool.request().input('pc', sql.Int, pcId).query('DELETE FROM PhieuChi WHERE PhieuChiID=@pc');
   await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM PhieuThu WHERE PhieuThuID=@id');
   res.json({ success: true, data: { daXoaPhieuChiKem: !!pcId } });
+});
+
+/* ================================================================================================
+   v7.95 — CHUYEN QUY NOI BO.
+   Rut tien tu TKNH ve tien mat, CK giua 2 TKNH. Tien KHONG vao/ra cong ty, chi doi cho giua hai quy.
+
+   MOT FORM -> BACKEND SINH CAP. Nguoi dung khai dung mot lan (quy nguon -> quy dich -> so tien),
+   backend sinh 1 phieu chi + 1 phieu thu buoc vao nhau. Truoc day phai go hai phieu roi tay va
+   khong gi rang buoc chung: xoa nham mot ve la lech quy vinh vien.
+   Dung LAI co che ghep cap cua chuyen thang (PhieuChiKemID/PhieuThuKemID) nen xoa/chan sua da co san
+   — xem ghi chu trong migration_v698.sql.
+
+   ⚠️ HinhThuc cua TUNG VE phai theo DUNG quy cua ve do ('Chuyển khoản' + TaiKhoanNHID cho TKNH,
+   'Tiền mặt' cho ket), KHONG dat mot hinh thuc rieng kieu 'Chuyển quỹ'. Muc A cua bao cao dinh tuyen
+   phieu ve dung quy bang chinh HinhThuc + TaiKhoanNHID (xem `laTM`/`themQuy` trong baocao.js) — dat
+   hinh thuc rieng la ca hai ve roi ra ngoai moi quy, so du hai quy deu sai. Dau nhan biet la cot
+   LaChuyenQuy.
+   ================================================================================================ */
+const QUY_TIEN_MAT = 'TienMat', QUY_NGAN_HANG = 'NganHang';
+router.post('/chuyenquy', requireAuth, requirePermission('CONGNO', 'create'), requireChucNang('CONGNO', 'phieuthu'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const b = req.body || {};
+    if (!await coCotChuyenQuy(pool)) {
+      return res.status(400).json({ success: false,
+        message: 'Chưa chạy database/migration_v698.sql — chưa dùng được Chuyển quỹ nội bộ.' });
+    }
+    if (!await coCotChuyenThang(pool)) {
+      return res.status(400).json({ success: false,
+        message: 'Chưa chạy database/migration_v675.sql — thiếu cột ghép cặp phiếu thu/chi, chưa dùng được Chuyển quỹ nội bộ.' });
+    }
+    const tien = so(b.soTien);
+    if (tien <= 0) return res.status(400).json({ success: false, message: 'Số tiền phải lớn hơn 0.' });
+
+    const coNH = await coBangTKNH(pool);
+    /* Doc ten quy tu danh muc de ghi vao dien giai + kiem tra tai khoan CO THAT.
+       Khong tin id client gui: id sai thi phieu tru vao mot tai khoan khong ton tai. */
+    async function docQuy(loai, tknhId, nhan) {
+      const l = loai === QUY_NGAN_HANG ? QUY_NGAN_HANG : QUY_TIEN_MAT;
+      if (l === QUY_TIEN_MAT) return { loai: l, tknh: null, ten: 'Quỹ tiền mặt' };
+      if (!coNH) return { loi: `Chưa chạy migration_v669 (danh mục tài khoản ngân hàng) nên không chọn được ngân hàng cho ${nhan}.` };
+      const id = tknhId ? Number(tknhId) : null;
+      if (!id) return { loi: `Chọn NGÂN HÀNG cho ${nhan} thì phải chọn số tài khoản.` };
+      const r = (await pool.request().input('id', sql.Int, id)
+        .query('SELECT TaiKhoanNHID, TenNganHang, SoTaiKhoan FROM DanhMucTaiKhoanNganHang WHERE TaiKhoanNHID=@id')).recordset[0];
+      if (!r) return { loi: `Tài khoản ngân hàng của ${nhan} không còn tồn tại.` };
+      return { loi: null, loai: l, tknh: r.TaiKhoanNHID, ten: `${r.TenNganHang}${r.SoTaiKhoan ? ' - ' + r.SoTaiKhoan : ''}` };
+    }
+    const nguon = await docQuy(b.tuLoai, b.tuTaiKhoanNHID, 'quỹ nguồn');
+    if (nguon.loi) return res.status(400).json({ success: false, message: nguon.loi });
+    const dich = await docQuy(b.denLoai, b.denTaiKhoanNHID, 'quỹ đích');
+    if (dich.loi) return res.status(400).json({ success: false, message: dich.loi });
+    /* Nguon = dich thi cap phieu triet tieu nhau ngay trong CUNG MOT quy: khong doi so du, chi lam
+       ban hai cot Thu/Chi va so phieu. Chan tu day, khong de lot vao so. */
+    if (nguon.loai === dich.loai && String(nguon.tknh || '') === String(dich.tknh || '')) {
+      return res.status(400).json({ success: false, message: 'Quỹ nguồn và quỹ đích đang là cùng một quỹ — chọn hai quỹ khác nhau.' });
+    }
+
+    const ngay = b.ngay || new Date();
+    const ghiThem = (b.dienGiai || '').trim();
+    const dienGiai = `Chuyển quỹ nội bộ: ${nguon.ten} → ${dich.ten}` + (ghiThem ? ` — ${ghiThem}` : '');
+    const htCua = (q) => (q.loai === QUY_NGAN_HANG ? 'Chuyển khoản' : 'Tiền mặt');
+    const NHAN_DT = 'Chuyển quỹ nội bộ';
+
+    /* Thu tu: PhieuThu -> PhieuChi (co PhieuThuKemID) -> update PhieuThu.PhieuChiKemID.
+       GIONG Y chuyen thang v6.54 de DELETE /phieuthu/:id (xoa ca cap, lai theo phia phieu thu) va
+       chanPhieuChiKem() hoat dong y het, khong phai viet them nhanh nao. */
+    const soPhieuThu = await sinhSoPhieu(pool, 'PhieuThu', 'SoPhieu', 'PT');
+    const kqThu = await pool.request()
+      .input('SoPhieu', sql.NVarChar, soPhieuThu)
+      .input('NgayThu', sql.Date, ngay)
+      .input('Ten', sql.NVarChar, NHAN_DT)
+      .input('SoTien', sql.Decimal(18, 2), tien)
+      .input('HinhThuc', sql.NVarChar, htCua(dich))
+      .input('DienGiai', sql.NVarChar, dienGiai)
+      .input('NguoiTaoID', sql.Int, req.session.user.userId)
+      .input('TaiKhoanNHID', sql.Int, dich.tknh)
+      .query(`INSERT INTO PhieuThu (SoPhieu, NgayThu, LoaiDoiTuong, KhachHangID, TenDoiTuong, TaiKhoanID,
+                PhieuBHID, SoTien, HinhThuc, DienGiai, NguoiTaoID, LaChuyenQuy${coNH ? ', TaiKhoanNHID' : ''})
+              OUTPUT INSERTED.PhieuThuID
+              VALUES (@SoPhieu, @NgayThu, N'Khac', NULL, @Ten, NULL,
+                NULL, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID, 1${coNH ? ', @TaiKhoanNHID' : ''})`);
+    const phieuThuId = (kqThu.recordset[0] || {}).PhieuThuID;
+
+    const soPhieuChi = await sinhSoPhieu(pool, 'PhieuChi', 'SoPhieu', 'PC');
+    let phieuChiId = null;
+    try {
+      const kqChi = await pool.request()
+        .input('SoPhieu', sql.NVarChar, soPhieuChi)
+        .input('NgayChi', sql.Date, ngay)
+        .input('Ten', sql.NVarChar, NHAN_DT)
+        .input('SoTien', sql.Decimal(18, 2), tien)
+        .input('HinhThuc', sql.NVarChar, htCua(nguon))
+        .input('DienGiai', sql.NVarChar, dienGiai)
+        .input('NguoiTaoID', sql.Int, req.session.user.userId)
+        .input('TaiKhoanNHID', sql.Int, nguon.tknh)
+        .input('PhieuThuKemID', sql.Int, phieuThuId)
+        .query(`INSERT INTO PhieuChi (SoPhieu, NgayChi, LoaiDoiTuong, NCC_ID, TenDoiTuong,
+                  TaiKhoanID, SoTien, HinhThuc, DienGiai, NguoiTaoID, PhieuThuKemID, LaChuyenQuy${coNH ? ', TaiKhoanNHID' : ''})
+                OUTPUT INSERTED.PhieuChiID
+                VALUES (@SoPhieu, @NgayChi, N'Khac', NULL, @Ten,
+                  NULL, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID, @PhieuThuKemID, 1${coNH ? ', @TaiKhoanNHID' : ''})`);
+      phieuChiId = (kqChi.recordset[0] || {}).PhieuChiID;
+    } catch (e) {
+      /* Ve chi that bai -> GO LUON ve thu. De lai mot phieu thu chuyen quy mo coi la cong khong tien
+         vao quy dich ma khong tru quy nguon: lech quy dung bang so tien vua nhap. */
+      await pool.request().input('id', sql.Int, phieuThuId).query('DELETE FROM PhieuThu WHERE PhieuThuID=@id');
+      throw e;
+    }
+    await pool.request()
+      .input('id', sql.Int, phieuThuId)
+      .input('pc', sql.Int, phieuChiId)
+      .query('UPDATE PhieuThu SET PhieuChiKemID=@pc WHERE PhieuThuID=@id');
+
+    res.json({ success: true, data: { soPhieuThu, soPhieuChi, tuQuy: nguon.ten, denQuy: dich.ten } });
+  } catch (err) {
+    console.error('[congno POST /chuyenquy]', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi lập phiếu chuyển quỹ: ' + err.message });
+  }
 });
 
 /* ================================================================================================
@@ -566,7 +713,8 @@ async function chanPhieuChiKem(pool, phieuChiId) {
   if (!r || !r.PhieuThuKemID) return null;
   const t = (await pool.request().input('id', sql.Int, r.PhieuThuKemID)
     .query('SELECT SoPhieu FROM PhieuThu WHERE PhieuThuID=@id')).recordset[0];
-  return `Phiếu chi này do phiếu thu CHUYỂN THẲNG ${t ? t.SoPhieu : ''} sinh ra. Muốn sửa hoặc xóa thì thao tác trên phiếu thu đó — cả cặp sẽ đi cùng nhau.`;
+  const cq = await laCapChuyenQuy(pool, r.PhieuThuKemID);   // v7.95: gọi đúng tên loại cặp
+  return `Phiếu chi này do phiếu thu ${cq ? 'CHUYỂN QUỸ NỘI BỘ' : 'CHUYỂN THẲNG'} ${t ? t.SoPhieu : ''} sinh ra. Muốn sửa hoặc xóa thì thao tác trên phiếu thu đó — cả cặp sẽ đi cùng nhau.`;
 }
 router.put('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'edit'), requireChucNang('CONGNO', 'phieuchi'), async (req, res) => {
   const pool = await getPool();

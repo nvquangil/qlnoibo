@@ -430,6 +430,74 @@ async function getCauHinhChamCong(pool) {
     return cfg;
   } catch (e) { return Object.assign({}, CC_DEFAULT); }
 }
+
+/* ================================================================================================
+   v8.00 — NHOM CHAM CONG (migration_v700).
+
+   Truoc v8.00 ca cong ty dung MOT bo gio vao/ra. Xuong nhieu ca => ai lech ca thi SO CONG sai,
+   phai sua tay tung ngay.
+
+   THU TU UU TIEN:   CC_DEFAULT  <-  cau hinh CHUNG  <-  cau hinh NHOM
+   Nhom chi khai nhung gi KHAC (thuong la gioVao/gioRa); o de trong roi ve cau hinh chung.
+   Nhan vien CHUA gan nhom -> dung y nguyen cau hinh chung (du lieu dang chay khong doi hanh vi).
+
+   ⚠️ ngayLe LAY TU CAU HINH CHUNG, nhom KHONG duoc ghi de — le la le chung ca cong ty. Neu de nhom
+   ghi de thi mot nhom quen khai ngayLe la ngay le cua ho thanh ngay thuong, tang ca tinh sai bac.
+
+   ⚠️ Ham do cot co CACHE theo tien trinh (__coCotNhomCC). Chay migration_v700 SAU khi pm2 da chay
+   thi phai pm2 restart, khong thi cache giu `false` va tinh nang an sach khong bao loi. Da vo dung
+   nhu vay o v7.95/v7.98.
+   ================================================================================================ */
+let __coCotNhomCC = null;
+async function coBangNhomChamCong(pool) {
+  if (__coCotNhomCC === null) {
+    try {
+      const r = (await pool.request().query(
+        "SELECT OBJECT_ID('NhomChamCong') AS b, COL_LENGTH('NhanVien','NhomChamCongID') AS c")).recordset[0] || {};
+      __coCotNhomCC = r.b != null && r.c != null;
+    } catch (e) { __coCotNhomCC = false; }
+  }
+  return __coCotNhomCC;
+}
+/* Gop 1 cau hinh nhom len tren cau hinh chung. Chi nhan cac o CO GIA TRI THAT cua nhom:
+   '' / null / undefined deu coi la "khong khai" -> giu cua chung.
+   Rieng nghiTruaTu/nghiTruaDen: chuoi rong LA MOT LUA CHON CO NGHIA ("khong tru nghi trua"), nen
+   phai phan biet '' voi undefined -> dung hasOwnProperty, cung cach da lam cho TenHoaDon (v7.46). */
+function gopCfgNhom(cfgChung, jsonNhom) {
+  let n = {};
+  try { n = jsonNhom ? JSON.parse(jsonNhom) : {}; } catch (e) { n = {}; }
+  const ra = Object.assign({}, cfgChung);
+  const coKhai = (k) => Object.prototype.hasOwnProperty.call(n, k) && n[k] !== null && n[k] !== undefined;
+  ['gioVao', 'gioRa'].forEach(k => { if (coKhai(k) && String(n[k]).trim() !== '') ra[k] = n[k]; });
+  ['nghiTruaTu', 'nghiTruaDen'].forEach(k => { if (coKhai(k)) ra[k] = n[k]; });
+  ['soGioMotCong', 'lamTronCong', 'toiThieuTinhCongPhut', 'otBatDauSauPhut', 'otLamTronGio', 'otToiDaGioNgay']
+    .forEach(k => { if (coKhai(k) && String(n[k]).trim() !== '' && !isNaN(Number(n[k]))) ra[k] = Number(n[k]); });
+  if (coKhai('tinhOtTruocGioVao')) ra.tinhOtTruocGioVao = !!n.tinhOtTruocGioVao;
+  ra.ngayLe = Array.isArray(cfgChung.ngayLe) ? cfgChung.ngayLe : [];   // LUON tu cau hinh chung
+  return ra;
+}
+/* Tra { chung, theoNhanVien: Map(NhanVienID -> cfg) }.
+   Chi nap MOT lan cho ca thang roi tra cuu trong vong lap tong hop — khong goi CSDL trong vong lap. */
+async function getCfgChamCongTheoNhom(pool) {
+  const chung = await getCauHinhChamCong(pool);
+  const theoNhanVien = new Map();
+  if (!await coBangNhomChamCong(pool)) return { chung, theoNhanVien };
+  try {
+    const rs = (await pool.request().query(`
+      SELECT nv.NhanVienID, n.CauHinh
+      FROM NhanVien nv
+      JOIN NhomChamCong n ON n.NhomID = nv.NhomChamCongID`)).recordset;
+    const capTheoJson = new Map();   // gop 1 lan cho moi nhom, khong gop lai cho tung nguoi
+    rs.forEach(r => {
+      const khoa = r.CauHinh == null ? '' : String(r.CauHinh);
+      if (!capTheoJson.has(khoa)) capTheoJson.set(khoa, gopCfgNhom(chung, r.CauHinh));
+      theoNhanVien.set(r.NhanVienID, capTheoJson.get(khoa));
+    });
+  } catch (e) {
+    console.warn('[payroll getCfgChamCongTheoNhom] khong doc duoc nhom:', e.message);
+  }
+  return { chung, theoNhanVien };
+}
 // 'HH:mm' -> số phút từ 0h. Trả null nếu rỗng/không hợp lệ.
 function phutTuGio(s) {
   if (s == null || s === '') return null;
@@ -510,26 +578,162 @@ function tinhCongMotNgay(cfg, ngayStr, gioVaoStr, gioRaStr) {
 router.get('/chamcong/cauhinh', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
   try {
     const pool = await getPool();
-    res.json({ success: true, data: await getCauHinhChamCong(pool) });
+    const nhomId = req.query.nhomId ? parseInt(req.query.nhomId, 10) : null;
+    if (!nhomId) return res.json({ success: true, data: await getCauHinhChamCong(pool) });
+    /* v8.00: cau hinh cua MOT NHOM. Tra ve ban DA GOP (chung + nhom) chu khong tra ban tho cua nhom.
+       Ly do: form khai gio dien san tu day, nen nhung gi Nguyen NHIN THAY chinh la nhung gi se duoc
+       luu. Tra ban tho thi o nao nhom chua khai se hien mac dinh CC_DEFAULT (vd 8 gio/cong) trong
+       khi cong ty dang dat 7.5 — bam Luu la am tham doi 7.5 thanh 8 cho nhom do. */
+    if (!await coBangNhomChamCong(pool)) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy database/migration_v700.sql — chưa dùng được Nhóm chấm công.' });
+    }
+    const r = (await pool.request().input('id', sql.Int, nhomId)
+      .query('SELECT NhomID, TenNhom, CauHinh FROM NhomChamCong WHERE NhomID=@id')).recordset[0];
+    if (!r) return res.status(404).json({ success: false, message: 'Không tìm thấy nhóm chấm công.' });
+    const chung = await getCauHinhChamCong(pool);
+    res.json({ success: true, data: gopCfgNhom(chung, r.CauHinh), nhom: { NhomID: r.NhomID, TenNhom: r.TenNhom }, daKhaiRieng: r.CauHinh != null });
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+
+/* ================================================================================================
+   v8.00 — NHOM CHAM CONG: danh muc + gan nhan vien.
+
+   ⚠️ CAC ROUTE NAY PHAI DUNG TRUOC `/chamcong/:nhanVienId` (dat o phia duoi file). `/chamcong/nhom`
+   va `/chamcong/:nhanVienId` DEU LA 2 DOAN => neu route co tham so dung truoc thi Express hieu
+   "nhom" la mot nhanVienId va tra ve bang cham cong rong. Dung loi `/nhanvien/template` chet tu
+   v5.38 (xem HUONG_DAN_CAI_DAT.md).
+   ================================================================================================ */
+async function chanChuaCoNhom(pool, res) {
+  if (await coBangNhomChamCong(pool)) return false;
+  res.status(400).json({ success: false, message: 'Chưa chạy database/migration_v700.sql — chưa dùng được Nhóm chấm công.' });
+  return true;
+}
+router.get('/chamcong/nhom', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    const rows = (await pool.request().query(`
+      SELECT n.NhomID, n.TenNhom, n.GhiChu, n.CauHinh,
+             (SELECT COUNT(*) FROM NhanVien nv WHERE nv.NhomChamCongID = n.NhomID) AS SoNhanVien
+      FROM NhomChamCong n ORDER BY n.TenNhom`)).recordset;
+    /* Tra kem gio dang ap dung THAT (da gop) de danh sach nhin la biet nhom nao dang chay gio nao,
+       khong phai mo tung nhom ra xem. */
+    const chung = await getCauHinhChamCong(pool);
+    const data = rows.map(r => {
+      const c = gopCfgNhom(chung, r.CauHinh);
+      return {
+        NhomID: r.NhomID, TenNhom: r.TenNhom, GhiChu: r.GhiChu, SoNhanVien: r.SoNhanVien,
+        DaKhaiRieng: r.CauHinh != null, GioVao: c.gioVao, GioRa: c.gioRa
+      };
+    });
+    res.json({ success: true, data, cauHinhChung: { gioVao: chung.gioVao, gioRa: chung.gioRa } });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+router.post('/chamcong/nhom', requireAuth, requirePermission('PAYROLL', 'create'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    const ten = String((req.body || {}).tenNhom || '').trim();
+    if (!ten) return res.status(400).json({ success: false, message: 'Nhập tên nhóm.' });
+    const r = await pool.request().input('t', sql.NVarChar, ten.slice(0, 100))
+      .input('g', sql.NVarChar, nn((req.body || {}).ghiChu))
+      .query(`INSERT INTO NhomChamCong (TenNhom, GhiChu) OUTPUT INSERTED.NhomID VALUES (@t, @g)`);
+    res.json({ success: true, data: { NhomID: (r.recordset[0] || {}).NhomID } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.put('/chamcong/nhom/:id', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    const ten = String((req.body || {}).tenNhom || '').trim();
+    if (!ten) return res.status(400).json({ success: false, message: 'Nhập tên nhóm.' });
+    await pool.request().input('id', sql.Int, req.params.id).input('t', sql.NVarChar, ten.slice(0, 100))
+      .input('g', sql.NVarChar, nn((req.body || {}).ghiChu))
+      .query('UPDATE NhomChamCong SET TenNhom=@t, GhiChu=@g WHERE NhomID=@id');
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.delete('/chamcong/nhom/:id', requireAuth, requirePermission('PAYROLL', 'delete'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    /* Go nhan vien ra khoi nhom TRUOC roi moi xoa nhom: FK chan xoa, va quan trong hon la KHONG
+       duoc xoa nguoi chi vi xoa nhom. Nguoi ve NULL = tinh theo cau hinh chung. */
+    const g = await pool.request().input('id', sql.Int, req.params.id)
+      .query('UPDATE NhanVien SET NhomChamCongID = NULL WHERE NhomChamCongID=@id');
+    await pool.request().input('id', sql.Int, req.params.id)
+      .query('DELETE FROM NhomChamCong WHERE NhomID=@id');
+    res.json({ success: true, data: { goRaKhoiNhom: g.rowsAffected[0] } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+/* Danh sach nhan vien de TICH CHON vao nhom. Tra ca nguoi dang thuoc nhom KHAC (kem ten nhom do) de
+   Nguyen thay ro minh dang keo nguoi tu nhom nao sang — mot nguoi chi thuoc DUNG MOT nhom. */
+router.get('/chamcong/nhom/:id/nhanvien', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    const rows = (await pool.request().input('id', sql.Int, req.params.id).query(`
+      SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan,
+             nv.NhomChamCongID, n.TenNhom AS TenNhomHienTai,
+             CASE WHEN nv.NhomChamCongID = @id THEN 1 ELSE 0 END AS DangThuocNhomNay
+      FROM NhanVien nv
+      LEFT JOIN BoPhan bp ON bp.BoPhanID = nv.BoPhanID
+      LEFT JOIN NhomChamCong n ON n.NhomID = nv.NhomChamCongID
+      WHERE nv.TrangThaiLaoDong <> N'Đã nghỉ việc'
+      ORDER BY nv.HoTen`)).recordset;
+    res.json({ success: true, data: rows });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+router.post('/chamcong/nhom/:id/nhanvien', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (await chanChuaCoNhom(pool, res)) return;
+    const nhomId = parseInt(req.params.id, 10);
+    const ids = Array.isArray((req.body || {}).nhanVienIds)
+      ? req.body.nhanVienIds.map(x => parseInt(x, 10)).filter(x => x > 0) : [];
+    /* Ghi de TRON BO thanh vien cua nhom nay: bo tich ai la nguoi do ve NULL (theo cau hinh chung).
+       Lam 2 buoc trong 1 transaction — nua duong la co nguoi khong thuoc nhom nao ma cung khong con
+       o nhom cu, so cong thang do tinh sai ma khong ai biet. */
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    try {
+      await new sql.Request(tx).input('id', sql.Int, nhomId)
+        .query('UPDATE NhanVien SET NhomChamCongID = NULL WHERE NhomChamCongID=@id');
+      for (const nv of ids) {
+        await new sql.Request(tx).input('nv', sql.Int, nv).input('id', sql.Int, nhomId)
+          .query('UPDATE NhanVien SET NhomChamCongID=@id WHERE NhanVienID=@nv');
+      }
+      await tx.commit();
+    } catch (e) { await tx.rollback(); throw e; }
+    res.json({ success: true, data: { soNguoi: ids.length } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 router.post('/chamcong/cauhinh', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
   try {
     const pool = await getPool();
     const b = req.body || {};
+    /* v8.00: `nhomId` co thi luu vao NhomChamCong.CauHinh, khong co thi luu cau hinh CHUNG nhu cu.
+       MOT form phuc vu ca hai (frontend goi lai dung openCauHinhChamCong) — khong viet ban thu hai,
+       kheo hai ban troi khoi nhau. */
+    const nhomId = b.nhomId ? parseInt(b.nhomId, 10) : null;
+    if (nhomId && await chanChuaCoNhom(pool, res)) return;
+    /* Goc de roi ve khi mot o khong hop le: luu cho NHOM thi goc la cau hinh CONG TY (khong phai
+       CC_DEFAULT) — nhom la ban chinh sua tren nen cong ty, khong phai bat dau lai tu mac dinh nha
+       may. Luu cau hinh chung thi goc van la CC_DEFAULT, giu nguyen hanh vi truoc v8.00. */
+    const goc = nhomId ? await getCauHinhChamCong(pool) : CC_DEFAULT;
     const soDuong = (v, mac) => { const n = Number(v); return isNaN(n) || n < 0 ? mac : n; };
     const gio = (v, mac) => (phutTuGio(v) != null ? String(v).trim().slice(0, 5) : mac);
     const cfg = {
-      gioVao: gio(b.gioVao, CC_DEFAULT.gioVao),
-      gioRa: gio(b.gioRa, CC_DEFAULT.gioRa),
-      nghiTruaTu: b.nghiTruaTu === '' ? '' : gio(b.nghiTruaTu, CC_DEFAULT.nghiTruaTu),
-      nghiTruaDen: b.nghiTruaDen === '' ? '' : gio(b.nghiTruaDen, CC_DEFAULT.nghiTruaDen),
-      soGioMotCong: soDuong(b.soGioMotCong, 8) || 8,
-      lamTronCong: soDuong(b.lamTronCong, 0.5),
-      toiThieuTinhCongPhut: soDuong(b.toiThieuTinhCongPhut, 30),
-      otBatDauSauPhut: soDuong(b.otBatDauSauPhut, 30),
-      otLamTronGio: soDuong(b.otLamTronGio, 0.5),
-      otToiDaGioNgay: soDuong(b.otToiDaGioNgay, 6),
+      gioVao: gio(b.gioVao, goc.gioVao),
+      gioRa: gio(b.gioRa, goc.gioRa),
+      nghiTruaTu: b.nghiTruaTu === '' ? '' : gio(b.nghiTruaTu, goc.nghiTruaTu),
+      nghiTruaDen: b.nghiTruaDen === '' ? '' : gio(b.nghiTruaDen, goc.nghiTruaDen),
+      soGioMotCong: soDuong(b.soGioMotCong, goc.soGioMotCong) || 8,
+      lamTronCong: soDuong(b.lamTronCong, goc.lamTronCong),
+      toiThieuTinhCongPhut: soDuong(b.toiThieuTinhCongPhut, goc.toiThieuTinhCongPhut),
+      otBatDauSauPhut: soDuong(b.otBatDauSauPhut, goc.otBatDauSauPhut),
+      otLamTronGio: soDuong(b.otLamTronGio, goc.otLamTronGio),
+      otToiDaGioNgay: soDuong(b.otToiDaGioNgay, goc.otToiDaGioNgay),
       tinhOtTruocGioVao: !!b.tinhOtTruocGioVao,
       ngayLe: Array.isArray(b.ngayLe) ? b.ngayLe.map(x => String(x).slice(0, 10)).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)) : []
     };
@@ -537,6 +741,16 @@ router.post('/chamcong/cauhinh', requireAuth, requirePermission('PAYROLL', 'edit
       return res.status(400).json({ success: false, message: 'Giờ ra phải sau giờ vào.' });
     }
     const json = JSON.stringify(cfg);
+    if (nhomId) {
+      /* ngayLe KHONG luu o nhom: le la le chung ca cong ty (xem gopCfgNhom — no luon lay ngayLe cua
+         cau hinh chung). Luu vao day chi lam nguoi doc CSDL sau nay tuong nhom co ngay le rieng. */
+      const cfgNhom = Object.assign({}, cfg); delete cfgNhom.ngayLe;
+      const r = await pool.request().input('id', sql.Int, nhomId)
+        .input('v', sql.NVarChar(sql.MAX), JSON.stringify(cfgNhom))
+        .query('UPDATE NhomChamCong SET CauHinh=@v WHERE NhomID=@id');
+      if (!r.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy nhóm chấm công.' });
+      return res.json({ success: true, data: cfg, nhomId });
+    }
     const up = await pool.request().input('k', sql.NVarChar, CC_KEY).input('v', sql.NVarChar(sql.MAX), json)
       .query('UPDATE CauHinh SET GiaTri=@v, UpdatedAt=SYSDATETIME() WHERE Khoa=@k');
     if (!up.rowsAffected[0]) {
@@ -554,7 +768,11 @@ router.post('/chamcong/tonghop', requireAuth, requirePermission('PAYROLL', 'edit
   try {
     const pool = await getPool();
     const nam = parseInt(req.body.nam, 10), thang = parseInt(req.body.thang, 10);
-    const cfg = await getCauHinhChamCong(pool);
+    /* v8.00: cfg theo NHOM. Nap MOT lan cho ca thang (khong goi CSDL trong vong lap), roi tra cuu
+       theo tung NhanVienID. Nguoi chua gan nhom -> `chung`, dung y nhu truoc v8.00.
+       ⚠️ tinhCongMotNgay() KHONG SUA MOT DONG NAO — day la phep tinh ra SO CONG roi ra LUONG, doi
+       no la doi tien tra cho cong nhan. v8.00 chi doi CHO NAP cfg. */
+    const { chung: cfgChung, theoNhanVien: cfgTheoNV } = await getCfgChamCongTheoNhom(pool);
     const agg = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
       SELECT NhanVienID, CAST(ThoiGian AS DATE) AS Ngay,
              CONVERT(varchar(5), MIN(ThoiGian), 108) AS GioVao,
@@ -567,7 +785,7 @@ router.post('/chamcong/tonghop', requireAuth, requirePermission('PAYROLL', 'edit
     let affected = 0, thieuQuet = 0;
     for (const a of agg) {
       const ngayStr = a.Ngay instanceof Date ? a.Ngay.toISOString().slice(0, 10) : String(a.Ngay).slice(0, 10);
-      const k = tinhCongMotNgay(cfg, ngayStr, a.GioVao, a.GioRa);
+      const k = tinhCongMotNgay(cfgTheoNV.get(a.NhanVienID) || cfgChung, ngayStr, a.GioVao, a.GioRa);   // v8.00
       if (a.SoLan < 2) thieuQuet++;
       const rq = pool.request()
         .input('nv', sql.Int, a.NhanVienID).input('ngay', sql.Date, ngayStr)
@@ -657,16 +875,21 @@ router.get('/chamcong', requireAuth, requirePermission('PAYROLL', 'view'), requi
     const pool = await getPool();
     const nam = parseInt(req.query.nam, 10) || new Date().getFullYear();
     const thang = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+    /* v8.00: + TenNhom (nhom cham cong). Do bang truoc khi JOIN — ban CSDL chua chay migration_v700
+       van chay binh thuong, chi la cot Nhom tra NULL. */
+    const coNhom = await coBangNhomChamCong(pool);
     const rows = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
       SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan,
+        ${coNhom ? 'ncc.TenNhom' : "CAST(NULL AS NVARCHAR(100)) AS TenNhom"},
         ISNULL(SUM(cc.SoCong),0) AS TongCong,
         SUM(ISNULL(cc.GioTangCaThuong,0)+ISNULL(cc.GioTangCaChuNhat,0)+ISNULL(cc.GioTangCaLeTet,0)) AS TongGioTangCa,
         COUNT(cc.ID) AS SoNgay
       FROM NhanVien nv
       LEFT JOIN BoPhan bp ON bp.BoPhanID=nv.BoPhanID
+      ${coNhom ? 'LEFT JOIN NhomChamCong ncc ON ncc.NhomID = nv.NhomChamCongID' : ''}
       LEFT JOIN ChamCongNgay cc ON cc.NhanVienID=nv.NhanVienID AND YEAR(cc.Ngay)=@n AND MONTH(cc.Ngay)=@t
       WHERE nv.TrangThaiLaoDong <> N'Đã nghỉ việc'
-      GROUP BY nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan
+      GROUP BY nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan${coNhom ? ', ncc.TenNhom' : ''}
       ORDER BY nv.HoTen`)).recordset;
     res.json({ success: true, data: { nam, thang, rows } });
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
@@ -862,6 +1085,117 @@ router.get('/bangluong/excel', requireAuth, requirePermission('PAYROLL', 'view')
     res.setHeader('Content-Disposition', `attachment; filename="BangLuong_T${thang}_${nam}.xlsx"`);
     res.end(Buffer.from(buf));
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+
+/* v7.97 — XUAT EXCEL CHI TIET CHAM CONG CUA 1 NHAN VIEN TRONG THANG.
+   Mo tu man Cham cong: bam HO TEN -> modal chi tiet -> nut "Xuat Excel".
+
+   Quyen: 'view' + chuc nang 'chamcong' — GIONG route GET /chamcong/:nhanVienId da co san, vi day
+   chi la ban xuat ra file cua DUNG bang ma nguoi dung dang xem. Khong doi thanh 'edit': nguoi chi
+   duoc XEM cham cong van phai xuat duoc bang cua chinh minh/nhan vien minh quan ly.
+
+   ⚠️ Route nay 3 doan (/chamcong/:id/excel) nen KHONG dam nhau voi /chamcong/:nhanVienId (2 doan)
+   dat o tren — nhung van phai nam SAU cac route CHU (/chamcong/chitiet, /chamcong/raw,
+   /chamcong/cauhinh, /chamcong/template). Xem loi /nhanvien/template chet tu v5.38.
+
+   ⚠️ Ngay/GioVao/GioRa doc TU CSDL nen phai dinh dang bang getUTC* — driver mssql cau hinh
+   useUTC=true, dung getHours()/getDate() la lech +7 (07:55 thanh 14:55, ngay 01 thanh ngay 31). */
+router.get('/chamcong/:nhanVienId/excel', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nvId = parseInt(req.params.nhanVienId, 10);
+    const nam = parseInt(req.query.nam, 10) || new Date().getFullYear();
+    const thang = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+    if (!nvId) return res.status(400).json({ success: false, message: 'Thiếu mã nhân viên.' });
+
+    const nv = (await pool.request().input('id', sql.Int, nvId).query(`
+      SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan
+      FROM NhanVien nv LEFT JOIN BoPhan bp ON bp.BoPhanID = nv.BoPhanID
+      WHERE nv.NhanVienID = @id`)).recordset[0];
+    if (!nv) return res.status(404).json({ success: false, message: 'Không tìm thấy nhân viên.' });
+
+    const rows = (await pool.request().input('id', sql.Int, nvId).input('n', sql.Int, nam).input('t', sql.Int, thang)
+      .query(`SELECT * FROM ChamCongNgay WHERE NhanVienID=@id AND YEAR(Ngay)=@n AND MONTH(Ngay)=@t ORDER BY Ngay`)).recordset;
+
+    const ngayDMY = (v) => {
+      if (!v) return '';
+      const d = new Date(v); if (isNaN(d)) return '';
+      return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+    };
+    const gioHM = (v) => {
+      if (!v) return '';
+      if (typeof v === 'string') return v.slice(0, 5);
+      const d = new Date(v); if (isNaN(d)) return '';
+      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    };
+    const s = (v) => Number(v) || 0;
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`ChamCong T${thang}-${nam}`);
+    const SO_COT = 12;
+    const cotCuoi = String.fromCharCode(64 + SO_COT); // 12 -> 'L'
+
+    ws.mergeCells(`A1:${cotCuoi}1`);
+    ws.getCell('A1').value = `CHI TIẾT CHẤM CÔNG — THÁNG ${thang}/${nam}`;
+    ws.getCell('A1').font = { bold: true, size: 14 };
+    ws.getCell('A1').alignment = { horizontal: 'center' };
+    ws.mergeCells(`A2:${cotCuoi}2`);
+    ws.getCell('A2').value = `Nhân viên: ${nv.MaNhanVien ? nv.MaNhanVien + ' — ' : ''}${nv.HoTen}`
+      + (nv.TenBoPhan ? `    ·    Bộ phận: ${nv.TenBoPhan}` : '');
+    ws.getCell('A2').alignment = { horizontal: 'center' };
+    ws.addRow([]);
+
+    const head = ['STT', 'Ngày', 'Mã', 'Giờ vào', 'Giờ ra', 'Giờ làm', 'Số công',
+      'Giờ TC thường', 'Giờ TC chủ nhật', 'Giờ TC lễ', 'Nguồn', 'Ghi chú'];
+    const hr = ws.addRow(head);
+    hr.font = { bold: true };
+    hr.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    hr.eachCell(c => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8EEF7' } };
+      c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    rows.forEach((r, i) => ws.addRow([
+      i + 1, ngayDMY(r.Ngay), r.MaCham || '', gioHM(r.GioVao), gioHM(r.GioRa),
+      r.SoGioLam != null ? s(r.SoGioLam) : null, s(r.SoCong),
+      s(r.GioTangCaThuong), s(r.GioTangCaChuNhat), s(r.GioTangCaLeTet),
+      r.Nguon || '', r.GhiChu || ''
+    ]));
+    if (!rows.length) {
+      const tr0 = ws.addRow(['', 'Chưa có ngày chấm công nào trong tháng này.']);
+      ws.mergeCells(`B${tr0.number}:${cotCuoi}${tr0.number}`);
+      tr0.getCell(2).alignment = { horizontal: 'center' };
+      tr0.font = { italic: true };
+    }
+
+    // Dong TONG — cong dung `rows` dang xuat, khong goi lai truy van khac (khoi lech voi bang tren).
+    const tong = rows.reduce((a, r) => ({
+      gioLam: a.gioLam + s(r.SoGioLam), cong: a.cong + s(r.SoCong),
+      tcT: a.tcT + s(r.GioTangCaThuong), tcCN: a.tcCN + s(r.GioTangCaChuNhat), tcLe: a.tcLe + s(r.GioTangCaLeTet)
+    }), { gioLam: 0, cong: 0, tcT: 0, tcCN: 0, tcLe: 0 });
+    const tr = ws.addRow(['', 'TỔNG CỘNG', '', '', '', tong.gioLam, tong.cong, tong.tcT, tong.tcCN, tong.tcLe, '', '']);
+    tr.font = { bold: true };
+    tr.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F3F4' } }; });
+
+    // Ke bang toan bo vung du lieu + dinh dang so (chuan phieu: bang phai co ke, so phai co dinh dang).
+    for (let r = 4; r <= tr.number; r++) {
+      for (let c = 1; c <= SO_COT; c++) {
+        ws.getCell(r, c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
+    }
+    ws.columns.forEach((col, i) => {
+      if (i >= 5 && i <= 9) col.numFmt = '#,##0.00';   // Gio lam ... Gio TC le
+      col.width = i === 1 ? 12 : (i === 11 ? 26 : (i >= 7 && i <= 9 ? 14 : 11));
+      if (i >= 2 && i <= 4) col.alignment = { horizontal: 'center' };
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    // Ten file = ten doi tuong + ky (chuan xuat file da chot). Bo dau vi Content-Disposition ASCII.
+    const tenFile = `ChamCong_${khongDau(nv.HoTen || '').replace(/[^A-Za-z0-9]+/g, '')}_T${thang}_${nam}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${tenFile}"`);
+    res.end(Buffer.from(buf));
+  } catch (err) { console.error('[payroll GET /chamcong/:id/excel]', err); res.status(500).json({ success: false, message: err.message }); }
 });
 
 // File chuyen khoan CK theo mau BIDV (ck luong.xlsx Sheet 1, cot A-I).

@@ -372,9 +372,11 @@ router.get('/orders/:donHangId/vaichophep', requireAuth, requirePermission('KHOV
   // bao nhieu. v5.20: KHONG con chi la THAM KHAO nua - day gio la CHINH nguon du lieu cayChoPhep o tren.
   const chiDinhResult = await pool.request().input('id', sql.Int, req.params.donHangId).query(`
     SELECT
-      ISNULL((SELECT SUM(SoKGYeuCau) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Chính'), 0) AS TongKGYeuCauChinh,
+            ISNULL((SELECT SUM(SoKGYeuCau) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Chính'), 0) AS TongKGYeuCauChinh,
+      ISNULL((SELECT SUM(SoKGYeuCau) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Phụ'), 0) AS TongKGYeuCauPhu,
       ISNULL((SELECT SUM(SoKGYeuCau) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Phối'), 0) AS TongKGYeuCauPhoi,
       ISNULL((SELECT SUM(SoMet) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Chính'), 0) AS TongMetChinh,
+      ISNULL((SELECT SUM(SoMet) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Phụ'), 0) AS TongMetPhu,
       ISNULL((SELECT SUM(SoMet) FROM ChiDinhVaiSX WHERE DonHangID = @id AND Kieu = N'Phối'), 0) AS TongMetPhoi,
       ISNULL((SELECT SUM(ct.KGXuat) FROM PhieuXuatVaiChiTiet ct JOIN PhieuXuatVai p ON p.PhieuXuatID = ct.PhieuXuatID WHERE p.DonHangID = @id), 0) AS TongKGDaXuat`);
   // v5.21 (yeu cau muc 6, "Hiển thị số lượng chỉ định từng mầu trong phần tạo phiếu xuất kho"): bo sung

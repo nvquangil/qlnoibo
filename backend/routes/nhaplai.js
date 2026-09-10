@@ -93,7 +93,30 @@ router.get('/timmahang', requireAuth, requirePermission('KHOHANG', 'view'), requ
   const q = String(req.query.q || '').trim().toLowerCase();
   const loc = q ? ds.filter(r => (String(r.MaHang || '') + ' ' + String(r.TenHang || '') + ' ' + String(r.TenMau || ''))
     .toLowerCase().includes(q)) : ds;
-  res.json({ success: true, data: loc.filter(r => r.ConTraCai > 0).slice(0, 200) });
+  const traVeDuoc = loc.filter(r => r.ConTraCai > 0);
+  /* ================================================================================================
+     ⚠️ v7.99 — ĐÃ BỎ `.slice(0, 200)` Ở ĐÂY.
+
+     Nguyen: "khi chọn Phiếu xuất thì hiện ra tất cả phiếu, nhưng khi tick Lấy tất cả mã đã mua
+     (mọi phiếu) thì không ra hết các phiếu".
+
+     Chặn 200 dòng là nguyên nhân. Nó cắt SAU khi đã sắp `ORDER BY NgayBan DESC, PhieuBHID DESC`
+     (xem utils/dongDaBanChoKhach.js) nên với khách mua nhiều thì phần bị chặt luôn là CÁC PHIẾU CŨ
+     NHẤT — mất trọn từng phiếu, không phải thiếu lẻ tẻ, đúng như Nguyen thấy.
+     Đường một-phiếu (GET /phieuxuat/:id/dong) chưa bao giờ có chặn này ⇒ hai đường cho hai kết quả
+     khác nhau trên cùng một dữ liệu.
+
+     Nặng hơn việc hiện thiếu: ô "Lọc mã hàng" ở form lọc TRÊN SỐ DÒNG ĐÃ NHẬN. Mã hàng nào bị chặt
+     ở dòng thứ 201 thì gõ tìm cũng KHÔNG BAO GIỜ ra — người dùng không còn đường nào với tới, và
+     cũng không có gì báo là dữ liệu đã bị cắt.
+
+     Không đặt lại chặn ở mức cao hơn: cắt im lặng ở 200 hay ở 2000 thì vẫn là cắt im lặng, chỉ khác
+     lúc nào mới vỡ. Phạm vi ở đây đã bị chặn tự nhiên bởi lịch sử mua CỦA MỘT KHÁCH (@ten), không
+     phải truy vấn mở toàn kho. Từ v7.99 frontend gửi `q` lên đây để lọc ở SERVER, nên khách nhiều
+     dòng thì gõ vài chữ là danh sách nhẹ lại — không cần chặn.
+     `soDong` trả kèm để form hiện rõ "đang hiện N dòng", thay cho việc âm thầm cắt.
+     ================================================================================================ */
+  res.json({ success: true, data: traVeDuoc, soDong: traVeDuoc.length });
 });
 
 router.get('/next-sophieu', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
