@@ -861,7 +861,9 @@ window.ModuleTaiLieuKyThuat = (function () {
     </div>
     ${perm.canEdit ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <button type="button" class="btn small secondary" id="btnTkctAddRow">+ Thêm dòng</button>
-        <button type="button" class="btn small" id="btnTkctExcel" title="File có dòng tiêu đề với ô 'Piece Name', cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải file Excel</button>
+        ${/* v8.03: nhan noi ro la NOI THEM — nguoi dung phai biet bam nhieu lan la cong don, khong
+             phai ghi de. Muon lam lai tu dau thi dung nut "Xoa trang bang" ngay ben canh. */''}
+        <button type="button" class="btn small" id="btnTkctExcel" title="Nối thêm các dòng trong file vào bảng (KHÔNG xóa dòng đang có) — tải nhiều file để ghép. Muốn làm lại từ đầu thì bấm 'Xóa trắng bảng' trước. File cần dòng tiêu đề có ô 'Piece Name'; cột 'Piece Image' là hình vẽ của Excel">⬆️ Tải Excel (nối thêm)</button>
         <input type="file" id="fileTkctExcel" accept=".xlsx,.xlsm" style="display:none;">
         ${/* v7.65.3: XÓA TRẮNG BẢNG để nhập lại từ đầu — nhập nhầm file hoặc gõ sai nửa chừng thì
              khỏi phải xóa từng dòng. CHỈ xóa trên màn hình; phải bấm Lưu thì mới ghi. */''}
@@ -954,7 +956,20 @@ window.ModuleTaiLieuKyThuat = (function () {
         } catch (err) { toast('Không tải được ảnh vừa dán: ' + err.message, 'error'); }
       });
     });
-    /* Tải file Excel -> thay toàn bộ bảng. */
+    /* ================================================================================================
+       v8.03 — TẢI FILE EXCEL = NỐI THÊM DÒNG, KHÔNG XÓA DÒNG ĐANG CÓ.
+
+       Nguyen: "tải nhiều lần file excel, mỗi lần tải thêm dòng mới không xóa dòng hiện tại".
+       Bản cũ gán thẳng `state.rows = j.data.rows` ⇒ mỗi lần tải là mất sạch phần đã có, nên muốn ghép
+       chi tiết từ NHIỀU file (mỗi file một bộ phận / một đợt) là không làm được.
+
+       Vì sao bỏ luôn câu hỏi "Thay TOÀN BỘ?": nối thêm KHÔNG phá gì nên không cần chặn. Còn muốn
+       làm lại từ đầu thì đã có sẵn nút "🗑 Xóa trắng bảng" ngay cạnh — một việc một nút, rõ hơn là
+       nhét hai nghĩa vào một nút rồi hỏi lại mỗi lần.
+
+       Dòng TRỐNG (chưa gõ tên, chưa có ảnh) bị loại trước khi nối: bảng mới mở luôn có sẵn 1 dòng
+       trắng làm chỗ gõ, để nguyên thì file đầu tiên tải lên lại nằm dưới một dòng rỗng vô nghĩa.
+       ================================================================================================ */
     const btnExcel = box.querySelector('#btnTkctExcel');
     const oFile = box.querySelector('#fileTkctExcel');
     if (btnExcel && oFile) {
@@ -963,8 +978,6 @@ window.ModuleTaiLieuKyThuat = (function () {
         const f = oFile.files && oFile.files[0];
         if (!f || !f.size) return;
         dongBo();
-        const coDL = state.rows.some(r => String(r.pieceName || '').trim() || r.anhChiTiet);
-        if (coDL && !confirm('Bảng đang có dữ liệu. Thay TOÀN BỘ bằng nội dung file Excel?')) return;
         const nhanCu = btnExcel.textContent;
         btnExcel.disabled = true; btnExcel.textContent = 'Đang đọc...';
         try {
@@ -973,9 +986,21 @@ window.ModuleTaiLieuKyThuat = (function () {
           const r = await fetch('/api/tailieukythuat/thongkechitiet/doc-excel', { method: 'POST', credentials: 'same-origin', body: fd });
           const j = await r.json().catch(() => ({ success: false, message: 'Máy chủ trả về dữ liệu không đọc được.' }));
           if (!r.ok || !j.success) throw new Error(j.message || ('HTTP ' + r.status));
-          state.rows = (j.data.rows || []).map(x => ({ ...tkctDongMoi(), ...x }));
+          const moi = (j.data.rows || []).map(x => ({ ...tkctDongMoi(), ...x }));
+          const laDongTrong = (x) => !String(x.pieceName || '').trim() && !x.anhChiTiet;
+          const giuLai = state.rows.filter(x => !laDongTrong(x));
+          /* Tải nhầm cùng một file hai lần là chuyện rất dễ xảy ra khi đã cho nối thêm — đếm số
+             trùng TÊN CHI TIẾT để báo, nhưng KHÔNG chặn: ghép 2 file có chi tiết trùng tên vẫn là
+             nghiệp vụ thật, người khai mới biết đúng hay sai. */
+          const tenDaCo = new Set(giuLai.map(x => String(x.pieceName || '').trim().toLowerCase()).filter(Boolean));
+          const soTrung = moi.filter(x => tenDaCo.has(String(x.pieceName || '').trim().toLowerCase())).length;
+          state.rows = giuLai.concat(moi);
+          if (!state.rows.length) state.rows = [tkctDongMoi()];
           renderTkctBox(box, state);
-          toast((j.message || 'Đã đọc file.') + ' Kiểm tra lại rồi bấm Lưu.', 'success');
+          let tb = (j.message || 'Đã đọc file.')
+            + ` Đã THÊM ${moi.length} dòng — bảng giờ có ${giuLai.length + moi.length} dòng.`;
+          if (soTrung) tb += ` ⚠️ ${soTrung} dòng trùng tên chi tiết đã có — kiểm lại kẻo tải nhầm cùng một file hai lần.`;
+          toast(tb + ' Kiểm tra lại rồi bấm Lưu.', soTrung ? 'info' : 'success');
         } catch (err) { toast('Không đọc được file: ' + err.message, 'error'); }
         btnExcel.disabled = false; btnExcel.textContent = nhanCu;
       });

@@ -42,16 +42,20 @@ window.ModulePayroll = (function () {
   function periodBar(onChange, extra) {
     const years = []; for (let y = now.getFullYear() - 2; y <= now.getFullYear() + 1; y++) years.push(y);
     return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
-      ${/* v8.00: hai o Nam/Thang BOP LAI vua bang so ky tu. Truoc day nhan option la "Nam 2026" va
-           "Thang 12" nen o chon rong ra theo chu, an cho cua cac nut ben canh — ma chu "Nam"/"Thang"
-           la du thua: nhan "Ky luong:" ngay ben trai da noi ro day la ky nao.
-           Dat flex:0 0 auto de flexbox KHONG keo gian hai o nay; con be rong thi de trinh duyet tu
-           do theo option dai nhat (2026 / T12) — dung nghia "ngan lai bang so ky tu".
+      ${/* v8.02: BOP BE RONG hai o Nam/Thang, GIU nguyen chu "Nam"/"Thang".
+           Nguyen: "cho chieu rong ngan lai chu co lien quan gi den cho khac" — chi hai o nay, khong
+           dung den cac nut ben canh.
+           v8.03: hai o nay dang GIAN HET CHIEU NGANG, moi o chiem tron mot dong (xem anh Nguyen gui)
+           — do quy tac CSS chung dat width:100% cho select, de len inline style thuong. Nen width
+           phai kem !important thi moi thang duoc; flex:0 0 auto de flexbox khong keo gian lai.
+           92px la muc hep nhat con doc tron "Thang 12" / "Nam 2026": the <select> bi bop hep hon noi
+           dung se CAT CHU (khong co dau ba cham), thanh "Nam 202...". Muon ngan hon nua thi buoc
+           phai rut chu, ma Nguyen da bo cach do.
            KHONG dat dau backtick trong comment nay: no nam BEN TRONG template literal, mot dau
            backtick la dong som template -> SyntaxError, ca man hinh dung im. */''}
       <label style="font-weight:600;">Kỳ lương:</label>
-      <select id="pNam" style="flex:0 0 auto;" title="Năm">${years.map(y => `<option value="${y}" ${y === selNam ? 'selected' : ''}>${y}</option>`).join('')}</select>
-      <select id="pThang" style="flex:0 0 auto;" title="Tháng">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === selThang ? 'selected' : ''}>T${m}</option>`).join('')}</select>
+      <select id="pNam" style="flex:0 0 auto;width:92px !important;font-size:13px;padding:3px 4px;">${years.map(y => `<option value="${y}" ${y === selNam ? 'selected' : ''}>Năm ${y}</option>`).join('')}</select>
+      <select id="pThang" style="flex:0 0 auto;width:92px !important;font-size:13px;padding:3px 4px;">${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}" ${m === selThang ? 'selected' : ''}>Tháng ${m}</option>`).join('')}</select>
       ${extra || ''}</div>`;
   }
   function wirePeriod(root, onChange) {

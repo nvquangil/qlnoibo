@@ -520,28 +520,29 @@ window.ModuleQLSX = (function () {
           ⚠️ Đơn này chưa khai sơ đồ ở công đoạn Kỹ thuật (Ghi tiến độ → Kỹ thuật → Sơ đồ) nên chưa tính định lượng được.</div>`;
       }
       const sdChon = r && r.SoDoID != null ? String(r.SoDoID) : '';
-      /* v8.01: ô chọn sơ đồ BÓP LẠI 60% (230px -> 92px). Nhãn hiện ra chỉ giữ phần PHÂN BIỆT ĐƯỢC
-         (số thứ tự + mét), còn khổ vải + mã rập dồn vào tooltip của từng option — bóp bề rộng mà
-         vẫn để nhãn dài thì trình duyệt cắt mất chữ, đọc không ra sơ đồ nào. Mét là con số dùng để
-         tính nên phải thấy ngay, không được ẩn. */
+      /* v8.02: ô chọn sơ đồ TO LÊN cho dễ nhìn, GIỮ ĐẦY ĐỦ mét sơ đồ + khổ vải như ban đầu.
+         Bản v8.02 trước của tôi bóp còn 92px và dồn khổ vải vào tooltip — hiểu sai yêu cầu
+         ("ngắn lại" là nói dải định lượng, không phải bóp hẹp ô này). Nay: chữ 13px (bằng ô nhập
+         thường, không còn 11px), rộng 300px để nhãn dài nhất vẫn đọc trọn. */
       const opts = soDoList.map((s, i) => {
-        const nhan = `SĐ ${i + 1} · ${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) + 'm' : 'chưa có mét'}`;
-        const dayDu = `Sơ đồ ${i + 1}`
-          + (s.MetSoDoDai != null ? ` — dài ${fmtNumber(s.MetSoDoDai)} m` : ' — chưa khai mét sơ đồ dài')
+        const nhan = `SĐ ${i + 1}: ${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) + ' m' : '(chưa có mét)'}`
           + (s.KhoVaiSoDo != null ? ` · khổ ${fmtNumber(s.KhoVaiSoDo)}` : '')
-          + (s.MaRap ? ` · mã rập ${s.MaRap}` : '')
-          + (s.GhiChu ? ` · ${s.GhiChu}` : '');
-        return `<option value="${s.ID}"${String(s.ID) === sdChon ? ' selected' : ''} title="${escapeHtml(dayDu)}">${escapeHtml(nhan)}</option>`;
+          + (s.MaRap ? ` · rập ${s.MaRap}` : '');
+        return `<option value="${s.ID}"${String(s.ID) === sdChon ? ' selected' : ''}>${escapeHtml(nhan)}</option>`;
       }).join('');
       const soLop = r && r.SoLop != null ? escapeHtml(String(r.SoLop)) : '';
       const hh = r && r.PhanTramHaoHut != null ? escapeHtml(String(r.PhanTramHaoHut)) : String(HAO_HUT_MAC_DINH);
-      return `<div class="cdv-dl" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:#5f6368;background:#f7f9fc;border:1px dashed #dce3ea;border-radius:4px;padding:4px 6px;margin:2px 0 0;">
+      return `<div class="cdv-dl" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:14px;color:#5f6368;background:#f7f9fc;border:1px dashed #dce3ea;border-radius:4px;padding:4px 6px;margin:2px 0 0;">
         <b style="color:#1a73e8;">Định lượng</b>
-        <select class="cdv-sodo" title="Sơ đồ do công đoạn Kỹ thuật khai — đưa chuột vào từng dòng để xem khổ vải / mã rập" style="font-size:11px;padding:2px 4px;width:92px;flex:0 0 auto;"><option value="">— sơ đồ —</option>${opts}</select>
-        <span>×</span><input type="text" inputmode="decimal" class="cdv-solop" placeholder="số lớp" style="width:66px;font-size:11px;padding:2px 4px;" value="${soLop}">
-        <span>lớp · hao hụt</span><input type="text" inputmode="decimal" class="cdv-hh" style="width:46px;font-size:11px;padding:2px 4px;" value="${hh}"><span>%</span>
-        <span class="cdv-dl-ket" style="margin-left:2px;"></span>
-        <button type="button" class="btn small secondary cdv-dl-ap" style="font-size:11px;padding:2px 8px;" title="Ghi TỔNG vào ô &quot;SL yêu cầu (mét)&quot; của dòng này">= Áp dụng</button>
+        ${/* v8.03: o nay dang GIAN HET CHIEU NGANG va chiem tron mot dong (xem anh Nguyen gui) —
+             do quy tac CSS chung dat width:100% cho select, de len inline style thuong.
+             Nen phai dat width bang px KEM !important thi moi thang duoc. flex:0 0 auto de flexbox
+             khong keo gian lai. 300px du doc tron nhan dai nhat (SD 1: 5.20 m - kho 1.50 - rap ABC). */''}
+        <select class="cdv-sodo" title="Sơ đồ do công đoạn Kỹ thuật khai" style="font-size:13px;padding:4px 6px;width:300px !important;flex:0 0 auto;"><option value="">— chọn sơ đồ —</option>${opts}</select>
+        <span>×</span><input type="text" inputmode="decimal" class="cdv-solop" placeholder="số lớp" style="width:100px;font-size:11px;padding:4px 8px;" value="${soLop}">
+        <span>lớp · hao hụt</span><input type="text" inputmode="decimal" class="cdv-hh" style="width:46px;font-size:14px;padding:4px 8px;" value="${hh}"><span>%</span>
+        <span class="cdv-dl-ket" style="margin-left:4px;"></span>
+        <button type="button" class="btn small secondary cdv-dl-ap" style="font-size:14px;padding:4px 10px;" title="Ghi TỔNG vào ô &quot;SL yêu cầu (mét)&quot; của dòng này">= Áp dụng</button>
       </div>`;
     }
     function rowHtml(r) {
