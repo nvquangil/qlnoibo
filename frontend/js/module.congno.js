@@ -714,7 +714,7 @@ window.ModuleCongNo = (function () {
             <td style="text-align:center;">${i + 1}</td>
             ${cot.map(c => `<td${c.phai ? ' style="text-align:right;"' : ''}>${c.o(r)}</td>`).join('')}
           </tr>`).join('') || `<tr><td colspan="${soCot + 1}" style="text-align:center;">Chưa có phát sinh nào</td></tr>`}
-          ${rows.length ? `<tr style="font-weight:700;background:#f1f3f4;">
+          ${rows.length ? `<tr data-tong style="font-weight:700;background:#f1f3f4;">
             <td colspan="${1 + cot.findIndex(c => c.tong)}" style="text-align:right;">TỔNG</td>
             ${cot.filter((c, i) => i >= cot.findIndex(x => x.tong)).map(c => `<td style="text-align:right;">${oTong(c)}</td>`).join('')}
           </tr>` : ''}
@@ -862,20 +862,125 @@ window.ModuleCongNo = (function () {
         <input type="date" id="soTuNgay" value="${ngayISO(new Date(nay.getFullYear(), 0, 1))}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="soDenNgay" value="${ngayISO(nay)}" style="width:auto;">
-        <button type="button" class="btn small" id="btnXuatSo"
-          title="Mẫu sổ kế toán 9 cột: Dư đầu kỳ – phát sinh từng chứng từ (kèm dòng hàng) – Dư cuối kỳ">⬇️ Xuất sổ chi tiết</button>
+        <button type="button" class="btn small" id="btnXemSo"
+          title="Mở sổ ra xem ngay trên màn hình. Muốn có file PDF thì trong hộp in chọn máy in &quot;Save as PDF&quot;.">👁️ Xem sổ / In PDF</button>
+        <button type="button" class="btn small secondary" id="btnXuatSo"
+          title="Mẫu sổ kế toán 10 cột: Dư đầu kỳ – phát sinh từng chứng từ (kèm dòng hàng) – Dư cuối kỳ">⬇️ Xuất Excel</button>
       </div>`;
   }
-  /* `duong` là phần query xác định đối tượng, vd 'loai=kh&khach=...' hoặc 'loai=ncc&nccId=12'. */
+  /* `duong` là phần query xác định đối tượng, vd 'loai=kh&khach=...' hoặc 'loai=ncc&nccId=12'.
+     CÙNG một chuỗi này dùng cho cả hai nút: route /export và route /so-ke-toan đọc y hệt bộ tham số
+     (loai / khach / nccId), nên không có chuyện hai nút ra hai đối tượng khác nhau. */
+  function kyDangChon(modal) {
+    const tu = (modal.querySelector('#soTuNgay') || {}).value || '';
+    const den = (modal.querySelector('#soDenNgay') || {}).value || '';
+    if (tu && den && tu > den) { toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error'); return null; }
+    return { tu, den };
+  }
   function noiDayXuatSo(modal, duong, tenFile) {
-    const nut = modal.querySelector('#btnXuatSo');
-    if (!nut) return;
-    nut.addEventListener('click', () => {
-      const tu = (modal.querySelector('#soTuNgay') || {}).value || '';
-      const den = (modal.querySelector('#soDenNgay') || {}).value || '';
-      if (tu && den && tu > den) return toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error');
-      taiFile(`/api/congno/export?${duong}&kieu=so&tuNgay=${tu}&denNgay=${den}`, tenFile);
+    const nutXuat = modal.querySelector('#btnXuatSo');
+    if (nutXuat) nutXuat.addEventListener('click', () => {
+      const k = kyDangChon(modal);
+      if (!k) return;
+      taiFile(`/api/congno/export?${duong}&kieu=so&tuNgay=${k.tu}&denNgay=${k.den}`, tenFile);
     });
+    const nutXem = modal.querySelector('#btnXemSo');   // v8.05
+    if (nutXem) nutXem.addEventListener('click', () => {
+      const k = kyDangChon(modal);
+      if (k) xemSoKeToan(duong, k.tu, k.den);
+    });
+  }
+
+  /* ================================================================================================
+     v8.05 — XEM SỔ CHI TIẾT CÔNG NỢ NGAY TRÊN MÀN HÌNH (thay cho việc bắt buộc tải file Excel).
+
+     Nguyên (yêu cầu): "đổi xuất ra excel thành xuất ra file pdf luôn, mở ra xem chi tiết không cần
+     lưu file". Bản in dựng bằng printHtml() -> hiện hộp in của trình duyệt; chọn máy in
+     "Save as PDF" / "Microsoft Print to PDF" là ra file PDF, không chọn thì chỉ xem rồi đóng.
+     Không có file nào rơi vào thư mục Downloads.
+
+     ⚠️ KHÔNG tự tính lại số ở đây. Chia kỳ, dư đầu kỳ, lật thứ tự cũ->mới là chỗ rất dễ sai; route
+     /api/congno/so-ke-toan trả DỮ LIỆU ĐÃ TÍNH, dùng chung nguồn với file Excel nên hai bản không
+     thể lệch nhau. Hàm này chỉ vẽ.
+
+     ⚠️ Bảng khai data-nostt: cột STT tự động sẽ đánh số cả dòng "Dư đầu kỳ", dòng hàng thụt lề và
+     dòng tổng — vô nghĩa với sổ kế toán, mà ô nhãn gộp cột lại nằm đúng chỗ cột STT (đã từng nuốt
+     mất nhãn dòng TỔNG ở v7.91). Sổ này đã có cột "Mã" riêng nên không cần STT.
+     ================================================================================================ */
+  async function xemSoKeToan(duong, tu, den) {
+    let d;
+    try { d = (await apiGet(`/api/congno/so-ke-toan?${duong}&tuNgay=${tu}&denNgay=${den}`)).data; }
+    catch (err) { toast('Không dựng được sổ chi tiết: ' + err.message, 'error'); return; }
+
+    /* tien(): 0 để TRỐNG — dòng chứng từ chỉ có một trong hai cột tiền, in số 0 ở cột kia làm rối mắt.
+       oPhai(): luôn in số, kể cả 0 — dùng cho 3 dòng tổng kết, ở đó "trống" và "bằng 0" khác nghĩa. */
+    const tien = v => (Number(v) ? fmtNumber(v) : '');
+    const oPhai = v => `<td style="text-align:right;">${fmtNumber(Number(v) || 0)}</td>`;
+    /* Số dư DƯƠNG = còn nợ -> cột "hàng" (cột tăng nợ). Số dư ÂM = trả thừa -> cột tiền. Giống hệt
+       oDu() của bản Excel, để hai bản đọc như nhau. */
+    const oDu = (g) => (Number(g) >= 0 ? oPhai(Math.abs(Number(g) || 0)) + '<td></td>'
+                                       : '<td></td>' + oPhai(Math.abs(Number(g) || 0)));
+    const dongNhan = (nhan, hai) => `<tr style="font-weight:700;background:#f1f3f4;">
+      <td></td><td></td><td></td><td>${nhan}</td><td></td><td></td><td></td><td></td>${hai}</tr>`;
+
+    const ky = (d.tuNgay || d.denNgay)
+      ? `Từ ngày ${d.tuNgay ? fmtDate(d.tuNgay) : '...'} đến ngày ${d.denNgay ? fmtDate(d.denNgay) : '...'}`
+      : 'Toàn bộ phát sinh (không giới hạn kỳ)';
+    const tenDT = escapeHtml(d.tenDoiTuong || '');
+
+    const thanDong = (d.dong || []).map(r => {
+      const cha = `<tr>
+        <td style="text-align:center;">${escapeHtml(r.Ma || '')}</td>
+        <td>${fmtDate(r.Ngay)}</td>
+        <td>${escapeHtml(r.SoPhieu || '')}</td>
+        <td>${escapeHtml(r.DienGiai || '')}</td>
+        <td></td><td></td><td></td><td></td>
+        <td style="text-align:right;">${tien(r.No)}</td>
+        <td style="text-align:right;">${tien(r.Co)}</td></tr>`;
+      const con = (r.hang || []).map(h => `<tr style="color:#3c4043;">
+        <td></td><td></td><td></td>
+        <td style="padding-left:18px;">${escapeHtml(h.Ten || '')}</td>
+        <td>${escapeHtml(h.MaHang || '')}</td>
+        <td style="text-align:right;">${h.SoLuong ? fmtNumber(h.SoLuong) : ''}${h.DonVi ? ' ' + escapeHtml(h.DonVi) : ''}</td>
+        <td style="text-align:right;">${tien(h.DonGia)}</td>
+        <td style="text-align:right;">${tien(h.ThanhTien)}</td>
+        <td></td><td></td></tr>`).join('');
+      return cha + con;
+    }).join('') || '<tr><td colspan="10" style="text-align:center;font-style:italic;">(không có phát sinh nào trong kỳ)</td></tr>';
+
+    printHtml(`So chi tiet cong no - ${d.tenDoiTuong || ''}`, `
+      <h2 style="text-align:center;margin:0 0 4px;">SỔ CHI TIẾT CÔNG NỢ</h2>
+      <div class="p-meta" style="text-align:center;">${(d.laKH ? 'Khách hàng: ' : 'Nhà cung cấp: ') + tenDT}</div>
+      <div class="p-meta" style="text-align:center;">${escapeHtml(ky)}</div>
+      <div style="font-style:italic;font-size:11px;color:#5f6368;margin-top:6px;">${escapeHtml(d.chuGiaiMa || '')}</div>
+      <table data-nostt style="margin-top:6px;width:100%;border-collapse:collapse;" border="1" cellpadding="4">
+        <colgroup>
+          <col style="width:34px;"><col style="width:62px;"><col style="width:74px;"><col>
+          <col style="width:76px;"><col style="width:56px;"><col style="width:62px;"><col style="width:74px;">
+          <col style="width:82px;"><col style="width:82px;">
+        </colgroup>
+        <thead><tr>
+          <th>Mã</th><th>Ngày</th><th>Số</th><th>Diễn giải</th><th>Mã hàng</th>
+          <th style="text-align:right;">Số lượng</th><th style="text-align:right;">Đơn giá</th>
+          <th style="text-align:right;">Thành tiền</th>
+          <th style="text-align:right;">${escapeHtml(d.nhanNo || '')}</th>
+          <th style="text-align:right;">${escapeHtml(d.nhanCo || '')}</th>
+        </tr></thead>
+        <tbody>
+          ${dongNhan('Dư đầu kỳ', oDu(d.duDau))}
+          ${thanDong}
+          ${dongNhan('Phát sinh trong kỳ', oPhai(d.tongNo) + oPhai(d.tongCo))}
+          ${dongNhan('Dư cuối kỳ', oDu(d.duCuoi))}
+          ${d.lech ? `<tr><td colspan="10" style="color:#c0392b;font-weight:700;font-size:11px;">
+            ⚠️ Lệch ${fmtNumber(d.lech.theoLuyKe - d.lech.theoCong)}: dư cuối theo lũy kế = ${fmtNumber(d.lech.theoLuyKe)},
+            còn dư đầu + phát sinh nợ − phát sinh có = ${fmtNumber(d.lech.theoCong)}. Kiểm tra lại chứng từ trong kỳ.</td></tr>` : ''}
+        </tbody>
+      </table>
+      <div class="p-sign">
+        <div><div class="line">Người lập</div></div>
+        <div><div class="line">Kế toán</div></div>
+        <div><div class="line">Đối tượng xác nhận</div></div>
+      </div>`, { extraStyle: 'th,td{font-size:10.5px;padding:2px 4px;} h2{font-size:17px;} table{table-layout:fixed;} td{word-wrap:break-word;}' });
   }
 
   /* v6.55: ô SỐ PHIẾU trong sổ công nợ — bấm được với mọi chứng từ có màn chi tiết.
@@ -915,7 +1020,7 @@ window.ModuleCongNo = (function () {
           <td style="text-align:right;">${fmtNumber(x.SoLuong)}</td><td>${escapeHtml(x.DonVi || '')}</td>
           <td style="text-align:right;">${fmtNumber(x.DonGia)}</td>
           <td style="text-align:right;"><b>${fmtNumber(x.ThanhTien)}</b></td></tr>`).join('')}
-          <tr style="font-weight:bold;background:#f1f3f4;"><td colspan="6" style="text-align:right;">TỔNG</td>
+          <tr data-tong style="font-weight:bold;background:#f1f3f4;"><td colspan="6" style="text-align:right;">TỔNG</td>
             <td style="text-align:right;">${fmtNumber(tong)}</td></tr></tbody></table></div>` : ''}
       <div class="modal-actions">
         ${/* v6.56: phiếu thu/chi in được ngay trong popup — dùng lại inPhieuThuChi() của danh sách,
@@ -1281,7 +1386,7 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;color:#137333;">${fmtNumber(q.thu)}</td>
         <td style="text-align:right;color:#c0392b;">${fmtNumber(q.chi)}</td>
         <td style="text-align:right;"><b>${fmtNumber(q.soDu)}</b></td></tr>`).join('')}
-        ${quy.length ? `<tr style="font-weight:bold;background:#f1f3f4;"><td colspan="5" style="text-align:right;">TỔNG TIỀN ĐANG CÓ</td>
+        ${quy.length ? `<tr data-tong style="font-weight:bold;background:#f1f3f4;"><td colspan="5" style="text-align:right;">TỔNG TIỀN ĐANG CÓ</td>
           <td style="text-align:right;">${fmtNumber(tongDu)}</td></tr>` : ''}</tbody></table>`;
     body.querySelectorAll('.act-quy').forEach(el => el.addEventListener('click', () =>
       soChiTietQuy(el.dataset.loai, el.dataset.id).catch(err => toast(err.message, 'error'))));

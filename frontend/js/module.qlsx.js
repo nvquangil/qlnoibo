@@ -346,7 +346,10 @@ window.ModuleQLSX = (function () {
           <td style="text-align:right;">${r.KhoVaiThucTe != null ? fmtNumber(r.KhoVaiThucTe) : ''}</td>
           <td style="text-align:right;">${fmtNumber(r.KGXuat)}</td>
           <td style="text-align:right;">${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td></tr>`).join('') || '<tr><td colspan="8" style="text-align:center;">(phiếu chưa có dòng nào)</td></tr>'}
-          <tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="6" style="text-align:right;">TỔNG CỘNG</td>
+          ${/* v8.06: data-tong — ô đầu dòng TỔNG là placeholder TRỐNG (cho thẳng cột STT có sẵn của
+               bảng), không phải ô gộp. __laDongDuLieu() chỉ nhận ra ô GỘP Ở VỊ TRÍ ĐẦU, nên dòng này
+               lọt lưới và bị đánh STT như một dòng dữ liệu thật. */''}
+          <tr data-tong style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="6" style="text-align:right;">TỔNG CỘNG</td>
             <td style="text-align:right;">${fmtNumber(Math.round(tongKg * 100) / 100)}</td>
             <td style="text-align:right;">${tongMet ? fmtNumber(Math.round(tongMet * 100) / 100) : ''}</td></tr>
         </tbody></table>`;

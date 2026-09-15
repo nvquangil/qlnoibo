@@ -218,6 +218,13 @@ window.ModuleBaoCao = (function () {
   /* ================================================================================================
      TAB 1-3: TON KHO (hang hoa / vai / phu kien) — cung 1 khung Nhap-Xuat-Ton
      ================================================================================================ */
+  /* v8.06 — MỌI dòng `class="row-tong"` trong file này nay thêm `data-tong`.
+     `row-tong` CHỈ LÀ TÊN LỚP CSS (dính đầu bảng khi cuộn, xem style.css) — cột STT tự động
+     (common.js: __dongKhongDanhSo) không hề biết lớp này, nó chỉ nhận ra dòng TỔNG qua thuộc tính
+     `data-tong` hoặc qua ô đầu dòng bị GỘP CỘT (colspan>1). Báo cáo kinh doanh (tồn kho hàng hóa)
+     lên màn hình với dòng TỔNG bị đánh STT="1", các dòng dữ liệu thật tụt xuống 2,3,4... — đúng lớp
+     lỗi đã vỡ ở v7.91 (nhãn dòng TỔNG bị cột STT ghi đè), chỉ khác chỗ vỡ. Thêm `data-tong` là cách
+     chắc chắn nhất, không phụ thuộc việc đếm colspan có đúng số cột hay không. */
   async function renderTonKho(perm, loai) {
     const body = document.getElementById('bcBody');
     const res = await apiGet(`/api/baocao/${loai}?tuNgay=${ky.tuNgay}&denNgay=${ky.denNgay}`);
@@ -233,7 +240,7 @@ window.ModuleBaoCao = (function () {
           <th rowspan="2">Đơn giá BQ</th><th rowspan="2">Giá trị tồn</th></tr>
         <tr><th>Tồn đầu</th><th>Nhập</th><th>Xuất</th><th>Tồn cuối</th>
             <th>Tồn đầu</th><th>Nhập</th><th>Xuất</th><th>Tồn cuối</th></tr></thead>
-        <tbody>${rows.length ? `<tr class="row-tong">
+        <tbody>${rows.length ? `<tr class="row-tong" data-tong>
           <td colspan="4" style="text-align:right;">TỔNG</td>
           ${oSo(t.TonDauKG)}${oSo(t.NhapKG)}${oSo(t.XuatKG)}${oSo(t.TonCuoiKG)}
           <td colspan="4"></td><td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
@@ -249,7 +256,7 @@ window.ModuleBaoCao = (function () {
           <th>Mã phụ kiện</th><th>Tên phụ kiện</th><th>Loại</th><th>Size</th><th>ĐVT</th>
           <th>Tồn đầu kỳ</th><th>Nhập trong kỳ</th><th>Xuất trong kỳ</th><th>Tồn cuối kỳ</th>
           <th>Đơn giá BQ</th><th>Giá trị tồn</th></tr></thead>
-        <tbody>${rows.length ? `<tr class="row-tong">
+        <tbody>${rows.length ? `<tr class="row-tong" data-tong>
           <td colspan="5" style="text-align:right;">TỔNG</td>
           ${oSo(t.TonDau)}${oSo(t.Nhap)}${oSo(t.Xuat)}${oSo(t.TonCuoi)}<td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
         ${rows.map(r => `<tr>
@@ -268,7 +275,7 @@ window.ModuleBaoCao = (function () {
           <th>Nguồn giá nhập</th>
           <th>Giá trị tồn<div style="font-weight:400;font-size:11px;">(theo giá nhập)</div></th>
           <th>Giá bán (1 cái)</th><th>Giá trị tồn<div style="font-weight:400;font-size:11px;">(theo giá bán)</div></th></tr></thead>
-        <tbody>${rows.length ? `<tr class="row-tong">
+        <tbody>${rows.length ? `<tr class="row-tong" data-tong>
           <td colspan="4" style="text-align:right;">TỔNG</td>
           ${oSo(t.TonDau)}${oSo(t.Nhap)}${oSo(t.Xuat)}${oSo(t.TonCuoi)}
           <td></td><td></td>${oTien(t.GiaTriTonNhap)}<td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
@@ -386,7 +393,7 @@ window.ModuleBaoCao = (function () {
 
       <h3 style="margin:14px 0 6px;font-size:15px;">A. Quỹ tiền mặt & ngân hàng</h3>
       <table><thead><tr><th>Quỹ / Tài khoản</th><th>Số tài khoản</th><th>Đầu kỳ</th><th>Thu trong kỳ</th><th>Chi trong kỳ</th><th>Cuối kỳ</th></tr></thead>
-      <tbody>${quy.length ? `<tr class="row-tong"><td colspan="2" style="text-align:right;">TỔNG</td>
+      <tbody>${quy.length ? `<tr class="row-tong" data-tong><td colspan="2" style="text-align:right;">TỔNG</td>
           ${oTien(tq.DauKy)}${oTien(tq.Thu)}${oTien(tq.Chi)}${oTien(tq.CuoiKy)}</tr>` : ''}
         ${quy.map(q => `<tr>
         <td><a href="javascript:void(0)" class="bc-quy" data-khoa="${escapeHtml(q.Khoa || '')}" title="Xem chi tiết thu chi của quỹ này">${escapeHtml(q.Ten)}</a></td><td>${escapeHtml(q.SoTaiKhoan || '')}</td>
@@ -435,7 +442,7 @@ window.ModuleBaoCao = (function () {
 
       <h3 style="margin:16px 0 6px;font-size:15px;">C. Dòng tiền trong kỳ theo loại tài khoản</h3>
       <table><thead><tr><th>Loại tài khoản</th><th>Tính chi phí KD</th><th>Thu</th><th>Chi</th></tr></thead>
-      <tbody>${tk.length ? `<tr class="row-tong"><td colspan="2" style="text-align:right;">TỔNG</td>
+      <tbody>${tk.length ? `<tr class="row-tong" data-tong><td colspan="2" style="text-align:right;">TỔNG</td>
           ${oTien(tk.reduce((s2, r) => s2 + (Number(r.Thu) || 0), 0))}
           ${oTien(tk.reduce((s2, r) => s2 + (Number(r.Chi) || 0), 0))}</tr>` : ''}
         ${tk.map(r => `<tr>
@@ -523,7 +530,7 @@ window.ModuleBaoCao = (function () {
       <div class="bang-cuon" style="max-height:400px;">
       <table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>SL bán (cái)</th><th>Doanh thu</th>
         <th>Giá vốn 1 cái</th><th>Giá vốn</th><th>Lãi gộp</th><th>Tỷ lệ lãi</th><th>Nguồn giá vốn</th></tr></thead>
-      <tbody>${ct.length ? `<tr class="row-tong"><td colspan="2" style="text-align:right;">TỔNG</td>
+      <tbody>${ct.length ? `<tr class="row-tong" data-tong><td colspan="2" style="text-align:right;">TỔNG</td>
           ${oSo(ct.reduce((s2, r) => s2 + (Number(r.SLCai) || 0), 0))}
           ${oTien(t.DoanhThuThuan)}<td></td>${oTien(t.GiaVon)}
           <td style="text-align:right;color:${mau(t.LaiGop)};">${fmtNumber(t.LaiGop)}</td>
@@ -540,7 +547,7 @@ window.ModuleBaoCao = (function () {
 
       <h3 style="margin:16px 0 6px;font-size:15px;">C. Chi tiết chi phí kinh doanh</h3>
       <table><thead><tr><th>Loại tài khoản</th><th>Tài khoản</th><th>Số tiền</th><th>Số phiếu</th></tr></thead>
-      <tbody>${cp.length ? `<tr class="row-tong"><td colspan="2" style="text-align:right;">TỔNG CHI PHÍ KD</td>
+      <tbody>${cp.length ? `<tr class="row-tong" data-tong><td colspan="2" style="text-align:right;">TỔNG CHI PHÍ KD</td>
           ${oTien(t.ChiPhiKD)}<td style="text-align:center;">${cp.reduce((s2, r) => s2 + (Number(r.SoPhieu) || 0), 0)}</td></tr>` : ''}
         ${cp.map(r => `<tr><td>${escapeHtml(r.TenLoai)}</td><td>${escapeHtml(r.TenTK)}</td>
         ${oTien(r.SoTien)}<td style="text-align:center;">${r.SoPhieu}</td></tr>`).join('')

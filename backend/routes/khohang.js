@@ -1422,9 +1422,49 @@ router.get('/items/:maHang/history', requireAuth, requirePermission('KHOHANG', '
         GhiChu: r.LyDo || ''
       }));
     }
+    /* ================================================================================================
+       v8.04 — XEN CÁC DÒNG PHIẾU BÁN HÀNG **KHÔNG QUA ĐƠN KHÁCH**.
+
+       Nguyen: "mã BD26c0501 trên PBH PX26038 có nhưng chi tiết thẻ kho không có, vẫn trừ tồn kho đúng".
+       Đúng vậy, và đây là lỗ hổng của chính bảng này: câu SQL ở trên chạy `FROM DonKhachDatHang`, tức
+       nó liệt kê ĐƠN KHÁCH rồi mới gắn số phiếu vào từng đơn. Phiếu bán hàng lập THẲNG (không qua đơn)
+       không có dòng nào trong DonKhachDatHang ⇒ KHÔNG BAO GIỜ hiện ra, dù từ v6.23 phiếu bán hàng mới
+       là chứng từ DUY NHẤT trừ tồn. Bảng tên là "Lịch sử" mà bỏ sót đúng loại chứng từ trừ tồn thì
+       không đối chiếu tồn được — người dùng thấy tồn giảm mà không dòng nào giải thích.
+
+       Chỉ lấy dòng KHÔNG gắn đơn: dòng CÓ gắn đơn đã hiện ở câu trên rồi, thêm lần nữa là đếm hai lần.
+       Giữ đúng 7 cột của bảng, DonID = NULL để frontend ẩn nút Sửa/In/Xóa (cùng cách v7.39 đã làm cho
+       dòng nhập lại — dòng này không phải đơn khách, không sửa được ở đây).
+       TrangThai lấy THẬT của phiếu (kể cả 'Đã hủy'): giấu phiếu đã hủy đi thì lại thành một chứng từ
+       có thật mà lịch sử không nhắc — đúng cái lỗi đang sửa. Hủy thì hiện rõ là hủy.
+       ================================================================================================ */
+    let dongBanThang = [];
+    if (coPBH) {
+      const rsBT = (await pool.request().input('id', sql.Int, hangInfo.MaHangID).query(`
+        SELECT p.PhieuBHID, p.SoPhieu, p.NgayBan, p.TenKhach, p.TrangThai,
+               ct.MauSacID, ms.TenMau, ct.SoLuong, ct.DonVi, ct.GhiChu
+        FROM PhieuBanHangChiTiet ct
+        JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+        WHERE ct.MaHangID = @id
+          AND ct.DonID IS NULL
+          ${coDonIDsCT ? "AND NULLIF(LTRIM(RTRIM(ISNULL(ct.DonIDs, ''))), '') IS NULL" : ''}
+        ORDER BY p.NgayBan DESC, p.PhieuBHID DESC`)).recordset;
+      dongBanThang = rsBT.map(r => ({
+        DonID: null, LaBanThang: true,
+        MaHangID: hangInfo.MaHangID, MaHang: hangInfo.MaHang,
+        MauSacID: r.MauSacID, TenMau: r.TenMau || '',
+        ThoiGian: r.NgayBan, TenKhach: r.TenKhach || '',
+        SoLuongDat: Number(r.SoLuong) || 0,        // bán ra, cùng chiều với đơn khách
+        DonVi: r.DonVi || hangInfo.DonViCoBan || 'Cái',
+        TrangThai: r.TrangThai || '',
+        SoPhieuBH: r.SoPhieu, PhieuBHIDThuc: r.PhieuBHID, NgayPhieuBH: r.NgayBan,
+        GhiChu: r.GhiChu || ''
+      }));
+    }
     /* Trộn rồi sắp lại theo thời gian giảm dần — cùng thứ tự với câu SQL đơn khách (ThoiGian DESC),
        để dòng nhập lại nằm đúng vị trí trong mạch thời gian chứ không dồn xuống cuối. */
-    const orders = [...ordersResult.recordset, ...dongNhapLai]
+    const orders = [...ordersResult.recordset, ...dongNhapLai, ...dongBanThang]
       .sort((a, b) => new Date(b.ThoiGian) - new Date(a.ThoiGian));
 
     res.json({ success: true, data: { hangInfo, colorDetail, orders } });

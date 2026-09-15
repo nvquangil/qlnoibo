@@ -1461,13 +1461,17 @@ window.ModuleKhoHang = (function () {
       /* v7.39: ô THAO TÁC. Dòng nhập lại KHÔNG phải đơn khách (DonID null) nên phải ẩn hết nút —
          để nguyên thì bấm Sửa/Xóa sẽ gọi API với id rỗng, đúng kiểu "bấm nút không có gì xảy ra". */
       const oThaoTac = (r) => {
-        if (r.LaNhapLai) return '<span class="empty-hint" style="padding:0;">—</span>';
+        /* v8.04: dòng BÁN THẲNG (phiếu bán hàng không qua đơn khách) cũng có DonID null — phải ẩn
+           nút y như dòng nhập lại, kẻo bấm Sửa/Xóa là gọi API với id rỗng. */
+        if (r.LaNhapLai || r.LaBanThang) return '<span class="empty-hint" style="padding:0;">—</span>';
         return `${perm.canEdit ? `<button class="btn small secondary act-h-edit" data-id="${r.DonID}">Sửa</button> ` : ''}`
           + `${perm.canEdit ? `<button class="btn small secondary act-h-inphieu" data-id="${r.DonID}" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In</button> ` : ''}`
           + `${perm.canEdit && r.TrangThai !== 'Đã hủy' ? histStatusButtons(r) + ' ' : ''}`
           + `${perm.canDelete ? `<button class="btn small danger act-h-del" data-id="${r.DonID}">Xóa</button>` : ''}`;
       };
-      histBody.innerHTML = ds.map(r => `<tr${r.LaNhapLai ? ' style="background:#fdf3f2;"' : ''}><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
+      /* v8.04: dòng bán thẳng tô nền xanh nhạt để phân biệt ngay với đơn khách — cột Thao tác của
+         nó là "—" nên không có dấu hiệu nào khác cho biết vì sao không sửa được. */
+      histBody.innerHTML = ds.map(r => `<tr${r.LaNhapLai ? ' style="background:#fdf3f2;"' : (r.LaBanThang ? ' style="background:#f2f8f4;"' : '')}><td>${fmtDate(r.ThoiGian)}</td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.TenMau)}</td>
         <td${r.LaNhapLai ? ' style="color:#c0392b;font-weight:700;"' : ''}>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td><td>${statusBadge(r.TrangThai)}</td><td>${oPhieu(r)}</td>${histActions ? `<td>${oThaoTac(r)}</td>` : ''}</tr>`).join('')
         || `<tr><td colspan="${histActions ? 8 : 7}" class="empty-hint">${orders.length ? 'Không có đơn nào khớp bộ lọc' : 'Chưa có lịch sử'}</td></tr>`;
       /* v7.15: TỔNG CỘNG TÁCH BA NHÓM — đã xuất / đã hủy / đang chờ. Trộn cả ba vào một con số là
@@ -1478,11 +1482,17 @@ window.ModuleKhoHang = (function () {
       /* v7.39: THÊM NHÓM RIÊNG cho dòng nhập lại. Bắt buộc phải tách: nhóm mặc định của hàm này là
          'cho' (đang chờ), nên nếu để dòng nhập lại rơi vào đó thì số ÂM sẽ TRỪ vào "Đang chờ" và làm
          con số đó sai. Nhận diện bằng cờ `LaNhapLai`, không dựa vào chuỗi trạng thái. */
+      /* v8.04: NHÓM RIÊNG cho dòng BÁN THẲNG (phiếu bán hàng không qua đơn khách). Bắt buộc tách,
+         cùng lý do với nhập lại: trạng thái của PHIẾU BÁN HÀNG không trùng bộ trạng thái của ĐƠN
+         KHÁCH ('Đã xuất hàng'/'Đã giao'), nên để nguyên là nó rơi vào nhánh mặc định 'cho' (Đang
+         chờ) — mà đây là hàng ĐÃ RA KHỎI KHO, đếm vào "đang chờ" là sai hẳn nghĩa.
+         Nhận diện bằng cờ `LaBanThang`, không dựa vào chuỗi trạng thái. */
       const nhomCua = (r) => (r.LaNhapLai ? 'nhapLai'
         : r.TrangThai === 'Đã hủy' ? 'huy'
+        : r.LaBanThang ? 'banThang'
         : (r.TrangThai === 'Đã xuất hàng' || r.TrangThai === 'Đã giao') ? 'xuat' : 'cho');
-      const tong = { xuat: new Map(), huy: new Map(), cho: new Map(), nhapLai: new Map() };
-      const demDon = { xuat: 0, huy: 0, cho: 0, nhapLai: 0 };
+      const tong = { xuat: new Map(), huy: new Map(), cho: new Map(), nhapLai: new Map(), banThang: new Map() };
+      const demDon = { xuat: 0, huy: 0, cho: 0, nhapLai: 0, banThang: 0 };
       ds.forEach(r => {
         const n = nhomCua(r);
         const dv = String(r.DonVi || donViCoBan || 'Cái');
@@ -1494,10 +1504,11 @@ window.ModuleKhoHang = (function () {
       if (demDon.xuat) phan.push(`<span style="color:#137333;">Đã xuất: ${inTong(tong.xuat)} (${demDon.xuat} đơn)</span>`);
       if (demDon.cho) phan.push(`<span style="color:#b06000;">Đang chờ: ${inTong(tong.cho)} (${demDon.cho} đơn)</span>`);
       if (demDon.huy) phan.push(`<span style="color:#a50e0e;">Đã hủy: ${inTong(tong.huy)} (${demDon.huy} đơn)</span>`);
+      if (demDon.banThang) phan.push(`<span style="color:#137333;">Bán thẳng (không qua đơn): ${inTong(tong.banThang)} (${demDon.banThang} phiếu)</span>`);
       if (demDon.nhapLai) phan.push(`<span style="color:#c0392b;">Khách trả lại: ${inTong(tong.nhapLai)} (${demDon.nhapLai} phiếu)</span>`);
-      /* Đếm "đơn" chỉ tính đơn khách thật; dòng nhập lại đếm riêng là "phiếu". */
-      const soDon = ds.length - demDon.nhapLai;
-      const soDonGoc = orders.length - orders.filter(o => o.LaNhapLai).length;
+      /* Đếm "đơn" chỉ tính đơn khách thật; dòng nhập lại và bán thẳng đếm riêng là "phiếu". */
+      const soDon = ds.length - demDon.nhapLai - demDon.banThang;
+      const soDonGoc = orders.length - orders.filter(o => o.LaNhapLai || o.LaBanThang).length;
       histTong.innerHTML = `<b>${soDon} đơn${soDon !== soDonGoc ? ` / ${soDonGoc}` : ''}</b>`
         + (phan.length ? ' &nbsp;·&nbsp; ' + phan.join(' &nbsp;·&nbsp; ') : '');
     }
@@ -1755,7 +1766,7 @@ window.ModuleKhoHang = (function () {
            Số lượng KHÔNG cộng gộp giữa các đơn vị khác nhau — Ri, Cái, Bộ là 3 thứ khác nhau, cộng
            chung ra một con số vô nghĩa — nên tách từng đơn vị một dòng. */''}
       <tbody>
-        <tr class="row-tong" id="ordDongTong">
+        <tr class="row-tong" data-tong id="ordDongTong">
           <td></td><td></td>
           <td colspan="4" id="ordTongNhan">TỔNG CỘNG</td>
           <td id="ordTongSL" style="text-align:right;"></td>
@@ -2075,7 +2086,7 @@ window.ModuleKhoHang = (function () {
         <td style="text-align:right;">${fmtNumber(r.GiaBan)}</td>
         <td style="text-align:right;">${fmtNumber(cai(r) * (Number(r.GiaBan) || 0))}</td>
         <td>${escapeHtml([...new Set(r.dons.map(d => d.TrangThai))].join(', '))}</td></tr>`).join('')}
-        <tr><td colspan="5" style="text-align:right;"><b>TỔNG CỘNG (${ds.length} dòng)</b></td>
+        <tr data-tong><td colspan="5" style="text-align:right;"><b>TỔNG CỘNG (${ds.length} dòng)</b></td>
           <td colspan="2"><b>${escapeHtml(dongTongDV)}</b></td>
           <td style="text-align:right;"><b>${fmtNumber(tongCai)}</b></td>
           <td></td><td style="text-align:right;"><b>${fmtNumber(tongTien)}</b></td><td></td></tr>
@@ -3149,7 +3160,7 @@ window.ModuleKhoHang = (function () {
           <td style="text-align:center;">${fmtNumber(g.PhanTramCKShop)}%</td>
           <td style="text-align:right;">${fmtTien(g.GiaBan)}</td>
           <td style="text-align:right;"><b>${fmtTien(g.ThanhTien)}</b></td></tr>`).join('')}
-        <tr style="font-weight:bold;background:#f1f3f4;">
+        <tr data-tong style="font-weight:bold;background:#f1f3f4;">
           <td colspan="4" style="text-align:center;">TỔNG CỘNG</td>
           ${/* Phiếu nhiều ĐVT khác nhau thì KHÔNG ghi đơn vị ở dòng tổng — cộng Cái với Bộ là vô nghĩa. */''}
           <td style="text-align:right;">${fmtNumber(h.TongSLCai)}${dvChung ? ' ' + escapeHtml(dvChung) : ''}</td>
@@ -3163,13 +3174,13 @@ window.ModuleKhoHang = (function () {
           })()}</td>
           <td colspan="3"></td>
           <td style="text-align:right;">${fmtTien(h.TongTienHang)}</td></tr>
-        <tr><td colspan="9" style="text-align:right;"><b>CK NPP</b> (${fmtNumber(h.PhanTramCKNPP)}% × tổng cộng)</td>
+        <tr data-tong><td colspan="9" style="text-align:right;"><b>CK NPP</b> (${fmtNumber(h.PhanTramCKNPP)}% × tổng cộng)</td>
           <td style="text-align:right;">${fmtTien(h.TienCKNPP)}</td></tr>
-        <tr><td colspan="9" style="text-align:right;"><b>TỔNG TIỀN HÀNG</b></td>
+        <tr data-tong><td colspan="9" style="text-align:right;"><b>TỔNG TIỀN HÀNG</b></td>
           <td style="text-align:right;">${fmtTien(h.TienTruocVAT)}</td></tr>
-        <tr><td colspan="9" style="text-align:right;"><b>THUẾ GTGT</b> (${fmtNumber(h.PhanTramVAT)}%)</td>
+        <tr data-tong><td colspan="9" style="text-align:right;"><b>THUẾ GTGT</b> (${fmtNumber(h.PhanTramVAT)}%)</td>
           <td style="text-align:right;">${fmtTien(h.TienVAT)}</td></tr>
-        <tr style="font-weight:bold;background:#e8f0fe;"><td colspan="9" style="text-align:right;">TỔNG TIỀN SAU THUẾ GTGT</td>
+        <tr data-tong style="font-weight:bold;background:#e8f0fe;"><td colspan="9" style="text-align:right;">TỔNG TIỀN SAU THUẾ GTGT</td>
           <td style="text-align:right;font-size:15px;">${fmtTien(h.TongThanhToan)}</td></tr>
 
       </tbody></table>`;
@@ -3568,21 +3579,23 @@ window.ModuleKhoHang = (function () {
     }
     /* v6.24: chân phiếu (Tổng cộng → CK NPP → Tổng tiền TT → VAT → Tổng sau VAT) nằm NGAY TRONG
        bảng nhập, đúng khuôn mẫu Word — nhìn một mạch từ dòng hàng xuống tổng tiền. */
+    /* v8.06: data-tong trên cả khối chân phiếu — không thì cột STT tự động đánh số nhầm vào các
+       dòng CK NPP/Thuế GTGT/Tổng tiền này y như đã vỡ ở màn Báo cáo kinh doanh. */
     function chanPhieuHtml() {
-      return `<tr class="bh-chan"><td colspan="7" style="text-align:right;font-weight:bold;">TỔNG CỘNG</td>
+      return `<tr class="bh-chan" data-tong><td colspan="7" style="text-align:right;font-weight:bold;">TỔNG CỘNG</td>
           <td id="bhTongSL" style="text-align:right;"></td><td id="bhTongHang" style="text-align:right;font-weight:bold;"></td><td></td></tr>
-        <tr class="bh-chan"><td colspan="6" style="text-align:right;">CK NPP</td>
+        <tr class="bh-chan" data-tong><td colspan="6" style="text-align:right;">CK NPP</td>
           <td><input type="number" name="ckNPP" id="bhCKNPP" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramCKNPP : 0}" style="width:64px;"></td>
           <td style="text-align:center;"><button type="button" class="btn small secondary" id="bhApNPP" style="padding:2px 6px;">Áp ${fmtNumber(bhTyLe.npp)}%</button></td>
           <td id="bhTienCK" style="text-align:right;"></td><td></td></tr>
-        <tr class="bh-chan"><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN HÀNG</td>
+        <tr class="bh-chan" data-tong><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN HÀNG</td>
           <td id="bhTruocVAT" style="text-align:right;font-weight:bold;"></td><td></td></tr>
-        <tr class="bh-chan"><td colspan="6" style="text-align:right;">THUẾ GTGT</td>
+        <tr class="bh-chan" data-tong><td colspan="6" style="text-align:right;">THUẾ GTGT</td>
           <td><input type="number" name="vat" id="bhVAT" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramVAT : bhTyLe.vat}" style="width:64px;"></td>
           <td style="text-align:center;">%</td><td id="bhTienVAT" style="text-align:right;"></td><td></td></tr>
-        <tr class="bh-chan" style="background:#e8f0fe;"><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN SAU THUẾ GTGT</td>
+        <tr class="bh-chan" data-tong style="background:#e8f0fe;"><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN SAU THUẾ GTGT</td>
           <td id="bhTongTT" style="text-align:right;font-weight:bold;font-size:15px;"></td><td></td></tr>
-        <tr class="bh-chan"><td colspan="10" id="bhBangChu" style="font-style:italic;color:#5f6368;"></td></tr>`;
+        <tr class="bh-chan" data-tong><td colspan="10" id="bhBangChu" style="font-style:italic;color:#5f6368;"></td></tr>`;
     }
     function veDong() {
       modal.querySelector('#bhDong').innerHTML = `<table style="width:100%;">

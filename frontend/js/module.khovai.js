@@ -1730,7 +1730,7 @@ window.ModuleKhoVai = (function () {
   }
   function dongTongKgMet(lines, fKg, fMet, soCotTruoc, soCotSau) {
     const t = congKgMet(lines, fKg, fMet);
-    return `<tr style="font-weight:700;background:#f1f3f4;">
+    return `<tr data-tong style="font-weight:700;background:#f1f3f4;">
       <td colspan="${soCotTruoc}" style="text-align:right;">TỔNG CỘNG</td>
       <td style="text-align:right;">${fmtNumber(Math.round(t.kg * 100) / 100)}</td>
       <td style="text-align:right;">${t.met ? fmtNumber(Math.round(t.met * 100) / 100) : ''}</td>
@@ -1784,7 +1784,7 @@ window.ModuleKhoVai = (function () {
   function khoiTongTienHtml(lines, soCotTruoc, soCotSau, dvt) {
     const t = tongTienCay(lines, dvt);
     const nghiNgo = (lines || []).filter(r => laTienNghiNgoVai(r, dvt)).length;
-    return `<tr style="font-weight:700;background:#fff7e6;">
+    return `<tr data-tong style="font-weight:700;background:#fff7e6;">
       <td colspan="${soCotTruoc}" style="text-align:right;">TỔNG TIỀN <span style="font-weight:400;font-size:11px;">(đơn giá theo ${escapeHtml(nhanDonViGia(dvt))})</span></td>
       <td style="text-align:right;">${fmtTien(t)} đ</td>
       ${soCotSau > 0 ? `<td colspan="${soCotSau}">${nghiNgo

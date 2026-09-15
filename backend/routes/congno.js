@@ -2039,6 +2039,11 @@ async function dongHangTheoChungTu(pool, rows) {
     const k = loai + '#' + x.Id;
     if (!kq.has(k)) kq.set(k, []);
     kq.get(k).push({
+      /* v8.05: + MaHang thanh CO T RIENG. Truoc day ma hang chi la PHUONG AN DU PHONG ben trong `Ten`
+         (ISNULL(h.TenHang, h.MaHang)) nen chi hien khi ten hang bi TRONG — nhin so khong tra duoc ma.
+         Chung tu khong phai hang hoa (phieu thu, nhap vai, nhap phu kien) de RONG: ma vai / ma phu
+         kien la HE MA KHAC, don vao mot cot la nguoi doc tuong cung mot he. */
+      MaHang: String(x.MaHang || '').trim(),
       Ten: String(x.Ten || '').trim(), SoLuong: so(x.SoLuong), DonVi: x.DonVi || '',
       DonGia: so(x.DonGia), ThanhTien: so(x.ThanhTien)
     });
@@ -2051,7 +2056,7 @@ async function dongHangTheoChungTu(pool, rows) {
     const c = await tapCot(pool, 'PhieuBanHangChiTiet');
     const slCot = c.has('SoLuongCai') ? 'ct.SoLuongCai' : (c.has('SoLuong') ? 'ct.SoLuong' : 'CAST(NULL AS INT)');
     nap('PBH', await chay(`
-      SELECT ct.PhieuBHID AS Id,
+      SELECT ct.PhieuBHID AS Id, h.MaHang AS MaHang,
              LTRIM(RTRIM(ISNULL(h.TenHang, h.MaHang) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
              ${slCot} AS SoLuong, N'Cái' AS DonVi,
              ${cotNhu(c, 'ct', 'GiaBan', 'DonGia', 'DECIMAL(14,2)')},
@@ -2068,7 +2073,7 @@ async function dongHangTheoChungTu(pool, rows) {
     const c = await tapCot(pool, 'PhieuNhapLaiChiTiet');
     const slCot = c.has('SoLuongCai') ? 'ct.SoLuongCai' : (c.has('SoLuong') ? 'ct.SoLuong' : 'CAST(NULL AS INT)');
     nap('PNL', await chay(`
-      SELECT ct.PhieuNLID AS Id,
+      SELECT ct.PhieuNLID AS Id, h.MaHang AS MaHang,
              LTRIM(RTRIM(ISNULL(h.TenHang, h.MaHang) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
              ${slCot} AS SoLuong, N'Cái' AS DonVi,
              ${cotNhu(c, 'ct', 'GiaBan', 'DonGia', 'DECIMAL(14,2)')},
@@ -2197,6 +2202,10 @@ function veSoKeToan(wb, tienIch, opt) {
     { header: 'Ngày', key: 'Ngay', width: 11 },
     { header: 'Số', key: 'So', width: 14 },
     { header: 'Diễn giải', key: 'DienGiai', width: 42 },
+    /* v8.05: cot MA HANG dat NGAY SAU Dien giai — dong hang thut le nam o cot Dien giai, ma hang
+       phai sat canh cai ten no giai thich. Chung tu (dong cha) de trong: ma hang thuoc ve TUNG DONG
+       HANG, khong phai ca phieu. */
+    { header: 'Mã hàng', key: 'MaHang', width: 16 },
     { header: 'Số lượng', key: 'SoLuong', width: 10 },
     { header: 'Đơn giá', key: 'DonGia', width: 12 },
     { header: 'Thành tiền', key: 'ThanhTien', width: 15 },
@@ -2231,6 +2240,7 @@ function veSoKeToan(wb, tienIch, opt) {
     });
     (chiTiet.get(r.CtLoai + '#' + r.CtID) || []).forEach(h => ws.addRow({
       DienGiai: '    ' + h.Ten,          // thut le 4 khoang trang, giong mau nguoi dung dua
+      MaHang: h.MaHang || '',            // v8.05
       SoLuong: h.SoLuong || null, DonGia: h.DonGia || null, ThanhTien: h.ThanhTien || null
     }));
   });
@@ -2256,6 +2266,82 @@ function veSoKeToan(wb, tienIch, opt) {
   return { tenDoiTuong, duDau, tongNo, tongCo, duCuoi: duCuoiLuy, soDong: trongKy.length };
 }
 function fmtVN(n) { return (Math.round(so(n))).toLocaleString('vi-VN'); }
+
+/* ================================================================================================
+   v8.05 — SO KE TOAN DANG DU LIEU (JSON) cho ban XEM TREN MAN HINH / in ra PDF.
+
+   Nguyen: "doi xuat ra excel thanh xuat ra file pdf luon, mo ra xem chi tiet khong can luu file".
+   Khong sinh PDF o may chu: Node o day khong co thu vien HTML->PDF, keo puppeteer ve chi de in mot
+   cai so la them ~300MB Chromium. Frontend dung printHtml() co san (chinh la thu nut "In" ben canh
+   dang dung) -> xem ngay tren man, Ctrl+P chon "Save as PDF" la ra PDF. Khong tai file nao ca.
+
+   ⚠️ PHEP TINH KHONG DUOC CHEP LAI O FRONTEND. Chia ky / du dau ky / lat thu tu cu->moi la cho RAT
+   de sai (xem ghi chu trong veSoKeToan ve viec quen lat mang). Route nay tra DU LIEU DA TINH, dung
+   CHUNG nguon voi file Excel — hai ban khong the lech nhau.
+   ================================================================================================ */
+async function duLieuSoKeToan(pool, opt) {
+  const laKH = opt.loai === 'kh';
+  const d = laKH ? await soChiTietKH(pool, opt.ten) : await soChiTietNCC(pool, opt.nccId);
+  const chiTiet = await dongHangTheoChungTu(pool, d.rows || []);
+
+  /* Lat CU -> MOI giong veSoKeToan: so ke toan doc tu tren xuong. soChiTietKH/NCC tra MOI NHAT
+     TRUOC (cho man hinh xem). Quen lat la Du dau ky lay sai dong ma KHONG bao loi gi. */
+  const tatCa = (d.rows || []).slice().reverse();
+  const mocTu = opt.tuNgay ? new Date(opt.tuNgay + 'T00:00:00') : null;
+  const mocDen = opt.denNgay ? new Date(opt.denNgay + 'T23:59:59') : null;
+  const truocKy = [], trongKy = [];
+  tatCa.forEach(r => {
+    const n = new Date(r.Ngay);
+    if (mocTu && n < mocTu) { truocKy.push(r); return; }
+    if (mocDen && n > mocDen) return;
+    trongKy.push(r);
+  });
+  const duDau = truocKy.length ? so(truocKy[truocKy.length - 1].LuyKe) : 0;
+
+  let tongNo = 0, tongCo = 0;
+  const dong = trongKy.map(r => {
+    const { tangNo, giamNo } = xeTien(r);
+    tongNo += tangNo; tongCo += giamNo;
+    return {
+      Ma: MA_CHUNG_TU[r.Loai] || '', Ngay: r.Ngay, SoPhieu: r.SoPhieu || '',
+      DienGiai: r.DienGiai || '', No: tangNo, Co: giamNo,
+      hang: (chiTiet.get(r.CtLoai + '#' + r.CtID) || [])
+    };
+  });
+  const duCuoiLuy = trongKy.length ? so(trongKy[trongKy.length - 1].LuyKe) : duDau;
+  const duCuoiCong = Math.round((duDau + tongNo - tongCo) * 100) / 100;
+  return {
+    laKH,
+    tenDoiTuong: laKH ? opt.ten : (d.tenNCC || ''),
+    nhanNo: laKH ? 'Bán hàng' : 'Mua hàng',
+    nhanCo: laKH ? 'Phiếu thu' : 'Phiếu chi',
+    tuNgay: opt.tuNgay || '', denNgay: opt.denNgay || '',
+    chuGiaiMa: CHU_GIAI_MA,
+    duDau, dong, tongNo, tongCo, duCuoi: duCuoiLuy,
+    /* Lech = co dong bi xep sai cot. Tra ra de ban xem in canh bao y het file Excel, khong am tham. */
+    lech: Math.abs(duCuoiLuy - duCuoiCong) > 1 ? { theoLuyKe: duCuoiLuy, theoCong: duCuoiCong } : null
+  };
+}
+
+router.get('/so-ke-toan', requireAuth, requirePermission('CONGNO', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const loai = req.query.loai === 'ncc' ? 'ncc' : 'kh';
+    const ten = String(req.query.khach || '').trim();
+    const nccId = parseInt(req.query.nccId, 10) || 0;
+    if (loai === 'kh' && !ten) return res.status(400).json({ success: false, message: 'Thiếu tên khách.' });
+    if (loai === 'ncc' && !nccId) return res.status(400).json({ success: false, message: 'Thiếu nhà cung cấp.' });
+    const ngayHopLe = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+    const data = await duLieuSoKeToan(pool, {
+      loai, ten, nccId,
+      tuNgay: ngayHopLe(req.query.tuNgay), denNgay: ngayHopLe(req.query.denNgay)
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[congno GET /so-ke-toan]', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi dựng sổ chi tiết: ' + err.message });
+  }
+});
 
 router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (req, res) => {
   try {

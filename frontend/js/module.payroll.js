@@ -809,6 +809,11 @@ window.ModulePayroll = (function () {
 
   /* v5.91 (rà soát) — LƯƠNG CÔNG NHẬT: trước đây tab này KHÔNG in được và không xem chi tiết được từng
      người (chỉ có Excel + file chuyển khoản). Nay bấm 1 dòng ra phiếu lương cá nhân có nút In. */
+  /* v8.06 — data-tong trên MỌI dòng TỔNG của file này (buildLuongCongNhatBangBody trở xuống).
+     Các bảng in ở đây tự viết sẵn cột STT (không nhờ common.js chèn), nên dòng TỔNG luôn mở đầu bằng
+     MỘT Ô TRỐNG cho thẳng cột STT rồi mới tới ô gộp "TỔNG". Cột STT tự động (common.js) chỉ nhận ra
+     ô GỘP nếu nó nằm Ở VỊ TRÍ ĐẦU DÒNG — ô trống đứng trước làm nó "nhìn không ra", nên trước đây
+     những dòng TỔNG này bị đánh số y như một dòng lương thật. Cùng lớp lỗi với Báo cáo kinh doanh. */
   function buildLuongCongNhatBangBody(d, tong) {
     return `<h2 style="text-align:center;">BẢNG LƯƠNG CÔNG NHẬT — Tháng ${selThang}/${selNam}</h2>
       <table style="width:100%;border-collapse:collapse;font-size:12px;" border="1" cellpadding="4"><thead><tr><th style="width:38px;">STT</th>
@@ -820,7 +825,7 @@ window.ModulePayroll = (function () {
         <td style="text-align:right;">${money(r.TongBH)}</td><td style="text-align:right;">${money(num(r.GiamTruBanThan) + num(r.GiamTruNPT))}</td>
         <td style="text-align:right;">${money(r.ThueTNCN)}</td><td style="text-align:right;">${money(r.TamUng)}</td>
         <td style="text-align:right;font-weight:600;">${money(r.ThucLinh)}</td></tr>`).join('') || '<tr><td colspan="11" style="text-align:center;">—</td></tr>'}
-        <tr style="font-weight:bold;"><td></td><td colspan="10" style="text-align:right;">TỔNG THỰC LĨNH</td><td style="text-align:right;">${money(tong)}</td></tr>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="10" style="text-align:right;">TỔNG THỰC LĨNH</td><td style="text-align:right;">${money(tong)}</td></tr>
       </tbody></table>`;
   }
   function buildLuongCongNhatNVBody(r) {
@@ -890,7 +895,7 @@ window.ModulePayroll = (function () {
     return `<h2 style="text-align:center;">TỔNG HỢP LƯƠNG KHOÁN MAY — Tháng ${selThang}/${selNam}</h2>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Tổng SL</th><th>Thành tiền</th></tr></thead>
       <tbody>${(d.tongHop || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('')}
-      <tr style="font-weight:bold;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
+      <tr data-tong style="font-weight:bold;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
   }
   function buildLuongMayNVBody(nv, rows) {
     const tong = rows.reduce((s, r) => s + num(r.ThanhTien), 0);
@@ -898,7 +903,7 @@ window.ModulePayroll = (function () {
       <p><b>Nhân viên:</b> ${escapeHtml(nv.HoTen || '')} (${escapeHtml(nv.MaNhanVien || '')})</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Mã ĐH</th><th>Ngày</th><th>Tên sản phẩm</th><th>Công đoạn</th><th>Số lượng</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
       <tbody>${rows.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenCongDoan || '')}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center;">—</td></tr>'}
-      <tr style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+      <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
   }
   function openLuongMayNVDetail(nvid, d) {
     const rows = (d.rows || []).filter(r => String(r.NhanVienID) === String(nvid));
@@ -922,7 +927,7 @@ window.ModulePayroll = (function () {
     const sec = (title, tongHop, tong) => `<h3>${title}</h3>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Nhà</th><th>Tổng SL nhận</th><th>Thành tiền</th></tr></thead>
       <tbody>${(tongHop || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;">—</td></tr>'}
-      <tr style="font-weight:bold;"><td style="text-align:right;">TỔNG</td><td></td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+      <tr data-tong style="font-weight:bold;"><td style="text-align:right;">TỔNG</td><td></td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
     return `<h2 style="text-align:center;">TỔNG HỢP LƯƠNG GIA CÔNG / IN THÊU — Tháng ${selThang}/${selNam}</h2>
       ${sec('Gia công ngoài (theo nhà)', d.giaCong.tongHop, gcTong)}
       ${sec('In thêu (theo nhà)', d.inThe.tongHop, itTong)}`;
@@ -947,7 +952,7 @@ window.ModulePayroll = (function () {
     return `<h2 style="text-align:center;">CHI TIẾT ${kind === 'gc' ? 'GIA CÔNG' : 'IN THÊU'} — ${escapeHtml(tenNha)}</h2>
       <p style="text-align:center;">Tháng ${selThang}/${selNam}</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th>${head}</tr></thead>
-      <tbody>${body}<tr style="font-weight:bold;"><td></td><td colspan="${span}" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+      <tbody>${body}<tr data-tong style="font-weight:bold;"><td></td><td colspan="${span}" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
   }
   function openGcItNhaDetail(nhaId, kind, d) {
     const src = kind === 'gc' ? (d.giaCong.rows || []) : (d.inThe.rows || []);
@@ -985,7 +990,7 @@ window.ModulePayroll = (function () {
     return `<h2 style="text-align:center;">LƯƠNG LÀ / ĐÓNG GÓI — Tháng ${selThang}/${selNam}</h2>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
       <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="10" style="text-align:center;">—</td></tr>'}
-      <tr style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
+      <tr data-tong style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
   }
   async function renderLuongLaDongGoi() {
     container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
@@ -1019,7 +1024,7 @@ window.ModulePayroll = (function () {
         <td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td>
         <td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td>
         <td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="8" style="text-align:center;">—</td></tr>'}
-        <tr style="font-weight:bold;"><td></td><td colspan="7" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="7" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
   }
   function openLaDgNVDetail(nvid, d) {
     const rows = (d.rows || []).filter(r => String(r.NhanVienID) === String(nvid));
@@ -1075,7 +1080,7 @@ window.ModulePayroll = (function () {
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="5"><thead><tr><th style="width:38px;">STT</th>
         <th>Sơ đồ</th><th>Ngày cắt</th><th>STT sổ cắt</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Thành tiền</th>
       </tr></thead><tbody>${donRows || '<tr><td colspan="7" style="text-align:center;">Chưa có sổ cắt nào trong tháng.</td></tr>'}
-        <tr style="font-weight:bold;"><td></td><td colspan="5" style="text-align:right;">TỔNG BÀN CẮT: ${(d.soDo || []).length} sơ đồ / ${(d.theoDon || []).length} lệnh SX</td>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="5" style="text-align:right;">TỔNG BÀN CẮT: ${(d.soDo || []).length} sơ đồ / ${(d.theoDon || []).length} lệnh SX</td>
             <td style="text-align:right;">${num((d.soDo || []).reduce((s, x) => s + num(x.TongLop), 0))}</td>
             <td style="text-align:right;">${money(d.quy)}</td></tr>
       </tbody></table>`;
@@ -1123,7 +1128,7 @@ window.ModulePayroll = (function () {
         <td style="text-align:right;">${num(s.TongLop)}</td>
         <td>${escapeHtml(s.NhanVienTraiVai || '')}</td><td>${escapeHtml(s.NhanVienCat || '')}</td>
         <td style="text-align:right;">${money(s.ThanhTien)}</td></tr>`).join('')}
-        <tr style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>
       </tbody></table>`;
     const modal = openModal(`<h3>Bàn cắt của lệnh ${escapeHtml(o.MaDH || '')}</h3>
       <div style="max-height:60vh;overflow:auto;">${body}</div>
@@ -1202,7 +1207,7 @@ window.ModulePayroll = (function () {
         <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
         <td style="text-align:right;">${num(r.TongGioLam)}</td><td style="text-align:right;">${num(r.HeSoLuong)}</td>
         <td style="text-align:right;">${money(d.donGiaGio)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center;">—</td></tr>'}
-        <tr style="font-weight:bold;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${num(d.tongGio)}</td><td></td><td></td><td style="text-align:right;">${money(d.tongLuong)}</td></tr>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${num(d.tongGio)}</td><td></td><td></td><td style="text-align:right;">${money(d.tongLuong)}</td></tr>
       </tbody></table>
       <p style="font-size:13px;">Quỹ lương cắt tháng: <b>${money(d.quy)}</b> · Lương 1 giờ: <b>${money(d.donGiaGio)}</b> · Chênh lệch tổng lương so với quỹ: <b>${money(d.chenhLech)}</b></p>
       ${buildLuongCatQuyBody(d)}`;

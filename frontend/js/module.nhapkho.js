@@ -905,11 +905,11 @@
           <td style="${G}">${escapeHtml(r.DonVi || '')}</td>
           ${sx ? '' : `<td style="${P}">${fmtTien(r.DonGia)}</td><td style="${P}"><b>${fmtTien(r.ThanhTien)}</b></td>`}
           <td>${escapeHtml(r.GhiChu || '')}</td></tr>`).join('')}
-        ${sx ? `<tr style="font-weight:bold;background:#f1f3f4;">
+        ${sx ? `<tr data-tong style="font-weight:bold;background:#f1f3f4;">
           <td colspan="4" style="${G}">TỔNG CỘNG</td>
           <td style="${P}">${fmtNumber(ct.reduce((s, r) => s + (Number(r.SoLuong) || 0), 0))}</td>
           <td colspan="2"></td></tr>`
-        : `<tr style="font-weight:bold;background:#f1f3f4;">
+        : `<tr data-tong style="font-weight:bold;background:#f1f3f4;">
           <td colspan="4" style="${G}">TỔNG CỘNG</td>
           <td style="${P}">${fmtNumber(ct.reduce((s, r) => s + (Number(r.SoLuong) || 0), 0))}</td>
           <td colspan="2"></td>

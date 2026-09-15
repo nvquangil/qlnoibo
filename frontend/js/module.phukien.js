@@ -476,8 +476,10 @@ window.ModulePhuKien = (function () {
       ${/* v6.30: 2 cột QUY ĐỔI (số lượng + giá) theo tỷ lệ khai ở Danh mục phụ kiện. */''}
       <table><thead><tr><th style="width:38px;">STT</th><th style="width:80px;">Ảnh</th><th>Mã PK</th><th>Loại PK</th><th>Tên PK</th><th>ĐVT</th><th>Số lượng</th><th>Quy đổi</th><th>Đơn giá</th><th>Giá quy đổi</th></tr></thead>
       ${/* v5.94: + dòng TỔNG CỘNG số lượng (và tổng thành tiền nếu có khai đơn giá) */''}
+      ${/* v8.06: data-tong — ô đầu dòng TỔNG là placeholder trống (cho thẳng cột STT), không phải ô
+           gộp, nên trước đây lọt qua __laDongDuLieu() và bị đánh số như dòng dữ liệu thật. */''}
       <tbody>${lines.map((d, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td style="text-align:center;">${anhPKPrintHtml(d)}</td><td>${escapeHtml(d.MaPhuKien)}</td><td>${escapeHtml(d.TenLoai || '')}</td><td>${escapeHtml(d.TenPhuKien)}</td><td>${escapeHtml(d.DonVi || '')}</td><td style="text-align:right;">${fmtNumber(d.SoLuong)}</td><td style="text-align:right;">${escapeHtml(chuoiQuyDoi(d))}</td><td style="text-align:right;">${d.DonGia != null ? fmtNumber(d.DonGia) : ''}</td><td style="text-align:right;">${escapeHtml(chuoiGiaQuyDoi(d))}</td></tr>`).join('')}
-        <tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="5" style="text-align:right;">TỔNG CỘNG</td>
+        <tr data-tong style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="5" style="text-align:right;">TỔNG CỘNG</td>
           <td style="text-align:right;">${fmtNumber(tongSLPhuKien(lines))}</td><td></td><td></td>
           <td style="text-align:right;">${tongTienPhuKien(lines) ? 'Thành tiền: ' + fmtNumber(tongTienPhuKien(lines)) : ''}</td></tr></tbody></table>
       <div class="p-sign"><div><div class="line">Người lập</div></div><div><div class="line">Thủ kho</div></div></div>`);
@@ -493,7 +495,8 @@ window.ModulePhuKien = (function () {
       ${/* v6.30: thêm cột QUY ĐỔI + GIÁ QUY ĐỔI (chỉ để đối chiếu, không lưu). */''}
       <table><thead><tr><th style="width:38px;">STT</th><th style="width:52px">Ảnh</th><th>Mã PK</th><th>Phụ kiện</th><th>Số lượng</th><th>ĐVT</th><th>Quy đổi</th><th>Đơn giá</th><th>Giá quy đổi</th><th>Ghi chú</th></tr></thead>
       <tbody>${lines.map((d, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${anhPKThumbHtml(d)}</td><td>${escapeHtml(d.MaPhuKien)}</td><td>${escapeHtml(d.TenPhuKien)}</td><td style="text-align:right;">${fmtNumber(d.SoLuong)}</td><td>${escapeHtml(d.DonVi || '')}</td><td style="text-align:right;color:#5f6368;">${escapeHtml(chuoiQuyDoi(d))}</td><td style="text-align:right;">${d.DonGia != null ? fmtNumber(d.DonGia) : ''}</td><td style="text-align:right;color:#5f6368;">${escapeHtml(chuoiGiaQuyDoi(d))}</td><td>${escapeHtml(d.GhiChu || '')}</td></tr>`).join('')}
-        <tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG CỘNG</td>
+        ${/* v8.06: data-tong, cùng lý do ở printPhieuNhapPK() phía trên trong file này. */''}
+        <tr data-tong style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG CỘNG</td>
           <td style="text-align:right;">${fmtNumber(tongSLPhuKien(lines))}</td><td colspan="2"></td>
           <td style="text-align:right;">${tongTienPhuKien(lines) ? fmtNumber(tongTienPhuKien(lines)) : ''}</td><td colspan="2"></td></tr></tbody></table>
       <div class="modal-actions">

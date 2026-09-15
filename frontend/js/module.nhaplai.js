@@ -492,7 +492,7 @@
           <td style="${G}">${fmtNumber(r.PhanTramCKShop)}%</td>
           <td style="${P}">${fmtTien(r.GiaBan)}</td>
           <td style="${P}"><b>${fmtTien(r.ThanhTien)}</b></td></tr>`).join('')}
-        <tr style="font-weight:bold;background:#f1f3f4;">
+        <tr data-tong style="font-weight:bold;background:#f1f3f4;">
           <td colspan="4" style="${G}">TỔNG CỘNG</td>
           <td style="${P}">${fmtNumber(h.TongSLCai)}${dvChung ? ' ' + escapeHtml(dvChung) : ''}</td>
           <td style="${P}">${(() => {
@@ -504,13 +504,13 @@
           })()}</td>
           <td colspan="3"></td>
           <td style="${P}">${fmtTien(h.TongTienHang)}</td></tr>
-        <tr><td colspan="9" style="${P}"><b>CK NPP</b> (${fmtNumber(h.PhanTramCKNPP)}% × tổng cộng)</td>
+        <tr data-tong><td colspan="9" style="${P}"><b>CK NPP</b> (${fmtNumber(h.PhanTramCKNPP)}% × tổng cộng)</td>
           <td style="${P}">${fmtTien(h.TienCKNPP)}</td></tr>
-        <tr><td colspan="9" style="${P}"><b>TỔNG TIỀN HÀNG</b></td>
+        <tr data-tong><td colspan="9" style="${P}"><b>TỔNG TIỀN HÀNG</b></td>
           <td style="${P}">${fmtTien(h.TienTruocVAT)}</td></tr>
-        <tr><td colspan="9" style="${P}"><b>THUẾ GTGT</b> (${fmtNumber(h.PhanTramVAT)}%)</td>
+        <tr data-tong><td colspan="9" style="${P}"><b>THUẾ GTGT</b> (${fmtNumber(h.PhanTramVAT)}%)</td>
           <td style="${P}">${fmtTien(h.TienVAT)}</td></tr>
-        <tr style="font-weight:bold;background:#e8f0fe;"><td colspan="9" style="${P}">TỔNG TRỪ CÔNG NỢ KHÁCH HÀNG</td>
+        <tr data-tong style="font-weight:bold;background:#e8f0fe;"><td colspan="9" style="${P}">TỔNG TRỪ CÔNG NỢ KHÁCH HÀNG</td>
           <td style="${P}font-size:15px;">${fmtTien(h.TongThanhToan)}</td></tr>
       </tbody></table>`;
   }
