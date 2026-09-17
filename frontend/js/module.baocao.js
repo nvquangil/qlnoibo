@@ -580,9 +580,9 @@ window.ModuleBaoCao = (function () {
         <span class="empty-hint" style="margin-left:auto;padding:0;">${rows.length} mã hàng · <b style="color:${chuaKhai ? '#c0392b' : '#137333'};">${chuaKhai} chưa khai</b></span>
       </div>
       <div class="empty-hint" style="margin-bottom:8px;">📘 Giá vốn là <b>giá thành 1 cái</b>, dùng để tính lãi/lỗ.
-        Nút <b>“Lấy giá thành từ lệnh SX”</b> nạp tự động cho mã hàng có liên kết lệnh SX (không đè lên mã đã khai tay).
-        Mã <b>đặt ngoài</b> không có lệnh SX thì bấm vào ô giá vốn để khai tay.
-        Giá vốn được <b>chốt lại</b> — sửa chi phí lệnh SX sau này không làm đổi lãi/lỗ của kỳ đã báo cáo.</div>
+        Hàng mua từ <b>nhà cung cấp</b>: từ v8.07 tự động lấy theo giá nhập (bình quân gia quyền) mỗi khi lưu/sửa/hủy phiếu nhập kho từ NCC — không cần khai tay, và số này <b>tự đổi theo</b> các phiếu nhập sau (không chốt cứng).
+        Hàng <b>tự sản xuất</b>: vẫn dùng nút <b>“Lấy giá thành từ lệnh SX”</b> — số này được <b>chốt lại</b>, sửa chi phí lệnh SX sau này không làm đổi lãi/lỗ của kỳ đã báo cáo.
+        Mã đặt ngoài <b>chưa có phiếu nhập NCC nào</b> (hàng mới) thì bấm vào ô giá vốn để khai tay tạm — khai tay thì hệ thống KHÔNG bao giờ tự ghi đè.</div>
       <div class="bang-cuon" style="max-height:calc(100vh - 280px);">
       <table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>Loại</th><th>Lệnh SX</th>
         <th>Giá bán (1 cái)</th><th>Giá vốn (1 cái)</th><th>Lãi gộp 1 cái</th><th>Nguồn</th><th>Cập nhật</th>

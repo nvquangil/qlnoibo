@@ -120,7 +120,7 @@
               </td>
             </tr>`).join('')}
         </tbody>
-        <tfoot><tr style="font-weight:700;background:#f4f6f8;">
+        <tfoot><tr data-tong style="font-weight:700;background:#f4f6f8;">
           <td colspan="6">TỔNG CỘNG (không tính phiếu đã hủy)</td>
           <td class="num">${fmtNumber(tongSL)}</td>
           <td class="num">${fmtTien(tongTien)}</td>

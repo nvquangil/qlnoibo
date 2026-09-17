@@ -26,7 +26,8 @@
         B la gia 1 DON VI GOC (1 Cai)   -> ma nao co DON VI CHINH LA DON VI GOP thi phai NHAN he so
    Bo qua cho nay la ma quan theo Ri hien gia nhap be gap <he so> lan so voi gia ban.
    ================================================================================================ */
-const { so } = require('./banHangCommon');
+const { so, donViChinhLaGop } = require('./banHangCommon');
+const { sql } = require('../db');
 
 async function coBang(pool, ten) {
   try {
@@ -79,4 +80,60 @@ function giaTheoDvChinh(gn, mh, laGop) {
   return gn.goc ? gn.gia * heSo : gn.gia;
 }
 
-module.exports = { mapGiaNhap, giaTheoDvChinh };
+/* ================================================================================================
+   v8.07 — TỰ ĐỘNG nạp Giá vốn hàng hóa TỪ giá nhập NCC.
+
+   Nguyen: "giá vốn hàng hóa nếu nhập kho từ nhà cung cấp có giá nhập thì lấy luôn giá nhập không
+   phải khai giá" -> chốt qua 2 câu hỏi: (1) TỰ ĐỘNG chạy mỗi khi lưu/sửa/hủy phiếu nhập kho từ NCC
+   (không cần bấm nút riêng); (2) KHÔNG ghi đè mã đã "Khai tay" — chỉ ghi mã còn trống hoặc đang lấy
+   từ nguồn tự động khác (vd 'Lệnh SX').
+
+   Trước v8.07, "Giá nhập" (cột ở Danh mục hàng hóa) và "Giá vốn" (bảng GiaVonHangHoa, dùng tính
+   lãi/lỗ) là HAI THỨ TÁCH RỜI: cột Giá nhập chỉ để XEM, còn Giá vốn cho hàng "Đặt ngoài" (mua NCC)
+   vẫn phải khai tay 100% dù hệ thống đã biết sẵn giá nhập.
+
+   ⚠️ Vì chạy TỰ ĐỘNG lặp lại (không phải nạp 1 lần rồi thôi như nút "Nạp từ lệnh SX"), giá vốn của
+   những mã KHÔNG khai tay sẽ TRÔI THEO bình quân gia quyền mới nhất mỗi lần có phiếu nhập NCC liên
+   quan — tức KHÔNG còn "chốt lại" bất biến như triết lý ban đầu của màn Giá vốn (xem renderGiaVon).
+   Đây là lựa chọn CÓ CHỦ Ý của Nguyen (đã hỏi rõ, đã xác nhận đánh đổi này), không phải sơ suất.
+
+   Chỉ tính lại cho DANH SÁCH MaHangID truyền vào (mã hàng trên đúng phiếu vừa đổi) — không quét lại
+   toàn bảng — nên rẻ và không đụng phiếu khác đang ghi. Dùng LẠI đúng mapGiaNhap()/giaTheoDvChinh()
+   — một nguồn sự thật với cột "Giá nhập" và nút "Nạp từ lệnh SX" — không viết công thức thứ hai.
+
+   Gọi hàm này SAU KHI phiếu chính đã commit, bọc try/catch RIÊNG ở nơi gọi — lỗi ở đây tuyệt đối
+   không được làm hỏng việc lưu/sửa/hủy phiếu (giống triết lý themCotStt ở common.js: một phần phụ
+   lỗi thì bỏ qua phần đó, không kéo sập cả thao tác chính). */
+async function napGiaVonTuMaHang(pool, maHangIds, userId) {
+  const ids = [...new Set((maHangIds || []).map(Number))].filter(n => Number.isInteger(n) && n > 0);
+  if (!ids.length) return { capNhat: 0, boQua: 0 };
+  if (!await coBang(pool, 'GiaVonHangHoa')) return { capNhat: 0, boQua: 0 };
+
+  const mhRows = (await pool.request().query(`
+    SELECT h.MaHangID, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, gv.NguonGia
+    FROM TheKhoHangHoa h
+    LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID
+    WHERE h.MaHangID IN (${ids.join(',')})`)).recordset;   // ids da loc Number.isInteger o tren -> an toan
+
+  const gnMap = await mapGiaNhap(pool);
+  let capNhat = 0, boQua = 0;
+  for (const mh of mhRows) {
+    if (mh.NguonGia === 'Khai tay') { boQua++; continue; }   // Nguyen chot: khai tay giu nguyen, khong dam
+    const gia = giaTheoDvChinh(gnMap.get(mh.MaHangID), mh, donViChinhLaGop);
+    if (!(gia > 0)) continue;   // chua co nguon nao tinh duoc -> bo qua, khong bia gia 0
+    await pool.request()
+      .input('mh', sql.Int, mh.MaHangID).input('gv', sql.Decimal(18, 2), gia)
+      .input('u', sql.Int, userId || null)
+      .query(`
+        MERGE GiaVonHangHoa AS t
+        USING (SELECT @mh AS MaHangID) AS s ON t.MaHangID = s.MaHangID
+        WHEN MATCHED THEN UPDATE SET GiaVon=@gv, NguonGia=N'Phiếu nhập NCC', MaDHNguon=NULL,
+             NgayCapNhat=CAST(SYSDATETIME() AS DATE), NguoiCapNhatID=@u
+        WHEN NOT MATCHED THEN INSERT (MaHangID, GiaVon, NguonGia, NgayCapNhat, NguoiCapNhatID)
+             VALUES (@mh, @gv, N'Phiếu nhập NCC', CAST(SYSDATETIME() AS DATE), @u);`);
+    capNhat++;
+  }
+  return { capNhat, boQua };
+}
+
+module.exports = { mapGiaNhap, giaTheoDvChinh, napGiaVonTuMaHang };

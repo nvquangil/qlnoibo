@@ -33,6 +33,9 @@ const { noiDangDungMaHang } = require('../utils/maHangThamChieu');
 const { damBaoDongMau, capNhatAnhDaiDien, datAnTheKho, coCotAnTheKho } = require('../utils/theKhoMau');
 // v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) — dung chung, khong tu viet lai.
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
+// v8.07: tu dong nap Gia von hang hoa TU gia nhap NCC moi khi luu/sua/huy/xoa phieu — xem ghi chu
+// chi tiet trong chinh ham nay (giaNhapHangHoa.js). Goi SAU KHI COMMIT, tu boc try/catch rieng.
+const { napGiaVonTuMaHang } = require('../utils/giaNhapHangHoa');
 
 const router = express.Router();
 
@@ -561,6 +564,14 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
 
     await tran.commit();
     const maMoi = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
+    // v8.07: hang tu NCC -> tu nap gia von tu gia nhap. Loi o day KHONG duoc chan phieu da luu xong.
+    let gvMsg = '';
+    if (loai === 'NhaCungCap') {
+      try {
+        const kqGv = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
+        if (kqGv.capNhat) gvMsg = ` Đã tự cập nhật giá vốn cho ${kqGv.capNhat} mã.`;
+      } catch (e) { console.error('[nhapkho POST /phieu] loi nap gia von tu gia nhap NCC (khong anh huong phieu da luu): ', e); }
+    }
     res.json({
       success: true,
       data: { phieuNKID: phieuId, soPhieu, tongTien, maMoi },
@@ -570,6 +581,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
         + (tk.soAnhMau ? ` Đã ghi ${tk.soAnhMau} ảnh màu.` : '')
         + loiNhanCoAn(co)
         + (tk.soAnh ? ` Đã cập nhật ảnh đại diện cho ${tk.soAnh} mã.` : '')
+        + gvMsg
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* transaction co the da ket thuc */ }
@@ -631,6 +643,16 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
               WHERE PhieuNKID=@id`);
     await tran.commit();
     const maMoi2 = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
+    /* v8.07: tu nap gia von tu gia nhap NCC. Tinh theo LOAI MOI (sau sua) — neu doi tu NhaCungCap
+       sang SanXuat thi khong cham vao gia von cu (gia nhap cua ma do se tu giam theo BQGQ o lan
+       phieu NCC KHAC gan nhat, khong can lam gi them o day). Loi o day KHONG duoc chan phieu da sua. */
+    let gvMsg2 = '';
+    if (loai === 'NhaCungCap') {
+      try {
+        const kqGv2 = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
+        if (kqGv2.capNhat) gvMsg2 = ` Đã tự cập nhật giá vốn cho ${kqGv2.capNhat} mã.`;
+      } catch (e) { console.error('[nhapkho PUT /phieu/:id] loi nap gia von tu gia nhap NCC (khong anh huong phieu da sua): ', e); }
+    }
     res.json({
       success: true,
       message: 'Đã lưu thay đổi và tính lại tồn kho.'
@@ -638,6 +660,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
         + (tk2.soMau ? ` Đã tạo thêm ${tk2.soMau} dòng màu trong thẻ kho.` : '')
         + (tk2.soAnhMau ? ` Đã ghi ${tk2.soAnhMau} ảnh màu.` : '')
         + loiNhanCoAn(co2)
+        + gvMsg2
     });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }
@@ -655,7 +678,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
 router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const h = (await pool.request().input('id', sql.Int, req.params.id)
-    .query('SELECT TrangThai FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
+    .query('SELECT TrangThai, LoaiNhap FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
   if (h.TrangThai === 'Đã hủy') return res.status(400).json({ success: false, message: 'Phiếu này đã hủy rồi.' });
   const tran = new sql.Transaction(pool);
@@ -664,7 +687,18 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query(`UPDATE PhieuNhapKhoHang SET TrangThai = N'Đã hủy' WHERE PhieuNKID=@id`);
     await tran.commit();
-    res.json({ success: true, message: 'Đã hủy phiếu — tồn kho và công nợ trả về như trước.' });
+    /* v8.07: phieu tu NCC bi huy -> BQGQ gia nhap cua cac ma tren phieu nay THAY DOI (cong thuc loai
+       phieu Da huy), nen tinh lai gia von cho dung nhung ma do. Loi o day KHONG duoc chan viec huy. */
+    let gvMsg3 = '';
+    if (h.LoaiNhap === 'NhaCungCap') {
+      try {
+        const idsCt = (await pool.request().input('id', sql.Int, req.params.id)
+          .query('SELECT DISTINCT MaHangID FROM PhieuNhapKhoHangChiTiet WHERE PhieuNKID=@id')).recordset.map(x => x.MaHangID);
+        const kqGv3 = await napGiaVonTuMaHang(pool, idsCt, req.session.user.userId);
+        if (kqGv3.capNhat) gvMsg3 = ` Đã cập nhật lại giá vốn cho ${kqGv3.capNhat} mã.`;
+      } catch (e) { console.error('[nhapkho PUT /phieu/:id/huy] loi nap gia von tu gia nhap NCC (khong anh huong viec huy): ', e); }
+    }
+    res.json({ success: true, message: 'Đã hủy phiếu — tồn kho và công nợ trả về như trước.' + gvMsg3 });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }
     res.status(400).json({ success: false, message: 'Lỗi khi hủy phiếu (đã quay lui): ' + err.message });
@@ -692,7 +726,7 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
   const pool = await getPool();
   const phieuId = parseInt(req.params.id, 10);
   const h = (await pool.request().input('id', sql.Int, phieuId)
-    .query('SELECT PhieuNKID, SoPhieu, TrangThai FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
+    .query('SELECT PhieuNKID, SoPhieu, TrangThai, LoaiNhap FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
 
   // Cac ma hang co tren phieu nay
@@ -727,11 +761,12 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
     await new sql.Request(tran).input('id', sql.Int, phieuId)
       .query('DELETE FROM PhieuNhapKhoHang WHERE PhieuNKID=@id');   // chi tiet xoa theo CASCADE
 
-    const daXoaMa = [], giuLaiMa = [];
+    const daXoaMa = [], giuLaiMa = [], giuLaiIds = [];
     for (const m of maTrenPhieu) {
       const vuong = await noiDangDungMaHang(pool, m.MaHangID, tran);
       if (vuong.length) {
         giuLaiMa.push(m.MaHang + ' (còn: ' + vuong.join(', ') + ')');
+        giuLaiIds.push(m.MaHangID);
         continue;
       }
       // Khong con gi tham chieu -> xoa ma hang. TheKhoChiTietMau / GiaVonHangHoa mat theo CASCADE.
@@ -741,9 +776,20 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
     }
 
     await tran.commit();
+    /* v8.07: ma hang GIU LAI (khong bi xoa theo phieu) co the mat dong dong gop cua CHINH phieu nay
+       vao BQGQ gia nhap -> tinh lai gia von cho dung. Ma DA XOA thi GiaVonHangHoa da mat theo CASCADE
+       roi, khong can dong gi them. Loi o day KHONG duoc chan viec xoa phieu (da commit xong). */
+    let gvMsg4 = '';
+    if (h.LoaiNhap === 'NhaCungCap' && giuLaiIds.length) {
+      try {
+        const kqGv4 = await napGiaVonTuMaHang(pool, giuLaiIds, req.session.user.userId);
+        if (kqGv4.capNhat) gvMsg4 = ' Đã cập nhật lại giá vốn cho ' + kqGv4.capNhat + ' mã.';
+      } catch (e) { console.error('[nhapkho DELETE /phieu/:id] loi nap gia von tu gia nhap NCC (khong anh huong viec xoa): ', e); }
+    }
     let msg = 'Đã xóa phiếu nhập kho ' + h.SoPhieu + '.';
     if (daXoaMa.length) msg += ' Đã xóa luôn ' + daXoaMa.length + ' mã hàng khỏi danh mục: ' + daXoaMa.join(', ') + '.';
     if (giuLaiMa.length) msg += ' GIỮ LẠI ' + giuLaiMa.length + ' mã vì còn dữ liệu liên quan: ' + giuLaiMa.join('; ') + '.';
+    msg += gvMsg4;
     res.json({ success: true, data: { daXoaMa, giuLaiMa }, message: msg });
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* da ket thuc */ }

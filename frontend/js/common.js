@@ -754,7 +754,13 @@ function enhanceOneSelect(sel) {
   function build(showAll) {
     const typed = showAll ? '' : input.value.trim().toLowerCase();
     const all = Array.from(sel.options);
-    shown = (typed ? all.filter(o => o.text.toLowerCase().includes(typed)) : all).slice(0, 60);
+    /* v8.14: 60 -> 300. Nguyen bao mau "Trang" co san trong danh muc Mau sac nhung khong hien trong
+       o chon mau luc "Tao phieu nhap kho vai". Danh sach sap XEP THEO BANG CHU CAI (backend ORDER BY
+       TenMau) - danh muc nao vuot 60 dong la moi dong TU VI TRI 60 tro di (vd "Trang" thuong nam gan
+       cuoi bang chu cai) BIEN MAT khoi goi y khi o CON TRONG (showAll), du van con nguyen trong <select>
+       goc - chi hien lai duoc neu go dung chu de LOC xuong duoi 60. Nang gioi han len 300 (du choi voi
+       moi danh muc kieu nay trong he thong) - render vai tram <div> van re, khong dang lo hieu nang. */
+    shown = (typed ? all.filter(o => o.text.toLowerCase().includes(typed)) : all).slice(0, 300);
     if (!shown.length) { close(); return; }
     if (!panel) { panel = document.createElement('div'); panel.className = 'ss-dropdown'; document.body.appendChild(panel); window.addEventListener('scroll', reposition, true); window.addEventListener('resize', reposition); }
     reposition(); hi = -1;
@@ -852,7 +858,8 @@ function enhanceOneDatalist(input) {
   function build(showAll) {
     const typed = showAll ? '' : String(input.value || '').trim().toLowerCase();
     const all = docMuc();
-    shown = (typed ? all.filter(x => (x.val + ' ' + x.mo).toLowerCase().includes(typed)) : all).slice(0, 60);
+    // v8.14: 60 -> 300, cung ly do voi enhanceOneSelect() o tren (xem comment tai do).
+    shown = (typed ? all.filter(x => (x.val + ' ' + x.mo).toLowerCase().includes(typed)) : all).slice(0, 300);
     if (!shown.length) { close(); return; }
     if (!panel) {
       panel = document.createElement('div'); panel.className = 'ss-dropdown';
@@ -941,9 +948,25 @@ function __oTraiHet(tr, soCot) {
   return null;
 }
 /* Dòng TỔNG (`data-tong`, quy ước sẵn có của wireTableSort) vẫn cần một ô cho thẳng cột, nhưng
-   KHÔNG được đánh số — nó không phải bản ghi thứ n của danh sách. */
+   KHÔNG được đánh số — nó không phải bản ghi thứ n của danh sách.
+
+   ⚠️ v8.07 — BỎ kiểm `tr.querySelector('.empty-hint')` ở đây.
+   Nguyen: màn "Lịch sử đặt hàng" (thẻ kho hàng hóa) — dòng có trạng thái "chưa lên phiếu" mất số
+   STT, cả dòng dồn lệch sang trái một ô (ngày đặt hiện dưới cột STT, khách hàng hiện dưới cột
+   Ngày...). KHÔNG phải lỗi thiếu `data-tong` như đợt v8.06 — đây là lỗi khác, nằm NGAY TRONG bộ
+   này: `.empty-hint` còn được dùng làm KIỂU CHỮ MỜ cho MỘT Ô bên trong một dòng dữ liệu THẬT (vd:
+   oPhieu() trả `<span class="empty-hint">chưa lên phiếu</span>`, oThaoTac() trả
+   `<span class="empty-hint">—</span>` khi ẩn nút) — `querySelector` dò TẤT CẢ hậu duệ nên bắt
+   NHẦM những dòng này là "không phải dữ liệu", làm `capNhatSttSauKhiDoi`/`themCotSttMotBang`
+   bỏ qua, không chèn ô STT cho riêng dòng đó -> dòng đó hụt đúng 1 ô so với các dòng khác trong
+   cùng bảng -> mọi cột từ đó trở đi lệch sang trái 1 ô. Đây là bug CHUNG của bộ đánh STT (ảnh
+   hưởng MỌI bảng có ô `.empty-hint` lồng bên trong một dòng nhiều ô, không riêng một màn — rà
+   được ~50 chỗ dùng kiểu này rải rác nhiều file), không phải lỗi của riêng module nào.
+   Dòng "trải hết bảng" (nguyên dòng chỉ có một ô, và CHÍNH ô đó là `.empty-hint`) đã được
+   `__oTraiHet()` kiểm RIÊNG, CHẶT hơn (bắt buộc đúng 1 ô) — nên không cần kiểm lại `.empty-hint`
+   ở đây nữa; giữ lại chỉ làm hỏng oan các dòng dữ liệu nhiều ô như trên. */
 function __dongKhongDanhSo(tr) {
-  return tr.hasAttribute('data-tong') || !!(tr.querySelector && tr.querySelector('.empty-hint'));
+  return tr.hasAttribute('data-tong');
 }
 /* ==================================================================================================
    ⚠️ v7.91 — "DÒNG NÀY CÓ PHẢI MỘT BẢN GHI KHÔNG?"

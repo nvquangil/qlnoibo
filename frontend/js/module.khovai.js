@@ -43,7 +43,13 @@ window.ModuleKhoVai = (function () {
     // v5.3: giao voi quyen rieng theo chuc nang (tab dang mo) - xem effectivePerm() trong common.js.
     const rawPerm = user.isAdmin ? { canView: true, canCreate: true, canEdit: true, canDelete: true } : (user.permissions.KHOVAI || {});
     const perm = effectivePerm(user, 'KHOVAI', activeTab, rawPerm);
-    if (!dm) dm = (await apiGet('/api/khovai/danhmuc')).data;
+    /* v8.13: TỪNG chỉ nạp `dm` (Loại vải/Màu/NCC cho các <select>) MỘT LẦN mỗi lần tải trang
+       (`if (!dm)`) — nhưng `render()` này chạy lại MỖI LẦN chuyển vào tab "Kho vải" (xem
+       switchModule() trong app.js), không chỉ lúc tải trang. Thêm Màu/Loại vải mới ở phân hệ
+       Danh mục rồi quay lại Kho vải (không F5) vẫn dùng bản `dm` CŨ — mã màu mới KHÔNG hiện trong
+       list "Tạo phiếu nhập kho vải". Nguyen báo: "danh mục màu sắc có màu Trắng nhưng nhập kho
+       không có Trắng để chọn". Nạp lại MỖI LẦN vào tab, bỏ cờ `if (!dm)`. */
+    dm = (await apiGet('/api/khovai/danhmuc')).data;
 
     container.innerHTML = `<div id="kvBody"></div>`;
 
@@ -291,7 +297,7 @@ window.ModuleKhoVai = (function () {
           ${perm.canEdit ? `<button type="button" class="btn small secondary act-edit" data-id="${r.PhieuNhapID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.PhieuNhapID}">Xóa</button>` : ''}
         </td></tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có phiếu nhập kho nào</td></tr>'}</tbody>
-      ${rows.length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;">
+      ${rows.length ? `<tfoot><tr data-tong style="font-weight:700;background:#f1f3f4;">
         <td colspan="4" style="text-align:right;">TỔNG CỘNG (${rows.length} phiếu)</td>
         <td>${fmtNumber(rows.reduce((s, r) => s + (Number(r.SoLuongCay) || 0), 0))}</td>
         <td>${fmtNumber(Math.round(rows.reduce((s, r) => s + (Number(r.TongKGNhap) || 0), 0) * 100) / 100)}</td>

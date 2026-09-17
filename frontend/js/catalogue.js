@@ -282,7 +282,8 @@ async function moDonCuaToi() {
           <td>${escapeHtml(r.TenHang || '')}<div style="color:#5f6368;font-size:11px;">${escapeHtml(r.MaHang || '')}</div></td>
           <td>${escapeHtml(r.TenMau || '')}</td>
           <td align="center">${oSL}</td>
-          <td>${escapeHtml(r.TrangThai || '')}</td>
+          <td>${escapeHtml(r.TrangThai || '')}${r.TrangThai === 'Đã xuất hàng' && r.SoPhieuBH
+            ? ` <span style="color:#5f6368;font-size:11px;">(Phiếu ${escapeHtml(r.SoPhieuBH)})</span>` : ''}</td>
           <td align="right" style="white-space:nowrap;">${nut}</td></tr>`;
       }).join('')}</tbody></table>
       <p style="color:#5f6368;font-size:12px;margin:10px 0 0;">Chỉ sửa/hủy được đơn đang "Chờ xử lý".

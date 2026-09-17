@@ -421,6 +421,18 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
   if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
   const { dong, tong } = kq;
 
+  /* v8.10: form "Lap phieu nhap lai" (module.nhaplai.js) CHUA BAO GIO gui khachHangId len (chi gui
+     TenKhach tu do) -> truoc gio MOI phieu nhap lai deu mo coi KhachHangID, du co gan phieu ban goc
+     (PhieuBHID) hay khong (kiem tra 2026-09-16: 17/17 phieu cu mo coi). Voi phieu CO PhieuBHID, tu
+     lay KhachHangID tu chinh PhieuBanHang goc thay vi trong cho frontend gui — khong can sua form.
+     Phieu KHONG co PhieuBHID (tu tim ma hang) van mo coi nhu cu, khong co nguon ID nao de suy ra. */
+  let khachHangIdMoi = b.khachHangId ? Number(b.khachHangId) : null;
+  if (!khachHangIdMoi && tong.phieuBHID) {
+    const rKH = await pool.request().input('id', sql.Int, tong.phieuBHID)
+      .query('SELECT KhachHangID FROM PhieuBanHang WHERE PhieuBHID = @id');
+    khachHangIdMoi = (rKH.recordset[0] && rKH.recordset[0].KhachHangID) || null;
+  }
+
   const tran = new sql.Transaction(pool);
   await tran.begin();
   try {
@@ -429,7 +441,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
     const phieuNLID = (await new sql.Request(tran)
       .input('SoPhieu', sql.NVarChar, soPhieu)
       .input('NgayNhap', sql.Date, b.ngayNhap || new Date())
-      .input('KhachHangID', sql.Int, b.khachHangId || null)
+      .input('KhachHangID', sql.Int, khachHangIdMoi)
       .input('TenKhach', sql.NVarChar, String(b.tenKhach).trim())
       .input('SDT', sql.NVarChar, b.sdt || null)
       .input('DiaChi', sql.NVarChar, b.diaChi || null)

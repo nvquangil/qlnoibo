@@ -932,7 +932,7 @@ window.ModuleDMS = (function () {
               <td>${h.SoNgoaiVung ? `<span class="badge danger">${fmtNumber(h.SoNgoaiVung)}</span>` : '0'}</td>
             </tr>`;
           }).join('') || `<tr><td colspan="10" class="empty-hint">Năm ${nam} chưa có phiếu bán hàng nào gắn nhân viên kinh doanh</td></tr>`}</tbody>
-          <tfoot><tr><th colspan="6" style="text-align:right;">TỔNG DOANH SỐ</th>
+          <tfoot><tr data-tong><th colspan="6" style="text-align:right;">TỔNG DOANH SỐ</th>
             <th style="text-align:right;">${fmtTien(tongDS)}</th><th colspan="3"></th></tr></tfoot></table>
           <div style="font-size:11px;color:#5f6368;margin:4px 0 14px;">Nguồn: phiếu bán hàng chưa hủy. Phiếu chưa chọn "Nhân viên kinh doanh" sẽ nằm ở dòng <i>(chưa gán nhân viên)</i> — vào Bán hàng → Sửa phiếu để gán.</div>
           <h4 style="margin:6px 0;">Doanh số theo shop / nhà phân phối</h4>

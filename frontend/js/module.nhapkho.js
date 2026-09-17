@@ -132,7 +132,7 @@
             </td>
           </tr>`).join('')}
       </tbody>
-      <tfoot><tr style="font-weight:700;background:#f4f6f8;">
+      <tfoot><tr data-tong style="font-weight:700;background:#f4f6f8;">
         <td colspan="7">TỔNG CỘNG (không tính phiếu đã hủy)</td>
         <td class="num">${fmtNumber(con.reduce((s, r) => s + (Number(r.TongSLCai) || 0), 0))}</td>
         <td class="num">${fmtTien(con.reduce((s, r) => s + (Number(r.TongTien) || 0), 0))}</td>

@@ -529,10 +529,12 @@ router.get('/khach/donhang', requireKhach, async (req, res) => {
     const rows = (await pool.request().input('id', sql.Int, k.id).query(`
       SELECT TOP 200 o.DonID, o.ThoiGian, h.MaHang, h.TenHang, h.AnhDaiDien, ms.TenMau,
              o.SoLuongDat, o.DonVi, o.TrangThai, o.GhiChuKhach,
-             h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi   -- v6.31: ô đơn vị khi khách sửa đơn
+             h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi,   -- v6.31: ô đơn vị khi khách sửa đơn
+             bh.SoPhieu AS SoPhieuBH   -- v8.10: đơn đã xuất hàng -> kèm số phiếu bán hàng
       FROM DonKhachDatHang o
       JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
       JOIN MauSac ms ON ms.MauSacID = o.MauSacID
+      LEFT JOIN PhieuBanHang bh ON bh.PhieuBHID = o.PhieuBHID
       WHERE o.TaiKhoanKhachID = @id
       ORDER BY o.ThoiGian DESC`)).recordset;
     res.json({ success: true, data: rows });

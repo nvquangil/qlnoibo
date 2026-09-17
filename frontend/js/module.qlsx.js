@@ -65,7 +65,12 @@ window.ModuleQLSX = (function () {
     // v5.3: giao voi quyen rieng theo chuc nang (tab dang mo) - xem effectivePerm() trong common.js.
     const rawPerm = user.isAdmin ? { canView: true, canCreate: true, canEdit: true, canDelete: true } : (user.permissions.QLSX || {});
     const perm = effectivePerm(user, 'QLSX', activeTab, rawPerm);
-    if (!dm) dm = (await apiGet('/api/qlsx/danhmuc')).data;
+    /* v8.13: BỎ cache "chỉ tải 1 lần" (`if (!dm)`) — CÙNG LỖI đã vá ở module.khohang.js (v5.6) và
+       module.khovai.js (v8.13, Nguyen báo "danh mục màu sắc có Trắng nhưng nhập kho không có Trắng
+       để chọn"): render() chạy lại MỖI LẦN chuyển vào tab QLSX, nhưng cache giữ mãi khiến Loại
+       vải/Màu/Khách hàng mới thêm ở phân hệ Danh mục không hiện cho tới khi F5 lại cả trang. Chi phí
+       gọi lại API này không đáng kể (bảng danh mục nhỏ) nên đổi lấy dữ liệu luôn mới là hợp lý hơn. */
+    dm = (await apiGet('/api/qlsx/danhmuc')).data;
 
     container.innerHTML = `<div id="qBody"></div>`;
 

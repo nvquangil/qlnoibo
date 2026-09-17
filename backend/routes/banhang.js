@@ -1486,6 +1486,11 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
   const coShop = coDMS.s != null && coDMS.n != null && coDMS.b != null;
   const coTenShopDon = (await pool.request().query(
     `SELECT COL_LENGTH('DonKhachDatHang','TenShop') AS c`)).recordset[0].c != null;
+  /* v8.07: đơn từ WEB khớp về khách trong Danh mục qua TaiKhoanKhach.KhachHangID — cùng mục đích với
+     GET /khohang/orders (xem ghi chú ở đó). Dùng riêng cờ coTKK (chỉ cần đúng 1 cột) thay vì kéo theo
+     toàn bộ nhóm cột migration_v657 như bên khohang.js, vì endpoint này chưa có sẵn cờ đó. */
+  const coTKK = (await pool.request().query(
+    `SELECT COL_LENGTH('DonKhachDatHang','TaiKhoanKhachID') AS c`)).recordset[0].c != null;
   const rows = (await rq.query(`
     SELECT o.DonID, o.ThoiGian, o.TenKhach, o.MaHangID, o.MauSacID, o.SoLuongDat, o.DonVi, o.TrangThai,
            h.MaHang, h.TenHang, h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi, h.AnhDaiDien, ms.TenMau,
@@ -1496,12 +1501,15 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
              ISNULL(sh.TenShop, ${coTenShopDon ? 'o.TenShop' : 'NULL'}) AS TenShop, sh.DiaChi AS DiaChiShop,
              sh.NhaPhanPhoiID, kh.TenKhachHang AS TenNPP, kh.SDT AS SDTNPP, kh.DiaChi AS DiaChiNPP,
              nv.HoTen AS TenNhanVien` : ''}
+           ${coTKK ? `, khtk.KhachHangID AS KhachHangIDLienKet, khtk.TenKhachHang AS TenKhachDanhMuc` : ''}
     FROM DonKhachDatHang o
     JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = o.MauSacID
     ${coShop ? `LEFT JOIN ShopBanLe sh ON sh.ShopID = o.ShopID
     LEFT JOIN KhachHang kh ON kh.KhachHangID = sh.NhaPhanPhoiID
     LEFT JOIN NhanVien  nv ON nv.NhanVienID  = o.NhanVienID` : ''}
+    ${coTKK ? `LEFT JOIN TaiKhoanKhach tkk ON tkk.TaiKhoanKhachID = o.TaiKhoanKhachID
+    LEFT JOIN KhachHang khtk ON khtk.KhachHangID = tkk.KhachHangID` : ''}
     WHERE ${dieuKien}
     ORDER BY o.ThoiGian DESC, o.DonID DESC`)).recordset;
   res.json({ success: true, data: rows, tyLe: await layTyLeCK(pool) });

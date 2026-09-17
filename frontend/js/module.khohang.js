@@ -19,6 +19,11 @@ window.ModuleKhoHang = (function () {
   let ordFilterTrangThai = '';   // v5.53: lọc theo trạng thái đơn khách
   let ordFilterMau = '';         // v5.81: lọc theo màu
   let ordFilterThoiGian = '';    // v5.81: lọc theo thời gian (khớp chuỗi ngày đang hiện, vd "28/07")
+  /* v8.07: mặc định CHỈ tải đơn Chờ xác nhận/Chờ xử lý (xem GET /orders ở backend) — 6216 đơn cộng
+     dồn kéo hết về mỗi lần mở tab là nguyên nhân chính khiến màn hình chậm. Tích "Xem tất cả" mới
+     gọi lại API với ?tatCa=1. Biến module-scope để giữ trạng thái tích qua các lần re-render, giống
+     các ordFilter* khác. */
+  let ordXemTatCa = false;
 
   /* v6.21: GIÁ SAU CHIẾT KHẤU — MỘT TỶ LỆ DÙNG CHUNG cho mọi mã hàng (v6.20 từng khai theo từng mã
      hàng, người dùng yêu cầu đánh chung). Tỷ lệ lưu ở CauHinhHeThong: CK_SHOP (mặc định 33), CK_NPP (17).
@@ -118,26 +123,39 @@ window.ModuleKhoHang = (function () {
     body.innerHTML = `
       <div class="toolbar">${perm.canCreate ? '<button class="btn" id="btnAddTKK">+ Tạo tài khoản khách</button>' : ''}</div>
       <p class="empty-hint" style="text-align:left;padding:0 0 8px;">Tạo tài khoản rồi gửi khách <b>tên đăng nhập + mật khẩu</b> kèm <b>link danh mục công khai</b> (Danh mục → Danh mục thẻ kho → Copy link). Khách đăng nhập ngay trên link đó để đặt hàng; đơn về mục <b>Đơn khách đặt hàng</b> với trạng thái <b>Chờ xác nhận</b> và <b>chưa trừ tồn kho</b>.</p>
-      <table><thead><tr><th>Tên đăng nhập</th><th>Tên khách</th><th>SĐT</th><th>Trạng thái</th><th>Số đơn</th><th>Đăng nhập cuối</th><th style="width:170px">Thao tác</th></tr></thead>
+      <table><thead><tr><th>Tên đăng nhập</th><th>Tên khách</th><th>SĐT</th><th>Khách hàng (danh mục)</th><th>Trạng thái</th><th>Số đơn</th><th>Đăng nhập cuối</th><th style="width:170px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td><b>${escapeHtml(r.TenDangNhap)}</b></td><td>${escapeHtml(r.TenKhach)}</td><td>${escapeHtml(r.SDT || '')}</td>
+        <td>${r.TenKhachHang ? escapeHtml(r.TenKhachHang) : '<span class="empty-hint">— chưa liên kết —</span>'}</td>
         <td>${r.TrangThai === 'Tạm dừng' ? '<span class="badge danger">Tạm dừng</span>' : '<span class="badge ok">Hoạt động</span>'}</td>
         <td style="text-align:right;">${fmtNumber(r.SoDon || 0)}</td>
         <td>${r.LanDangNhapCuoi ? fmtDate(r.LanDangNhapCuoi) : '—'}</td>
         <td>${perm.canEdit ? `<button class="btn small secondary act-tkk-edit" data-id="${r.TaiKhoanKhachID}">Sửa / Đổi mật khẩu</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-tkk-del" data-id="${r.TaiKhoanKhachID}">Xóa</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có tài khoản khách nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có tài khoản khách nào</td></tr>'}</tbody></table>`;
     const bAdd = document.getElementById('btnAddTKK');
-    if (bAdd) bAdd.addEventListener('click', () => openTaiKhoanKhachForm(null, perm));
+    // v8.07: openTaiKhoanKhachForm nay là async (phải tải Danh mục khách hàng trước khi mở modal)
+    // -> .catch() để lỗi tải danh mục hiện toast thay vì rơi thành unhandled rejection im lặng.
+    if (bAdd) bAdd.addEventListener('click', () => openTaiKhoanKhachForm(null, perm).catch(err => toast(err.message, 'error')));
     body.querySelectorAll('.act-tkk-edit').forEach(b => b.addEventListener('click', () =>
-      openTaiKhoanKhachForm(rows.find(x => String(x.TaiKhoanKhachID) === String(b.dataset.id)), perm)));
+      openTaiKhoanKhachForm(rows.find(x => String(x.TaiKhoanKhachID) === String(b.dataset.id)), perm).catch(err => toast(err.message, 'error'))));
     body.querySelectorAll('.act-tkk-del').forEach(b => b.addEventListener('click', async () => {
       if (!confirm('Xóa tài khoản khách này? Các đơn đã đặt vẫn được giữ lại.')) return;
       try { await apiDelete('/api/khohang/taikhoankhach/' + b.dataset.id); toast('Đã xóa.', 'success'); renderTaiKhoanKhach(perm); }
       catch (e) { toast(e.message, 'error'); }
     }));
   }
-  function openTaiKhoanKhachForm(row, perm) {
+  // v8.07: async — cần tải Danh mục khách hàng TRƯỚC khi dựng modal, để ô chọn liên kết có sẵn
+  // danh sách (không lazy-load sau khi mở, tránh modal "trống rồi mới hiện" giật cục).
+  // Nguyen: "tài khoản khách thêm trường danh mục khách hàng lấy từ danh mục khách để khi khách
+  // đặt sẽ khớp với khách hàng trong danh mục có sẵn." Mẫu field-chọn-từ-danh-mục này lấy theo
+  // đúng API/cột đã dùng ở liên kết NCC↔Khách hàng trong module.danhmuc.js (optionsApi kiểu cũ),
+  // viết tay ở đây vì openTaiKhoanKhachForm không đi qua bộ field-descriptor chung.
+  async function openTaiKhoanKhachForm(row, perm) {
     const isEdit = !!row;
+    const dsKhachHang = (await apiGet('/api/danhmuc/khachhang')).data || [];
+    const khOptions = ['<option value="">— Không liên kết —</option>']
+      .concat(dsKhachHang.map(k => `<option value="${k.KhachHangID}" ${row && String(row.KhachHangID) === String(k.KhachHangID) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}</option>`))
+      .join('');
     const modal = openModal(`
       <h3>${isEdit ? 'Sửa tài khoản khách' : 'Tạo tài khoản khách'}</h3>
       <form id="tkkForm">
@@ -148,10 +166,12 @@ window.ModuleKhoHang = (function () {
           <div class="form-row"><label>SĐT</label><input id="tkk_sdt" value="${escapeHtml(row ? (row.SDT || '') : '')}"></div>
           <div class="form-row"><label>Email</label><input id="tkk_em" value="${escapeHtml(row ? (row.Email || '') : '')}"></div>
           <div class="form-row"><label>Trạng thái</label><select id="tkk_tt" data-nosearch><option ${row && row.TrangThai === 'Tạm dừng' ? '' : 'selected'}>Hoạt động</option><option ${row && row.TrangThai === 'Tạm dừng' ? 'selected' : ''}>Tạm dừng</option></select></div>
+          <div class="form-row"><label>Khách hàng (danh mục)</label><select id="tkk_khid">${khOptions}</select></div>
         </div>
         <div class="form-row"><label>Địa chỉ</label><input id="tkk_dc" value="${escapeHtml(row ? (row.DiaChi || '') : '')}"></div>
         <div class="form-row"><label>Ghi chú</label><input id="tkk_gc" value="${escapeHtml(row ? (row.GhiChu || '') : '')}"></div>
         <p class="empty-hint" style="text-align:left;">Mật khẩu được mã hóa khi lưu — sau này không xem lại được, chỉ đặt lại mật khẩu mới. Hãy gửi khách ngay sau khi tạo.</p>
+        <p class="empty-hint" style="text-align:left;">Liên kết "Khách hàng (danh mục)" để đơn khách đặt qua tài khoản này khớp thẳng vào đúng khách trong Danh mục khách hàng (xem công nợ, lịch sử...). Chưa có trong danh mục thì để "— Không liên kết —", tạo bổ sung sau.</p>
         <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Hủy</button><button type="submit" class="btn">Lưu</button></div>
       </form>`);
     modal.querySelector('#btnCancel').addEventListener('click', closeModal);
@@ -165,7 +185,8 @@ window.ModuleKhoHang = (function () {
         email: (modal.querySelector('#tkk_em').value || '').trim() || null,
         diaChi: (modal.querySelector('#tkk_dc').value || '').trim() || null,
         trangThai: modal.querySelector('#tkk_tt').value,
-        ghiChu: (modal.querySelector('#tkk_gc').value || '').trim() || null
+        ghiChu: (modal.querySelector('#tkk_gc').value || '').trim() || null,
+        khachHangId: modal.querySelector('#tkk_khid').value || null
       };
       if (!isEdit && payload.matKhau.length < 4) { toast('Mật khẩu tối thiểu 4 ký tự.', 'error'); return; }
       try {
@@ -1668,17 +1689,45 @@ window.ModuleKhoHang = (function () {
   async function renderOrders(perm) {
     const body = document.getElementById('khBody');
     // v5.64.1: KHÔNG để lỗi tải dữ liệu làm TRẮNG tab — hiện thông báo lỗi cụ thể để biết đường xử lý.
-    let itemsRes, ordersRes;
+    /* v8.07: BỎ eager-fetch '/api/khohang/items' ở đây — đây là truy vấn NẶNG NHẤT module (gộp 2 view
+       vw_TonKhoHangHoa/vw_TonTheoMau + layHangDangGiu, dùng chung 8 màn hình) nhưng renderOrders CHỈ
+       cần nó khi bấm "+ Lên đơn đặt hàng" hoặc "Sửa" — xem/lọc/in/xuất Excel/xác nhận/đổi trạng thái
+       không đụng tới items/chiTiet. Tải lười qua layItemsChoDon() bên dưới, đúng lúc cần. */
+    let ordersRes;
     try {
       body.innerHTML = '<div class="empty-hint">Đang tải...</div>';
-      [itemsRes, ordersRes] = await Promise.all([apiGet('/api/khohang/items'), apiGet('/api/khohang/orders')]);
+      ordersRes = await apiGet('/api/khohang/orders' + (ordXemTatCa ? '?tatCa=1' : ''));
     } catch (e) {
       body.innerHTML = `<div class="empty-hint">Không tải được danh sách đơn đặt hàng.<br><b>${escapeHtml(e.message)}</b><br><br>
         Nếu báo thiếu cột (Invalid column name): hãy chạy <code>database/migration_v657.sql</code> rồi <code>pm2 restart qlnoibo</code>.</div>`;
       return;
     }
-    const { tongHop: items, chiTiet } = itemsRes.data;
+    // v8.07: tải '/items' MỘT LẦN, chỉ khi thật sự cần (Thêm/Sửa đơn), rồi nhớ lại trong đúng lần
+    // render này — bấm "+ Lên đơn" rồi "Sửa" một đơn khác trong cùng lần xem không tải lại lần 2.
+    let itemsCache = null;
+    async function layItemsChoDon() {
+      if (!itemsCache) {
+        const r = await apiGet('/api/khohang/items');
+        itemsCache = { items: r.data.tongHop, chiTiet: r.data.chiTiet };
+      }
+      return itemsCache;
+    }
     const orders = ordersRes.data;
+    /* v8.07: đơn khách đặt từ WEB có liên kết Danh mục khách hàng (qua TaiKhoanKhach.KhachHangID,
+       xem GET /orders) -> DÙNG THẲNG tên danh mục làm TenKhach HIỆU LỰC cho đơn đó, áp dụng cho MỌI
+       chỗ đọc o.TenKhach bên dưới (gộp nhóm gopDonKhach, danh sách khachList, bộ lọc, in phiếu/bảng
+       kê, xuất Excel) — không cần sửa riêng từng nơi. Đơn tạo nội bộ (không qua tài khoản khách) thì
+       TenKhachDanhMuc rỗng -> giữ nguyên TenKhach như trước giờ.
+       Nguyen: "đơn khách đặt từ web ở đơn khách đặt hàng và lên phiếu bán hàng hiển thị theo tên danh
+       mục." Không đổi cách công nợ GỘP theo tên (xem đầu file backend/routes/congno.js) — chỉ giúp
+       tên được gộp ĐÚNG hơn (khớp chính xác chuỗi danh mục thay vì chuỗi khách tự gõ trên web).
+       v8.10: GIỮ LẠI tên gốc ở o.TenKhachGoc trước khi ghi đè o.TenKhach — nút "Chuyển sang phiếu bán
+       hàng" (bên dưới, biến `khach`) phải lọc GET /donchoxuat theo tên GỐC đang lưu trong
+       DonKhachDatHang (backend so khớp TUYỆT ĐỐI `o.TenKhach = @k`), không phải tên danh mục vừa gán
+       ở đây — nếu không, đơn NÀO có tên danh mục khác tên tự gõ sẽ luôn báo rỗng "Không còn đơn khách
+       đặt nào đang chờ xuất hàng" dù đơn vẫn còn (lỗi thật đã gặp 2026-09-16, xem
+       project_qlnoibo_v807_khach_ncc_theo_id.md). */
+    orders.forEach(o => { if (o.TenKhachDanhMuc) { o.TenKhachGoc = o.TenKhach; o.TenKhach = o.TenKhachDanhMuc; } });
     if (ordersRes.tyLeCK) tyLeCK = ordersRes.tyLeCK;   // v6.21: để bảng kê in tính giá sau CK
     if (ordersRes.canhBao) toast(ordersRes.canhBao, 'info');   // vd chưa chạy migration_v657
     // v6.21: GỘP các đơn cùng (ngày + khách + mã hàng + màu + đơn vị) — xem gopDonKhach().
@@ -1737,6 +1786,12 @@ window.ModuleKhoHang = (function () {
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${perm.canCreate ? '<button class="btn" id="btnAdd">+ Lên đơn đặt hàng</button>' : ''}
+        ${/* v8.07: mặc định server chỉ trả đơn Chờ xác nhận/Chờ xử lý (xem GET /orders) — tích ô này
+             mới gọi lại API với ?tatCa=1 để tải cả đơn Đã giao/Đã hủy/Đã xuất hàng. Đổi ô này PHẢI
+             render lại (gọi API mới) — khác các ô lọc khác chỉ ẩn/hiện dòng đã tải sẵn. */''}
+        <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;" title="Mặc định chỉ tải đơn đang chờ xử lý để mở nhanh hơn — tích để xem cả đơn đã xong">
+          <input type="checkbox" id="ordXemTatCa"${ordXemTatCa ? ' checked' : ''}> Xem tất cả (kể cả đã xong)
+        </label>
         ${/* v6.42: 2 nút in này CHỈ IN GIẤY — không trừ tồn, không đổi trạng thái, không lọc bỏ đơn
              theo trạng thái. Việc trừ tồn/công nợ do PHIẾU BÁN HÀNG (v6.23) đảm nhiệm. */''}
         ${perm.canEdit ? '<button class="btn small secondary" id="btnInHien" title="Chỉ in giấy — không trừ tồn, không đổi trạng thái">🖨️ In các dòng đang hiện</button>' : ''}
@@ -1773,7 +1828,7 @@ window.ModuleKhoHang = (function () {
           <td id="ordTongDV"></td>
           <td colspan="2"></td>
         </tr>
-        ${nhomDon.map(g => nhomRowHtml(g, perm)).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có đơn đặt hàng</td></tr>'}</tbody></table>`;
+        ${nhomDon.map(g => nhomRowHtml(g, perm)).join('') || `<tr><td colspan="10" class="empty-hint">${ordXemTatCa ? 'Chưa có đơn đặt hàng' : 'Không có đơn nào đang chờ xử lý — tích "Xem tất cả" ở trên để xem cả đơn đã xong'}</td></tr>`}</tbody></table>`;
 
     /* v5.49/v5.81: áp bộ lọc — biến module-scope để GIỮ bộ lọc khi re-render sau mỗi thao tác.
        v6.21: "dòng" nay là DÒNG NHÓM (`tr[data-key]`); dòng đơn con (`tr[data-sub]`) chỉ hiện khi mở
@@ -1831,6 +1886,14 @@ window.ModuleKhoHang = (function () {
         oDV.innerHTML = a.dv;
       }
       dinhDongTong();
+      /* v8.10: đo LẦN HAI sau 80ms. `dinhDongTong()` đọc --bar-h/--tabs-h (do common.js
+         `capNhatThanhCongCuDinh` gán) NGAY LÚC NÀY, nhưng hàm đó chạy qua MutationObserver debounce
+         60ms trên #content — nếu thanh công cụ VỪA đổi chiều cao (vd thêm nút/checkbox, số đếm đổi
+         độ dài) đúng lúc bảng này render, lần đo đầu có thể đọc --bar-h CŨ (chưa cập nhật), dòng Tổng
+         bị "đóng đinh" sai vị trí và không tự sửa lại — nhìn như dòng Tổng "vỡ/không dính" khi cuộn
+         qua đúng chỗ đó. Đo lại sau 80ms (qua khỏi mốc debounce 60ms) để bắt đúng giá trị đã ổn định;
+         gọi lại `dinhDongTong()` khi giá trị không đổi là vô hại (chỉ ghi đè cùng 1 số). */
+      setTimeout(dinhDongTong, 80);
     }
     /* Dòng tổng phải dính NGAY DƯỚI <thead> (thead ở màn hình này có 2 hàng: tiêu đề + ô lọc, và bản
        thân nó đã dính cách đỉnh một đoạn = thanh tab + thanh công cụ). Đo thật thay vì đoán hằng số:
@@ -1907,6 +1970,10 @@ window.ModuleKhoHang = (function () {
     // v5.82: lọc ngày là DANH SÁCH CHỌN (tháng mm/yyyy hoặc ngày dd/mm/yyyy) -> nghe 'change'.
     // Giá trị tháng "07/2026" vẫn khớp vì bộ lọc so bằng includes() trên chuỗi "28/07/2026".
     gan('locThoiGian', (e) => { ordFilterThoiGian = e.target.value; applyOrderFilters(); });
+    // v8.07: đổi ô "Xem tất cả" PHẢI gọi lại API (server quyết định lọc, không phải ẩn/hiện DOM như
+    // các ô lọc ở trên) — renderOrders() sẽ tự thêm/bớt ?tatCa=1 dựa theo ordXemTatCa.
+    const cbXemTatCa = body.querySelector('#ordXemTatCa');
+    if (cbXemTatCa) cbXemTatCa.addEventListener('change', (e) => { ordXemTatCa = e.target.checked; renderOrders(perm); });
     const btnXoaLoc = body.querySelector('#btnXoaLoc');
     if (btnXoaLoc) btnXoaLoc.addEventListener('click', () => {
       ordFilterKhach = ordFilterMaHang = ordFilterMau = ordFilterTrangThai = ordFilterThoiGian = '';
@@ -2016,10 +2083,14 @@ window.ModuleKhoHang = (function () {
       try { await apiDelete('/api/khohang/orders/' + btn.dataset.id); toast('Đã xóa đơn.', 'success'); renderOrders(perm); }
       catch (err) { toast(err.message, 'error'); }
     }));
-    // v5.49: sửa 1 đơn.
-    body.querySelectorAll('.act-edit-order').forEach(btn => btn.addEventListener('click', () => {
+    // v5.49: sửa 1 đơn. v8.07: items/chiTiet nay tải LƯỜI qua layItemsChoDon() — xem đầu hàm.
+    body.querySelectorAll('.act-edit-order').forEach(btn => btn.addEventListener('click', async () => {
       const o = orders.find(x => String(x.DonID) === btn.dataset.id);
-      if (o) openOrderEditModal(o, items, chiTiet, khachList, perm);
+      if (!o) return;
+      try {
+        const { items, chiTiet } = await layItemsChoDon();
+        openOrderEditModal(o, items, chiTiet, khachList, perm);
+      } catch (err) { toast(err.message, 'error'); }
     }));
 
     /* v6.23: "Chuyển sang phiếu bán hàng" — lấy các đơn ĐANG TÍCH (nếu không tích thì lấy các dòng
@@ -2034,7 +2105,9 @@ window.ModuleKhoHang = (function () {
         toast('Không có đơn nào ở trạng thái "Chờ xử lý"/"Chờ xác nhận" để lên phiếu (đơn đã xuất hàng/đã hủy thì không).', 'error');
         return;
       }
-      const khach = [...new Set(duocXuat.map(o => o.TenKhach))];
+      // v8.10: dùng TenKhachGoc (tên gốc, lưu trong DB) chứ không dùng TenKhach đã bị đổi sang tên
+      // danh mục ở renderOrders() — donchoxuat so khớp TUYỆT ĐỐI với tên GỐC, sai tên -> lọc rỗng.
+      const khach = [...new Set(duocXuat.map(o => o.TenKhachGoc || o.TenKhach))];
       if (khach.length > 1) {
         toast(`Đang chọn ${khach.length} khách khác nhau. Một phiếu bán hàng chỉ của MỘT khách — hãy lọc theo 1 khách rồi làm lại.`, 'error');
         return;
@@ -2044,9 +2117,14 @@ window.ModuleKhoHang = (function () {
     });
 
     applyOrderFilters();
-    // openOrderForm nay là async (nạp danh mục khách) -> phải .catch kẻo lỗi làm "bấm nút không có gì xảy ra".
-    if (perm.canCreate) document.getElementById('btnAdd').addEventListener('click', () =>
-      openOrderForm(items, chiTiet, khachList).catch(err => toast(err.message, 'error')));
+    // openOrderForm nay là async (nạp danh mục khách) -> phải bắt lỗi kẻo lỗi làm "bấm nút không có
+    // gì xảy ra". v8.07: + tải items/chiTiet LƯỜI qua layItemsChoDon() (xem đầu hàm renderOrders).
+    if (perm.canCreate) document.getElementById('btnAdd').addEventListener('click', async () => {
+      try {
+        const { items, chiTiet } = await layItemsChoDon();
+        await openOrderForm(items, chiTiet, khachList);
+      } catch (err) { toast(err.message, 'error'); }
+    });
   }
 
   // v5.65: dòng ghi chú "BẢN IN LẠI" cho phiếu của đơn ĐÃ GIAO (in lại không đổi trạng thái).
@@ -2853,7 +2931,7 @@ window.ModuleKhoHang = (function () {
           </tr>`;
         }).join('') || `<tr><td colspan="11" class="empty-hint">${coCot ? 'Không có hàng mẫu nào đang ở khách.' : 'Chưa chạy migration_v693.'}</td></tr>`}
       </tbody>
-      ${ds.length ? `<tfoot><tr style="font-weight:bold;">
+      ${ds.length ? `<tfoot><tr data-tong style="font-weight:bold;">
         <td colspan="6" style="text-align:right;">TỔNG CỘNG</td>
         <td style="text-align:right;">${fmtNumber(tong.gui)}</td>
         <td style="text-align:right;">${fmtNumber(tong.tra)}</td>
@@ -3303,6 +3381,10 @@ window.ModuleKhoHang = (function () {
   async function openChonDonModal(perm, khachSan) {
     const res = await apiGet('/api/banhang/donchoxuat' + (khachSan ? '?khach=' + encodeURIComponent(khachSan) : ''));
     const don = res.data || [];
+    // v8.07: cùng quy tắc với renderOrders() — đơn web có TenKhachDanhMuc thì dùng luôn làm TenKhach
+    // hiệu lực, để ô chọn khách + gộp nhóm trong modal này khớp đúng danh mục (xem GET /donchoxuat).
+    // v8.10: giữ lại tên gốc ở TenKhachGoc — cần để dò lại option đúng khi khachSan là tên gốc (xem dưới).
+    don.forEach(d => { if (d.TenKhachDanhMuc) { d.TenKhachGoc = d.TenKhach; d.TenKhach = d.TenKhachDanhMuc; } });
     if (res.tyLe) bhTyLe = res.tyLe;
     if (!don.length) { toast('Không còn đơn khách đặt nào đang chờ xuất hàng.', 'info'); return; }
     /* ================================================================================================
@@ -3375,7 +3457,13 @@ window.ModuleKhoHang = (function () {
        bảng trống mà không có lời cảnh báo nào. Không dò ra thì giữ option đầu để còn dùng được. */
     if (khachSan) {
       const sel = modal.querySelector('#dcxKhach');
-      const op = Array.from(sel.options).find(o => chuanTen(o.value) === chuanTen(khachSan));
+      /* v8.10: khachSan la TEN GOC (renderOrders truyen TenKhachGoc — xem ghi chu o do), nhung option
+         trong <select> nay dung TEN DANH MUC lam value (vi da doi o dong tren). Do tim don co
+         TenKhachGoc khop khachSan roi lay TenKhach (da doi) cua CHINH don do lam ten dai dien; khong
+         tim duoc (don noi bo, ten goc = ten hien thi) thi dung thang khachSan nhu cu. */
+      const dKhop = don.find(d => chuanTen(d.TenKhachGoc || d.TenKhach) === chuanTen(khachSan));
+      const tenDaiDien = dKhop ? dKhop.TenKhach : khachSan;
+      const op = Array.from(sel.options).find(o => chuanTen(o.value) === chuanTen(tenDaiDien));
       if (op) sel.value = op.value;
       else toast(`Khách "${khachSan}" không có đơn nào đang chờ xuất — đang hiện đơn của "${sel.value}".`, 'info');
     }
@@ -3422,6 +3510,13 @@ window.ModuleKhoHang = (function () {
     } : null;
     const nvkdTuDon = donDMS && donDMS.NhanVienID ? { id: donDMS.NhanVienID, ten: donDMS.TenNhanVien } : null;
     const khach0 = khachNPP ? khachNPP.ten : (donChon && donChon.length ? donChon[0].TenKhach : '');
+    /* v8.07: đơn từ WEB có sẵn KhachHangIDLienKet (qua TaiKhoanKhach.KhachHangID — xem GET
+       /donchoxuat) -> chọn sẵn khách trong danh mục THEO ID (chắc chắn), không so `TenKhachHang ===
+       khach0` như trước (so chuỗi TUYỆT ĐỐI, một dấu cách/chữ hoa lệch với danh mục là chọn trượt,
+       hiện "-- chọn khách trong danh mục --", KhachHangID rỗng — đúng lỗi Nguyen báo). Đơn nội bộ hoặc
+       đơn NPP (Đi tuyến) không có cột này/đã có khachNPP riêng -> giữ hành vi cũ. */
+    const khachHangId0 = khachNPP ? khachNPP.id
+      : (donChon && donChon.length ? donChon[0].KhachHangIDLienKet : null);
     // v6.23.2: khách hàng chọn từ DANH MỤC (không gõ tự do) — kèm SĐT/địa chỉ để in thẳng lên phiếu.
     const dsKhach = await apiGet('/api/danhmuc/khachhang').then(r => r.data || []).catch(() => []);
     /* v7.24: SHOP BÁN LẺ + NHÂN VIÊN KINH DOANH (phân hệ Đi tuyến) để tính doanh số nhân viên.
@@ -3498,7 +3593,7 @@ window.ModuleKhoHang = (function () {
           <div class="form-row"><label>Khách hàng *</label>
             <div style="display:flex;gap:6px;">
               ${/* v6.25.5: khi SỬA phải chọn sẵn đúng khách của phiếu, kẻo lưu lại làm mất KhachHangID. */''}
-              <select id="bhKhachSel" style="flex:1;"><option value="">-- chọn khách trong danh mục --</option>${dsKhach.map(k => `<option value="${k.KhachHangID}" ${(phieuSua ? String(k.KhachHangID) === String(phieuSua.header.KhachHangID) : (khachNPP ? String(k.KhachHangID) === String(khachNPP.id) : k.TenKhachHang === khach0)) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}${k.SDT ? ' · ' + escapeHtml(k.SDT) : ''}</option>`).join('')}</select>
+              <select id="bhKhachSel" style="flex:1;"><option value="">-- chọn khách trong danh mục --</option>${dsKhach.map(k => `<option value="${k.KhachHangID}" ${(phieuSua ? String(k.KhachHangID) === String(phieuSua.header.KhachHangID) : (khachHangId0 ? String(k.KhachHangID) === String(khachHangId0) : k.TenKhachHang === khach0)) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}${k.SDT ? ' · ' + escapeHtml(k.SDT) : ''}</option>`).join('')}</select>
               <button type="button" class="btn small secondary" id="bhThemKhach">+ Khách mới</button>
             </div>
             <input type="hidden" name="khachHangId" id="bhKhachId" value="${phieuSua ? (phieuSua.header.KhachHangID || '') : (khachNPP ? khachNPP.id : '')}">

@@ -913,14 +913,39 @@ router.get('/orders', requireAuth, requirePermission('KHOHANG', 'view'), require
       ? `, o.NguonDat, o.GhiChuKhach, o.DaTruTon, o.TaiKhoanKhachID, o.ThoiGianXacNhan`
       : `, CAST(N'NoiBo' AS NVARCHAR(20)) AS NguonDat, CAST(NULL AS NVARCHAR(500)) AS GhiChuKhach,
           CAST(1 AS BIT) AS DaTruTon, CAST(NULL AS INT) AS TaiKhoanKhachID, CAST(NULL AS DATETIME2) AS ThoiGianXacNhan`) + cotPBH;
+    /* v8.07 — MẶC ĐỊNH CHỈ TRẢ ĐƠN CHƯA XỬ LÝ XONG (Chờ xác nhận / Chờ xử lý).
+       Nguyen: hiện đã 6216 đơn cộng dồn — SELECT không lọc kéo cả lịch sử mỗi lần mở tab là nguyên
+       nhân chính khiến màn "Đơn khách đặt hàng" chậm mỗi lần truy cập (xem
+       memory: project_qlnoibo_donkhachdathang_cham.md). Cùng đúng 2 trạng thái đã dùng làm mốc
+       "đang chờ xử lý" ở layHangDangGiu() (banhang.js) và uuTien() (module.khohang.js) — không bịa
+       nhóm trạng thái mới. Muốn xem lại đơn cũ (Đã giao/Đã hủy/Đã xuất hàng) thì FE gọi kèm ?tatCa=1
+       (checkbox "Xem tất cả" trên màn hình) — lúc đó mới trả đầy đủ như trước v8.07. */
+    const xemTatCa = req.query.tatCa === '1' || req.query.tatCa === 'true';
+    const dkTrangThai = xemTatCa ? '' : `WHERE o.TrangThai IN (N'Chờ xác nhận', N'Chờ xử lý')`;
+    /* v8.07 — ĐƠN TỪ WEB: khớp về ĐÚNG khách trong Danh mục khách hàng qua liên kết
+       TaiKhoanKhach.KhachHangID (wired lượt trước — xem project_qlnoibo_v807_taikhoankhach_khachhang.md),
+       thay vì chỉ có chuỗi TenKhach do khách tự gõ lúc đặt (có thể lệch dấu/khoảng trắng với danh mục).
+       Nguyen: "đơn khách đặt từ web ở đơn khách đặt hàng và lên phiếu bán hàng hiển thị theo tên danh mục."
+       CHỈ trả thêm 2 cột để FE tự quyết định hiển thị/khớp — KHÔNG đụng TenKhach gốc ở đây, KHÔNG đụng
+       cách công nợ gộp theo tên (xem đầu file congno.js) — đơn nội bộ (không qua tài khoản khách) thì
+       TaiKhoanKhachID/KhachHangIDLienKet đều NULL, hành vi giữ nguyên như cũ. */
+    const lkDanhMuc = duCot
+      ? `LEFT JOIN TaiKhoanKhach tkk ON tkk.TaiKhoanKhachID = o.TaiKhoanKhachID
+         LEFT JOIN KhachHang khtk ON khtk.KhachHangID = tkk.KhachHangID`
+      : '';
+    const cotDanhMuc = duCot
+      ? `, khtk.KhachHangID AS KhachHangIDLienKet, khtk.TenKhachHang AS TenKhachDanhMuc`
+      : `, CAST(NULL AS INT) AS KhachHangIDLienKet, CAST(NULL AS NVARCHAR(150)) AS TenKhachDanhMuc`;
     const result = await pool.request().query(`
       SELECT o.DonID, o.ThoiGian, o.TenKhach, o.MaHangID, o.MauSacID, h.MaHang, h.TenHang, ms.TenMau, o.SoLuongDat, o.DonVi, o.TrangThai,
              h.AnhDaiDien,   /* v5.65: cột Ảnh (ảnh đại diện chung của mã hàng) */
              h.GiaBan, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi   /* v6.21: bảng kê in cần giá + quy đổi SL ra Cái */
-             ${cotMoi}
+             ${cotMoi}${cotDanhMuc}
       FROM DonKhachDatHang o
       JOIN TheKhoHangHoa h ON h.MaHangID = o.MaHangID
       JOIN MauSac ms ON ms.MauSacID = o.MauSacID
+      ${lkDanhMuc}
+      ${dkTrangThai}
       /* v6.76: cùng thứ tự ưu tiên với frontend (nhomDon) — đơn CHƯA XỬ LÝ XONG lên trên cùng.
          Để backend trả một kiểu, frontend sắp một kiểu thì lúc phân trang/xuất Excel sẽ ra thứ tự khác
          với thứ tự người dùng đang nhìn trên màn hình. */
@@ -928,6 +953,7 @@ router.get('/orders', requireAuth, requirePermission('KHOHANG', 'view'), require
                o.ThoiGian DESC`);
     res.json({
       success: true, data: result.recordset,
+      xemTatCa,   // v8.07: FE dùng để hiện đúng trạng thái ô "Xem tất cả" + thông báo phù hợp khi rỗng
       tyLeCK: await layTyLeCK(pool),   // v6.21: để bảng kê in tính giá sau CK shop/NPP
       canhBao: duCot ? null : 'Chưa chạy database/migration_v657.sql — chức năng khách tự đặt hàng trên web chưa dùng được (đang hiển thị theo dữ liệu cũ).'
     });
@@ -1135,11 +1161,17 @@ router.put('/orders/:id/xacnhan', requireAuth, requirePermission('KHOHANG', 'edi
 router.get('/taikhoankhach', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'taikhoankhach'), async (req, res) => {
   try {
     const pool = await getPool();
+    /* v8.07: + KhachHangID / TenKhachHang — gắn tài khoản khách với ĐÚNG khách trong Danh mục
+       khách hàng (cột KhachHangID đã có từ migration_v657 nhưng chưa từng được đọc/ghi ở đây).
+       Nguyen: "tài khoản khách thêm trường danh mục khách hàng ... để khi khách đặt sẽ khớp với
+       khách hàng trong danh mục có sẵn". */
     const rows = (await pool.request().query(`
       SELECT k.TaiKhoanKhachID, k.TenDangNhap, k.TenKhach, k.SDT, k.Email, k.DiaChi, k.TrangThai, k.GhiChu,
-             k.LanDangNhapCuoi, k.CreatedAt,
+             k.LanDangNhapCuoi, k.CreatedAt, k.KhachHangID, kh.TenKhachHang,
              (SELECT COUNT(*) FROM DonKhachDatHang d WHERE d.TaiKhoanKhachID = k.TaiKhoanKhachID) AS SoDon
-      FROM TaiKhoanKhach k ORDER BY k.TenKhach`)).recordset;
+      FROM TaiKhoanKhach k
+      LEFT JOIN KhachHang kh ON kh.KhachHangID = k.KhachHangID
+      ORDER BY k.TenKhach`)).recordset;
     res.json({ success: true, data: rows });
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
@@ -1153,13 +1185,17 @@ router.post('/taikhoankhach', requireAuth, requirePermission('KHOHANG', 'create'
     if (matKhau.length < 4) return res.status(400).json({ success: false, message: 'Mật khẩu tối thiểu 4 ký tự.' });
     const pool = await getPool();
     const hash = await bcrypt.hash(matKhau, 10);
+    // v8.07: khachHangId TÙY CHỌN (giống thiết kế gốc của cột — migration_v657) — khách mới lập tài
+    // khoản trước khi có trong Danh mục khách hàng thì để trống, gán liên kết sau ở nút Sửa.
+    const khId = (b.khachHangId !== undefined && b.khachHangId !== null && b.khachHangId !== '')
+      ? parseInt(b.khachHangId, 10) : null;
     const r = await pool.request()
       .input('u', sql.NVarChar, tenDangNhap).input('h', sql.NVarChar, hash).input('t', sql.NVarChar, tenKhach)
       .input('sdt', sql.NVarChar, b.sdt || null).input('em', sql.NVarChar, b.email || null)
       .input('dc', sql.NVarChar, b.diaChi || null).input('tt', sql.NVarChar, b.trangThai || 'Hoạt động')
-      .input('gc', sql.NVarChar, b.ghiChu || null)
-      .query(`INSERT INTO TaiKhoanKhach (TenDangNhap, MatKhauHash, TenKhach, SDT, Email, DiaChi, TrangThai, GhiChu)
-              OUTPUT INSERTED.TaiKhoanKhachID VALUES (@u,@h,@t,@sdt,@em,@dc,@tt,@gc)`);
+      .input('gc', sql.NVarChar, b.ghiChu || null).input('kh', sql.Int, Number.isInteger(khId) ? khId : null)
+      .query(`INSERT INTO TaiKhoanKhach (TenDangNhap, MatKhauHash, TenKhach, SDT, Email, DiaChi, TrangThai, GhiChu, KhachHangID)
+              OUTPUT INSERTED.TaiKhoanKhachID VALUES (@u,@h,@t,@sdt,@em,@dc,@tt,@gc,@kh)`);
     res.json({ success: true, data: { TaiKhoanKhachID: r.recordset[0].TaiKhoanKhachID } });
   } catch (err) {
     console.error(err);
@@ -1171,16 +1207,21 @@ router.put('/taikhoankhach/:id', requireAuth, requirePermission('KHOHANG', 'edit
   try {
     const b = req.body || {};
     const pool = await getPool();
+    // v8.07: khachHangId — GHI ĐÈ TRỰC TIẾP (không ISNULL-giữ-nguyên như TenKhach): form Sửa luôn
+    // gửi đúng trạng thái ô chọn hiện tại, kể cả khi bỏ chọn để GỠ liên kết (giá trị rỗng -> NULL).
+    const khId = (b.khachHangId !== undefined && b.khachHangId !== null && b.khachHangId !== '')
+      ? parseInt(b.khachHangId, 10) : null;
     const rq = pool.request().input('id', sql.Int, parseInt(req.params.id, 10))
       .input('t', sql.NVarChar, String(b.tenKhach || '').trim() || null)
       .input('sdt', sql.NVarChar, b.sdt || null).input('em', sql.NVarChar, b.email || null)
       .input('dc', sql.NVarChar, b.diaChi || null).input('tt', sql.NVarChar, b.trangThai || 'Hoạt động')
-      .input('gc', sql.NVarChar, b.ghiChu || null);
+      .input('gc', sql.NVarChar, b.ghiChu || null).input('kh', sql.Int, Number.isInteger(khId) ? khId : null);
     // Mật khẩu để TRỐNG khi sửa = giữ nguyên mật khẩu cũ (giống cách sửa máy chấm công).
     const matKhau = String(b.matKhau || '');
     rq.input('h', sql.NVarChar, matKhau ? await bcrypt.hash(matKhau, 10) : null);
     await rq.query(`UPDATE TaiKhoanKhach SET TenKhach=ISNULL(@t,TenKhach), SDT=@sdt, Email=@em, DiaChi=@dc,
-                    TrangThai=@tt, GhiChu=@gc, MatKhauHash=ISNULL(@h, MatKhauHash) WHERE TaiKhoanKhachID=@id`);
+                    TrangThai=@tt, GhiChu=@gc, MatKhauHash=ISNULL(@h, MatKhauHash), KhachHangID=@kh
+                    WHERE TaiKhoanKhachID=@id`);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });

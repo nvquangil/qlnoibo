@@ -325,7 +325,7 @@
           <td class="num" style="color:${r.ConNo > 0 ? '#c62828' : '#2e7d32'};font-weight:700;">${fmtTien(r.ConNo)}</td>
         </tr>`).join('')}
       </tbody>
-      <tfoot><tr style="font-weight:700;background:#f4f6f8;">
+      <tfoot><tr data-tong style="font-weight:700;background:#f4f6f8;">
         <td colspan="3">TỔNG CỘNG</td>
         <td class="num">${fmtTien(soLieu.tong.doanhThu)}</td>
         <td class="num">${fmtTien(soLieu.tong.traLai)}</td>
