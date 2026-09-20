@@ -200,6 +200,92 @@ window.ModuleKhoHang = (function () {
   // v5.41.4: 2 cột đơn vị hiện tồn ở ĐÚNG cột đơn vị của mặt hàng (cột kia để trống), không quy đổi chéo.
   // (Đã bỏ helper tonQuyDoiHtml — logic đặt cột nằm ngay trong renderItems bên dưới.)
 
+  /* v8.17 — Nguyen test bản v8.16 (tải TỪNG ảnh một, xem ghi chú cũ đã xóa) thấy trên điện thoại:
+     Safari không tự lưu (phải bấm Lưu thủ công từng cái, chậm) VÀ mở ảnh = điều hướng cả trang nên
+     vòng lặp chỉ chạy được đúng 1 ảnh đầu rồi dừng. Đổi hẳn sang tải 1 file NÉN (.zip) DUY NHẤT —
+     server đóng gói (xem route /api/khohang/items/anh-ton-kho.zip) — không còn mở/điều hướng ảnh nào
+     giữa chừng nên cả 2 vấn đề trên biến mất, và không cần "nút thoát" nào vì không có ảnh nào tự mở.
+     Kích hoạt tải bằng <a> ẩn (giống hệt cách nút "⬇️ Xuất Excel" đã dùng — Content-Disposition:
+     attachment ở response khiến trình duyệt tải file thay vì điều hướng trang). */
+  function taiFileVeMay(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  /* v8.19: Nguyen xác nhận v8.17 (.zip) ĐÃ deploy + đã thử thật, nhưng mở app kiểu "Thêm vào màn
+       hình chính" (PWA standalone, không có thanh địa chỉ/nút Back của trình duyệt) trên Chrome mobile
+       thì bấm tải .zip ra một "màn tải file" không có nút thoát. taiFileVeMay() ở trên tải .zip bằng
+       ĐIỀU HƯỚNG (a.click() không có thuộc tính download, dựa vào Content-Disposition) — nghi vấn CHÍNH
+       là kiểu điều hướng này, trong khung standalone không có chrome trình duyệt bao quanh, mở ra một
+       màn hình tải file không có gì để đóng ngoài nút Back vật lý/cử chỉ của Android (không phải lỗi
+       code, mà do PWA standalone không có UI điều hướng — trang web không chèn được nút vào đó).
+     Nguyen tự đề xuất: mobile tải TỪNG ảnh về album, máy tính vẫn tải .zip. Hàm dưới đây tải từng ảnh
+     bằng thuộc tính download (KHÔNG điều hướng trang — khác hẳn cách taiFileVeMay() tải .zip ở trên),
+     nên về lý thuyết không rơi vào tình huống "điều hướng vào màn hình standalone không lối thoát" nói
+     trên. GIẢ ĐỊNH CHƯA KIỂM CHỨNG được trên máy thật (phiên này không có thiết bị/bash để thử): Android
+     Chrome thường tôn trọng thuộc tính download và tự lưu ngầm, không mở/điều hướng ảnh ra màn hình nào.
+     Nếu Nguyen thử vẫn thấy y hệt vấn đề cũ của v8.16 (Safari không tự lưu, chỉ tải được ảnh đầu) thì
+     đây không phải do "toàn màn hình .zip" như nghi vấn, mà do chính thuộc tính download cũng không
+     được tôn trọng trên máy đó — cần báo lại, ĐỪNG tự đoán sửa tiếp lần 3 mà không có thêm thông tin cụ
+     thể (loại máy, phiên bản Chrome, ảnh chụp màn hình lúc lỗi). */
+  function tenFileTaiVe(ten, linkAnh) {
+    const m = String(linkAnh || '').match(/\.[a-zA-Z0-9]+($|\?)/);
+    return ten + (m ? m[0].replace(/\?$/, '') : '.jpg');
+  }
+  async function taiTungAnhVeMay(ds) {
+    for (const c of ds) {
+      const a = document.createElement('a');
+      a.href = c.linkAnh;
+      a.download = tenFileTaiVe(c.ten, c.linkAnh);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      await new Promise(res => setTimeout(res, 400));   // giãn cách để trình duyệt không chặn "tải nhiều file"
+    }
+  }
+
+  /* v8.20: taiTungAnhVeMay() (thuộc tính download, v8.19) Nguyen test lại vẫn lỗi Y HỆT v8.16 — hoá ra
+     Nguyen dùng "iOS Chrome", mà iOS BẮT BUỘC mọi trình duyệt (kể cả Chrome) dùng chung engine WebKit
+     của chính Safari (quy định của Apple) — nên "đổi tên trình duyệt" không đổi được hành vi tải file
+     trên iOS, y hệt Safari ở v8.16 (xem [[reference_qlnoibo_ios_webkit_dung_chung_engine]] trong bộ
+     nhớ làm việc). Đây là lượt thất bại thứ 2 CÙNG 1 gốc — KHÔNG đoán vá thêm bằng cùng kỹ thuật, đã
+     hỏi Nguyen chọn hướng khác hẳn: đổi sang Web Share API.
+     Cách này KHÔNG dùng `download`/điều hướng nữa — fetch từng ảnh thành Blob/File rồi giao thẳng cho
+     HỘP THOẠI CHIA SẺ GỐC của hệ điều hành (navigator.share), người dùng tự chọn đích lưu (Photos trên
+     iOS, Google Photos/Thư viện trên Android) — cùng 1 cơ chế trên cả 2 nền tảng vì đây là API chuẩn
+     của trình duyệt giao tiếp với hệ điều hành, không phải hành vi tự chế của web app.
+     v8.23: BẢN ĐẦU chia nhỏ từng lô 20 ảnh, gọi navigator.share() NHIỀU LẦN (mỗi lô 1 lần) — Nguyen
+     test với >20 ảnh: lô đầu chia sẻ được, nhưng lô 2 lại rơi về hộp thoại tải file của trình duyệt
+     (taiTungAnhVeMay() fallback). ĐÚNG rủi ro đã cảnh báo trước (mục 2 cũ): sau khi hộp thoại chia sẻ
+     của lô 1 đóng lại, "user activation" của cú bấm nút gốc đã hết hạn — gọi navigator.share() LẦN 2
+     trong CÙNG một hàm (không phải do bấm nút mới) bị trình duyệt từ chối, ném lỗi, rơi vào catch ở
+     handler và lùi về tải-từng-ảnh cho TOÀN BỘ danh sách (giải thích đúng hiện tượng "tải 20 xong lại
+     ra hộp thoại tải file"). Nguyen yêu cầu: không giới hạn số lượng, tải hết một lần. SỬA: bỏ hẳn việc
+     chia lô — dựng TẤT CẢ ảnh thành File rồi gọi navigator.share() ĐÚNG 1 LẦN DUY NHẤT cho cả danh sách,
+     tránh hẳn tình huống gọi share() lần 2 mất user-activation. Đánh đổi: danh sách rất lớn (hàng trăm
+     ảnh) dựng cùng lúc thành Blob có thể chậm/nặng bộ nhớ hơn — chưa có giới hạn cứng nào khác ngoài hộp
+     thoại xác nhận đã có sẵn khi ds.length > 150 (báo trước, không tự chặn). CHƯA test lại trên thiết bị
+     thật lần sửa này. */
+  async function anhThanhFile(c) {
+    const res = await fetch(c.linkAnh);
+    if (!res.ok) throw new Error('Không tải được ảnh: ' + c.ten);
+    const blob = await res.blob();
+    return new File([blob], tenFileTaiVe(c.ten, c.linkAnh), { type: blob.type || 'image/jpeg' });
+  }
+  async function chiaSeAnhVeMay(ds) {
+    const files = await Promise.all(ds.map(anhThanhFile));
+    if (!navigator.canShare({ files })) throw new Error('Trình duyệt không hỗ trợ chia sẻ nhiều ảnh cùng lúc.');
+    try {
+      await navigator.share({ files, title: 'Ảnh màu còn tồn kho' });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;   // người dùng tự bấm Hủy — dừng hẳn, không phải lỗi
+      throw err;
+    }
+  }
+
   async function renderItems(perm) {
     const body = document.getElementById('khBody');
     const res = await apiGet('/api/khohang/items');
@@ -226,6 +312,10 @@ window.ModuleKhoHang = (function () {
         <select id="khLoai"><option value="">-- Loại hàng --</option>${loaiList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <select id="khDanhMuc"><option value="">-- Danh mục --</option>${dmList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <a class="btn small secondary" href="/api/khohang/items/export">⬇️ Xuất Excel</a>
+        ${/* v8.16: tải ảnh các màu CÒN TỒN KHO khớp đúng bộ lọc Loại hàng/Danh mục đang chọn ở 2 ô
+             #khLoai/#khDanhMuc ngay bên trái nút này (không cần thêm ô ngày — tồn kho luôn tính tại
+             thời điểm bấm tải, xem ghi chú ở route /api/khohang/items/anh-ton-kho). */''}
+        <button type="button" class="btn small secondary" id="btnTaiAnhTon">📷 Tải ảnh màu còn tồn</button>
         ${perm.canCreate ? '<button type="button" class="btn small" id="btnAddNew" style="margin-left:auto;">+ Tạo thẻ kho mới</button>' : ''}
       </div>
       ${/* v7.85: nói rõ có bao nhiêu mã đang bị ẩn + chỉ đúng đường lấy lại — không thì người dùng
@@ -318,6 +408,59 @@ window.ModuleKhoHang = (function () {
         toast('Đã lưu tỷ lệ chiết khấu — áp cho TẤT CẢ mã hàng.', 'success');
         renderItems(perm);
       } catch (err) { toast(err.message, 'error'); }
+    });
+    /* v8.16/8.17 — Nguyen: "tải ảnh các màu còn của các mã hàng còn trong kho về máy theo lựa chọn
+       loại hàng, danh mục hàng". Dùng ĐÚNG giá trị đang chọn ở #khLoai/#khDanhMuc (2 ô lọc có sẵn của
+       chính bảng này): gọi API JSON trước để biết có bao nhiêu ảnh (báo lỗi nếu rỗng, hỏi lại nếu quá
+       nhiều), rồi tải 1 file .zip DUY NHẤT chứa hết ảnh (route /anh-ton-kho.zip, server đóng gói).
+       v8.17: đã BỎ cách tải từng ảnh một của v8.16 — Nguyen test trên điện thoại thấy Safari không tự
+       lưu (phải bấm Lưu thủ công từng cái) và chỉ tải được đúng 1 ảnh đầu rồi dừng (mở ảnh = điều
+       hướng cả trang, vòng lặp JS bị ngắt giữa chừng). 1 file zip duy nhất tránh được cả 2 vấn đề. */
+    const btnTaiAnhTon = body.querySelector('#btnTaiAnhTon');
+    if (btnTaiAnhTon) btnTaiAnhTon.addEventListener('click', async () => {
+      const loaiHang = body.querySelector('#khLoai').value;
+      const danhMuc = body.querySelector('#khDanhMuc').value;
+      const nhanGoc = btnTaiAnhTon.textContent;
+      btnTaiAnhTon.disabled = true;
+      btnTaiAnhTon.textContent = 'Đang tìm ảnh...';
+      try {
+        const qs = new URLSearchParams();
+        if (loaiHang) qs.set('loaiHang', loaiHang);
+        if (danhMuc) qs.set('danhMuc', danhMuc);
+        const qsStr = qs.toString();
+        const r = await apiGet('/api/khohang/items/anh-ton-kho' + (qsStr ? '?' + qsStr : ''));
+        const ds = r.data || [];
+        if (!ds.length) { toast('Không có màu nào còn tồn kho VÀ có sẵn ảnh khớp bộ lọc đang chọn.', 'error'); return; }
+        // v8.19: mốc ≤900px dùng LẠI đúng ngưỡng "mobile" chung của toàn hệ thống (xem __gioTheoDoiStt/
+        // heHep trong common.js) — không tự đặt ngưỡng riêng cho mỗi tính năng.
+        const laDienThoai = (window.innerWidth || document.documentElement.clientWidth || 0) <= 900;
+        if (laDienThoai) {
+          if (ds.length > 150 && !confirm(`Có ${ds.length} ảnh khớp bộ lọc — có thể mất thời gian.\n\nNên thu hẹp bộ lọc (chọn Loại hàng/Danh mục) trước.\n\nVẫn tải hết ${ds.length} ảnh?`)) return;
+          // v8.20: ưu tiên Web Share API (xem comment đầy đủ ở chỗ khai báo chiaSeAnhVeMay) — chỉ lùi
+          // về cách tải bằng <a download> (v8.19, biết có thể không ổn định trên iOS) khi trình duyệt
+          // không có navigator.share/canShare, hoặc khi share() tự báo lỗi giữa chừng.
+          if (navigator.share && navigator.canShare) {
+            try {
+              toast(`Đang chuẩn bị ${ds.length} ảnh...`, 'success');
+              await chiaSeAnhVeMay(ds);
+              toast('Xong — kiểm tra trong Ảnh/Photos (hoặc nơi bạn vừa chọn lưu).', 'success');
+            } catch (err) {
+              toast('Chia sẻ ảnh không thành công (' + err.message + ') — thử lại bằng cách tải từng ảnh...', 'error');
+              await taiTungAnhVeMay(ds);
+              toast('Đã tải xong.', 'success');
+            }
+          } else {
+            toast(`Trình duyệt này chưa hỗ trợ chia sẻ nhiều ảnh — đang tải từng ảnh (có thể không ổn định trên iOS).`, 'success');
+            await taiTungAnhVeMay(ds);
+            toast('Đã tải xong.', 'success');
+          }
+        } else {
+          if (ds.length > 150 && !confirm(`Có ${ds.length} ảnh khớp bộ lọc — file nén tải về sẽ khá nặng, có thể mất thời gian.\n\nNên thu hẹp bộ lọc (chọn Loại hàng/Danh mục) trước.\n\nVẫn tải hết ${ds.length} ảnh?`)) return;
+          toast(`Đang đóng gói ${ds.length} ảnh — chờ trình duyệt tải file .zip xuống.`, 'success');
+          taiFileVeMay('/api/khohang/items/anh-ton-kho.zip' + (qsStr ? '?' + qsStr : ''));
+        }
+      } catch (err) { toast(err.message, 'error'); }
+      finally { btnTaiAnhTon.disabled = false; btnTaiAnhTon.textContent = nhanGoc; }
     });
     /* v6.71: bật/tắt công khai ngay tại dòng. Chỉ gửi đúng trường `congKhai` — backend giữ nguyên
        mọi trường khác (ISNULL), nên không có chuyện bấm nút này lại làm rơi dữ liệu ô nào khác. */

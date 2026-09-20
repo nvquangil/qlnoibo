@@ -2879,7 +2879,21 @@ window.ModuleQLSX = (function () {
       </div>
       <label class="chk-item" style="font-weight:normal;margin:4px 0;">
         <input type="checkbox" id="ssGcToggle" ${ssCoGiatCap ? 'checked' : ''}> Có cắt giật cấp (ghi số CÁI — không tính vào số lớp)</label>
-      <div class="lap-wrap"><table class="lap-table">
+      ${/* v8.15: thuộc tính 'data-nostt' BẮT BUỘC — bảng này có cột "STT" RIÊNG (STT của CÂY, ô nhập
+         tay '.ss-stt', gửi lên backend là sttCay) không liên quan gì tới hệ thống tự đánh STT
+         (themCotStt/common.js, v7.84). Hàm __daCoStt() chỉ dò CHỮ "STT" trong 3 ô <th> đầu để coi bảng
+         "đã có sẵn cột STT" - khớp NHẦM với tiêu đề này (cột thứ 2). Từ đó danhLaiStt() ghi số thứ tự
+         bằng textContent vào CHÍNH ô <td> chứa input '.ss-stt' -> gán textContent XÓA SẠCH input đó
+         (thay bằng chữ số trơn) NGAY LÚC MỞ MODAL, và lại chạy tiếp mỗi khi thêm dòng (observer riêng
+         của bộ STT gắn ở __gioTheoDoiStt). Bấm "Lưu" sau đó: r.querySelector('.ss-stt') trả null (input
+         đã bị xóa) -> đọc .value của null ném TypeError NGAY TRONG phần đồng bộ của handler async,
+         TRƯỚC khối try/catch (chỉ bọc apiPut) -> promise bị reject không ai bắt -> nút Lưu coi như
+         "không phản ứng" (đúng lỗi Nguyen báo: "sửa sổ cắt thêm cây xong bấm lưu, đứng im"). Đặt
+         'data-nostt' cho themCotSttMotBang bỏ qua HẲN bảng này (kiểm NGAY dòng đầu hàm, trước cả
+         __daCoStt) - đúng ý đồ gốc vì bảng này chưa từng cần/dùng tới auto-STT. Đã audit toàn bộ
+         codebase (grep <th>STT</th>) - đây là bảng DUY NHẤT có "STT" nằm trong 3 ô đầu mà lại là Ô
+         NHẬP LIỆU thay vì số thứ tự thật. */''}
+      <div class="lap-wrap"><table class="lap-table" data-nostt>
         <colgroup><col style="width:26%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:11%"><col style="width:10%"><col style="width:130px"><col style="width:42px"></colgroup>
         <thead><tr><th>Cây vải (đã xuất cho đơn)</th><th>STT</th><th>SL lớp</th><th>Hệ số</th><th class="gc-cell" style="${ssCoGiatCap ? '' : 'display:none;'}">Giật cấp (cái)</th><th>KG/mét đã dùng</th><th>SL cái</th><th>Ảnh</th><th></th></tr></thead>
         <tbody id="ssRows">${(rec.cays || []).map(dongHtml).join('') || dongHtml(null)}</tbody></table></div>

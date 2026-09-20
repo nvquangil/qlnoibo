@@ -404,6 +404,156 @@ router.get('/items/export', requireAuth, requirePermission('KHOHANG', 'view'), r
   }
 });
 
+// v8.16.1: ten file trong .zip khong duoc dinh ky tu he dieu hanh cam (Windows/macOS deu chan / \ : * ? " < > |).
+function sachTenFileAnh(s) {
+  return String(s || '').replace(/[\\/:*?"<>|]/g, '_').trim() || 'anh';
+}
+
+/* v8.16→v8.18 — Nguyen: "thẻ kho hàng hóa thêm chức năng tải ảnh các màu còn của các mã hàng còn
+   trong kho về máy theo lựa chọn loại hàng, danh mục hàng" (v8.16), sau đổi sang 1 file .zip (v8.17),
+   rồi ĐỔI TIÊU CHÍ (v8.18): "mã hàng nào còn đủ mầu chỉ tải ảnh đại diện chung. nếu không đủ mầu tải
+   những mầu còn."
+
+   Tiêu chí MỚI tính theo TỪNG MÃ HÀNG (không còn tính phẳng theo từng dòng Mã hàng+Màu như trước):
+     - "Đủ màu" = MỌI màu mã đó từng ghi nhận (qua vw_TonTheoMau, gồm cả nguồn phiếu nhập kho, giống
+       /items ở trên) đều đang CÒN TỒN (TonCai > 0) — hoặc mã đó KHÔNG theo dõi theo màu (0 dòng, vd
+       hàng không phân màu) thì coi như "đủ màu" luôn (không có màu nào để thiếu). Trường hợp này chỉ
+       lấy 1 ẢNH ĐẠI DIỆN CHUNG (TheKhoHangHoa.AnhDaiDien) — bỏ qua nếu mã đó chưa có ảnh đại diện
+       (giữ đúng nguyên tắc cũ "thiếu ảnh thì bỏ qua, không báo lỗi").
+     - "Thiếu màu" = ít nhất 1 màu đã hết (TonCai <= 0) trong khi màu khác vẫn còn — lấy ẢNH RIÊNG của
+       CHỈ những màu CÒN TỒN (TheKhoChiTietMau/vw_TonTheoMau.LinkAnh, đúng logic v8.16/8.17 cũ).
+   Mã hàng nào tổng thể đã HẾT HÀNG (TongTon <= 0, theo vw_TonKhoHangHoa) thì không xuất hiện ở cả 2
+   nhánh trên — giữ nguyên tinh thần "chỉ tải ảnh mã CÒN TRONG KHO" từ đầu.
+
+   ⚠️ Câu lệnh SQL này PHỨC TẠP hơn hẳn bản v8.16/8.17 (CTE + so sánh tổng số màu với số màu còn tồn) —
+   phiên làm việc này KHÔNG kết nối được CSDL thật để chạy thử (không có bash), chỉ soát bằng mắt dựa
+   trên tên bảng/cột đã xác nhận qua các route khác trong CHÍNH file này (vw_TonTheoMau, vw_TonKhoHangHoa,
+   TheKhoHangHoa.AnhDaiDien đều đã dùng ở /items). Nguyen kiểm càng kỹ càng tốt sau khi deploy — xem
+   mục CHƯA XÁC NHẬN trong project_qlnoibo_v816_tai_anh_ton_kho.md. */
+async function layDsAnhTaiVe(pool, query) {
+  const rq = pool.request();
+  // v8.21: Nguyen báo JSON đếm 11 ảnh nhưng thực nhận có 9 — lệch 2. Nguyên nhân xác định được: bản
+  // v8.18/v8.20 dùng `JOIN vw_TonKhoHangHoa vk ON vk.MaHangID = h.MaHangID` — nếu view này (không kiểm
+  // tra được cấu trúc thật vì không có bash/DB trong các phiên trước) trả NHIỀU HƠN 1 dòng cho cùng 1
+  // MaHangID (vd. theo kho/đơn vị tính khác nhau), phép JOIN sẽ nhân bản chính dòng `h` đó lên nhiều
+  // lần — cùng 1 mã hàng "đủ màu" bị đẩy vào dsFile 2 lần, JSON đếm đúng 2 dòng trùng nhưng khi tải về
+  // Files/Photos, 2 file TRÙNG TÊN (cùng sachTenFileAnh(MaHang), không qua bước khử trùng tên như route
+  // .zip) có thể bị ghi đè thành 1 — khớp đúng hiện tượng "đếm nhiều hơn tải được". Sửa TẬN GỐC: đổi
+  // `JOIN vw_TonKhoHangHoa` (có thể nhân dòng) thành `EXISTS (...)` trong WHERE — EXISTS chỉ LỌC, không
+  // bao giờ nhân dòng của bảng ngoài, bất kể view đó có cấu trúc thật như thế nào.
+  let where = `EXISTS (SELECT 1 FROM vw_TonKhoHangHoa vk WHERE vk.MaHangID = h.MaHangID AND ISNULL(vk.TongTon, 0) > 0)`;
+  const loaiHang = (query.loaiHang || '').trim();
+  const danhMuc = (query.danhMuc || '').trim();
+  if (loaiHang) { rq.input('LoaiHang', sql.NVarChar, loaiHang); where += ' AND nsp.TenNhom = @LoaiHang'; }
+  if (danhMuc) { rq.input('DanhMuc', sql.NVarChar, danhMuc); where += ' AND tk.TenTheKho = @DanhMuc'; }
+  const tongTheoMa = await rq.query(`
+    ;WITH tong AS (
+      SELECT MaHangID, COUNT(*) AS TongSoMau, SUM(CASE WHEN TonCai > 0 THEN 1 ELSE 0 END) AS SoMauConTon
+      FROM vw_TonTheoMau
+      GROUP BY MaHangID
+    )
+    SELECT h.MaHangID, h.MaHang, h.AnhDaiDien,
+           ISNULL(tg.TongSoMau, 0) AS TongSoMau, ISNULL(tg.SoMauConTon, 0) AS SoMauConTon
+    FROM TheKhoHangHoa h
+    LEFT JOIN tong tg ON tg.MaHangID = h.MaHangID
+    LEFT JOIN DanhMucNhomSanPham nsp ON nsp.NhomSanPhamID = h.NhomSanPhamID
+    LEFT JOIN TheKhoDanhMuc tk ON tk.TheKhoDanhMucID = h.TheKhoDanhMucID
+    WHERE ${where}
+    ORDER BY h.MaHang`);
+
+  // v8.22: Nguyen dán JSON thật ra thấy 2/11 bản ghi có linkAnh = "/" (đúng 1 dấu gạch chéo — không
+  // NULL, không rỗng, nên lọt qua điều kiện SQL cũ `LinkAnh IS NOT NULL AND LTRIM(RTRIM(...))<>''`) —
+  // KHÔNG phải đường dẫn ảnh thật (ảnh thật luôn dạng /uploads/<file>). Route .zip (v8.17) tình cờ tránh
+  // được vì đã có sẵn `rel.indexOf('/uploads/') !== 0` để chặn path traversal — route JSON đếm/Web Share
+  // (v8.20) thì CHƯA có điều kiện này. Thêm hàm `laLinkAnhHopLe` dùng CHUNG 1 tiêu chí ở CẢ 2 nhánh, để
+  // JSON đếm và thực tải luôn khớp nhau (không sửa lại điều kiện riêng lẻ từng chỗ nữa).
+  function laLinkAnhHopLe(link) {
+    return typeof link === 'string' && link.indexOf('/uploads/') === 0;
+  }
+  const idThieuMau = [];
+  const dsFile = [];   // { ten, linkAnh } — danh sách cuối cùng để tải/nén
+  for (const r of tongTheoMa.recordset) {
+    const duMau = r.TongSoMau === 0 || r.SoMauConTon >= r.TongSoMau;
+    if (duMau) { if (laLinkAnhHopLe(r.AnhDaiDien)) dsFile.push({ ten: sachTenFileAnh(r.MaHang), linkAnh: r.AnhDaiDien }); }
+    else idThieuMau.push(r.MaHangID);
+  }
+
+  if (idThieuMau.length) {
+    const rq2 = pool.request();
+    const idParams = idThieuMau.map((id, i) => { rq2.input('id' + i, sql.Int, id); return '@id' + i; }).join(',');
+    const chiTiet = await rq2.query(`
+      SELECT h.MaHang, ms.TenMau, t.LinkAnh
+      FROM vw_TonTheoMau t
+      JOIN MauSac ms ON ms.MauSacID = t.MauSacID
+      JOIN TheKhoHangHoa h ON h.MaHangID = t.MaHangID
+      WHERE t.MaHangID IN (${idParams}) AND t.TonCai > 0 AND t.LinkAnh IS NOT NULL AND LTRIM(RTRIM(t.LinkAnh)) <> ''
+      ORDER BY h.MaHang, ms.TenMau`);
+    for (const c of chiTiet.recordset) {
+      if (!laLinkAnhHopLe(c.LinkAnh)) continue;   // chặn rác kiểu "/" lọt qua điều kiện SQL phía trên
+      dsFile.push({ ten: `${sachTenFileAnh(c.MaHang)}_${sachTenFileAnh(c.TenMau)}`, linkAnh: c.LinkAnh });
+    }
+  }
+  return dsFile;   // đã lọc rỗng ảnh ở cả 2 nhánh — mọi phần tử ở đây CHẮC CHẮN có linkAnh
+}
+
+router.get('/items/anh-ton-kho', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    res.json({ success: true, data: await layDsAnhTaiVe(pool, req.query) });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi lấy danh sách ảnh: ' + err.message });
+  }
+});
+
+/* v8.17 — Nguyen test thực tế bản v8.16 (tải TỪNG ảnh một) thấy 3 vấn đề trên điện thoại: (1) Safari
+   không tự lưu, phải bấm "Lưu ảnh" thủ công từng cái — chậm; (2) mở ảnh ra là ĐIỀU HƯỚNG cả trang
+   sang xem ảnh đó, thoát khỏi vòng lặp JS đang chạy nên chỉ tải được ĐÚNG ảnh đầu tiên rồi dừng; (3)
+   cần thêm nút thoát khi ảnh hiện ra. Cách sửa TẬN GỐC cho cả 3: đổi hẳn sang 1 file NÉN (.zip) DUY
+   NHẤT chứa mọi ảnh — không còn mở/điều hướng ảnh nào giữa chừng, không còn vòng lặp nào để bị chặn
+   giữa chừng, và không có "nút thoát" nào cần thêm vì không có ảnh nào tự mở ra nữa.
+   Dùng thư viện `archiver` — vừa thêm vào package.json, CHƯA CÓ trong node_modules (không cài được
+   qua npm trong phiên này). require() ĐẶT TRONG hàm (không phải đầu file) để thiếu thư viện chỉ làm
+   ĐÚNG route này báo lỗi rõ ràng, không làm sập toàn bộ server lúc khởi động. */
+router.get('/items/anh-ton-kho.zip', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
+  let archiver;
+  try { archiver = require('archiver'); }
+  catch (e) {
+    return res.status(500).json({ success: false, message: 'Chưa cài thư viện nén (archiver). Vào thư mục backend chạy lệnh: npm install — rồi thử lại.' });
+  }
+  try {
+    const pool = await getPool();
+    const ds = await layDsAnhTaiVe(pool, req.query);
+    if (!ds.length) return res.status(400).json({ success: false, message: 'Không có mã hàng nào còn tồn kho và có sẵn ảnh khớp bộ lọc đang chọn.' });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="anh_mau_con_ton_kho.zip"');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('warning', (e) => console.warn('[anh-ton-kho.zip]', e.message));
+    archive.on('error', (err) => { console.error(err); try { if (!res.headersSent) res.status(500); res.end(); } catch (e2) {} });
+    archive.pipe(res);
+
+    const tenDaDung = new Set();   // tránh trùng tên file trong zip nếu 2 mục cùng ra 1 tên gốc
+    for (const c of ds) {
+      const rel = String(c.linkAnh || '');
+      if (rel.indexOf('/uploads/') !== 0) continue;   // chỉ nhận đúng dạng đường dẫn nội bộ đã biết (an toàn)
+      const tenFileGoc = path.basename(rel);           // path.basename tự chặn path traversal ("../..")
+      const fileDisk = path.join(UPLOAD_DIR, tenFileGoc);
+      if (!fs.existsSync(fileDisk)) continue;           // ảnh bị xóa thủ công khỏi ổ đĩa -> bỏ qua, không chặn cả zip
+      const duoi = path.extname(tenFileGoc) || '.jpg';
+      let ten = `${c.ten}${duoi}`;
+      let dem = 2;
+      while (tenDaDung.has(ten)) ten = `${c.ten}_${dem++}${duoi}`;
+      tenDaDung.add(ten);
+      archive.file(fileDisk, { name: ten });
+    }
+    await archive.finalize();
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(400).json({ success: false, message: 'Lỗi khi tạo file nén ảnh: ' + err.message });
+  }
+});
+
 // ============ TAO / CAP NHAT THE KHO ============
 // v5.46: giải mã màu cho 1 dòng chi tiết — ưu tiên mauSacId; nếu chỉ có tenMau (người dùng gõ tự do)
 // thì tìm theo tên, chưa có thì TẠO màu mới trong MauSac (sinh MaMau duy nhất từ tên, bỏ dấu + hoa).
