@@ -316,6 +316,12 @@ window.ModuleKhoHang = (function () {
              #khLoai/#khDanhMuc ngay bên trái nút này (không cần thêm ô ngày — tồn kho luôn tính tại
              thời điểm bấm tải, xem ghi chú ở route /api/khohang/items/anh-ton-kho). */''}
         <button type="button" class="btn small secondary" id="btnTaiAnhTon">📷 Tải ảnh màu còn tồn</button>
+        ${/* v8.24: Nguyen — "danh sách thẻ kho hàng hóa thêm chức năng chuyển danh mục kho". Tick
+             checkbox ở đầu mỗi dòng (có thêm ô "chọn tất cả dòng đang hiển thị" ở đầu bảng, tôn trọng
+             bộ lọc Loại hàng/Danh mục/Tìm kiếm đang áp dụng), rồi bấm nút này để đổi Danh mục thẻ kho
+             cho TẤT CẢ mã đã tick trong 1 lần — atomic ở backend (PUT /items/bulk-danhmuc), không lặp
+             gọi API sửa từng mã. Nút disabled khi chưa tick dòng nào, tự cập nhật số lượng trong nhãn. */''}
+        ${perm.canEdit ? '<button type="button" class="btn small secondary" id="btnChuyenDanhMuc" disabled>🔀 Chuyển danh mục</button>' : ''}
         ${perm.canCreate ? '<button type="button" class="btn small" id="btnAddNew" style="margin-left:auto;">+ Tạo thẻ kho mới</button>' : ''}
       </div>
       ${/* v7.85: nói rõ có bao nhiêu mã đang bị ẩn + chỉ đúng đường lấy lại — không thì người dùng
@@ -333,7 +339,7 @@ window.ModuleKhoHang = (function () {
         ${perm.canEdit ? '<button type="button" class="btn small" id="btnLuuCK">💾 Lưu tỷ lệ</button>' : ''}
         <span class="empty-hint" style="padding:0;">Giá shop = Giá bán − CK shop. <b>Giá NPP = giá shop − CK NPP</b> (chiết khấu chồng, không tính lại trên giá bán).</span>
       </div>
-      <table><thead><tr><th>Ảnh</th><th>Mã hàng</th><th>Tên hàng</th><th>Nguồn hàng</th><th>Loại hàng</th><th>Giá bán</th><th>Giá sau CK shop<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.shop)}%)</div></th><th>Giá sau CK NPP<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.npp)}% trên giá shop)</div></th><th>Danh mục</th><th>Tổng nhập<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tổng xuất<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tồn quy ra Cái</th><th>Tồn (Ri)</th><th>Khả dụng<div style="font-weight:400;font-size:11px;">(theo Ri, trừ đơn đang chờ)</div></th><th style="width:130px">Thao tác</th></tr></thead>
+      <table><thead><tr>${perm.canEdit ? `<th style="width:28px;"><input type="checkbox" id="khChonTatCa" title="Chọn tất cả dòng đang hiển thị"></th>` : ''}<th>Ảnh</th><th>Mã hàng</th><th>Tên hàng</th><th>Nguồn hàng</th><th>Loại hàng</th><th>Giá bán</th><th>Giá sau CK shop<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.shop)}%)</div></th><th>Giá sau CK NPP<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.npp)}% trên giá shop)</div></th><th>Danh mục</th><th>Tổng nhập<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tổng xuất<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tồn quy ra Cái</th><th>Tồn (Ri)</th><th>Khả dụng<div style="font-weight:400;font-size:11px;">(theo Ri, trừ đơn đang chờ)</div></th><th style="width:130px">Thao tác</th></tr></thead>
       <tbody>${tongHop.map(r => {
         const hetHang = Number(r.TongTon) <= 0;
         // v5.41.5: CẢ 2 cột đều hiện tồn quy đổi. ĐVT (Cái) = số cái; ĐVT (Ri) = số ri kèm hệ số "Ri{hệ số}".
@@ -353,6 +359,9 @@ window.ModuleKhoHang = (function () {
         const tdDvtCai = `${fmtNumber(soCaiVal)}${tonBadge ? ' ' + tonBadge : ''}`;
         const tdDvtRi = soRiHtml;
         return `<tr data-loai="${escapeHtml(r.TenNhom || '')}" data-dm="${escapeHtml(r.TenTheKho || '')}" data-search="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + (r.MaDH || '')).toLowerCase())}" ${hetHang ? 'style="background:#fdecea;"' : ''}>
+        ${/* v8.24: checkbox chuyển danh mục hàng loạt — chỉ hiện khi có quyền Sửa (khớp điều kiện nút
+             Chuyển danh mục và điều kiện quyền của backend PUT /items/bulk-danhmuc). */''}
+        ${perm.canEdit ? `<td><input type="checkbox" class="kh-chon" data-id="${r.MaHangID}"></td>` : ''}
         ${/* v6.07: ô ảnh nhỏ dùng ẢNH XEM TRƯỚC 160px + loading="lazy" (trước tải đúng file gốc, có ảnh
              vài MB cho 1 ô 40px -> danh sách vài trăm dòng là tải hàng trăm MB). Bấm phóng to vẫn ảnh GỐC
              qua data-src. */''}
@@ -394,7 +403,7 @@ window.ModuleKhoHang = (function () {
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.MaHangID}" data-mahang="${escapeHtml(r.MaHang)}">Xóa</button>` : ''}
         </td>
       </tr>`;
-      }).join('') || '<tr><td colspan="15" class="empty-hint">Chưa có thẻ kho nào</td></tr>'}</tbody></table>`;
+      }).join('') || `<tr><td colspan="${perm.canEdit ? 16 : 15}" class="empty-hint">Chưa có thẻ kho nào</td></tr>`}</tbody></table>`;
 
     // Luu y: truyen null (KHONG phai chiTiet) khi tao moi - chiTiet la mang mau CUA TAT CA ma hang,
     // truyen nham vao day se lam form "Tao the kho moi" hien sot mau cua nhung ma hang khac (bug cu).
@@ -462,6 +471,33 @@ window.ModuleKhoHang = (function () {
       } catch (err) { toast(err.message, 'error'); }
       finally { btnTaiAnhTon.disabled = false; btnTaiAnhTon.textContent = nhanGoc; }
     });
+    /* v8.24: checkbox chuyển danh mục hàng loạt — cập nhật nhãn/disable nút theo số dòng đang tick,
+       và ô "chọn tất cả" chỉ tác động các dòng ĐANG HIỂN THỊ (tôn trọng bộ lọc Loại hàng/Danh mục/Tìm
+       kiếm hiện tại — applyKhFilter() chỉ ẩn bằng style.display, không gỡ khỏi DOM). Dòng đã tick rồi
+       bị lọc ẩn đi vẫn GIỮ NGUYÊN trạng thái tick (không tự bỏ tick) — người dùng lọc qua lọc lại để
+       gom nhiều nhóm mã khác nhau vẫn cộng dồn được lựa chọn. */
+    const btnChuyenDanhMuc = body.querySelector('#btnChuyenDanhMuc');
+    function capNhatNutChuyenDanhMuc() {
+      if (!btnChuyenDanhMuc) return;
+      const soChon = body.querySelectorAll('.kh-chon:checked').length;
+      btnChuyenDanhMuc.disabled = !soChon;
+      btnChuyenDanhMuc.textContent = soChon ? `🔀 Chuyển danh mục (${soChon})` : '🔀 Chuyển danh mục';
+    }
+    body.querySelectorAll('.kh-chon').forEach(chk => chk.addEventListener('change', capNhatNutChuyenDanhMuc));
+    const khChonTatCa = body.querySelector('#khChonTatCa');
+    if (khChonTatCa) khChonTatCa.addEventListener('change', () => {
+      body.querySelectorAll('table tbody tr').forEach(tr => {
+        if (tr.style.display === 'none') return;   // dòng đang bị bộ lọc ẩn -> không đụng tới
+        const chk = tr.querySelector('.kh-chon');
+        if (chk) chk.checked = khChonTatCa.checked;
+      });
+      capNhatNutChuyenDanhMuc();
+    });
+    if (btnChuyenDanhMuc) btnChuyenDanhMuc.addEventListener('click', () => {
+      const idsChon = [...body.querySelectorAll('.kh-chon:checked')].map(chk => Number(chk.dataset.id));
+      if (!idsChon.length) return;
+      openChuyenDanhMucModal(idsChon, perm);
+    });
     /* v6.71: bật/tắt công khai ngay tại dòng. Chỉ gửi đúng trường `congKhai` — backend giữ nguyên
        mọi trường khác (ISNULL), nên không có chuyện bấm nút này lại làm rơi dữ liệu ô nào khác. */
     body.querySelectorAll('.act-public').forEach(btn => btn.addEventListener('click', async () => {
@@ -509,6 +545,50 @@ window.ModuleKhoHang = (function () {
       });
     }
     ['#khSearch', '#khLoai', '#khDanhMuc'].forEach(sel => { const el = body.querySelector(sel); if (el) el.addEventListener(sel === '#khSearch' ? 'input' : 'change', applyKhFilter); });
+  }
+
+  /* v8.24: modal xác nhận + chọn danh mục đích cho nút "Chuyển danh mục" (chuyển hàng loạt) trong
+     renderItems() — tách hàm riêng cho gọn, renderItems() đã khá dài.
+     LƯU Ý NGHIỆP VỤ (đã xác nhận với Nguyen 2026-09-21): Danh mục thẻ kho (TheKhoDanhMuc) CŨNG LÀ danh
+     mục hiển thị trên Catalogue công khai cho khách xem online (xem backend/routes/public.js) — chuyển
+     mã hàng sang danh mục khác = chuyển luôn nơi khách nhìn thấy nó, kể cả khi danh mục đích đang bị ẩn
+     khỏi Catalogue. Đây là hành vi CHỦ ĐỊNH, không cảnh báo/chặn riêng — chỉ nhắc 1 dòng trong modal. */
+  async function openChuyenDanhMucModal(ids, perm) {
+    const html = `
+      <h3>Chuyển danh mục thẻ kho</h3>
+      <div class="form-grid">
+        <div class="form-row"><b>${ids.length}</b> mã hàng đã chọn.</div>
+        <div class="form-row"><label>Chuyển sang danh mục</label>
+          <select id="cdmDanhMuc"><option value="">-- Chọn danh mục --</option>${opt(dm.theKhoDanhMuc, 'TheKhoDanhMucID', 'TenTheKho', '')}</select>
+        </div>
+        <div class="empty-hint">Danh mục thẻ kho cũng là danh mục hiển thị trên Catalogue công khai —
+          đổi ở đây tức là đổi luôn mục khách xem online nhìn thấy các mã hàng này.</div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btnCdmHuy">Hủy</button>
+        <button type="button" class="btn" id="btnCdmXacNhan">Xác nhận</button>
+      </div>`;
+    const modal = openModal(html);
+    modal.querySelector('#btnCdmHuy').addEventListener('click', closeModal);
+    modal.querySelector('#btnCdmXacNhan').addEventListener('click', async () => {
+      const sel = modal.querySelector('#cdmDanhMuc');
+      const dmId = sel.value;
+      if (!dmId) { toast('Chưa chọn danh mục đích.', 'error'); return; }
+      const tenDm = sel.options[sel.selectedIndex].textContent;
+      if (!confirm(`Chuyển ${ids.length} mã hàng đã chọn sang danh mục "${tenDm}"?`)) return;
+      const btn = modal.querySelector('#btnCdmXacNhan');
+      const nhanGoc = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Đang lưu...';
+      try {
+        const r = await apiPut('/api/khohang/items/bulk-danhmuc', { ids, theKhoDanhMucId: dmId });
+        closeModal();
+        toast(`Đã chuyển ${r.data.soDaCapNhat} mã hàng sang danh mục "${r.data.tenDanhMuc}".`, 'success');
+        renderItems(perm);   // vẽ lại bảng — cột Danh mục + 2 ô lọc Loại hàng/Danh mục cập nhật theo dữ liệu mới
+      } catch (err) {
+        btn.disabled = false; btn.textContent = nhanGoc;
+        toast(err.message, 'error');
+      }
+    });
   }
 
   // v5.40: "Tạo thẻ kho mới" đã gộp vào toolbar tab "Thẻ kho / Tồn kho" (renderItems) — bỏ tab tạo riêng.

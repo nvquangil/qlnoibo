@@ -770,6 +770,45 @@ router.put('/items/:id/congkhai', requireAuth, requirePermission('KHOHANG', 'edi
   res.json({ success: true, data: { MaHangID: Number(req.params.id), CongKhai: bat ? 1 : 0 } });
 });
 
+// v8.24: Chuyển danh mục thẻ kho HÀNG LOẠT — Nguyen: đổi Danh mục thẻ kho (TheKhoDanhMucID) cho nhiều
+// mã hàng cùng lúc từ danh sách Thẻ kho hàng hóa (tick checkbox), thay vì mở form Sửa từng mã một.
+// LƯU Ý NGHIỆP VỤ: Danh mục thẻ kho CŨNG LÀ danh mục hiển thị trên Catalogue công khai (xem public.js,
+// TheKhoDanhMuc.CongKhai/Slug) — đổi danh mục ở đây tức là đổi luôn mục khách xem online nhìn thấy mã
+// hàng đó. Đây là hành vi ĐÚNG theo xác nhận của Nguyen (2026-09-21) — KHÔNG cảnh báo/chặn riêng khi
+// danh mục đích đang ẩn khỏi Catalogue.
+// 1 câu UPDATE DUY NHẤT (atomic) — không lặp N lần gọi PUT /items/:id từ frontend (tránh nửa chừng lỗi
+// giữa chừng làm vài mã đổi, vài mã không). Route NÀY PHẢI đứng TRƯỚC `PUT /items/:id` bên dưới — 2
+// route cùng 2 segment "/items/:x", đăng ký sau route :id thì Express nuốt "bulk-danhmuc" làm giá trị
+// :id (đúng lỗi đã từng dính ở HIKVISION v5.59/60, xem reference_qlnoibo_... trong memory).
+router.put('/items/bulk-danhmuc', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const ids = Array.isArray(body.ids)
+      ? [...new Set(body.ids.map(Number))].filter(n => Number.isInteger(n) && n > 0)
+      : [];
+    const dmId = Number(body.theKhoDanhMucId);
+    if (!ids.length) return res.status(400).json({ success: false, message: 'Chưa chọn mã hàng nào để chuyển danh mục.' });
+    if (!Number.isInteger(dmId) || dmId <= 0) return res.status(400).json({ success: false, message: 'Chưa chọn danh mục đích.' });
+
+    const pool = await getPool();
+    const dm = await pool.request().input('dm', sql.Int, dmId)
+      .query('SELECT TenTheKho FROM TheKhoDanhMuc WHERE TheKhoDanhMucID=@dm');
+    if (!dm.recordset.length) {
+      return res.status(400).json({ success: false, message: 'Danh mục đích không tồn tại (có thể vừa bị xóa) — tải lại trang và thử lại.' });
+    }
+
+    // Tham số hóa TỪNG ID (không nối chuỗi trực tiếp) — ids đến từ body người dùng gửi lên qua API.
+    const rq = pool.request().input('dm', sql.Int, dmId);
+    const idParams = ids.map((id, i) => { rq.input('id' + i, sql.Int, id); return '@id' + i; }).join(',');
+    const kq = await rq.query(`UPDATE TheKhoHangHoa SET TheKhoDanhMucID=@dm WHERE MaHangID IN (${idParams})`);
+
+    res.json({ success: true, data: { soDaChon: ids.length, soDaCapNhat: kq.rowsAffected[0], tenDanhMuc: dm.recordset[0].TenTheKho } });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi chuyển danh mục hàng loạt: ' + err.message });
+  }
+});
+
 router.put('/items/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
   try {
     const maHangId = req.params.id;
