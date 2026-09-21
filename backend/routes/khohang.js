@@ -441,16 +441,32 @@ async function layDsAnhTaiVe(pool, query) {
   // .zip) có thể bị ghi đè thành 1 — khớp đúng hiện tượng "đếm nhiều hơn tải được". Sửa TẬN GỐC: đổi
   // `JOIN vw_TonKhoHangHoa` (có thể nhân dòng) thành `EXISTS (...)` trong WHERE — EXISTS chỉ LỌC, không
   // bao giờ nhân dòng của bảng ngoài, bất kể view đó có cấu trúc thật như thế nào.
-  let where = `EXISTS (SELECT 1 FROM vw_TonKhoHangHoa vk WHERE vk.MaHangID = h.MaHangID AND ISNULL(vk.TongTon, 0) > 0)`;
+  /* v8.26: Nguyen — áp luôn ngưỡng ">=1 Ri" (xem comment v8.25 bên dưới) CHO CẢ mã hàng KHÔNG phân màu
+     (TongSoMau=0 — dùng thẳng ảnh đại diện, không qua CTE `tong` bên dưới nên phải chặn NGAY Ở ĐÂY, chỗ
+     lọc tổng tồn toàn mã hàng). Đổi `ISNULL(vk.TongTon,0) > 0` thành `>= ISNULL(h.LoaiRi,1)`. An toàn cho
+     cả mã hàng CÓ phân màu: TongTon là TỔNG cộng dồn tất cả màu, nên nếu tổng < LoaiRi thì chắc chắn
+     KHÔNG màu nào riêng lẻ đạt >=LoaiRi — CTE/chiTiet phía dưới vốn dĩ cũng sẽ loại hết, siết ở đây chỉ
+     là lọc sớm hơn, KHÔNG đổi kết quả cuối của nhóm có phân màu. */
+  let where = `EXISTS (SELECT 1 FROM vw_TonKhoHangHoa vk WHERE vk.MaHangID = h.MaHangID AND ISNULL(vk.TongTon, 0) >= ISNULL(h.LoaiRi, 1))`;
   const loaiHang = (query.loaiHang || '').trim();
   const danhMuc = (query.danhMuc || '').trim();
   if (loaiHang) { rq.input('LoaiHang', sql.NVarChar, loaiHang); where += ' AND nsp.TenNhom = @LoaiHang'; }
   if (danhMuc) { rq.input('DanhMuc', sql.NVarChar, danhMuc); where += ' AND tk.TenTheKho = @DanhMuc'; }
+  /* v8.25: Nguyen — "thêm điều kiện những màu số lượng còn tồn >= 1 Ri mới tải về". Trước đây một màu
+     được coi là "còn tồn" (đưa vào danh sách tải ảnh) chỉ cần TonCai > 0 — còn 1-2 cái lẻ (chưa đủ 1 Ri)
+     vẫn tính là còn tồn. Đổi ngưỡng sang TonCai >= LoaiRi (hệ số quy đổi Ri CỦA TỪNG MÃ HÀNG, cột
+     TheKhoHangHoa.LoaiRi — ISNULL(...,1) vì mã hàng không quy đổi Ri thì LoaiRi=1, ngưỡng ">=1 Ri" suy
+     biến về ">=1 cái" như cũ, đúng bản chất "không có khái niệm Ri thì không có gì đổi"). Áp DÙNG CHUNG
+     1 NGƯỠNG ở CẢ 2 chỗ tính "còn tồn": (1) CTE dưới đây (quyết định "đủ màu" hay "thiếu màu"), và (2)
+     câu SELECT chiTiet bên dưới (lọc màu nào được đưa ảnh riêng vào danh sách tải khi "thiếu màu") — hai
+     nơi phải khớp NGƯỠNG NHAU, lệch 1 trong 2 sẽ tái diễn kiểu bug "đếm 11 tải 9" đã gặp ở v8.21/8.22. */
   const tongTheoMa = await rq.query(`
     ;WITH tong AS (
-      SELECT MaHangID, COUNT(*) AS TongSoMau, SUM(CASE WHEN TonCai > 0 THEN 1 ELSE 0 END) AS SoMauConTon
-      FROM vw_TonTheoMau
-      GROUP BY MaHangID
+      SELECT t.MaHangID, COUNT(*) AS TongSoMau,
+             SUM(CASE WHEN t.TonCai >= ISNULL(hh.LoaiRi, 1) THEN 1 ELSE 0 END) AS SoMauConTon
+      FROM vw_TonTheoMau t
+      JOIN TheKhoHangHoa hh ON hh.MaHangID = t.MaHangID
+      GROUP BY t.MaHangID
     )
     SELECT h.MaHangID, h.MaHang, h.AnhDaiDien,
            ISNULL(tg.TongSoMau, 0) AS TongSoMau, ISNULL(tg.SoMauConTon, 0) AS SoMauConTon
@@ -486,7 +502,7 @@ async function layDsAnhTaiVe(pool, query) {
       FROM vw_TonTheoMau t
       JOIN MauSac ms ON ms.MauSacID = t.MauSacID
       JOIN TheKhoHangHoa h ON h.MaHangID = t.MaHangID
-      WHERE t.MaHangID IN (${idParams}) AND t.TonCai > 0 AND t.LinkAnh IS NOT NULL AND LTRIM(RTRIM(t.LinkAnh)) <> ''
+      WHERE t.MaHangID IN (${idParams}) AND t.TonCai >= ISNULL(h.LoaiRi, 1) AND t.LinkAnh IS NOT NULL AND LTRIM(RTRIM(t.LinkAnh)) <> ''
       ORDER BY h.MaHang, ms.TenMau`);
     for (const c of chiTiet.recordset) {
       if (!laLinkAnhHopLe(c.LinkAnh)) continue;   // chặn rác kiểu "/" lọt qua điều kiện SQL phía trên

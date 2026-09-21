@@ -1421,6 +1421,21 @@ window.ModuleKhoHang = (function () {
     return dsDonViCua(item).map(dv =>
       `<option value="${escapeHtml(dv.giaTri)}" ${dv.macDinh ? 'selected' : ''}>${escapeHtml(dv.nhan)}</option>`).join('');
   }
+  /* v8.27: BẢN SAO PHÍA CLIENT của `orderQtyToBase()` ở backend/routes/khohang.js (route POST /orders) —
+     quy số lượng người dùng gõ (theo đơn vị họ đang chọn ở ô "Đơn vị") về ĐƠN VỊ CHÍNH của mã hàng (đơn
+     vị lưu tồn kho thật, TonCai/DangGiu đều theo đơn vị này). Dùng để so sánh SỐNG với "Khả dụng" ngay
+     trong form Lên đơn đặt hàng (xem `veKhaDung()` trong `openOrderForm`) — TRƯỚC ĐÂY chỉ backend kiểm
+     lúc bấm Lưu. ⚠️ SỬA CÔNG THỨC Ở ĐÂY THÌ PHẢI SỬA CẢ `orderQtyToBase()` bên backend — 2 nơi PHẢI khớp
+     nhau tuyệt đối, lệch 1 trong 2 là cảnh báo phía trước và điều kiện chặn lúc Lưu nói khác nhau. Dùng
+     lại ĐÚNG 2 hàm `laDonViGop`/`donViChinhLaGop` (đã có sẵn trong common.js, backend cũng dùng cùng tên
+     — xem ghi chú ở common.js) nên công thức tự động khớp logic, chỉ khác chỗ gọi. */
+  function orderQtyToBaseClient(soLuong, orderDonVi, donViCoBan, loaiRi, donViQuyDoi) {
+    const n = Number(soLuong) || 0, he = Number(loaiRi) || 1;
+    const mh = { DonViCoBan: donViCoBan, DonViQuyDoi: donViQuyDoi };
+    const cai = laDonViGop(orderDonVi, mh) ? n * he : n;
+    const base = donViChinhLaGop(mh) ? cai / he : cai;
+    return Math.round(base);
+  }
 
   /* v6.44: ĐỒNG BỘ với form "Lên đơn đặt hàng". Hai chỗ trước đây lệch nhau, đều sai âm thầm:
        1) Ô Đơn vị gõ cứng "Cái"/"Ri". Mã hàng khai ĐVT quy đổi là "Bộ"/"Tá"/... thì chọn "Ri" xong
@@ -2556,12 +2571,22 @@ window.ModuleKhoHang = (function () {
         <div class="o-img-mahang">${imgTag(item && item.AnhDaiDien)}</div>
         <div><label>Mã hàng</label><select class="o-mahang">${items.length ? optionsSel(items, 'MaHangID', 'MaHang', itemId) : '<option value="">-- Không còn mã hàng nào tồn kho --</option>'}</select></div>
         <div class="o-img-mau">${imgTag(color && color.LinkAnh)}</div>
-        <div><label>Màu</label><select class="o-mau">${colorOptionsFor(itemId, colorId)}</select></div>
+        ${/* v8.27: Nguyen — "khi chọn mã hàng chọn mầu phải hiện ra Khả dụng(theo Ri, trừ đơn đang chờ)
+             chứ ko phải khi lưu mới check". Ô `.o-khadung` hiện NGAY dưới ô Màu (đọc từ `chiTiet` đã tải
+             sẵn khi mở form, công thức TonCai-DangGiu Y HỆT backend layHangDangGiu — không gọi thêm API
+             nào). Format bằng oSoRi() — dùng CHUNG với cột "Khả dụng" ở bảng Thẻ kho hàng hóa. */''}
+        <div><label>Màu</label><select class="o-mau">${colorOptionsFor(itemId, colorId)}</select>
+          <div class="o-khadung" style="font-size:11px;"></div></div>
         ${/* v6.24.4: ĐƠN VỊ mặc định là RI khi mã hàng có hệ số quy đổi > 1 — xưởng đặt hàng theo ri,
              trước đây mặc định "Cái" nên gõ 12 (ý là 12 ri) lại thành 12 cái, phiếu xuất & tồn sai theo.
              Kèm dòng QUY ĐỔI ngay dưới để nhìn là biết đang đặt bao nhiêu cái. */''}
+        ${/* v8.27: Nguyen — "nếu số lượng đặt lớn hơn số khả dụng cảnh báo không đủ". `.o-canhbao` chỉ
+             hiện khi SL đã quy đổi về ĐVT chính (orderQtyToBaseClient) VƯỢT khả dụng — CẢNH BÁO SỐNG,
+             không chặn gõ/không chặn Lưu (backend POST /orders vẫn là nơi CHẶN THẬT, giữ nguyên logic
+             cũ) — tránh 2 nơi tính "đủ/thiếu" theo 2 công thức khác nhau mà kết luận khác nhau. */''}
         <div><label>Số lượng</label><input class="o-sl" type="number" min="1" value="1">
-          <div class="o-quydoi" style="font-size:11px;color:#5f6368;"></div></div>
+          <div class="o-quydoi" style="font-size:11px;color:#5f6368;"></div>
+          <div class="o-canhbao" style="font-size:11px;color:#c0392b;font-weight:600;display:none;"></div></div>
         ${/* v6.31: 2 lựa chọn = ĐVT chính + ĐVT quy đổi CỦA CHÍNH mã hàng (trước gõ cứng "Ri" —
              mã khai ĐVT quy đổi khác "Ri" thì backend không nhân hệ số, giữ hàng thiếu <tỷ lệ> lần). */''}
         <div><label>Đơn vị</label><select class="o-donvi">${dsDonViCua(item).map(dv =>
@@ -2624,6 +2649,8 @@ window.ModuleKhoHang = (function () {
       const slInp = rowEl.querySelector('.o-sl');
       const dvSel = rowEl.querySelector('.o-donvi');
       const quyDoi = rowEl.querySelector('.o-quydoi');
+      const khaDungBox = rowEl.querySelector('.o-khadung');
+      const canhBao = rowEl.querySelector('.o-canhbao');
       function refreshMauImg() {
         const color = findColor(mahangSel.value, mauSel.value);
         rowEl.querySelector('.o-img-mau').innerHTML = imgTag(color && color.LinkAnh);
@@ -2639,6 +2666,27 @@ window.ModuleKhoHang = (function () {
           ? `= <b>${fmtNumber(n * he)}</b> ${escapeHtml(dvG)}`
           : `= <b>${fmtNumber(Math.floor(n / he))}</b> Ri${he}${n % he ? ' dư ' + fmtNumber(n % he) : ''}`;
       }
+      /* v8.27: Nguyen — "khi chọn mã hàng chọn mầu phải hiện ra Khả dụng ... chứ ko phải khi lưu mới
+         check" + "nếu số lượng đặt lớn hơn số khả dụng cảnh báo không đủ". Đọc thẳng `chiTiet` (đã tải
+         sẵn lúc mở form, CÙNG NGUỒN `layHangDangGiu` mà backend POST /orders dùng để validate) — không
+         gọi thêm API. Khả dụng = TonCai - DangGiu (đơn vị CHÍNH, y hệt cách renderItems() tính cột "Khả
+         dụng" ở bảng Thẻ kho hàng hóa: TongTon - DangGiu). CHỈ mang tính tham khảo SỐNG — backend vẫn
+         là nơi CHẶN THẬT lúc bấm Lưu (đối chiếu lại tồn+đang giữ tại đúng thời điểm lưu, tránh dữ liệu
+         cũ do 2 người cùng lên đơn 1 lúc). */
+      function veKhaDung() {
+        const item = findItem(mahangSel.value);
+        const color = findColor(mahangSel.value, mauSel.value);
+        if (!item || !color) { khaDungBox.innerHTML = ''; canhBao.style.display = 'none'; return; }
+        const khaDungCai = (Number(color.TonCai) || 0) - (Number(color.DangGiu) || 0);
+        khaDungBox.innerHTML = `Khả dụng: ${oSoRi(khaDungCai, item, true)}`;
+        const slCanCai = orderQtyToBaseClient(slInp.value, dvSel.value, item.DonViCoBan, item.LoaiRi, item.DonViQuyDoi);
+        if (slCanCai > khaDungCai) {
+          canhBao.textContent = `⚠️ Không đủ — đang đặt ${fmtNumber(slCanCai)} ${escapeHtml(item.DonViCoBan || 'Cái')}, chỉ còn khả dụng ${fmtNumber(khaDungCai)} ${escapeHtml(item.DonViCoBan || 'Cái')}.`;
+          canhBao.style.display = '';
+        } else {
+          canhBao.style.display = 'none';
+        }
+      }
       mahangSel.addEventListener('change', () => {
         rowEl.querySelector('.o-mau').innerHTML = colorOptionsFor(mahangSel.value);
         const item = findItem(mahangSel.value);
@@ -2649,12 +2697,12 @@ window.ModuleKhoHang = (function () {
         dvSel.innerHTML = ds.map(dv => `<option value="${escapeHtml(dv.giaTri)}">${escapeHtml(dv.nhan)}</option>`).join('');
         const mac = ds.find(x => x.macDinh) || ds[0];
         dvSel.value = mac.giaTri;
-        refreshMauImg(); veQuyDoi();
+        refreshMauImg(); veQuyDoi(); veKhaDung();
       });
-      mauSel.addEventListener('change', refreshMauImg);
-      slInp.addEventListener('input', veQuyDoi);
-      dvSel.addEventListener('change', veQuyDoi);
-      veQuyDoi();
+      mauSel.addEventListener('change', () => { refreshMauImg(); veKhaDung(); });
+      slInp.addEventListener('input', () => { veQuyDoi(); veKhaDung(); });
+      dvSel.addEventListener('change', () => { veQuyDoi(); veKhaDung(); });
+      veQuyDoi(); veKhaDung();
     }
     function wireRemove() {
       modal.querySelectorAll('.o-remove').forEach(btn => btn.onclick = () => {
