@@ -18,6 +18,7 @@ const dashboardRoutes = require('./routes/dashboard'); // v6.67: dashboard kinh 
 const doiSoatRoutes = require('./routes/doisoat');   // v6.74: đối soát ngân hàng (khớp chuyển khoản -> phiếu thu)
 const nhapKhoRoutes = require('./routes/nhapkho');   // v6.78: phiếu nhập kho hàng hóa (NCC / sản xuất)
 const congNoRoutes = require('./routes/congno');     // v6.23: phiếu thu/chi + công nợ KH/NCC + danh mục tài khoản
+const hoaDonRoutes = require('./routes/hoadon');     // v8.36: hóa đơn điện tử - kết nối cổng Tổng cục thuế
 const baoCaoRoutes = require('./routes/baocao');     // v6.26: báo cáo tồn kho / tài chính / kết quả kinh doanh
 const dmsRoutes = require('./routes/dms');            // v7.23: đi tuyến thị trường (shop bán lẻ, ghé thăm GPS, doanh số NVKD)
 const taiLieuKyThuatRoutes = require('./routes/tailieukythuat');
@@ -158,6 +159,7 @@ app.use('/api/baocao', baoCaoRoutes);     // v6.26
 app.use('/api/dms', dmsRoutes);           // v7.23
 app.use('/api/tailieukythuat', taiLieuKyThuatRoutes);
 app.use('/api/bangke', bangKeRoutes);
+app.use('/api/hoadon', hoaDonRoutes);     // v8.36
 app.use('/api/hrm', hrmRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/upload', uploadRoutes);

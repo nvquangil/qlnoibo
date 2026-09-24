@@ -44,7 +44,22 @@ const MA_CONG_DOAN_MAY = 'MAY';
 // Kho nhap) - GIU NGUYEN dong CongDoanSanXuat (LaHeThong=1, khong xoa) cung ly do voi GV/PK o tren. Xem
 // migration_v520.sql ve buoc chuyen cac don dang dung o HT sang "Nhat chi" (NCH, cong doan ke tiep thuc
 // su trong danh muc moi) khi nang cap.
-const MA_CONG_DOAN_BO_QUA = ['GV', 'PK', 'HT', 'GNGC', 'NNGC', 'GNIT', 'NNIT'];   // v5.31: an GNGC/NNGC cu; v5.33: an GNIT/NNIT (in theu cu trung voi GIT/NIT moi)
+// v8.30: them 'NCH' (Nhat chi) vao danh sach bo qua KHONG DIEU KIEN - Nguyen cho biet cong doan "Nhat
+// chi" nay da duoc GOP VAO "May" (nhan cong may lam luon, khong con tach rieng nguoi/buoc nhat chi
+// nua): "May xong sang QC luon". GIU NGUYEN dong CongDoanSanXuat NCH (khong xoa) cung ly do voi GV/PK/
+// HT o tren - chi khong con la diem dung tren duong di cua don hang MOI. Don dang SAN CO san o dung
+// NCH tai thoi diem deploy KHONG bi ket lai: khi bam "Gửi" o dung NCH nhu cu, tinhNextStage() van tinh
+// ke tiep tu SAU vi tri hien tai (NCH) - se nhay thang qua QC binh thuong, KHONG can migration doi
+// CongDoanHienTaiID nhu truong hop HT (HT truoc day la diem CUOI, don o do se ket lai khong loi ra neu
+// khong doi CongDoanHienTaiID - khac voi NCH la mot buoc GIUA con di tiep binh thuong).
+// v8.33: them 'LA' (La) vao danh sach bo qua KHONG DIEU KIEN - Nguyen: "bo cong doan la, nhat chi ra
+// khoi luong lenh san xuat. khong hien trong ghi nhan tien do". Cung ly do/cung cach lam voi NCH o
+// v8.30 (GIU NGUYEN dong CongDoanSanXuat 'LA' de khong vo lich su TienDoSanXuat.StageID cu + tab luong
+// "Luong la/dong goi" con doc duoc du lieu cu). Luong moi sau sua nay: ... May -> QC -> Dong goi ->
+// Kho nhap. 'LA' la buoc GIUA (khong phai diem cuoi) nen KHONG can migration doi CongDoanHienTaiID -
+// xem ghi chu NCH ngay tren. LUU Y: tu v8.29 cong doan 'LA' da khong con ghi PhanCongLaDongGoi nua
+// (bo chon nhan vien), nen viec bo han 'LA' khoi luong o day khong lam mat them du lieu luong nao.
+const MA_CONG_DOAN_BO_QUA = ['GV', 'PK', 'HT', 'NCH', 'LA', 'GNGC', 'NNGC', 'GNIT', 'NNIT'];   // v5.31: an GNGC/NNGC cu; v5.33: an GNIT/NNIT (in theu cu trung voi GIT/NIT moi); v8.30: an NCH (gop vao May); v8.33: an LA
 
 // v5.20 (muc 1/2/3): 2 cong doan MOI thay 1 phan modal "Giao/nhan nha gia cong & nha in" (openVendorForm)
 // da bi XOA khoi Danh sach lenh san xuat (yeu cau muc 3) - nay la 2 CONG DOAN THAT trong chinh luong Ghi
@@ -106,9 +121,10 @@ function tinhNextStage(stages, curIndex, order) {
     // nhap truc tiep tai chinh cong doan 'GC' (Nha gia cong chi tiet + SoLuong, xem tren), khong con 1
     // cong doan trung gian nao khac thay the.
     if (ma === MA_CONG_DOAN_MAY && chiGiaCongNgoai) { nextIndex++; continue; }
-    // v5.31: don CHI gia cong ngoai - sau "Nhan gia cong" (NGC) nhay THANG sang QC, bo qua "Nhat chi" (NCH)
-    // (nha gia cong da lam xong khau nay). Don co "Giao nha lam" van di qua May -> NCH binh thuong.
-    if (ma === 'NCH' && chiGiaCongNgoai) { nextIndex++; continue; }
+    // v5.31 (đã hết hiệu lực từ v8.30): dòng skip CÓ ĐIỀU KIỆN "bỏ NCH nếu chỉ gia công ngoài" không
+    // còn cần nữa - từ v8.30 'NCH' đã nằm trong MA_CONG_DOAN_BO_QUA (bỏ KHÔNG ĐIỀU KIỆN cho MỌI đơn,
+    // xem đầu file) nên nhánh check ở trên (dòng 97) đã chặn NCH trước khi chạy tới đây - giữ dòng
+    // comment này để người đọc sau không thắc mắc "chiGiaCongNgoai" biến mất khỏi lịch sử NCH ở đâu.
     // v5.30: "Nhan gia cong" (NGC) chi ap dung don co giao gia cong ngoai - bo qua neu don khong giao gia cong.
     if (ma === 'NGC' && !order.DaGiaoGiaCong) { nextIndex++; continue; }
     // v5.33: don KHONG in theu -> bo qua Giao/Nhan in theu (GIT/NIT), Cat nhay thang sang Giao gia cong.
@@ -307,7 +323,25 @@ router.get('/orders/:maDH', requireAuth, requirePermission('QLSX', 'view'), requ
      con số trên form luôn khớp con số hệ thống đang tính. */
   const knStageIdForm = await getKhoNhapStageId(pool);
   const slKhoNhapTheoMau = knStageIdForm ? await getStageActualQtyByColor(pool, order.DonHangID, knStageIdForm) : {};
-  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet } });
+
+  /* v8.34 — SL LŨY KẾ THEO MÀU CỦA TỪNG CÔNG ĐOẠN, để form Ghi nhận tiến độ hiện cột đối chiếu
+     "công đoạn trước" bên cạnh ô nhập (yêu cầu: "những công đoạn sau hiện thêm cột số lượng nhập
+     của công đoạn trước và cột số lượng từ cắt").
+
+     Dùng CHÍNH getStageActualQtyByColor — cùng hàm đang tính slCatTheoMau/slKhoNhapTheoMau ở trên,
+     nên con số hiện trên form LUÔN khớp con số hệ thống đang tính (cùng quy tắc effectiveTienDoIds
+     + cùng cách loại màu Phối). KHÔNG viết truy vấn gộp riêng để tránh lệch nguồn.
+
+     CAT/KN lấy lại 2 biến đã tính ở trên (không truy vấn lại). Chỉ thêm MAY/QC/DG.
+     Không đụng schema, không migration. */
+  const slTheoMauCongDoan = { CAT: slCatTheoMau, KN: slKhoNhapTheoMau };
+  const stageRowsDoiChieu = (await pool.request().query(
+    "SELECT StageID, MaCongDoan FROM CongDoanSanXuat WHERE MaCongDoan IN (N'MAY', N'QC', N'DG')")).recordset;
+  for (const s of stageRowsDoiChieu) {
+    slTheoMauCongDoan[s.MaCongDoan] = await getStageActualQtyByColor(pool, order.DonHangID, s.StageID);
+  }
+
+  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, slTheoMauCongDoan, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet } });
 });
 
 // v5.0: chi tiet vai LONG NHAU - moi dong "Chính" mang theo mang "phoi" cua chinh no (loc theo
@@ -588,7 +622,25 @@ async function getCatMauList(pool, donHangId, stageId) {
                                 AND cv.MauSacID IS NOT NULL AND cv.MauSacID = ct.MauSacID)
             GROUP BY ct.MauSacID, ms.TenMau
             ORDER BY ms.TenMau`);
-  return result.recordset.map(r => ({ MauSacID: r.MauSacID, TenMau: r.TenMau || '', SoLuong: Number(r.SoLuong) || 0 }));
+  /* v8.31: THÊM tổng số lớp đã cắt CHO TỪNG MÀU (TienDoCatChiTietCay.SoLuongLop, cộng dồn mọi cây CÙNG
+     MÀU - Nguyen: "gộp các cây cùng màu vào nhau... nguyên tắc cộng vẫn như vậy" giống cách SoLuong ở
+     trên đang cộng) - dùng làm hệ số quy đổi CÁI -> RI ở công đoạn Đóng gói (xem renderStageFields('DG')
+     trong module.qlsx.js). CỐ Ý viết THÀNH QUERY RIÊNG, không nhét vào query SoLuong ở trên - query đó
+     đã rất rối (lọc màu Chính/Phối phức tạp), tách riêng để không rủi ro phá logic lọc sẵn có. Dùng
+     CHUNG biến ids (effectiveTienDoIds) để cùng phạm vi "lần cắt có hiệu lực" với SoLuong phía trên - khác
+     phạm vi thì SoLuong/TongSoLop lệch nhau, chia ra hệ số Ri sẽ sai. */
+  const lopResult = await pool.request().query(`
+    SELECT dv.MauSacID, SUM(cc.SoLuongLop) AS TongSoLop
+    FROM TienDoCatChiTietCay cc
+    JOIN VaiCay vc ON vc.CayID = cc.CayID
+    JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+    WHERE cc.TienDoID IN (${ids.join(',')})
+    GROUP BY dv.MauSacID`);
+  const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), Number(r.TongSoLop) || 0]));
+  return result.recordset.map(r => ({
+    MauSacID: r.MauSacID, TenMau: r.TenMau || '', SoLuong: Number(r.SoLuong) || 0,
+    TongSoLop: lopMap.get(String(r.MauSacID)) || 0
+  }));
 }
 
 // v5.30: tong SL (mau chinh) tu ket qua Cat gan nhat = tong SoLuong tung mau (dung chung getCatMauList).
@@ -816,6 +868,9 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
       tenSanPham, maSanPham, size, khachHangId, ngayDat, ngayGiao, anhSanPham,
       thietKeVien, kyThuatRap, dongHinhIn, anhHinhIn, ghiChuLenh, chiTietVai, chiTietPhuKien,
       heSoQuyDoi,
+      // v8.35: ten san pham se IN LEN NHAN/TEM cua san pham - o ghi chep TU DO, co the khac
+      // TenSanPham dung noi bo. Khong bat buoc. Xem migration_v835.sql.
+      tenSanPhamTem,
       // v6.43: tên khách GÕ TỰ DO — chỉ khi tên đó KHÔNG có trong danh mục (frontend đã dò trước).
       // Không tạo bản ghi khách mới; tên chỉ sống trong chính lệnh SX này và các bản in của nó.
       tenKhachHangTuDo,
@@ -843,6 +898,7 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
     const result = await pool.request()
       .input('MaDH', sql.NVarChar, maDH)
       .input('TenSanPham', sql.NVarChar, tenSanPham)
+      .input('TenSanPhamTem', sql.NVarChar(255), (tenSanPhamTem || '').trim() || null)   // v8.35: tên in lên nhãn/tem SP
       .input('MaSanPham', sql.NVarChar, maSanPham || null)
       .input('Size', sql.NVarChar, size || null)
       .input('KhachHangID', sql.Int, khachHangId || null)
@@ -869,9 +925,9 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
       .input('Mac', sql.NVarChar, mac || null)                  // v5.42
       .input('PhuLieu', sql.NVarChar(sql.MAX), phuLieu || null) // v5.42 (nhiều dòng phụ kiện, nối \n)
       .query(`INSERT INTO DonHangSanXuat
-              (MaDH, TenSanPham, MaSanPham, Size, KhachHangID, TenKhachHangTuDo, NgayDat, NgayGiaoDuKien, TongSoLuong, CongDoanHienTaiID, AnhSanPham, ThietKeVien, KyThuatRap, DongHinhIn, AnhHinhIn, GhiChuLenh, HeSoQuyDoi, DonViQuyDoiID, CoInTheu, Mac, PhuLieu)
+              (MaDH, TenSanPham, TenSanPhamTem, MaSanPham, Size, KhachHangID, TenKhachHangTuDo, NgayDat, NgayGiaoDuKien, TongSoLuong, CongDoanHienTaiID, AnhSanPham, ThietKeVien, KyThuatRap, DongHinhIn, AnhHinhIn, GhiChuLenh, HeSoQuyDoi, DonViQuyDoiID, CoInTheu, Mac, PhuLieu)
               OUTPUT INSERTED.DonHangID
-              VALUES (@MaDH, @TenSanPham, @MaSanPham, @Size, @KhachHangID, @TenKhachHangTuDo, @NgayDat, @NgayGiaoDuKien, @TongSoLuong, @CongDoanHienTaiID, @AnhSanPham, @ThietKeVien, @KyThuatRap, @DongHinhIn, @AnhHinhIn, @GhiChuLenh, @HeSoQuyDoi, @DonViQuyDoiID, @CoInTheu, @Mac, @PhuLieu)`);
+              VALUES (@MaDH, @TenSanPham, @TenSanPhamTem, @MaSanPham, @Size, @KhachHangID, @TenKhachHangTuDo, @NgayDat, @NgayGiaoDuKien, @TongSoLuong, @CongDoanHienTaiID, @AnhSanPham, @ThietKeVien, @KyThuatRap, @DongHinhIn, @AnhHinhIn, @GhiChuLenh, @HeSoQuyDoi, @DonViQuyDoiID, @CoInTheu, @Mac, @PhuLieu)`);
     const donHangId = result.recordset[0].DonHangID;
 
     if (Array.isArray(chiTietVai)) {
@@ -945,6 +1001,7 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     const {
       tenSanPham, maSanPham, size, khachHangId, tenKhachHangTuDo, ngayDat, ngayGiao,   // v6.43: + tên khách gõ tự do
+      tenSanPhamTem,   // v8.35: tên in lên nhãn/tem SP (tự do, có thể để trống)
       thietKeVien, kyThuatRap, dongHinhIn, anhHinhIn, ghiChuLenh,
       // v5.6: chiTietVai nay la TUY CHON - chi gui khi nguoi dung THUC SU sua cau truc vai o form Sua
       // lenh san xuat (yeu cau v5.6 "sua lenh sx sua ca phan chon vai"). Khong gui (undefined) = giu
@@ -992,6 +1049,7 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
     await pool.request()
       .input('id', sql.Int, order.DonHangID)
       .input('TenSanPham', sql.NVarChar, tenSanPham)
+      .input('TenSanPhamTem', sql.NVarChar(255), (tenSanPhamTem || '').trim() || null)   // v8.35: tên in lên nhãn/tem SP
       .input('MaSanPham', sql.NVarChar, maSanPham || null)
       .input('Size', sql.NVarChar, size || null)
       .input('KhachHangID', sql.Int, khachHangId || null)
@@ -1012,7 +1070,7 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
       .input('Mac', sql.NVarChar, mac || null)                  // v5.42
       .input('PhuLieu', sql.NVarChar(sql.MAX), phuLieu || null) // v5.42
       .input('AnhSanPham', sql.NVarChar, anhSanPham || null)    // v5.42
-      .query(`UPDATE DonHangSanXuat SET TenSanPham=@TenSanPham, MaSanPham=@MaSanPham, Size=@Size, KhachHangID=@KhachHangID, TenKhachHangTuDo=@TenKhachHangTuDo,
+      .query(`UPDATE DonHangSanXuat SET TenSanPham=@TenSanPham, TenSanPhamTem=@TenSanPhamTem, MaSanPham=@MaSanPham, Size=@Size, KhachHangID=@KhachHangID, TenKhachHangTuDo=@TenKhachHangTuDo,
               NgayDat=@NgayDat, NgayGiaoDuKien=@NgayGiaoDuKien, TongSoLuong=ISNULL(@TongSoLuong, TongSoLuong), ThietKeVien=@ThietKeVien,
               KyThuatRap=@KyThuatRap, DongHinhIn=@DongHinhIn, AnhHinhIn=@AnhHinhIn, GhiChuLenh=@GhiChuLenh, HeSoQuyDoi=@HeSoQuyDoi,
               DonViQuyDoiID=@DonViQuyDoiID, CoInTheu=@CoInTheu, Mac=@Mac, PhuLieu=@PhuLieu, AnhSanPham=ISNULL(@AnhSanPham, AnhSanPham), UpdatedAt=SYSDATETIME()
@@ -3466,6 +3524,18 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
         .input('nl', sql.Bit, daGiaoNhaLam ? 1 : 0)
         .input('gc', sql.Bit, daGiaoGiaCong ? 1 : 0)
         .query('UPDATE DonHangSanXuat SET DaGiaoNhaLam=@nl, DaGiaoGiaCong=@gc, UpdatedAt=SYSDATETIME() WHERE DonHangID=@id');
+      // v8.32 (SUA LOI Nguyen bao 2026-09-22: "khi chi tich chon giao gia cong thi trang thai phai la
+      // giao gia cong, day lai bao la may"). Bien `order` duoc doc o DAU route (getOrderByMaDH, phia
+      // tren) - tuc TRUOC lenh UPDATE vua chay ngay tren day - nen 2 co DaGiaoNhaLam/DaGiaoGiaCong trong
+      // `order` van la GIA TRI CU (lan dau mo cong doan 'GC' thi ca 2 = 0). tinhNextStage() o cuoi route
+      // lai doc DUNG 2 co nay => voi don chi tich "Giao gia cong": chiGiaCongNgoai tinh ra false nen
+      // KHONG bo qua 'MAY', dong thoi nhanh "if (ma === 'NGC' && !order.DaGiaoGiaCong)" lai BO NHAM
+      // 'NGC' => con tro nhay thang sang "May" - dung nhu trieu chung.
+      // Dong bo lai NGAY tren bien `order` trong bo nho theo dung gia tri vua ghi xuong CSDL (khong
+      // truy van lai - 2 gia tri da biet chac chan, doc lai chi ton them 1 round-trip). Sau sua nay:
+      // chi tich "Giao gia cong" -> bo qua 'MAY', dung o 'NGC' (Nhan gia cong) dung thiet ke v5.30.
+      order.DaGiaoNhaLam = daGiaoNhaLam ? 1 : 0;
+      order.DaGiaoGiaCong = daGiaoGiaCong ? 1 : 0;
     }
 
     // v5.21 (muc 8): khai bao nha in/theu tai "Ky thuat" da bi XOA (khong con can biet NhaInID tu som -

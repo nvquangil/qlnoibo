@@ -15,6 +15,8 @@ const MODULES = [
   { code: 'KHOHANG', label: 'Thẻ kho hàng hóa', icon: '📦', mod: window.ModuleKhoHang },
   // v6.23: phân hệ công nợ (phiếu thu / phiếu chi / công nợ khách hàng / công nợ NCC)
   { code: 'CONGNO', label: 'Quản lý công nợ', icon: '💵', mod: window.ModuleCongNo },
+  // v8.36: hóa đơn điện tử - kết nối cổng Tổng cục thuế (tải HĐ đầu vào/đầu ra)
+  { code: 'HOADON', label: 'Hóa đơn điện tử', icon: '🧾', mod: window.ModuleHoaDon },
   // v6.26: báo cáo tồn kho (hàng hóa/vải/phụ kiện) + tài chính + kết quả kinh doanh
   { code: 'BAOCAO', label: 'Báo cáo kinh doanh', icon: '📊', mod: window.ModuleBaoCao },
   // v7.23: đi tuyến thị trường (shop bán lẻ, ghé thăm GPS, lộ trình, doanh số NVKD)

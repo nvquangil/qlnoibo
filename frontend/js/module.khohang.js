@@ -2895,21 +2895,29 @@ window.ModuleKhoHang = (function () {
     }));
   }
 
-  /* v6.62: GIÁ BÁN trên thẻ kho là giá ĐÃ GỒM THUẾ. Nên chiều tính bị ĐẢO so với trước:
-       Sau VAT   = chính giá bán  (không nhân thêm lần nữa)
-       Trước VAT = giá bán / (1 + %VAT)
+  /* v8.37: GỐC TÍNH nay là GIÁ SAU CK SHOP (= Giá bán × (1 − CK_SHOP%), backend tính sẵn trong SQL
+     và vẫn trả về dưới tên GiaAloha). Nguyen chốt bằng ví dụ số THẬT (2026-09-24):
+       "giá bán 100.000, CK shop 33% thành còn 67.000 điền vào cột giá trước thuế của aloha,
+        thuế 8%, giá sau thuế = 67000 + 67000*8%"
+     →  Trước VAT = GiaAloha             (67.000)
+        Sau VAT   = GiaAloha × (1+%VAT)  (72.360)
+
+     ⚠️ ĐẢO CHIỀU so với v6.62 — và đó là ĐÚNG, không phải lỗi cộng thuế hai lần tái phát:
+     v6.62 lấy GIÁ BÁN LẺ (đã gồm thuế, bán cho người tiêu dùng) nên phải CHIA xuống; ở đây lấy
+     GIÁ SAU CK SHOP — là giá bán buôn CHƯA thuế theo định nghĩa của Nguyen — nên NHÂN lên.
+     Gốc tính khác nhau thì chiều tính khác nhau. Đừng "sửa lại cho giống v6.62".
      Trước đây coi giá lấy vào là giá TRƯỚC thuế rồi nhân lên -> báo giá gửi khách bị cộng thuế
      HAI LẦN (giá 108.000 đã gồm 8% thành 116.640).
      PhanTramVAT lưu dạng PHÂN SỐ (0.08 = 8%) — khác Thẻ kho lưu 20 = 20%, đừng chép công thức qua lại.
      Dùng chung cho modal xem, bản in và Excel để 3 nơi không lệch nhau. */
   function baoGiaSauVat(it) {
-    const gia = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-    return gia;   // giá bán đã gồm VAT
-  }
-  function baoGiaTruocVat(it) {
     const vat = Number(it.PhanTramVAT) || 0;
     const gia = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-    return gia != null ? gia / (1 + vat) : null;
+    return gia != null ? gia * (1 + vat) : null;   // v8.37: giá sau CK shop CỘNG thuế lên
+  }
+  function baoGiaTruocVat(it) {
+    const gia = it.GiaAloha != null ? Number(it.GiaAloha) : null;
+    return gia;   // v8.37: giá sau CK shop CHÍNH LÀ giá trước thuế
   }
 
   // v5.18 (muc 2.1.1): modal "Xem" 1 bao gia - header (Ten bao gia/Ngay tao/Ten Cty SX-NK/Ma+Ten NCC/Ghi
@@ -2979,8 +2987,11 @@ window.ModuleKhoHang = (function () {
     return gt.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
   }
   function candRowHtml(c, prefill) {
-    // v6.61: GiaAloha nay là ALIAS của Giá bán (xem khohang.js) -> đổi nhãn cho khỏi hiểu nhầm.
-    const gia = c.GiaAloha != null ? `<span style="color:#5f6368;">(${fmtNumber(c.GiaAloha)}đ)</span>` : '<span style="color:#c0392b;">(chưa có Giá bán)</span>';
+    /* v8.37: GiaAloha nay là GIÁ SAU CK SHOP (backend tính từ Giá bán × (1 − CK_SHOP%), xem
+       SQL_GIA_ALOHA trong khohang.js) -> ghi rõ nhãn để không ai tưởng đây là Giá bán. */
+    const gia = c.GiaAloha != null
+      ? `<span style="color:#5f6368;" title="Giá sau CK shop — dùng làm giá TRƯỚC thuế trên báo giá">(sau CK: ${fmtNumber(c.GiaAloha)}đ)</span>`
+      : '<span style="color:#c0392b;">(chưa có Giá bán)</span>';
     const checked = !!prefill;
     const vatValue = prefill && prefill.PhanTramVAT != null ? Math.round(Number(prefill.PhanTramVAT) * 10000) / 100 : 8;
     /* v7.54: hiện TỒN KHO ngay cạnh mã — người lập báo giá không phải sang màn Thẻ kho tra lại.

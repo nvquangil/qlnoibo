@@ -1770,6 +1770,54 @@ Trước đây phiếu bán hàng ghi cứng "Cái" ở mọi chỗ. Nay lấy t
 
 ---
 
+## BƯỚC 3.76 — Hóa đơn điện tử: kết nối cổng Tổng cục thuế (v8.36)
+
+Phân hệ **mới**: tải hóa đơn đầu vào / đầu ra từ `hoadondientu.gdt.gov.vn` ngay trong QLNoiBo. Đăng nhập cổng thuế **gõ captcha bằng tay** (cố ý — không tự động giải, để không vi phạm điều khoản sử dụng của cổng TCT). Mật khẩu cổng thuế lưu trong CSDL ở dạng **mã hóa**, nên mỗi lần tải chỉ phải gõ captcha.
+
+**CÓ migration: `migration_v836.sql`** (đăng ký module `HOADON`, bảng `CauHinhHoaDonDienTu` + `HoaDonDienTu`).
+
+### 1. Thêm `HOADON_SECRET` vào `backend/.env` — BẮT BUỘC
+
+Đây là **khóa mã hóa mật khẩu cổng thuế**. Không có nó thì màn Cấu hình báo lỗi đỏ và không lưu được mật khẩu.
+
+```
+HOADON_SECRET=<chuỗi ngẫu nhiên, tối thiểu 16 ký tự>
+```
+
+Điền **một chuỗi ngẫu nhiên bất kỳ do bạn tự sinh** — không phải mật khẩu thuế, không phải MST, không liên quan gì tới tài khoản TCT. Sinh nhanh bằng một trong hai cách:
+
+```powershell
+# Cách 1 - PowerShell (có sẵn trên Windows)
+-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 48 | % {[char]$_})
+
+# Cách 2 - Node (máy đã cài Node để chạy hệ thống)
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Ba điều bắt buộc nhớ, sai là mất dữ liệu:
+
+- **Đặt một lần rồi ĐỪNG ĐỔI.** Đổi `HOADON_SECRET` là mật khẩu thuế đã lưu không giải mã được nữa — phải vào tab Cấu hình nhập lại mật khẩu.
+- **Sao lưu chuỗi này cùng chỗ với backup CSDL.** Khôi phục CSDL sang máy khác mà thiếu đúng chuỗi này thì cột mật khẩu trong bản backup thành rác.
+- **Không commit lên git.** File `.env` đã nằm trong `.gitignore`, giữ nguyên như vậy.
+
+> Đánh đổi đã biết và chấp nhận: ai đọc được **cả** CSDL **lẫn** file `.env` thì giải mã được mật khẩu cổng thuế. Đây là cái giá của việc không phải gõ lại mật khẩu mỗi lần tải hóa đơn. Muốn an toàn tuyệt đối thì phải nhập mật khẩu mỗi phiên — đã cân nhắc và chọn phương án hiện tại.
+
+### 2. Cài đặt
+
+1. Chạy `database/migration_v836.sql`.
+2. Thêm `HOADON_SECRET` vào `backend/.env` (mục 1 ở trên).
+3. Copy: `backend/routes/hoadon.js`, `backend/server.js`, `frontend/js/module.hoadon.js`, `frontend/js/app.js`, `frontend/index.html`.
+4. **`pm2 restart qlnoibo`** (bắt buộc — vừa chạy migration vừa sửa `.env`) + **Ctrl+F5**.
+5. **Cấp quyền thủ công**: vào **Quản lý User → Ma trận phân quyền**, bật quyền module **Hóa đơn điện tử** cho nhóm cần dùng.
+
+> Vì sao phải cấp quyền tay: module này mặc định **TẮT với mọi nhóm** (khác các phân hệ trước vốn mặc định cho Xem). Màn này chạm tới mật khẩu cơ quan thuế và chứng từ kế toán nên phải là quyết định có chủ đích. Admin đã sẵn toàn quyền. **Nếu sau khi cài mà không thấy menu "Hóa đơn điện tử" thì gần như chắc chắn là chưa làm bước này, không phải lỗi cài đặt.**
+
+### 3. Dùng lần đầu
+
+Vào **Hóa đơn điện tử → Cấu hình kết nối TCT**: nhập **MST** và **mật khẩu cổng thuế** → Lưu. Sang tab **Hóa đơn đầu vào**: hệ thống lấy ảnh captcha thật từ TCT → gõ mã → Đăng nhập. Gõ sai thì hệ thống tự cấp ảnh **mới** (mã cũ dùng một lần là hỏng, không gõ lại được trên cùng ảnh).
+
+---
+
 ## BƯỚC 3.75 — Báo giá Aloha lấy thẳng Giá bán, bỏ ô "Giá Aloha" ở Thẻ kho (v6.61)
 
 ```

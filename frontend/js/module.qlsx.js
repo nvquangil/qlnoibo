@@ -1266,6 +1266,9 @@ window.ModuleQLSX = (function () {
       <form id="editForm">
         <div class="form-grid">
           <div class="form-row"><label>Tên sản phẩm *</label><input name="tenSanPham" value="${escapeHtml(detail.TenSanPham || '')}" required></div>
+          ${/* v8.35: tên IN LÊN NHÃN/TEM của sản phẩm - gõ tự do, có thể khác "Tên sản phẩm" dùng nội bộ.
+               Không bắt buộc; để trống thì bản in vẫn in nhãn với ô trống để ghi tay. */''}
+          <div class="form-row"><label>Tên sản phẩm trên tem</label><input name="tenSanPhamTem" value="${escapeHtml(detail.TenSanPhamTem || '')}" placeholder="Tên sẽ in lên nhãn/tem sản phẩm"></div>
           <div class="form-row"><label>Mã đơn hàng</label><input value="${escapeHtml(maDH)}" disabled></div>
           <div class="form-row"><label>Size</label><input name="size" value="${escapeHtml(detail.Size || '')}"></div>
           ${/* v6.43: xem ghi chú ở form Ra lệnh SX. detail.TenKhachHang đã là tên hiển thị (tự do nếu
@@ -1411,6 +1414,7 @@ window.ModuleQLSX = (function () {
         // /orders/:maDH trong qlsx.js) - them gui "heSoQuyDoi".
         await apiPut(`/api/qlsx/orders/${maDH}`, {
           tenSanPham: fd.get('tenSanPham'), size: fd.get('size'),
+          tenSanPhamTem: fd.get('tenSanPhamTem'),   // v8.35: tên in lên nhãn/tem SP (tự do, được để trống)
           ...tachKhachHang(fd.get('khachHangText')),   // v6.43: -> { khachHangId, tenKhachHangTuDo }
           ngayDat: fd.get('ngayDat'), ngayGiao: fd.get('ngayGiao'),
           heSoQuyDoi: fd.get('heSoQuyDoi') || 1,
@@ -1652,6 +1656,9 @@ window.ModuleQLSX = (function () {
         <form id="lenhForm">
           <div class="form-grid">
             <div class="form-row"><label>Tên sản phẩm *</label><input name="tenSanPham" required></div>
+            ${/* v8.35: tên IN LÊN NHÃN/TEM của sản phẩm - gõ tự do, có thể khác "Tên sản phẩm" dùng nội bộ.
+                 Không bắt buộc; để trống thì bản in vẫn in nhãn với ô trống để xưởng ghi tay. */''}
+            <div class="form-row"><label>Tên sản phẩm trên tem</label><input name="tenSanPhamTem" placeholder="Tên sẽ in lên nhãn/tem sản phẩm"></div>
             <div class="form-row"><label>Mã đơn hàng</label><input id="inpMaDHPreview" value="(đang tạo mã...)" disabled title="Mã đơn hàng do hệ thống tự sinh — chỉ ghi vào CSDL khi bấm Lưu"></div>
             <div class="form-row"><label>Size</label><input name="size" placeholder="VD: 9M - 4Y"></div>
             ${/* v6.43: Khách hàng GÕ TỰ DO. Gõ trùng tên có trong danh mục -> vẫn lưu khóa nối như cũ
@@ -1780,6 +1787,7 @@ window.ModuleQLSX = (function () {
         // trong qlsx.js) - them gui "heSoQuyDoi".
         const res = await apiPost('/api/qlsx/orders', {
           tenSanPham: fd.get('tenSanPham'), size: fd.get('size'),
+          tenSanPhamTem: fd.get('tenSanPhamTem'),   // v8.35: tên in lên nhãn/tem SP (tự do, được để trống)
           ...tachKhachHang(fd.get('khachHangText')),   // v6.43: -> { khachHangId, tenKhachHangTuDo }
           ngayDat: fd.get('ngayDat'), ngayGiao: fd.get('ngayGiao'),
           anhSanPham, heSoQuyDoi: fd.get('heSoQuyDoi') || 1,
@@ -1940,6 +1948,9 @@ window.ModuleQLSX = (function () {
         <tr><td><b>Mã sản phẩm:</b> ${escapeHtml(o.MaSanPham || o.MaDH || '')}</td><td><b>Kỹ thuật rập:</b> ${escapeHtml(o.KyThuatRap || '')}</td></tr>
         <tr><td colspan="2"><b>Mã rập (sơ đồ):</b> ${escapeHtml(o.MaRap || '')}</td></tr>
         <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}</td></tr>
+        ${/* v8.35: LUÔN in dòng này kể cả khi trống (Nguyen: "luôn in nhãn với ô trống để ghi tay") -
+             đơn cũ chưa có dữ liệu sẽ ra ô trống, xưởng điền tay, bố cục phiếu không đổi. */''}
+        <tr><td colspan="2"><b>Tên sản phẩm trên tem:</b> ${escapeHtml(o.TenSanPhamTem || '')}</td></tr>
         <tr><td colspan="2"><b>Khách hàng:</b> ${escapeHtml(o.TenKhachHang || '')}</td></tr>
         <tr><td><b>Size:</b> ${escapeHtml(o.Size || '')}</td><td><b>Ngày Deadline:</b> ${fmtDate(o.NgayGiaoDuKien)}</td></tr>
         <tr><td><b>Vải chính:</b> ${vaiChinh || '—'}${c.GhiChu ? ` <i>(${escapeHtml(c.GhiChu)})</i>` : ''}</td><td><b>Vải phối:</b> ${vaiPhoi || '—'}</td></tr>
@@ -1967,6 +1978,8 @@ window.ModuleQLSX = (function () {
       <table style="margin-top:8px;"><tbody>
         <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td><td><b>Mã SP:</b> ${escapeHtml(o.MaSanPham || o.MaDH || '')}</td><td><b>Size:</b> ${escapeHtml(o.Size || '')}</td></tr>
         <tr><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}</td><td><b>Kỹ thuật rập:</b> ${escapeHtml(o.KyThuatRap || '')}</td><td><b>Deadline ra hàng:</b> ${fmtDate(o.NgayGiaoDuKien)}</td></tr>
+        ${/* v8.35: LUÔN in dòng này kể cả khi trống (Nguyen: "luôn in nhãn với ô trống để ghi tay"). */''}
+        <tr><td colspan="3"><b>Tên sản phẩm trên tem:</b> ${escapeHtml(o.TenSanPhamTem || '')}</td></tr>
         <tr><td colspan="3"><b>Khách hàng:</b> ${escapeHtml(o.TenKhachHang || '')}</td></tr>
         <tr><td colspan="3"><b>Mã rập (sơ đồ):</b> ${escapeHtml(o.MaRap || '')}</td></tr>
       </tbody></table>
@@ -3058,7 +3071,16 @@ window.ModuleQLSX = (function () {
     // Rong/khong gan = xem HET (dong nhat backend loc don hang + canUpdateStage). Admin xem het.
     const myStageIds = Array.isArray(currentUser.congDoanIds) ? currentUser.congDoanIds : [];
     const seeAllStages = currentUser.isAdmin || !myStageIds.length;
+    // v8.33 (Nguyen: "bỏ công đoạn là, nhặt chỉ ra khỏi luồng lệnh sản xuất. không hiện trong ghi nhận
+    // tiến độ"): ẩn 'NCH' (Nhặt chỉ — đã gộp vào May từ v8.30) và 'LA' (Là — bỏ khỏi luồng từ v8.33)
+    // khỏi CHÍNH ô chọn Công đoạn, đúng cách đã làm cho 'GV'/'PK' ở trên: backend tinhNextStage() đã bỏ
+    // qua 2 mã này (MA_CONG_DOAN_BO_QUA) nên đơn MỚI không bao giờ dừng ở đó — ẩn thêm ở đây để không ai
+    // chọn tay được. Luồng còn lại: ... May → QC → Đóng gói → Kho nhập.
+    // ⚠️ Đơn CŨ đang đứng sẵn ở 'LA'/'NCH' lúc deploy: KHÔNG kẹt vĩnh viễn — chọn thẳng công đoạn SAU đó
+    // (QC/Đóng gói) rồi Gửi là con trỏ tự tiến (xem khối "advanced" trong POST /orders/:maDH/tiendo),
+    // không cần migration dời CongDoanHienTaiID.
     const stages = dm.congDoan.filter(s => s.MaCongDoan !== 'GV' && s.MaCongDoan !== 'PK'
+      && s.MaCongDoan !== 'NCH' && s.MaCongDoan !== 'LA'
       && s.MaCongDoan !== 'GNGC' && s.MaCongDoan !== 'NNGC'
       && s.MaCongDoan !== 'GNIT' && s.MaCongDoan !== 'NNIT'   // v5.33: an in theu cu (trung GIT/NIT moi)
       && s.TenCongDoan !== 'Giao nhà gia công' && s.TenCongDoan !== 'Nhận nhà gia công'
@@ -3135,15 +3157,117 @@ window.ModuleQLSX = (function () {
     modal.querySelector('#btnCancel').addEventListener('click', closeModal);
 
     // ---- Cac mau HTML dung chung ----
+    /* ================================================================================================
+       v8.34 — CỘT ĐỐI CHIẾU "CÔNG ĐOẠN TRƯỚC".
+       Yêu cầu: "những công đoạn sau hiện thêm cột số lượng nhập của công đoạn trước và cột số lượng
+       từ cắt" — để người ghi tiến độ phát hiện lệch/hụt ngay lúc nhập, không phải mở báo cáo khác.
+
+       "Công đoạn trước" = công đoạn LIỀN TRƯỚC CÓ GHI SL THEO MÀU và THỰC SỰ nằm trong luồng của
+       ĐÚNG đơn này. Giao gia công (GC) / Nhận gia công (NGC) KHÔNG ghi SL theo màu (chỉ ghi SL
+       giao/nhận theo từng nhà gia công) nên không bao giờ là nguồn đối chiếu.
+
+       Ngoại lệ theo đơn: đơn CHỈ gia công ngoài thì "May" bị bỏ qua khỏi luồng (xem tinhNextStage()
+       backend + giaCongNgoaiFE ngay phía trên) - khi đó QC đối chiếu thẳng với SỔ CẮT, đúng yêu cầu
+       Nguyen: "nếu Giao/nhận gia công thì phần QC sẽ phải nhập số lượng từng mầu và hiện số sổ cắt
+       để đối chiếu".
+
+       Khi "công đoạn trước" chính là Cắt thì GỘP còn MỘT cột (không hiện 2 cột giống hệt nhau).
+       Công đoạn trước chưa ghi lần nào -> hiện "chưa ghi", KHÔNG lùi tiếp về công đoạn xa hơn (để
+       nhãn cột luôn nói đúng tên công đoạn đang so, không đổi tùy đơn).
+       ================================================================================================ */
+    const slTheoMauCongDoan = detail.slTheoMauCongDoan || {};
+    const MA_CONG_DOAN_TRUOC = { MAY: 'CAT', QC: 'MAY', DG: 'QC', KN: 'DG' };
+    function maCongDoanTruoc(stageCode) {
+      if (stageCode === 'QC' && giaCongNgoaiFE) return 'CAT';   // đơn chỉ gia công ngoài: May không nằm trong luồng
+      return MA_CONG_DOAN_TRUOC[stageCode] || null;
+    }
+    function coCotCongDoanTruoc(stageCode) {
+      const ma = maCongDoanTruoc(stageCode);
+      return !!ma && ma !== 'CAT';                              // trùng cột Cắt thì không hiện thành 2 cột
+    }
+    function tenCongDoanTheoMa(ma) {
+      const s = (dm.congDoan || []).find(x => x.MaCongDoan === ma);
+      return s && s.TenCongDoan ? s.TenCongDoan : ma;
+    }
+    // Trả về 1 HOẶC 2 ô (div.form-row) - nơi gọi phải đặt grid-template-columns khớp số ô này.
+    function oDoiChieuHtml(stageCode, mauSacId, slCat) {
+      const oCat = `<div class="form-row"><label>Cắt</label><div class="readonly-fact">${fmtNumber(slCat || 0)}</div></div>`;
+      if (!coCotCongDoanTruoc(stageCode)) return oCat;
+      const ma = maCongDoanTruoc(stageCode);
+      const v = (slTheoMauCongDoan[ma] || {})[String(mauSacId)];
+      const so = v == null ? '<span style="color:#8a8a8a;">chưa ghi</span>' : fmtNumber(Number(v) || 0);
+      return `<div class="form-row"><label>${escapeHtml(tenCongDoanTheoMa(ma))}</label><div class="readonly-fact">${so}</div></div>${oCat}`;
+    }
+
     // v5.0: them cot tham khao "Cắt: X" ben canh SL nhap, ap dung cho May va cac cong doan sau Cat khac
     // (khong ap dung rieng cong doan Cat vi Cat gio dung UI theo cay o duoi). Yeu cau v5.2 muc 8 ("cac
     // cong doan sau Cat hien SL da quy doi theo tung mau") DA duoc dap ung boi cot nay.
-    function mauQtyRowsHtml() {
-      return catMauList.map(ct => `<div class="row-item" style="grid-template-columns:160px 1fr 110px;">
+    // v8.34: nhan them stageCode de biet doi chieu voi cong doan nao (xem khoi ghi chu ngay tren).
+    function mauQtyRowsHtml(stageCode) {
+      const cols = coCotCongDoanTruoc(stageCode) ? '160px 1fr 140px 110px' : '160px 1fr 110px';
+      return catMauList.map(ct => `<div class="row-item" style="grid-template-columns:${cols};">
           <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
           <div class="form-row"><input type="number" min="0" class="mau-qty" data-mausac="${ct.MauSacID}" placeholder="SL lũy kế"></div>
-          <div class="form-row"><div class="readonly-fact">Cắt: ${fmtNumber(ct.SoLuong || 0)}</div></div>
+          ${oDoiChieuHtml(stageCode, ct.MauSacID, ct.SoLuong)}
         </div>`).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>';
+    }
+    /* v8.31: giống mauQtyRowsHtml() nhưng dành RIÊNG cho Đóng gói - nhập theo Ri, hệ số = TongSoLop của
+       đúng màu đó (catMauList[].TongSoLop do backend getCatMauList() cộng dồn mọi cây cùng màu).
+       (Phần mô tả "một ô nhập duy nhất, gộp input theo class" của v8.31 ĐÃ BỊ THAY bởi v8.34 ngay dưới.)
+       v8.34 — Đóng gói nhập LÀM 2 Ô: "Ri" (bội số nguyên của 1 Ri) + "SL lẻ" (phần cái không đủ 1 Ri),
+       và cột "Tổng (cái)" tự tính = Ri × hệ số + SL lẻ. TỔNG NÀY là số LƯU vào CSDL (thay công thức
+       v8.31 chỉ có Ri × hệ số - trước đây phần lẻ không có chỗ nhập).
+       Ghi chú "18 lớp → Ri = 18 ri" xuống HẲN DÒNG DƯỚI của đúng màu đó (yêu cầu Nguyen) - vừa dễ đọc
+       vừa không làm dòng nhập bị chật khi có tới 6 cột.
+       Màu CHƯA có số lớp (TongSoLop = 0): ô Ri thành dấu "—", ô còn lại là ô nhập THẲNG CÁI dùng LẠI
+       đúng class .mau-qty như trước - không chặn nhập liệu. */
+    function dgQtyRowsHtml() {
+      const cols = coCotCongDoanTruoc('DG')
+        ? '150px 110px 120px 110px 140px 110px'
+        : '150px 110px 120px 110px 110px';
+      return catMauList.map(ct => {
+        const heSo = Number(ct.TongSoLop) || 0;
+        const coHeSo = heSo > 0;
+        const oRi = coHeSo
+          ? `<input type="number" min="0" step="1" class="dg-ri-qty" data-mausac="${ct.MauSacID}" placeholder="Ri">`
+          : '<div class="readonly-fact">—</div>';
+        const oLe = coHeSo
+          ? `<input type="number" min="0" step="1" class="dg-le-qty" data-mausac="${ct.MauSacID}" placeholder="cái">`
+          : `<input type="number" min="0" step="1" class="mau-qty" data-mausac="${ct.MauSacID}" placeholder="cái">`;
+        // v8.31.1: nhãn đơn vị là "ri" (không phải "cái") - thuần túy chữ hiển thị, không đụng công thức.
+        // v8.34: dòng này chuyển XUỐNG DƯỚI dòng nhập của đúng màu đó (yêu cầu Nguyen), giữ NGUYÊN chữ.
+        const ghiChu = coHeSo
+          ? `${fmtNumber(heSo)} lớp → Ri = ${fmtNumber(heSo)} ri`
+          : 'Chưa có số lớp ở Sổ cắt — nhập thẳng số cái vào ô "SL lẻ"';
+        return `<div class="row-item" style="grid-template-columns:${cols};">
+          <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
+          <div class="form-row"><label>Ri</label>${oRi}</div>
+          <div class="form-row"><label>SL lẻ (cái)</label>${oLe}</div>
+          <div class="form-row"><label>Tổng (cái)</label><div class="readonly-fact dg-tong" data-mausac="${ct.MauSacID}" data-heso="${heSo}" style="font-weight:600;">0</div></div>
+          ${oDoiChieuHtml('DG', ct.MauSacID, ct.SoLuong)}
+        </div>
+        <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}</div>`;
+      }).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>';
+    }
+    /* v8.34: cột "Tổng (cái)" cập nhật NGAY khi gõ, để người đóng gói thấy trước con số sẽ được lưu
+       (đúng công thức mà nhánh build payload lúc "Gửi" dùng - xem nhánh 'DG' bên dưới, 2 chỗ phải
+       KHỚP nhau). Gọi SAU khi đã gán innerHTML cho box. */
+    function wireDgTotals(box) {
+      const tinhLai = (mauSacId) => {
+        const oTong = box.querySelector(`.dg-tong[data-mausac="${mauSacId}"]`);
+        if (!oTong) return;
+        const heSo = Number(oTong.dataset.heso) || 0;
+        const oRi = box.querySelector(`.dg-ri-qty[data-mausac="${mauSacId}"]`);
+        const oLe = box.querySelector(`.dg-le-qty[data-mausac="${mauSacId}"]`);
+        const oCai = box.querySelector(`.mau-qty[data-mausac="${mauSacId}"]`);
+        const tong = Math.round((Number(oRi && oRi.value) || 0) * heSo)
+          + (Number(oLe && oLe.value) || 0)
+          + (Number(oCai && oCai.value) || 0);
+        oTong.textContent = fmtNumber(tong);
+      };
+      box.querySelectorAll('.dg-ri-qty, .dg-le-qty, .mau-qty').forEach(inp => {
+        inp.addEventListener('input', () => tinhLai(inp.dataset.mausac));
+      });
     }
     // v5.2: dropdown "Cong doan may" chi liet ke cac cong doan DA DUOC GAN cho don hang nay o Ky thuat
     // (congDoanMayDaChon) thay vi toan bo danh muc - yeu cau v5.2 muc 6.
@@ -4679,7 +4803,7 @@ window.ModuleQLSX = (function () {
             <div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái — Số bàn cắt: ${fmtNumber(detail.slCatSoBan || 0)}/${fmtNumber(detail.slCatSoBanTatCa != null ? detail.slCatSoBanTatCa : (detail.slCatSoBan || 0))} bàn${Number(detail.slCatSoBanTatCa || 0) > Number(detail.slCatSoBan || 0) ? ' <span style="color:#b06000;">(đơn cắt nhiều đợt — số trên chỉ tính đợt cắt gần nhất)</span>' : ''}</div></div>
           ${showGiaoViec ? `<div class="form-row"><label>Công đoạn may đã chọn cho đơn hàng này (ở "Kỹ thuật")</label><div id="mayCongDoanMayArea"></div></div>` : `<div class="form-row"><label>Công đoạn may đã chọn cho đơn hàng này (ở "Kỹ thuật")</label>${congDoanMayDaChonTableHtml()}</div>`}
           <div class="form-row"><label>Số lượng lũy kế theo màu (tham khảo SL cắt từng màu)</label>
-            <div class="row-repeater">${mauQtyRowsHtml()}</div>
+            <div class="row-repeater">${mauQtyRowsHtml('MAY')}</div>
           </div>
           ${showGiaoViec ? `<div class="form-row"><label>Lịch sử giao việc nội bộ đã ghi nhận</label>
             <div id="mayPcmArea">${phanCongMayExistingTableHtml()}</div></div>` : ''}`;
@@ -4757,8 +4881,15 @@ window.ModuleQLSX = (function () {
         box.innerHTML = `<div class="form-row"><label>Số lượng thực tế nhập kho theo màu</label>
           <div class="empty-hint" style="text-align:left;">Nhập được <b>nhiều đợt</b>: mỗi lần Gửi là một đợt, các đợt <b>cộng dồn</b>. Ô "SL nhập đợt này" chỉ điền phần <b>nhập thêm lần này</b>, không điền lại số đã nhập.</div>
           <div class="row-repeater">${catMauList.map(ct => `
-            <div class="row-item" style="grid-template-columns:140px 1fr 1fr 1fr 140px 110px;">
+            <div class="row-item" style="grid-template-columns:140px 1fr 1fr 1fr 1fr 140px 110px;">
               <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
+              ${/* v8.34: thêm cột SL công đoạn TRƯỚC (Đóng gói) - biết đã đóng gói bao nhiêu mà nhập
+                   kho bao nhiêu. Lấy từ CHÍNH slTheoMauCongDoan backend trả (cùng hàm tính với
+                   "Đã nhập lũy kế" ngay bên cạnh) nên 2 con số so được với nhau. */''}
+              <div class="form-row"><label>${escapeHtml(tenCongDoanTheoMa('DG'))}</label><div class="readonly-fact">${
+                (() => { const v = (slTheoMauCongDoan['DG'] || {})[String(ct.MauSacID)];
+                         return v == null ? '<span style="color:#8a8a8a;">chưa ghi</span>' : fmtNumber(Number(v) || 0); })()
+              }</div></div>
               <div class="form-row"><label>SL tổng từ Cắt</label><div class="readonly-fact">${fmtNumber(ct.SoLuong || 0)}</div></div>
               <div class="form-row"><label>Đã nhập (lũy kế)</label><div class="readonly-fact">${fmtNumber(daNhapTheoMau[ct.MauSacID] || 0)}</div></div>
               <div class="form-row"><label>Còn lại</label><div class="readonly-fact" style="color:${conLaiCua(ct) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct))}</div></div>
@@ -4836,13 +4967,33 @@ window.ModuleQLSX = (function () {
             toast('Đã lưu số lượng nhận.', 'success');
           } catch (err) { toast(err.message, 'error'); }
         });
-      } else if (stageCode === 'LA' || stageCode === 'DG') {
-        // v5.38: Bộ phận LÀ/ĐÓNG GÓI - mỗi màu chính thêm nhân viên + SL, khống chế ≤ SL cắt từng màu.
-        box.innerHTML = `<div class="form-row"><label>Bộ phận ${stageCode === 'LA' ? 'LÀ (ủi)' : 'ĐÓNG GÓI'} — thêm nhân viên &amp; SL theo từng màu chính (tổng SL giao mỗi màu ≤ SL cắt màu đó)</label>${laDgAreaHtml(stageCode)}</div>`;
-        wireLaDgArea();
+      } else if (stageCode === 'DG') {
+        /* v8.31: Đóng gói - nhập SL theo RI thay vì CÁI trực tiếp, tự quy đổi ra cái để lưu (giống
+           mọi công đoạn khác, TienDoChiTietMau.SoLuongLuyKe vẫn luôn lưu CÁI). Hệ số quy đổi 1 Ri =
+           TongSoLop CÁI của ĐÚNG màu đó (số lớp CỘNG DỒN mọi cây cùng màu vải chính, tính ở
+           getCatMauList() backend - Nguyen: "gộp các cây cùng màu vào nhau... nguyên tắc cộng vẫn như
+           hiện tại đang cộng SL cái" tức CÙNG cách SoLuong ở trên đang cộng). Màu NÀO CHƯA có số lớp
+           (TongSoLop=0 - đơn cũ trước v8.31, hoặc lần cắt đó chưa ghi Sổ cắt chi tiết từng cây) thì
+           KHÔNG chặn nhập liệu - rơi về nhập THẲNG số CÁI như trước (dgQtyRowsHtml() tự chọn class
+           .dg-ri-qty hay .mau-qty theo từng màu, xem hàm bên dưới + nhánh build payload lúc Gửi).
+           CHỈ áp cho 'DG' - "Là" (LA) vẫn ở nhánh else mặc định (SL cái trực tiếp) như v8.29, KHÔNG đổi
+           gì thêm cho "Là" vì Nguyên chỉ nói riêng "Đóng gói" lần này. */
+        box.innerHTML = `<div class="form-row"><label>Đóng gói — nhập số Ri + số lẻ; cột "Tổng (cái)" là số sẽ được lưu (màu chưa có số lớp thì nhập thẳng số cái)</label>
+          <div class="row-repeater">${dgQtyRowsHtml()}</div></div>`;
+        wireDgTotals(box);   // v8.34: bật tính Tổng theo thời gian gõ
       } else {
+        /* v8.29: BỎ nhánh riêng "LA"/"DG" (chọn nhân viên + SL theo màu, giao việc để tính lương khoán
+           v5.38 P4b) — Nguyen yêu cầu cả 2 công đoạn Là VÀ Đóng gói đổi thành CHỈ nhập số lượng theo
+           màu, giống hệt QC, KHÔNG chọn nhân viên nữa. Đã xác nhận + Nguyen CHỦ ĐỘNG chấp nhận: từ nay
+           tab "Lương là/đóng gói" (module.payroll.js renderLuongLaDongGoi, backend loadLuongLaDongGoi)
+           sẽ KHÔNG còn phát sinh số liệu MỚI cho cả 2 công đoạn (dữ liệu lịch sử trước đây vẫn giữ
+           nguyên, không xóa PhanCongLaDongGoi/tab lương). 'LA' giờ rơi vào đúng nhánh else này (giống
+           QC và mọi công đoạn không có nhánh riêng): chỉ hiện "Số lượng lũy kế theo màu", không có ô
+           chọn nhân viên. 'DG' TÁCH RIÊNG lại từ v8.31 (xem nhánh phía trên) để nhập theo Ri - KHÔNG
+           còn rơi vào nhánh else này nữa. laDgAreaHtml()/wireLaDgArea() (khai báo phía trên) nay KHÔNG
+           còn nơi nào gọi tới — giữ lại trong file (không xóa) để dễ khôi phục nếu sau này cần dùng lại. */
         box.innerHTML = `<div class="form-row"><label>Số lượng lũy kế theo màu</label>
-          <div class="row-repeater">${mauQtyRowsHtml()}</div></div>`;
+          <div class="row-repeater">${mauQtyRowsHtml(stageCode)}</div></div>`;
       }
     }
 
@@ -4986,23 +5137,33 @@ window.ModuleQLSX = (function () {
       } else if (stageCode === 'NGC') {
         // v5.30: SL nhan da luu ngay qua nut "💾 Lưu số lượng nhận" - "Gửi" chi ghi nhan cong doan + chuyen
         // buoc (khong gui chiTietMau theo mau).
-      } else if (stageCode === 'LA' || stageCode === 'DG') {
-        // v5.38: khống chế tổng SL giao mỗi màu ≤ SL cắt màu đó, rồi gom giaoViecLaDG.
-        const laDgBoxEl = modal.querySelector('#laDgBox');
-        if (laDgBoxEl) {
-          for (const cell of laDgBoxEl.querySelectorAll('[data-ladgcell]')) {
-            const mauId = cell.dataset.ladgcell;
-            const ct = catMauList.find(c => String(c.MauSacID) === String(mauId));
-            const capSL = ct ? Number(ct.SoLuong) || 0 : 0;
-            const tongCell = Array.from(cell.querySelectorAll('.ladg-sl')).reduce((s, i) => s + (Number(i.value) || 0), 0);
-            if (capSL > 0 && tongCell > capSL) { toast(`Màu "${ct ? ct.TenMau : ''}": tổng SL giao (${fmtNumber(tongCell)}) vượt SL cắt màu (${fmtNumber(capSL)}). Vui lòng chỉnh lại.`, 'error'); return; }
-          }
-          payload.giaoViecLaDG = Array.from(laDgBoxEl.querySelectorAll('[data-ladgrow]')).map(rowEl => {
-            const cell = rowEl.closest('[data-ladgcell]'); const mauId = cell ? cell.dataset.ladgcell : null; const idx = rowEl.dataset.idx;
-            return { nhanVienId: getSearchableValue('ladg_' + mauId + '_' + idx), mauSacId: mauId, soLuong: rowEl.querySelector('.ladg-sl').value };
-          }).filter(g => g.nhanVienId && g.mauSacId && g.soLuong !== '');
-        }
+      } else if (stageCode === 'DG') {
+        // v8.31: gom 2 loại ô đã render ở dgQtyRowsHtml() — .dg-ri-qty (nhập Ri, NHÂN với hệ số
+        // TongSoLop của ĐÚNG màu đó để ra CÁI thật trước khi gửi — backend TienDoChiTietMau.SoLuongLuyKe
+        // luôn lưu CÁI, không lưu Ri) và .mau-qty (màu chưa có số lớp, nhập thẳng CÁI như cũ, không
+        // nhân gì cả). Làm tròn kết quả nhân — SL cái luôn là số nguyên.
+        /* v8.34: công thức đổi thành Ri × hệ số + SL LẺ (trước đây chỉ có Ri × hệ số nên phần lẻ
+           không nhập được). Duyệt theo catMauList thay vì quét theo class để mỗi màu ra ĐÚNG MỘT
+           dòng payload — nếu quét 2 lớp class riêng thì màu vừa nhập Ri vừa nhập lẻ sẽ sinh 2 dòng
+           cùng MauSacID và backend ghi đè/cộng nhầm.
+           ⚠️ Công thức ở đây phải KHỚP với hàm wireDgTotals() (cột "Tổng (cái)" người dùng đang nhìn)
+           — sửa một chỗ thì phải sửa cả chỗ kia. */
+        payload.chiTietMau = catMauList.map(ct => {
+          const heSo = Number(ct.TongSoLop) || 0;
+          const oRi = modal.querySelector(`.dg-ri-qty[data-mausac="${ct.MauSacID}"]`);
+          const oLe = modal.querySelector(`.dg-le-qty[data-mausac="${ct.MauSacID}"]`);
+          const oCai = modal.querySelector(`.mau-qty[data-mausac="${ct.MauSacID}"]`);
+          const coNhap = (oRi && oRi.value !== '') || (oLe && oLe.value !== '') || (oCai && oCai.value !== '');
+          if (!coNhap) return null;                 // màu để trống = không ghi gì cho màu đó
+          const soLuong = Math.round((Number(oRi && oRi.value) || 0) * heSo)
+            + (Number(oLe && oLe.value) || 0)
+            + (Number(oCai && oCai.value) || 0);
+          return { mauSacId: ct.MauSacID, soLuong };
+        }).filter(Boolean);
       } else {
+        // v8.29: 'LA' không còn nhánh riêng (xem comment trong renderStageFields) — gửi chiTietMau
+        // giống mọi công đoạn dùng nhập số lượng theo màu (QC, v.v.), KHÔNG còn payload.giaoViecLaDG.
+        // 'DG' TÁCH RIÊNG lại từ v8.31 (xem nhánh phía trên), KHÔNG còn rơi xuống đây nữa.
         payload.chiTietMau = Array.from(modal.querySelectorAll('.mau-qty')).filter(i => i.value !== '').map(i => ({ mauSacId: i.dataset.mausac, soLuong: i.value }));
       }
 

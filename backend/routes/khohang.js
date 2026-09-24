@@ -279,6 +279,26 @@ function giaNPPSauCK(giaBan, ck) {
   return Math.round(giaShopSauCK(giaBan, ck) * (1 - (Number(ck.npp) || 0) / 100) * 100) / 100;
 }
 
+/* ===== v8.37: BAO GIA ALOHA LAY GIA SAU CK SHOP LAM GOC (thay vi Gia ban) =====
+   Nguyen 2026-09-24: "Bao gia aloha sua lai lay Gia sau CK shop (33%) de lam gia
+   truoc thue", sau do chot lai bang VI DU SO THAT:
+     "gia ban 100.000, CK shop 33% thanh con 67.000 dien vao cot gia truoc thue cua
+      aloha, thue 8%, gia sau thue = 67000 + 67000*8%"
+   =>  Gia sau CK shop = GiaBan x (1 - CK_SHOP/100)     <- gia tri cua GiaAloha (67.000)
+       Truoc VAT       = GiaAloha                       (67.000)
+       Sau VAT         = GiaAloha x (1 + %VAT)          (72.360)
+   ⚠️ DAO CHIEU so voi v6.62 (chia xuong) - CO CHU DICH, xem ghi chu day du tai cho
+   tinh gia trong route /baogia/:id/export ben duoi.
+
+   CACH LAM: doi ngay trong SQL, GIU ALIAS GiaAloha. Nho vay MOI noi doc phia sau
+   (frontend popup, ban in, Excel xuat) tu dung ma KHONG phai sua theo - dung tinh
+   than da ghi o v6.61. Ty le lay tu CauHinhHeThong qua layTyLeCK(), KHONG go cung 33.
+   ⚠️ Cau SQL nao dung SQL_GIA_ALOHA thi BAT BUOC phai .input('ckShop', ...). */
+const SQL_GIA_ALOHA = 'ROUND(h.GiaBan * (1 - @ckShop / 100.0), 2) AS GiaAloha';
+/* Ghi chu dat TRONG cau SQL - dung /* *\/ cua SQL, TUYET DOI khong chua dau backtick
+   vi chuoi nay duoc nhung vao template literal cua cau query (bai hoc v7.98). */
+const SQL_GHI_CHU_GIA_ALOHA = '/* v8.37: GiaAloha = gia SAU CK SHOP (khong con la GiaBan) - xem ghi chu SQL_GIA_ALOHA */';
+
 // v6.21: doc/ghi ty le CK ngay tren tab The kho (khong bat vao Danh muc -> Cau hinh vi nguoi dung
 // thao tac gia ban o day). Ghi bang MERGE nen KHONG can migration - lan luu dau tu tao dong.
 router.get('/cauhinh-ck', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
@@ -1744,7 +1764,9 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
     /* v7.54: TEN VIET HOA DON (v7.46, migration_v690) — bao gia gui khach ngoai phai ghi ten thuong
        mai, khong ghi ten noi bo. Chua chay migration thi tra NULL, frontend tu lui ve TenHang. */
     const cotTenHDBG = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
-    const result = await pool.request().input('excludeBaoGiaId', sql.Int, excludeBaoGiaId).query(`
+    const ckUV = await layTyLeCK(pool);   // v8.37: ty le CK shop dung chung, lay tu CauHinhHeThong
+    const result = await pool.request().input('excludeBaoGiaId', sql.Int, excludeBaoGiaId)
+      .input('ckShop', sql.Decimal(5, 2), Number(ckUV.shop) || 0).query(`
       /* v6.61: Bao gia Aloha lay thang GIA BAN cua the kho, bo han truong "Gia Aloha" rieng.
          Hai o gia song song luon lech nhau: sua gia ban ma quen sua gia Aloha la bao gia gui khach
          sai gia, khong co gi bao. Giu ALIAS GiaAloha de moi cho doc phia sau (frontend, Excel,
@@ -1752,8 +1774,9 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
          du lieu cu giu nguyen, chi la khong dung va khong cho nhap nua.
          LUU Y: chu thich nay nam BEN TRONG chuoi template cua cau SQL -> TUYET DOI khong duoc go
          dau backtick vao day, no se ket thuc chuoi va lam sap ca file. */
+      ${SQL_GHI_CHU_GIA_ALOHA}
       SELECT h.MaHangID, h.MaHang, h.TenHang, ${cotTenHDBG} AS TenHoaDon,
-        h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi, h.DonViCoBan,
+        ${SQL_GIA_ALOHA}, h.MaBarcode, h.AnhDaiDien, h.LoaiRi, h.DonViCoBan,
         ISNULL(v.TongTonThuc, 0) AS TongTon,
         /* v7.55: DANH MUC the kho + LOAI HANG de form loc duoc. Lay tu bang danh muc (khong go cung),
            LEFT JOIN vi ca hai truong deu co the de trong. */
@@ -1807,8 +1830,11 @@ router.get('/baogia/:id', requireAuth, requirePermission('KHOHANG', 'view'), req
        do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
     const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
 
-    const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
-      SELECT ct.ID, ct.MaHangID, ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, h.GiaBan AS GiaAloha, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
+    const ckCT = await layTyLeCK(pool);   // v8.37
+    const itemsResult = await pool.request().input('id', sql.Int, req.params.id)
+      .input('ckShop', sql.Decimal(5, 2), Number(ckCT.shop) || 0).query(`
+      ${SQL_GHI_CHU_GIA_ALOHA}
+      SELECT ct.ID, ct.MaHangID, ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, ${SQL_GIA_ALOHA}, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
       FROM BaoGiaAlohaChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -2042,8 +2068,11 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
        do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
     const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
 
-    const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
-      SELECT ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, h.GiaBan AS GiaAloha, h.MaBarcode, h.LoaiRi, h.AnhDaiDien,
+    const ckXuat = await layTyLeCK(pool);   // v8.37
+    const itemsResult = await pool.request().input('id', sql.Int, req.params.id)
+      .input('ckShop', sql.Decimal(5, 2), Number(ckXuat.shop) || 0).query(`
+      ${SQL_GHI_CHU_GIA_ALOHA}
+      SELECT ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, ${SQL_GIA_ALOHA}, h.MaBarcode, h.LoaiRi, h.AnhDaiDien,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
       FROM BaoGiaAlohaChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -2058,14 +2087,23 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
     ws.pageSetup.fitToWidth = 1;
     ws.pageSetup.fitToHeight = 0;
 
+    /* v8.38: THEM cot "Mã hàng" NGAY TRUOC "Tên sản phẩm" (Nguyen chon vi tri nay - de doi chieu
+       canh ten hang va ma barcode). Hau qua: MOI cot tu vi tri 5 tro di DICH PHAI 1 so voi mau goc
+       cua khach (28 -> 29 cot, A..AC).
+       ⚠️ Doi so cot o day thi PHAI sua DONG BO 5 cho ben duoi, bo sot 1 cho la du lieu/anh/dinh dang
+       roi nham cot ma file van mo duoc binh thuong (khong bao loi):
+         1) rowVals        2) numFmt cua tung cot so    3) o can trai (ten SP)
+         4) toa do nhung ANH ("Hình ảnh sp")            5) mang WIDTHS + vong lap width con lai
+       Cot 2/3/4 (Ten Cty SX-NK, Ma NCC, Ten NCC) KHONG doi vi nam TRUOC vi tri chen. */
     const HEADERS = [
       'STT', 'Tên Công ty Sản Xuất/ Nhập Khẩu', 'MÃ NCC', 'Tên NCC',
+      'Mã hàng',
       'Tên sản phẩm (trên hóa đơn VAT)', 'Mã Barcode', 'Giá trước VAT', '% VAT',
       'Sau VAT ( áp dụng thuế suất 8%...10%)', 'Giá bán đề xuất', 'Tỷ lệ trên giá vốn',
       'Tỷ lệ trên giá bán', 'Tỷ lệ lãi tham chiếu', 'Hình ảnh sp', 'Số mầu', 'Số cái/ 1 ri',
       ...BAOGIA_DISTRICT_COLS, 'Tổng cộng'
     ];
-    const COL_COUNT = HEADERS.length; // 28 cot (A..AB)
+    const COL_COUNT = HEADERS.length; // v8.38: 29 cot (A..AC) - truoc day 28
     const THIN = { style: 'thin' };
     const BORDER_ALL = { top: THIN, bottom: THIN, left: THIN, right: THIN };
     const FONT_NAME = 'Times New Roman';
@@ -2106,17 +2144,26 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
       const it = items[i];
       const r = DATA_START + i;
       const vat = Number(it.PhanTramVAT) || 0;
-      /* v6.62: GiaAloha nay la GIA BAN cua the kho, va gia ban DA GOM THUE -> chieu tinh DAO lai:
-           Sau VAT   = chinh gia ban
-           Truoc VAT = gia ban / (1 + %VAT)
-         Truoc day nhan len -> file Excel gui khach bi cong thue HAI LAN. */
-      const giaGomVat = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-      const giaTruocVat = giaGomVat != null ? giaGomVat / (1 + vat) : null;
-      const sauVat = giaGomVat;
+      /* v8.37: GiaAloha nay la GIA SAU CK SHOP (= GiaBan x (1 - CK_SHOP%), tinh trong SQL - xem
+         SQL_GIA_ALOHA). Nguyen chot bang vi du so THAT (2026-09-24):
+           "gia ban 100.000, CK shop 33% thanh con 67.000 dien vao cot gia truoc thue cua aloha,
+            thue 8%, gia sau thue = 67000 + 67000*8%"
+         => So sau CK CHINH LA gia TRUOC thue, va SAU VAT = NHAN len:
+              Truoc VAT = GiaAloha            (67.000)
+              Sau VAT   = GiaAloha x (1+%VAT) (72.360)
+
+         ⚠️ DAY LA DAO CHIEU so voi v6.62 (v6.62 coi gia lay vao la DA GOM thue nen CHIA xuong).
+         KHONG phai loi "cong thue hai lan" tai phat: v6.62 lay GIA BAN LE (gia da gom thue ban cho
+         nguoi tieu dung), con day lay GIA SAU CK SHOP - la gia BAN BUON chua thue theo cach Nguyen
+         dinh nghia. Goc tinh khac nhau nen chieu tinh khac nhau. Da xac nhan bang vi du so, dung
+         "sua lai cho giong v6.62". */
+      const giaTruocVat = it.GiaAloha != null ? Number(it.GiaAloha) : null;
+      const sauVat = giaTruocVat != null ? giaTruocVat * (1 + vat) : null;
       /* v7.54: ten tren bao gia = TEN VIET HOA DON, lui ve TenHang neu chua khai. Bao gia gui ra ngoai
          phai ghi ten thuong mai; frontend (popup xem + ban in) dung cung quy tac qua tenBaoGia(). */
       const tenBG = String(it.TenHoaDon || it.TenHang || '').trim();
-      const rowVals = { 1: i + 1, 5: tenBG, 6: it.MaBarcode || null, 7: giaTruocVat, 8: vat, 9: sauVat, 15: it.SoMau, 16: it.LoaiRi };
+      // v8.38: 5 = Mã hàng (MOI); cac cot cu tu 5 tro di da dich phai 1.
+      const rowVals = { 1: i + 1, 5: it.MaHang || null, 6: tenBG, 7: it.MaBarcode || null, 8: giaTruocVat, 9: vat, 10: sauVat, 16: it.SoMau, 17: it.LoaiRi };
       for (let c = 1; c <= COL_COUNT; c++) {
         const cell = ws.getCell(r, c);
         if (rowVals[c] !== undefined) cell.value = rowVals[c];
@@ -2124,15 +2171,16 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
         cell.alignment = { horizontal: 'center', vertical: 'center', wrapText: true };
         cell.border = BORDER_ALL;
       }
-      ws.getCell(r, 7).numFmt = '#,##0';
-      ws.getCell(r, 8).numFmt = '0%';
-      ws.getCell(r, 9).numFmt = '#,##0';
-      ws.getCell(r, 15).numFmt = '#,##0';
+      // v8.38: da dich phai 1 (7->8 gia truoc VAT, 8->9 %VAT, 9->10 sau VAT, 15->16 so mau, 16->17 so cai/ri)
+      ws.getCell(r, 8).numFmt = '#,##0';
+      ws.getCell(r, 9).numFmt = '0%';
+      ws.getCell(r, 10).numFmt = '#,##0';
       ws.getCell(r, 16).numFmt = '#,##0';
-      ws.getCell(r, 5).alignment = { horizontal: 'left', vertical: 'center', wrapText: true };
+      ws.getCell(r, 17).numFmt = '#,##0';
+      ws.getCell(r, 6).alignment = { horizontal: 'left', vertical: 'center', wrapText: true };   // v8.38: Tên SP 5->6
       ws.getRow(r).height = 30;
 
-      // v5.18 (muc 2.1.2): nhung anh dai dien vao dung o "Hình ảnh sp" (cot 14) cua dong nay - xem ghi
+      // v5.18 (muc 2.1.2): nhung anh dai dien vao dung o "Hình ảnh sp" (cot 15 tu v8.38) cua dong nay - xem ghi
       // chu chi tiet o dau route. anhToPngBuffer() lo phan chuan hoa dinh dang (sharp); o day chi lo
       // phan dat anh vao dung vi tri. Boc try/catch RIENG cho TUNG anh - 1 anh loi (du lieu AnhDaiDien
       // hong/sharp khong doc duoc) chi lam dong DO thieu anh, khong lam hong ca file xuat.
@@ -2149,7 +2197,8 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
           // cua chuan OOXML). 'twoCell' la gia tri hop le theo chuan ST_EditAs (Microsoft OOXML) dù
           // khong duoc liet ke trong bang README cua exceljs - truyen thang se ghi dung "editAs=twoCell"
           // vao XML, cho anh vua di chuyen VUA co gian theo o dung yeu cau.
-          ws.addImage(imageId, { tl: { col: 13, row: r - 1 }, br: { col: 14, row: r }, editAs: 'twoCell' });
+          // v8.38: "Hình ảnh sp" dich tu cot 14 -> 15 (1-based) => chi so 0-based 13 -> 14.
+          ws.addImage(imageId, { tl: { col: 14, row: r - 1 }, br: { col: 15, row: r }, editAs: 'twoCell' });
         } catch (imgErr) {
           console.error(`Lỗi khi chèn ảnh đại diện vào Excel báo giá (mã hàng ${it.MaHang}):`, imgErr.message);
         }
@@ -2169,16 +2218,18 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
     const footerRow1 = DATA_END + 2;
     const footerRow2 = footerRow1 + 1;
     const d = new Date(header.NgayTao || header.CreatedAt || Date.now());
-    ws.getCell(footerRow1, 14).value = `Việt Trì, ngày ${d.getDate()} tháng ${d.getMonth() + 1} năm ${d.getFullYear()}`;
-    ws.getCell(footerRow1, 14).font = { name: FONT_NAME, size: 12, bold: true };
-    ws.getCell(footerRow1, 14).alignment = { horizontal: 'center' };
-    ws.getCell(footerRow2, 14).value = 'Người đề nghị';
-    ws.getCell(footerRow2, 14).font = { name: FONT_NAME, size: 12, bold: true };
-    ws.getCell(footerRow2, 14).alignment = { horizontal: 'center' };
+    ws.getCell(footerRow1, 15).value = `Việt Trì, ngày ${d.getDate()} tháng ${d.getMonth() + 1} năm ${d.getFullYear()}`;
+    ws.getCell(footerRow1, 15).font = { name: FONT_NAME, size: 12, bold: true };
+    ws.getCell(footerRow1, 15).alignment = { horizontal: 'center' };
+    ws.getCell(footerRow2, 15).value = 'Người đề nghị';
+    ws.getCell(footerRow2, 15).font = { name: FONT_NAME, size: 12, bold: true };
+    ws.getCell(footerRow2, 15).alignment = { horizontal: 'center' };
 
-    const WIDTHS = [5.4, 21.4, 9.9, 20.1, 20.4, 15, 11.9, 9.6, 17.1, 11.4, 10, 10, 10, 17.4, 16.4, 12.6];
+    /* v8.38: chen be rong 14 cho cot "Mã hàng" o vi tri 5 -> mang tu 16 len 17 phan tu, va vong lap
+       cac cot chi nhanh con lai bat dau tu 18 (truoc day 17). */
+    const WIDTHS = [5.4, 21.4, 9.9, 20.1, 14, 20.4, 15, 11.9, 9.6, 17.1, 11.4, 10, 10, 10, 17.4, 16.4, 12.6];
     WIDTHS.forEach((w, idx) => { ws.getColumn(idx + 1).width = w; });
-    for (let c = 17; c <= COL_COUNT; c++) ws.getColumn(c).width = 10;
+    for (let c = 18; c <= COL_COUNT; c++) ws.getColumn(c).width = 10;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     const safeName = (header.TenBaoGia || ('BaoGia_' + header.ID)).replace(/[^\p{L}\p{N}_\-]/gu, '_');
