@@ -1,14 +1,58 @@
-# HƯỚNG DẪN CÀI ĐẶT — HỆ THỐNG QUẢN LÝ NỘI BỘ (SQL SERVER + NODE.JS) — v5.4
+# HƯỚNG DẪN CÀI ĐẶT — HỆ THỐNG QUẢN LÝ NỘI BỘ (SQL SERVER + NODE.JS) — **v8.45**
 
-Hệ thống gộp 4 công cụ Google Sheets/Apps Script rời rạc trước đây (Quản lý sản xuất, Kho vải, Thẻ kho hàng hóa, Phụ kiện) thành **một web app duy nhất**, dùng chung **một database SQL Server**, có đăng nhập và phân quyền theo nhóm/bộ phận. Tài liệu này viết lại từ đầu, áp dụng cho cài đặt mới lẫn nâng cấp từ bản cũ.
+Hệ thống gộp 4 công cụ Google Sheets/Apps Script rời rạc trước đây (Quản lý sản xuất, Kho vải, Thẻ kho hàng hóa, Phụ kiện) thành **một web app duy nhất**, dùng chung **một database SQL Server**, có đăng nhập và phân quyền theo nhóm/bộ phận. Tài liệu này áp dụng cho cài đặt mới lẫn nâng cấp từ bản cũ.
 
 **Kiến trúc:** SQL Server (dữ liệu) ← Node.js/Express (backend API + phục vụ giao diện) ← trình duyệt (HTML/JS thuần, không cần cài gì phía người dùng ngoài trình duyệt).
 
 > Vì sao không dùng Google Sheets như trước? Yêu cầu ban đầu là dùng SQL Server và có phân quyền chi tiết theo phân hệ — điều Google Sheets không làm tốt ở quy mô nhiều bảng liên kết. Đánh đổi: hệ thống này cần một máy chủ chạy Node.js + một instance SQL Server (có thể cài miễn phí bản **SQL Server Express** trên cùng máy tính đang dùng làm server), thay vì "miễn phí hoàn toàn trên trình duyệt" như bản Apps Script.
 
-**6 phân hệ (yêu cầu đăng nhập) trong bản v4.0:** Danh mục, Quản lý User, Quản lý sản xuất, Quản lý kho vải, Thẻ kho hàng hóa, Quản lý phụ kiện — cộng thêm **1 trang công khai `catalogue.html`** không cần đăng nhập, xem Bước 10.5.
+---
 
-> **Yêu cầu mới ở v4.0:** trình duyệt cần **kết nối Internet** khi mở trang (để tải thư viện quét mã QR `html5-qrcode` từ CDN `cdnjs.cloudflare.com`) — xem lưu ý ở Bước 2.3 nếu xưởng vận hành trong mạng LAN cách ly hoàn toàn không có Internet.
+## ⚡ TÓM TẮT NHANH — TRẠNG THÁI HIỆN TẠI (đọc cái này trước)
+
+**14 phân hệ** (yêu cầu đăng nhập), quyền cấp theo nhóm ở *Quản lý User → Ma trận phân quyền*:
+
+| # | Phân hệ | # | Phân hệ |
+|---|---|---|---|
+| 1 | 📈 Dashboard kinh doanh | 8 | 📊 Báo cáo kinh doanh |
+| 2 | 🧵 Quản lý sản xuất | 9 | 🛣️ Đi tuyến thị trường |
+| 3 | 🧶 Quản lý kho vải | 10 | 👥 Quản lý nhân sự |
+| 4 | 🧷 Quản lý phụ kiện | 11 | 💰 Tính lương |
+| 5 | 📦 Thẻ kho hàng hóa | 12 | 🧾 Bảng lương của tôi |
+| 6 | 💵 Quản lý công nợ | 13 | 📋 Danh mục |
+| 7 | 🧾 **Hóa đơn điện tử** *(mới, v8.36)* | 14 | 👤 Quản lý User |
+
+*(Thứ tự đúng như trên thanh menu bên trái. Người dùng chỉ thấy phân hệ mình được cấp quyền.)*
+
+Cộng thêm **1 trang công khai `catalogue.html`** không cần đăng nhập (xem Bước 10.5).
+
+### Cài mới — làm đúng 4 việc
+
+1. Cài SQL Server (PHẦN A) → chạy **`database/CAI_DAT_DAY_DU.sql`** (file này đã gộp SẴN toàn bộ migration tới v8.45, không phải chạy từng file `migration_vXXX.sql`).
+2. `cd backend && npm install`
+3. Tạo `backend/.env` từ `.env.example` — xem bảng biến môi trường bên dưới.
+4. `npm run seed:admin` → chạy `npm start` hoặc pm2.
+
+### Biến môi trường bắt buộc / tùy chọn trong `backend/.env`
+
+| Biến | Bắt buộc | Dùng làm gì |
+|---|---|---|
+| `DB_SERVER`, `DB_DATABASE`, `DB_USER`, `DB_PASSWORD`, `DB_ENCRYPT` | ✅ | Kết nối SQL Server (xem BƯỚC 4 có 2 cách khai báo instance) |
+| `PORT`, `PUBLIC_PORT` | ✅ | Cổng nội bộ / cổng trang Catalogue công khai (đặt `PUBLIC_PORT=0` để tắt hẳn trang công khai) |
+| `SESSION_SECRET` | ✅ | Mã hóa phiên đăng nhập — **phải tự đặt chuỗi ngẫu nhiên dài**, để trống là ai cũng giả được phiên người khác |
+| `HOADON_SECRET` | Chỉ khi dùng Hóa đơn điện tử | Khóa mã hóa mật khẩu cổng thuế — **đặt 1 lần, đừng đổi, sao lưu cùng backup CSDL**. Xem BƯỚC 3.76 |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Tùy chọn | Thông báo đẩy (Web Push). Không khai → tính năng tự tắt, không lỗi |
+| `TRUST_PROXY`, `HTTPS_HOSTS`, `HTTPS_REDIRECT_PORT` | Tùy chọn | Khi chạy sau Cloudflare Tunnel / nginx / IIS |
+
+### Lưu ý khi `npm install`
+
+Từ v8.36, `package.json` có thêm **`puppeteer`** (kéo theo bản Chromium riêng ~300MB, cho phân hệ Hóa đơn điện tử) và **`adm-zip`**. Cả hai nằm trong `dependencies` nên `npm install` bình thường là đủ — chỉ cần biết trước rằng **lần cài này lâu hơn hẳn và máy chủ phải có Internet**. Máy chủ chặn Internet thì đặt `PUPPETEER_SKIP_DOWNLOAD=true` để bỏ qua Chromium: phần còn lại chạy bình thường, riêng Hóa đơn điện tử không dùng được.
+
+`web-push` **không** nằm trong `dependencies` — chỉ cài riêng nếu dùng thông báo đẩy (`npx web-push generate-vapid-keys` để sinh cặp khóa VAPID).
+
+> **Yêu cầu Internet ở máy người dùng:** trình duyệt cần kết nối Internet khi mở trang (tải thư viện quét mã QR `html5-qrcode` từ CDN `cdnjs.cloudflare.com`) — xem lưu ý ở Bước 2.3 nếu xưởng chạy LAN cách ly.
+
+> ⚠️ **Về phần lịch sử nâng cấp bên dưới:** các mục `BƯỚC 3.x` được ghi theo thứ tự **phiên bản giảm dần** (mới nhất ở trên). Tài liệu này có **khoảng trống từ v6.62 đến v8.28** — giai đoạn đó chỉ commit code, không cập nhật hướng dẫn. Muốn tra chi tiết những bản ấy, dùng `git log --oneline` trong repo. Từ **v8.29 trở đi** đã được ghi lại đầy đủ (xem BƯỚC 3.77 ngay dưới).
 
 ---
 
@@ -1767,6 +1811,79 @@ Trước đây phiếu bán hàng ghi cứng "Cái" ở mọi chỗ. Nay lấy t
 - Màn chọn đơn khách đặt cũng hiện đúng ĐVT thay vì "Tồn kho (Cái)".
 
 **Không phép tính nào thay đổi.** `SoLuongCai` và `GiaBanLe` vốn đã tính theo đơn vị gốc của mã hàng — với mã ĐVT chính = Bộ thì đó chính là số bộ và giá 1 bộ. Đây thuần túy là đổi nhãn hiển thị. Mã quản theo **Ri** vẫn ghi "Cái" vì Ri là đơn vị gộp, số lượng lưu vẫn là số cái.
+
+---
+
+## BƯỚC 3.77 — Gói nâng cấp v8.29 → v8.45 (Ghi nhận tiến độ · Chỉ định SX · Báo giá Aloha · Hóa đơn điện tử)
+
+Đây là bản tổng hợp một đợt làm liên tục. Cài theo đúng thứ tự dưới, làm một lần cho cả gói — **không cần** cài lẻ từng phiên bản.
+
+### A. SQL
+
+| File | Nội dung |
+|---|---|
+| `database/migration_v835.sql` | Thêm cột `DonHangSanXuat.TenSanPhamTem NVARCHAR(255) NULL` |
+| `database/migration_v836.sql` | Module `HOADON` + bảng `CauHinhHoaDonDienTu`, `HoaDonDienTu` |
+
+> **Cài mới thì bỏ qua mục A** — `database/CAI_DAT_DAY_DU.sql` đã gộp sẵn cả hai. Mục A chỉ dành cho hệ thống đang chạy, nâng cấp tại chỗ.
+
+### B. Thư viện npm mới
+
+```
+cd backend
+npm install
+```
+
+`backend/package.json` đã khai thêm **`puppeteer`** và **`adm-zip`** (cho Hóa đơn điện tử). `puppeteer` kéo theo bản Chromium riêng ~300MB — lần `npm install` này lâu hơn bình thường và máy chủ phải có Internet. Không cài được thì các phân hệ khác vẫn chạy, chỉ riêng Hóa đơn điện tử báo lỗi.
+
+### C. Biến môi trường mới
+
+Thêm `HOADON_SECRET` vào `backend/.env` — chi tiết và cách sinh chuỗi xem **BƯỚC 3.76** ngay dưới.
+
+### D. File cần copy
+
+Backend: `routes/qlsx.js`, `routes/khohang.js`, `routes/hoadon.js` (mới), `server.js`, `package.json`, `.env.example`
+Frontend: `js/module.qlsx.js`, `js/module.khohang.js`, `js/module.hoadon.js` (mới), `js/app.js`, `index.html`
+
+Sau khi copy: **`pm2 restart qlnoibo`** + **Ctrl+F5**.
+
+### E. Sau khi cài — 2 việc phải làm bằng tay
+
+1. **Cấp quyền module Hóa đơn điện tử** (mặc định TẮT với mọi nhóm): Quản lý User → Ma trận phân quyền → bật cho nhóm cần dùng. Xem BƯỚC 3.76 mục 2.
+2. Nếu đã từng tải hóa đơn trước v8.45: vào từng tháng đã tải, bấm **🔄 Dựng lại PDF** một lượt để các file PDF cũ có hình trống đồng chìm. Hóa đơn tải **mới** từ v8.45 trở đi đã có sẵn, không phải dựng lại.
+
+---
+
+### Có gì thay đổi
+
+**Ghi nhận tiến độ sản xuất (v8.29 → v8.34)**
+
+- **Bỏ hẳn 2 công đoạn khỏi luồng: "Nhặt chỉ" (NCH) và "Là" (LA).** Hai công đoạn này không còn tự nhảy tới, cũng không còn hiện trong ô chọn của màn Ghi nhận tiến độ. Luồng còn lại: Cắt → May → QC → Đóng gói → Kho nhập. Dòng `CongDoanSanXuat` vẫn giữ nguyên trong CSDL để không mất dữ liệu lịch sử — chỉ là bị bỏ qua khi tính công đoạn kế tiếp.
+- **Hệ quả đã biết và chấp nhận:** tab "Lương là/đóng gói" từ nay không phát sinh số liệu mới ở phần Là. Có chủ đích.
+- **Sửa lỗi "Giao gia công nhảy sang May".** Lệnh chỉ tích *Giao gia công* (không tích *Giao nhà làm*) trước đây vẫn bị đẩy sang trạng thái "May". Nguyên nhân: hai cờ `DaGiaoNhaLam` / `DaGiaoGiaCong` được đọc **trước** câu UPDATE nên hàm tính công đoạn kế tiếp đọc phải giá trị cũ. Nay chỉ tích *Giao gia công* → trạng thái đúng là **"Nhận gia công"**.
+  > ⚠️ **Lệnh đã bị đẩy sai TRƯỚC khi nâng cấp sẽ KHÔNG tự sửa.** Cơ chế chống lùi con trỏ công đoạn (từ v5.48) không cho ghi nhận lại công đoạn cũ để kéo trạng thái lùi về. Muốn nắn lại phải sửa trực tiếp bằng SQL.
+- **Đóng gói nhập theo Ri.** Ô nhập của Đóng gói đổi thành **Ri | SL lẻ (cái) | Tổng (cái)**, tổng tính sống `Ri × hệ số + SL lẻ`. Hệ số Ri của một màu = **tổng `SoLuongLop` của mọi cây vải chính cùng màu đó**; ghi chú `(18 lớp → Ri = 18 ri)` nằm ngay dưới dòng nhập của chính màu đó. Màu chưa có số lớp thì quay về nhập thẳng số cái.
+- **Cột đối chiếu số lượng.** Mỗi công đoạn sau Cắt nay hiện thêm **số lượng của công đoạn liền trước** và **số lượng từ Cắt**, theo từng màu, để đối chiếu tại chỗ. Riêng khi lệnh có **Giao/nhận gia công**, phần QC phải nhập số lượng từng màu và đối chiếu thẳng với sổ cắt (bỏ qua May).
+
+**Chỉ định sản xuất (v8.35)**
+
+Thêm trường nhập tự do **"Tên sản phẩm trên tem"** ở cả form tạo mới lẫn form sửa, và in ra bản Chỉ định. **Dòng in luôn hiện kể cả khi để trống** — cố ý, để xưởng ghi tay lên bản in.
+
+**Báo giá Aloha (v8.37, v8.38)**
+
+- **Đổi gốc tính giá: lấy Giá sau CK shop (33%) làm giá TRƯỚC thuế.** Ví dụ Giá bán 100.000, CK shop 33% → **trước VAT 67.000**, VAT 8% → **sau VAT 72.360**.
+  > ⚠️ Chiều tính này **ngược** với bản v6.61/v6.62 (trước kia chia xuống). Có chủ đích: v6.62 lấy giá bán **lẻ đã gồm thuế**, bản này lấy giá bán **buôn chưa thuế**. Đừng "sửa cho giống bản cũ".
+  > Tỷ lệ CK đọc từ `CauHinhHeThong` (`CK_SHOP`, mặc định 33), không gõ cứng — đổi tỷ lệ thì sửa ở Cấu hình hệ thống, không sửa code.
+- **File Excel xuất ra thêm cột "Mã hàng"**, chèn ngay trước "Tên sản phẩm" (29 cột).
+
+**Hóa đơn điện tử (v8.36 → v8.45)** — phân hệ mới, xem BƯỚC 3.76 cho phần cài đặt. Các bản từ v8.39 trở đi bổ sung:
+
+- Tải danh sách + **XML + PDF trong MỘT lần bấm** "Tải từ Tổng cục thuế". Màn đăng nhập TCT chỉ hiện **khi cần tải**; vào tab là thấy ngay danh sách đã tải về trước đó.
+- Cột **XML** (tải file) và cột **PDF** (👁️ Xem — mở đọc ngay trong trình duyệt), có ở **cả đầu vào lẫn đầu ra**. Chọn từng hóa đơn hoặc tải toàn bộ về máy dạng `.zip`.
+- PDF dựng ra **có hình trống đồng chìm** giống bản gốc của cổng TCT. (Bản HTML mà TCT trả về cố ý xóa nền khi in — hệ thống chèn lại lớp nền này khi dựng PDF.)
+- Nút **🔄 Dựng lại PDF** cho các hóa đơn đã tải trước đây, chạy theo lô 5 file một để không vượt giới hạn chờ 30 giây của trình duyệt.
+
+> **Lưu XML là yêu cầu bắt buộc theo quy định**, PDF chỉ để xem. Hệ thống lưu cả hai trên máy chủ; nút "Tải về máy (.zip)" để lấy bản sao.
 
 ---
 
@@ -4859,6 +4976,8 @@ Trong `.env`, điền `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` (với Gmail: bật 
 
 ## BƯỚC 10 — Sử dụng từng phân hệ
 
+> Mục 10.1–10.5 mô tả **5 phân hệ gốc** (bản v4.0/v5.x), 10.6 là phân hệ Hóa đơn điện tử. Các phân hệ ra đời sau — Công nợ, Báo cáo kinh doanh, Đi tuyến thị trường (DMS), Nhân sự, Tính lương, Bảng lương của tôi, Dashboard kinh doanh — **không có mục riêng ở đây**; cách dùng nằm rải trong các mục `BƯỚC 3.x` theo phiên bản đưa ra tính năng đó. Tra bằng `Ctrl+F` tên phân hệ trong file này, hoặc `git log --oneline` cho khoảng v6.62–v8.28 (khoảng trống tài liệu, xem cảnh báo ở đầu file).
+
 ### 10.1 Quản lý sản xuất
 - **Dashboard**: tổng quan số đơn theo trạng thái/công đoạn, **bảng "Đơn hàng đang sản xuất" (v4.0)** hiển thị trạng thái kèm đúng tên công đoạn hiện tại (VD "Đang sản xuất - May"), báo cáo tốc độ xử lý theo từng nhà gia công/nhà in. **Từ v5.2**: bấm vào 1 dòng trong bảng này để xem ngay chi tiết đơn hàng (báo cáo năng suất, xuất vải, lịch sử tiến độ) trong 1 popup, không cần chuyển sang tab Danh sách rồi tìm lại.
 - **Ra lệnh sản xuất → Danh sách lệnh sản xuất** *(tab đổi tên từ "Danh sách đơn hàng" — v5.2)*: nhập tên sản phẩm, khách hàng, ngày đặt/giao, tổng số lượng, **đơn vị tính (chọn từ danh mục Đơn vị tính — v4.0)**, ảnh sản phẩm, và cấu trúc vải/màu (nhiều dòng loại vải + kiểu Chính/Phối + màu + số lượng, **mỗi màu chính có thêm 1 ảnh riêng — v5.2**). Chỉ tài khoản có quyền **Thêm** trên QLSX mới tạo được đơn mới. **Từ v5.2**, khối "Phụ kiện cần dùng" không còn ở form này — chuyển sang ghi nhận tại công đoạn "Phụ kiện" (xem dưới). Tab **Danh sách lệnh sản xuất** có thêm nút **Sửa** (chỉnh thông tin chung, không sửa cấu trúc vải/phụ kiện) và **Xóa** — cả 2 chỉ hiện với tài khoản có đúng quyền Sửa/Xóa; các nút thao tác khác (Ghi tiến độ, Giao/nhận nhà gia công) cũng chỉ hiện với quyền Sửa, In lệnh/In phiếu luôn hiện (chỉ xem).
@@ -4916,17 +5035,47 @@ Trang `catalogue.html` (VD truy cập tại `http://<địa-chỉ-máy-chủ>:30
 - Vì trang này công khai, **không hiển thị** thông tin nội bộ (số lượng nhập/xuất, đơn hàng sản xuất liên kết, ghi chú...) — chỉ hiển thị đúng những gì khách hàng cần thấy.
 - Nếu muốn tạm ẩn hoàn toàn trang này (VD chưa muốn công khai), có thể yêu cầu bên kỹ thuật chặn route `/api/public` và `/catalogue.html` ở tầng reverse proxy/firewall — bản thân ứng dụng không có công tắc ẩn/hiện qua giao diện.
 
+### 10.6 Hóa đơn điện tử (mới, v8.36 — v8.45)
+
+Tải hóa đơn **đầu vào** và **đầu ra** từ cổng Tổng cục thuế `hoadondientu.gdt.gov.vn` về lưu trên máy chủ. Ba tab:
+
+- **Cấu hình kết nối TCT**: nhập **MST** và **mật khẩu cổng thuế**, lưu một lần. Mật khẩu lưu dạng **mã hóa** (khóa là `HOADON_SECRET` trong `.env`) — từ đó về sau mỗi lần tải chỉ phải gõ captcha.
+- **Hóa đơn đầu vào** / **Hóa đơn đầu ra**: hai tab dùng chung cách vận hành.
+
+**Cách tải:**
+
+1. Vào tab, chọn khoảng thời gian — **từ ngày ... đến ngày**, hoặc **theo tháng**.
+2. Bấm **"Tải từ Tổng cục thuế"** → hiện màn đăng nhập TCT, gõ **captcha** (ảnh lấy thật từ cổng TCT). Gõ sai thì hệ thống tự cấp ảnh **mới** — mã cũ dùng một lần là hỏng, không gõ lại trên cùng ảnh được.
+3. Một lần bấm này tải **cả ba thứ**: danh sách hóa đơn, **file XML**, và **file PDF**.
+
+**Sau khi tải:**
+
+- Vào lại tab là **thấy ngay danh sách đã tải về** — không phải đăng nhập lại. Màn đăng nhập TCT chỉ hiện khi thực sự cần tải thêm.
+- Cột **XML**: bấm để tải file XML về máy. **XML là bản có giá trị pháp lý phải lưu theo quy định** — PDF chỉ để xem.
+- Cột **PDF**: bấm 👁️ **Xem** để mở đọc ngay trong trình duyệt, không phải tải xuống.
+- **📊 Xuất Excel**: danh sách hóa đơn kèm đầy đủ thông tin (ký hiệu, số, ngày lập, MST/tên người bán–mua, tiền chưa thuế, tiền thuế, tổng thanh toán, trạng thái).
+- **💾 Tải về máy (.zip)**: tick chọn từng hóa đơn hoặc chọn tất cả → tải gói XML + PDF về máy.
+- **🔄 Dựng lại PDF**: chỉ dùng cho hóa đơn tải về **trước v8.45** (khi đó PDF chưa có hình trống đồng chìm). Chạy một lượt cho mỗi tháng đã tải là xong vĩnh viễn. Hóa đơn tải mới từ v8.45 trở đi **không cần** dựng lại.
+
+> Không thấy menu "Hóa đơn điện tử" sau khi cài? Module này mặc định **TẮT với mọi nhóm** — phải vào Quản lý User → Ma trận phân quyền bật thủ công. Xem BƯỚC 3.76.
+
+> **Về mật khẩu cổng thuế:** đổi mật khẩu trên cổng TCT thì phải vào tab Cấu hình nhập lại, nếu không mọi lần tải sẽ báo sai mật khẩu. Đổi `HOADON_SECRET` trong `.env` cũng cho kết quả tương tự (mật khẩu cũ không giải mã được) — xem cảnh báo ở BƯỚC 3.76.
+
 ---
 
 ## PHẦN D — BẢO TRÌ & SAO LƯU
 
 - **Sao lưu database định kỳ**: trong SSMS, chuột phải database `QLNoiBo` → Tasks → Back Up... → lưu file `.bak` ra ổ đĩa khác hoặc cloud. Nên đặt lịch tự động (SQL Server Agent, chỉ có ở bản không phải Express) hoặc chạy tay hàng tuần.
 - **Sao lưu ảnh upload**: thư mục `backend/uploads/` chứa toàn bộ ảnh sản phẩm/thẻ kho — sao lưu cùng lúc với database.
-- **Cập nhật code**: thay file trong `backend/` hoặc `frontend/`, chạy lại `pm2 restart qlnoibo` (nếu đổi backend) — frontend là file tĩnh nên chỉ cần tải lại trang trình duyệt.
+- **Sao lưu file hóa đơn điện tử** *(từ v8.36)*: thư mục lưu XML/PDF hóa đơn đã tải về. **XML là bản có giá trị pháp lý phải lưu theo quy định** — sao lưu cùng lúc với database, không coi là file tạm.
+- **Sao lưu `backend/.env`** *(từ v8.36)*: cụ thể là chuỗi **`HOADON_SECRET`**. Khôi phục database sang máy khác mà thiếu đúng chuỗi này thì mật khẩu cổng thuế trong bản backup thành rác, phải nhập lại tay. Cất cùng chỗ với file `.bak`.
+- **Cập nhật code**: thay file trong `backend/` hoặc `frontend/`, chạy lại `pm2 restart qlnoibo` (nếu đổi backend) — frontend là file tĩnh **nhưng phải bump số `?v=` trong `frontend/index.html`** rồi Ctrl+F5, nếu không trình duyệt vẫn chạy file JS cũ trong cache.
 
 ---
 
 ## PHẦN E — NHẬT KÝ CẬP NHẬT (CHANGELOG)
+
+> ⚠️ **Phần E này dừng ở v5.34 và KHÔNG còn được cập nhật.** Từ v5.35 trở đi, lịch sử thay đổi nằm ở các mục **`BƯỚC 3.x`** (phần trên, xếp theo **phiên bản giảm dần** — mới nhất ở trên cùng: BƯỚC 3.77 = v8.29→v8.45). Khoảng **v6.62 → v8.28** không có trong tài liệu, tra bằng `git log --oneline`.
 
 ### v5.34 — Giai đoạn A (bản hiện tại — nhánh QLSX) — Đổi tên "Chỉ định sản xuất" + Bảng kê bán thành phẩm
 

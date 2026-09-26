@@ -298,13 +298,16 @@
          đường nào chọn lại. Nay có ô tích: tích vào là nạp lại danh sách kèm CẢ lệnh đã nhập, mỗi
          lệnh ghi rõ đã có mấy phiếu và số phiếu gần nhất — chọn nhầm thì nhìn là thấy. */
       $('#nkfONguon').innerHTML = sx
-        ? `<select id="nkfDon" style="width:100%;"><option value="">-- Chọn lệnh SX đã hoàn thành --</option>
+        /* v8.47: điều kiện hiện lệnh đã NỚI ra — lệnh chỉ cần ghi nhận ít nhất 1 lần ở công đoạn
+           Kho nhập là chọn được, không phải đợi trạng thái "Hoàn thành". Nhãn dưới đây sửa theo,
+           nếu không người dùng nhìn thấy lệnh đang sản xuất trong ô "đã hoàn thành" rồi tưởng lỗi. */
+        ? `<select id="nkfDon" style="width:100%;"><option value="">-- Chọn lệnh SX đã ghi nhận Kho nhập --</option>
              ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}${Number(d2.SoPhieuDaNhap) > 0 ? `  ⚠️ đã nhập ${d2.SoPhieuDaNhap} phiếu${d2.SoPhieuGanNhat ? ' (' + escapeHtml(d2.SoPhieuGanNhat) + ')' : ''}` : ''}</option>`).join('')}
            </select>
            <label style="display:flex;gap:5px;align-items:center;font-size:12px;margin-top:4px;white-space:nowrap;">
              <input type="checkbox" id="nkfKeDaNhap" ${keDaNhap ? 'checked' : ''}> Nhập bổ sung — hiện cả lệnh SX đã nhập kho
            </label>
-           ${(dm.donHang || []).length ? '' : `<div class="empty-hint" style="margin-top:2px;">${keDaNhap ? 'Chưa có lệnh SX nào ở trạng thái Hoàn thành.' : 'Không còn lệnh SX nào chưa nhập kho — tích "Nhập bổ sung" để chọn lệnh đã nhập.'}</div>`}`
+           ${(dm.donHang || []).length ? '' : `<div class="empty-hint" style="margin-top:2px;">${keDaNhap ? 'Chưa có lệnh SX nào ghi nhận công đoạn Kho nhập.' : 'Không còn lệnh SX nào chưa nhập kho — tích "Nhập bổ sung" để chọn lệnh đã nhập.'}</div>`}`
         : `<select id="nkfNcc" style="width:100%;"><option value="">-- Chọn nhà cung cấp --</option>
              ${opt(dm.ncc, 'NCC_ID', 'TenNCC', '')}</select>`;
       const oN = $('#nkfNcc'), oD = $('#nkfDon');

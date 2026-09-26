@@ -80,8 +80,15 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
   const q = (t) => pool.request().query(t).then(r => r.recordset);
   const [ncc, donHang, theKho, nhom, mauSac, donVi] = await Promise.all([
     q('SELECT NCC_ID, TenNCC FROM NhaCungCap ORDER BY TenNCC'),
-    /* v6.80: CHI lay lenh SX DA HOAN THANH. Lenh dang san xuat ma cho nhap kho thanh pham thi so
-       "da hoan thanh" cua lenh do va ton kho se lech nhau, khong ai doi chieu duoc.
+    /* v8.47 — DOI DIEU KIEN HIEN LENH SX: lenh chi can DA GHI NHAN it nhat 1 lan o cong doan
+       KHO NHAP ('KN') la hien ra ngay, khong phai doi chay het luong toi 'Hoàn thành'.
+       Ly do: to kho nhap hang theo tung dot; bat cho den khi lenh dong hoan toan moi cho lap phieu
+       la phieu luon lap muon hon thuc te.
+       ⚠️ DAY LA NOI LONG so voi v6.80 (truoc: BAT BUOC TrangThai = 'Hoàn thành'). Danh doi da biet:
+       lenh dang chay co the lap phieu nhap kho, nen so "% hoan thanh" cua lenh va ton kho se lech
+       nhau TRONG KHI lenh chua xong — chap nhan, vi so lieu do chinh la nhap bo sung nhieu dot.
+       GIU LAI ve 'Hoàn thành' bang OR: lenh nao truoc day hien duoc thi VAN hien, khong co lenh nao
+       bien mat khoi o chon sau khi nang cap (vd lenh cu da hoan thanh nhung chua tung ghi 'KN').
        v6.89: BO cac lenh DA GAN vao mot phieu nhap khac (phieu chua huy) — mot lenh SX chi nhap kho
        mot lan, de lai trong danh sach la mo duong nhap trung ca lenh.
        ⚠️ Phai GIU LAI lenh cua CHINH phieu dang sua (?phieuNKID=), khong thi mo form Sua se thay o
@@ -97,7 +104,10 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
                 WHERE p3.DonHangID = d.DonHangID AND p3.TrangThai <> N'Đã hủy'
                 ORDER BY p3.NgayNhap DESC, p3.PhieuNKID DESC) AS SoPhieuGanNhat
        FROM DonHangSanXuat d
-       WHERE d.TrangThai = N'Hoàn thành'
+       WHERE (d.TrangThai = N'Hoàn thành'
+              OR EXISTS (SELECT 1 FROM TienDoSanXuat td
+                           JOIN CongDoanSanXuat cd ON cd.StageID = td.StageID
+                          WHERE td.DonHangID = d.DonHangID AND cd.MaCongDoan = 'KN'))
          ${req.query.keCaDaNhap === '1' ? '' : `AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang p
                          WHERE p.DonHangID = d.DonHangID
                            AND p.TrangThai <> N'Đã hủy'

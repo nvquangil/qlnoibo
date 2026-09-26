@@ -948,6 +948,27 @@ window.ModuleQLSX = (function () {
     ].filter(x => x != null && x !== '').join('  '));
   }
 
+  /* v8.48 — LỆNH ĐANG Ở KHO NHẬP MÀ CHƯA ĐỦ SỐ LƯỢNG: ghi ngay dưới Trạng thái đã nhập được bao
+     nhiêu, tách RI CHẴN và CÁI LẺ ("Đã nhập 40 Ri 5 Cái").
+     v8.53: số đã nhập lưu là TỔNG CÁI; backend tách sẵn ra Ri (chia nguyên cho hệ số) và lẻ (phần
+     dư) — xem slKhoNhapTheoDon(). Viết giống hệt cách form Kho nhập đang viết: "43 Ri (215 cái) +
+     3 cái lẻ", để hai màn hình đọc lên cùng một câu.
+     Ba trường hợp KHÔNG hiện gì: không ở công đoạn Kho nhập / đã nhập đủ (≥ tổng SL) / chưa nhập
+     được gì (0 — lúc đó chữ "Kho nhập" ở trạng thái đã nói đủ, thêm "Đã nhập 0" chỉ tổ rối). */
+  function ghiChuKhoNhap(o) {
+    if (o.MaCongDoan !== 'KN') return '';
+    const daNhap = Number(o.SLKhoNhapCai) || 0;
+    const can = Number(o.TongSoLuong) || 0;
+    if (daNhap <= 0) return '';
+    if (can > 0 && daNhap >= can) return '';
+    const ri = Number(o.SLKhoNhapRi) || 0;
+    const le = Number(o.SLKhoNhapLe) || 0;
+    const so = ri > 0
+      ? `${fmtNumber(ri)} Ri (${fmtNumber(daNhap - le)} cái)${le > 0 ? ' + ' + fmtNumber(le) + ' cái lẻ' : ''}`
+      : `${fmtNumber(daNhap)} cái`;
+    return `<div style="font-size:11px;color:#a06800;" title="Đã ghi nhận ${fmtNumber(daNhap)} cái / cần ${fmtNumber(can)} cái">Đã nhập ${so}</div>`;
+  }
+
   async function renderOrders(perm, permTiendo, permTLKT) {
     const body = document.getElementById('qBody');
     const res = await apiGet('/api/qlsx/orders');
@@ -998,7 +1019,7 @@ window.ModuleQLSX = (function () {
         <td>${fmtDate(o.NgayGiaoDuKien)}${dl ? `<div style="font-size:11px;font-weight:bold;color:${dl.chu};">${dl.nhan}</div>` : ''}</td>
         ${/* v5.99: đơn nhiều sơ đồ chưa cắt đủ -> nhắc ngay cạnh công đoạn (tổ Cắt vẫn thấy đơn này) */''}
         <td>${escapeHtml(o.TenCongDoan)}${o.ConPhaiCat ? `<div><span class="badge warn" title="Đơn có ${o.SoSoDo} sơ đồ, đã ghi sổ cắt ${o.SoSoDoDaCat} sơ đồ">✂️ Còn cắt ${o.SoSoDoConLai}/${o.SoSoDo} sơ đồ</span></div>` : ''}</td>
-        <td>${o.PhanTramHoanThanh}%</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan, o.TenNhaGiaCong, o.MaCongDoan)}</td>
+        <td>${o.PhanTramHoanThanh}%</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan, o.TenNhaGiaCong, o.MaCongDoan)}${ghiChuKhoNhap(o)}</td>
         ${/* Chưa nhập kho thì để TRỐNG, không ghi "—": cột này trống ở phần lớn lệnh đang chạy. */''}
         <td>${o.SoPhieuNhapKho
           ? `<b>${escapeHtml(o.SoPhieuNhapKho)}</b><div style="font-size:11px;color:#5f6368;">Nhập ${fmtDate(o.NgayNhapKho)}</div>`
@@ -3079,7 +3100,16 @@ window.ModuleQLSX = (function () {
     // ⚠️ Đơn CŨ đang đứng sẵn ở 'LA'/'NCH' lúc deploy: KHÔNG kẹt vĩnh viễn — chọn thẳng công đoạn SAU đó
     // (QC/Đóng gói) rồi Gửi là con trỏ tự tiến (xem khối "advanced" trong POST /orders/:maDH/tiendo),
     // không cần migration dời CongDoanHienTaiID.
-    const stages = dm.congDoan.filter(s => s.MaCongDoan !== 'GV' && s.MaCongDoan !== 'PK'
+    /* v8.50 — SỬA LỖI: dòng "Nhặt chỉ" trong CSDL có MaCongDoan = **'nhatchi'**, không phải 'NCH'
+       (Nguyen xác nhận bằng dữ liệu thật 2026-09-26). Nên điều kiện `MaCongDoan !== 'NCH'` viết ở
+       v8.33 chưa bao giờ ẩn được nó — công đoạn vẫn hiện trong ô chọn, và backend cũng vẫn chuyển
+       sang nó (xem laCongDoanBoQua() trong routes/qlsx.js).
+       Nay lọc thêm theo TÊN đã chuẩn hóa, đúng cách v5.31 đã làm cho 'Giao/Nhận nhà gia công' ngay
+       bên dưới. Chỉ liệt kê tên của 2 công đoạn Nguyen đã nói rõ là bỏ — KHÔNG đoán tên GV/PK/HT. */
+    const tenBoQua = ['nhặt chỉ', 'là'];
+    const laTenBoQua = (s) => tenBoQua.indexOf(String(s.TenCongDoan || '').trim().toLowerCase()) !== -1;
+    const stages = dm.congDoan.filter(s => !laTenBoQua(s)
+      && s.MaCongDoan !== 'GV' && s.MaCongDoan !== 'PK'
       && s.MaCongDoan !== 'NCH' && s.MaCongDoan !== 'LA'
       && s.MaCongDoan !== 'GNGC' && s.MaCongDoan !== 'NNGC'
       && s.MaCongDoan !== 'GNIT' && s.MaCongDoan !== 'NNIT'   // v5.33: an in theu cu (trung GIT/NIT moi)
@@ -3226,8 +3256,11 @@ window.ModuleQLSX = (function () {
         ? '150px 110px 120px 110px 140px 110px'
         : '150px 110px 120px 110px 110px';
       return catMauList.map(ct => {
-        const heSo = Number(ct.TongSoLop) || 0;
+        /* v8.52: hệ số quy đổi Ri → cái là HeSoQuyDoi CỦA LỆNH, không phải TongSoLop (xem khối
+           ghi chú ở soLuongRiLe). TongSoLop vẫn hiện, nhưng với đúng ý nghĩa của nó: SỐ RI cắt được. */
+        const heSo = Number(heSoQuyDoiDonHang) || 0;
         const coHeSo = heSo > 0;
+        const soRiCat = Number(ct.TongSoLop) || 0;
         const oRi = coHeSo
           ? `<input type="number" min="0" step="1" class="dg-ri-qty" data-mausac="${ct.MauSacID}" placeholder="Ri">`
           : '<div class="readonly-fact">—</div>';
@@ -3236,9 +3269,11 @@ window.ModuleQLSX = (function () {
           : `<input type="number" min="0" step="1" class="mau-qty" data-mausac="${ct.MauSacID}" placeholder="cái">`;
         // v8.31.1: nhãn đơn vị là "ri" (không phải "cái") - thuần túy chữ hiển thị, không đụng công thức.
         // v8.34: dòng này chuyển XUỐNG DƯỚI dòng nhập của đúng màu đó (yêu cầu Nguyen), giữ NGUYÊN chữ.
+        // v8.52: viết lại cho đúng nghĩa + hiện HỆ SỐ lên (yêu cầu Nguyen "hiển thị luôn cả hệ số").
         const ghiChu = coHeSo
-          ? `${fmtNumber(heSo)} lớp → Ri = ${fmtNumber(heSo)} ri`
-          : 'Chưa có số lớp ở Sổ cắt — nhập thẳng số cái vào ô "SL lẻ"';
+          ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số quy đổi của lệnh)`
+            + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
+          : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
         return `<div class="row-item" style="grid-template-columns:${cols};">
           <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
           <div class="form-row"><label>Ri</label>${oRi}</div>
@@ -3249,23 +3284,60 @@ window.ModuleQLSX = (function () {
         <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}</div>`;
       }).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>';
     }
-    /* v8.34: cột "Tổng (cái)" cập nhật NGAY khi gõ, để người đóng gói thấy trước con số sẽ được lưu
-       (đúng công thức mà nhánh build payload lúc "Gửi" dùng - xem nhánh 'DG' bên dưới, 2 chỗ phải
-       KHỚP nhau). Gọi SAU khi đã gán innerHTML cho box. */
-    function wireDgTotals(box) {
+    /* ============================================================================================
+       v8.49 — CÔNG THỨC "Ri × hệ số + SL lẻ" NẰM ĐÚNG MỘT CHỖ: soLuongRiLe().
+       Trước v8.49 công thức này được chép ở 2 nơi (wireDgTotals + nhánh build payload 'DG') kèm
+       cảnh báo "2 chỗ phải KHỚP nhau". Nay Kho nhập dùng CÙNG kiểu nhập (v8.49) nên sẽ thành 4 chỗ
+       — quá đủ để một lần sửa sót là số lưu xuống khác số người dùng đang nhìn. Gom về 1 hàm.
+       `pre` = tiền tố class của công đoạn: 'dg' (Đóng gói) hoặc 'kn' (Kho nhập).
+       Trả về NULL khi màu đó để TRỐNG HẲN (không ghi dòng nào cho màu đó), khác hẳn với 0.
+       `.mau-qty` là đường lùi CŨ của Đóng gói (màu chưa có số lớp) — Kho nhập không dùng.
+       ============================================================================================ */
+    /* ============================================================================================
+       v8.52 — SỬA HỆ SỐ QUY ĐỔI RI → CÁI. Đây là SỬA SAI, không phải thêm tính năng.
+
+       Nguyen xác nhận 2026-09-26: **SỐ RI CHÍNH LÀ SỐ LỚP** ở công đoạn Cắt.
+       Từ v8.31 tới v8.51 tôi hiểu NGƯỢC câu ghi chú "18 lớp → Ri = 18 ri": đọc thành "1 ri = 18
+       cái" nên lấy TongSoLop làm hệ số. Đúng phải là:
+
+           số ri  = số lớp                    (mỗi lớp cắt ra một bộ size = một ri)
+           1 ri   = HeSoQuyDoi cái            (số sản phẩm trên một sơ đồ)
+           cái    = ri × HeSoQuyDoi
+
+       Khớp đúng công thức đang chạy ở công đoạn Cắt: `SL cái = số lớp × hệ số` (xem nhánh 'CAT'
+       trong POST /orders/:maDH/tiendo). Cắt 18 lớp, hệ số 5 → 18 ri, 90 cái, mỗi ri 5 cái.
+       Cách cũ (× TongSoLop) cho ra 18 × 18 = 324 cái — sai đúng tỉ lệ TongSoLop / HeSoQuyDoi.
+
+       ⚠️ DỮ LIỆU ĐÓNG GÓI GHI TỪ v8.31 TỚI TRƯỚC BẢN NÀY ĐÃ LƯU SAI theo tỉ lệ đó. Sửa hàm này
+       KHÔNG tự sửa số cũ — cần rà riêng, xem ghi chú ở cuối file migration_v852.sql.
+
+       Hệ số lấy theo LỆNH (DonHangSanXuat.HeSoQuyDoi), không theo từng màu: đây là số sản phẩm
+       trên một sơ đồ, chung cho cả lệnh. Cắt có cho phép ghi đè hệ số theo TỪNG CÂY (v6.08) — màu
+       nào trộn cây khác hệ số thì không tồn tại một cỡ ri duy nhất; lúc đó hệ số của lệnh là con
+       số đúng nhất còn dùng được, và chính là con số người nhập đang nhìn thấy trên form.
+       ============================================================================================ */
+    function soLuongRiLe(root, pre, ct) {
+      const heSo = Number(heSoQuyDoiDonHang) || 0;
+      const oRi = root.querySelector(`.${pre}-ri-qty[data-mausac="${ct.MauSacID}"]`);
+      const oLe = root.querySelector(`.${pre}-le-qty[data-mausac="${ct.MauSacID}"]`);
+      const oCai = root.querySelector(`.mau-qty[data-mausac="${ct.MauSacID}"]`);
+      const coNhap = (oRi && oRi.value !== '') || (oLe && oLe.value !== '') || (oCai && oCai.value !== '');
+      if (!coNhap) return null;
+      return Math.round((Number(oRi && oRi.value) || 0) * heSo)
+        + (Number(oLe && oLe.value) || 0)
+        + (Number(oCai && oCai.value) || 0);
+    }
+    /* v8.34: cột "Tổng (cái)" cập nhật NGAY khi gõ, để người nhập thấy trước con số sẽ được lưu.
+       v8.49: dùng CHUNG soLuongRiLe() với lúc Gửi, nên hai con số không thể lệch nhau nữa.
+       Gọi SAU khi đã gán innerHTML cho box. */
+    function wireRiTotals(box, pre) {
       const tinhLai = (mauSacId) => {
-        const oTong = box.querySelector(`.dg-tong[data-mausac="${mauSacId}"]`);
+        const oTong = box.querySelector(`.${pre}-tong[data-mausac="${mauSacId}"]`);
         if (!oTong) return;
-        const heSo = Number(oTong.dataset.heso) || 0;
-        const oRi = box.querySelector(`.dg-ri-qty[data-mausac="${mauSacId}"]`);
-        const oLe = box.querySelector(`.dg-le-qty[data-mausac="${mauSacId}"]`);
-        const oCai = box.querySelector(`.mau-qty[data-mausac="${mauSacId}"]`);
-        const tong = Math.round((Number(oRi && oRi.value) || 0) * heSo)
-          + (Number(oLe && oLe.value) || 0)
-          + (Number(oCai && oCai.value) || 0);
-        oTong.textContent = fmtNumber(tong);
+        const ct = catMauList.find(x => String(x.MauSacID) === String(mauSacId));
+        oTong.textContent = fmtNumber(ct ? (soLuongRiLe(box, pre, ct) || 0) : 0);
       };
-      box.querySelectorAll('.dg-ri-qty, .dg-le-qty, .mau-qty').forEach(inp => {
+      box.querySelectorAll(`.${pre}-ri-qty, .${pre}-le-qty, .mau-qty`).forEach(inp => {
         inp.addEventListener('input', () => tinhLai(inp.dataset.mausac));
       });
     }
@@ -4877,12 +4949,68 @@ window.ModuleQLSX = (function () {
            nên nhập bao nhiêu, và dễ nhập lại cả số đã nhập rồi. Số lũy kế lấy từ backend
            (detail.slKhoNhapTheoMau), CÙNG hàm với con số hệ thống đang tính. */
         const daNhapTheoMau = detail.slKhoNhapTheoMau || {};
-        const conLaiCua = (ct) => Math.max(0, (Number(ct.SoLuong) || 0) - (Number(daNhapTheoMau[ct.MauSacID]) || 0));
-        box.innerHTML = `<div class="form-row"><label>Số lượng thực tế nhập kho theo màu</label>
-          <div class="empty-hint" style="text-align:left;">Nhập được <b>nhiều đợt</b>: mỗi lần Gửi là một đợt, các đợt <b>cộng dồn</b>. Ô "SL nhập đợt này" chỉ điền phần <b>nhập thêm lần này</b>, không điền lại số đã nhập.</div>
-          <div class="row-repeater">${catMauList.map(ct => `
-            <div class="row-item" style="grid-template-columns:140px 1fr 1fr 1fr 1fr 140px 110px;">
+        /* ==========================================================================================
+           v8.53 — SỐ ĐÃ NHẬP LŨY KẾ: LƯU LÀ TỔNG **CÁI**, TÁCH NGƯỢC RA RI + LẺ ĐỂ HIỂN THỊ.
+
+           `slKhoNhapTheoMau` = tổng thô TienDoChiTietMau.SoLuongLuyKe của công đoạn Kho nhập. Đó là
+           con số ĐÃ quy đổi sẵn lúc ghi (Ri × hệ số + lẻ), tức TỔNG CÁI — KHÔNG phải số ri.
+           Bản v8.52 nhân nó với hệ số thêm một lần nữa -> phồng lên đúng <hệ số> lần. Nguyen phát
+           hiện: "bạn đang lấy số lượng cột tổng cái x hệ số".
+
+           Tách ngược (Nguyen chốt cách hiển thị):
+               ri  = tổng ÷ hệ số      (chia nguyên)
+               lẻ  = tổng − ri × hệ số (phần dư)
+               hiện: "43 Ri (215 cái) + 3 cái lẻ"
+           Tách được chính xác vì lúc ghi, phần lẻ luôn nhỏ hơn một ri.
+
+           `ct.SoLuong` (từ Cắt) cũng là CÁI, nên "Còn lại" trừ thẳng, KHÔNG nhân chia gì thêm.
+           ========================================================================================== */
+        const heSoLenh = Number(heSoQuyDoiDonHang) || 0;
+        const daNhapCai = (ct) => Number(daNhapTheoMau[ct.MauSacID]) || 0;
+        const daNhapRiLe = (ct) => {
+          const tong = daNhapCai(ct);
+          if (!(heSoLenh > 0)) return { ri: 0, cuaRi: 0, le: tong, tong };
+          const ri = Math.trunc(tong / heSoLenh);
+          const cuaRi = ri * heSoLenh;
+          return { ri, cuaRi, le: tong - cuaRi, tong };
+        };
+        const conLaiCua = (ct) => Math.max(0, (Number(ct.SoLuong) || 0) - daNhapCai(ct));
+        /* ==========================================================================================
+           v8.49 — KHO NHẬP NHẬP GIỐNG ĐÓNG GÓI: "Ri" + "SL lẻ (cái)" + cột "Tổng (cái)" tự tính.
+           v8.52 SỬA LẠI HỆ SỐ: 1 ri = **HeSoQuyDoi của lệnh** cái, KHÔNG phải TongSoLop.
+           TongSoLop (số lớp) chính là SỐ RI cắt được — xem khối ghi chú dài ở soLuongRiLe().
+
+           ⚠️ ĐÂY LÀ THAY ĐỔI VỀ Ý NGHĨA, không chỉ về giao diện — và nó VÁ một lỗ có sẵn:
+           - Trước v8.49 form có ô "Đơn vị" (Cái/Ri) và gửi donViDaChon lên. NHƯNG từ v6.91 backend
+             KHÔNG CÒN nhân hệ số ở đâu cả (khối cộng DELTA vào TheKho.NhapCai đã bị gỡ) — nên chọn
+             "Ri" rồi gõ 40 là CSDL lưu đúng số 40. Ô đơn vị đó thực chất chỉ còn là nhãn hiển thị.
+           - Nay bỏ hẳn ô đó: form tự quy đổi Ri × hệ số + lẻ và gửi thẳng số CÁI.
+           - v8.53: số lưu xuống LÀ TỔNG CÁI (Ri × hệ số + lẻ). Mọi chỗ đọc lại đều dùng thẳng, rồi
+             TÁCH NGƯỢC ra Ri/lẻ khi cần hiển thị (daNhapRiLe) — không nhân hệ số thêm lần nào.
+           Lệnh chưa khai hệ số quy đổi: ô Ri thành "—", nhập thẳng số cái vào ô "SL lẻ" — giống hệt
+           đường lùi của Đóng gói, không chặn nhập liệu.
+           ========================================================================================== */
+        box.innerHTML = `<div class="form-row"><label>Số lượng thực tế nhập kho theo màu — nhập số Ri + số lẻ; cột "Tổng (cái)" là số sẽ được lưu</label>
+          <div class="empty-hint" style="text-align:left;">Nhập được <b>nhiều đợt</b>: mỗi lần Gửi là một đợt, các đợt <b>cộng dồn</b>. Ô nhập chỉ điền phần <b>nhập thêm lần này</b>, không điền lại số đã nhập.</div>
+          <div class="row-repeater">${catMauList.map(ct => {
+            /* v8.52: hệ số Ri → cái là HeSoQuyDoi CỦA LỆNH (xem soLuongRiLe). TongSoLop là SỐ RI
+               cắt được, không phải hệ số — trước đây dùng nhầm nó làm hệ số. */
+            const heSo = Number(heSoQuyDoiDonHang) || 0;
+            const coHeSo = heSo > 0;
+            const soRiCat = Number(ct.TongSoLop) || 0;
+            const oRi = coHeSo
+              ? `<input type="number" min="0" step="1" class="kn-ri-qty" data-mausac="${ct.MauSacID}" placeholder="Ri">`
+              : '<div class="readonly-fact">—</div>';
+            const ghiChu = coHeSo
+              ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số quy đổi của lệnh)`
+                + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
+              : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
+            return `
+            <div class="row-item" style="grid-template-columns:140px 100px 110px 110px 120px 110px 170px 100px;">
               <div class="form-row"><label>${escapeHtml(ct.TenMau)}</label></div>
+              <div class="form-row"><label>Ri</label>${oRi}</div>
+              <div class="form-row"><label>SL lẻ (cái)</label><input type="number" min="0" step="1" class="kn-le-qty" data-mausac="${ct.MauSacID}" placeholder="cái"></div>
+              <div class="form-row"><label>Tổng (cái)</label><div class="readonly-fact kn-tong" data-mausac="${ct.MauSacID}" data-heso="${heSo}" data-conlai="${conLaiCua(ct)}" data-tenmau="${escapeHtml(ct.TenMau)}" style="font-weight:600;">0</div></div>
               ${/* v8.34: thêm cột SL công đoạn TRƯỚC (Đóng gói) - biết đã đóng gói bao nhiêu mà nhập
                    kho bao nhiêu. Lấy từ CHÍNH slTheoMauCongDoan backend trả (cùng hàm tính với
                    "Đã nhập lũy kế" ngay bên cạnh) nên 2 con số so được với nhau. */''}
@@ -4891,18 +5019,21 @@ window.ModuleQLSX = (function () {
                          return v == null ? '<span style="color:#8a8a8a;">chưa ghi</span>' : fmtNumber(Number(v) || 0); })()
               }</div></div>
               <div class="form-row"><label>SL tổng từ Cắt</label><div class="readonly-fact">${fmtNumber(ct.SoLuong || 0)}</div></div>
-              <div class="form-row"><label>Đã nhập (lũy kế)</label><div class="readonly-fact">${fmtNumber(daNhapTheoMau[ct.MauSacID] || 0)}</div></div>
+              ${/* v8.53 (Nguyen chốt cách viết): "43 Ri (215 cái) + 3 cái lẻ" — GỌN TRONG MỘT Ô.
+                   Ri và lẻ tách ngược từ tổng cái đang lưu (xem daNhapRiLe ở trên), KHÔNG nhân thêm
+                   hệ số lần nào nữa. Hệ số đã nằm ở dòng ghi chú ngay dưới của đúng màu đó. */''}
+              <div class="form-row"><label>Đã nhập (lũy kế)</label><div class="readonly-fact">${
+                (() => {
+                  const x = daNhapRiLe(ct);
+                  if (!coHeSo) return `${fmtNumber(x.tong)} cái`;
+                  const phanRi = `${fmtNumber(x.ri)} Ri <span style="color:#5f6368;font-weight:400;">(${fmtNumber(x.cuaRi)} cái)</span>`;
+                  return x.le > 0 ? `${phanRi} + ${fmtNumber(x.le)} cái lẻ` : phanRi;
+                })()
+              }</div></div>
               <div class="form-row"><label>Còn lại</label><div class="readonly-fact" style="color:${conLaiCua(ct) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct))}</div></div>
-              <div class="form-row"><label>SL nhập đợt này</label><input type="number" min="0" class="kho-qty" data-mausac="${ct.MauSacID}" data-conlai="${conLaiCua(ct)}" data-tenmau="${escapeHtml(ct.TenMau)}"></div>
-              ${/* v6.31: CHỈ hiện ô đơn vị quy đổi khi mã hàng THẬT SỰ có khai ĐVT quy đổi.
-                   Trước đây thiếu thì vẫn hiện "Ri", nhưng backend (qlsx.js ~3187) chỉ nhân hệ số khi
-                   DonViQuyDoi khác rỗng -> chọn "Ri" là ghi vào kho THIẾU đúng <tỷ lệ> lần, im lặng. */''}
-              <div class="form-row"><label>Đơn vị</label><select class="kho-donvi" data-mausac="${ct.MauSacID}">${
-                [...new Set([theKho.DonViCoBan || 'Cái', String(theKho.DonViQuyDoi || '').trim()].filter(Boolean))]
-                  .map(dv => `<option value="${escapeHtml(dv)}">${escapeHtml(dv)}</option>`).join('')
-              }</select>${!String(theKho.DonViQuyDoi || '').trim() && Number(theKho.LoaiRi) > 1
-                ? '<div class="empty-hint" style="color:#b26a00;">Mã này có tỷ lệ quy đổi nhưng CHƯA khai "ĐVT quy đổi" ở Thẻ kho — chỉ nhập được theo đơn vị chính.</div>' : ''}</div>
-            </div>`).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>'}</div>
+            </div>
+            <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}</div>`;
+          }).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>'}</div>
           </div>
           ${/* v7.57: LUA CHON KET THUC. Chua nhap du so cat thi mac dinh don O LAI cong doan Kho nhap
                 de nhap tiep dot sau; tich o nay la ket thuc lenh (chuyen "Hoàn thành") DU CHUA DU —
@@ -4920,7 +5051,8 @@ window.ModuleQLSX = (function () {
            quyết định có tích hay không mà không phải tự cộng lại từng màu. */
         (() => {
           const tongCat = catMauList.reduce((a, ct) => a + (Number(ct.SoLuong) || 0), 0);
-          const tongDaNhap = catMauList.reduce((a, ct) => a + (Number(daNhapTheoMau[ct.MauSacID]) || 0), 0);
+          /* v8.53: `daNhapTheoMau` đã là TỔNG CÁI, cộng thẳng — không nhân chia gì (xem daNhapCai). */
+          const tongDaNhap = catMauList.reduce((a, ct) => a + daNhapCai(ct), 0);
           const con = Math.max(0, tongCat - tongDaNhap);
           const el = box.querySelector('#knKetThucGoiY');
           if (!el) return;
@@ -4931,6 +5063,7 @@ window.ModuleQLSX = (function () {
                 + 'KHÔNG tích: lệnh <b>ở lại</b> công đoạn Kho nhập để nhập tiếp đợt sau.'
               : `Đã nhập <b>${fmtNumber(tongDaNhap)}</b> / sổ cắt <b>${fmtNumber(tongCat)}</b> — <b style="color:#137333;">đã đủ</b>, lệnh tự kết thúc khi Gửi.`);
         })();
+        wireRiTotals(box, 'kn');   // v8.49: cột "Tổng (cái)" tự tính khi gõ Ri / SL lẻ
         // v7.56: khối "Kho nhập đã ghi" — xem/sửa/xóa từng đợt (giống "Ghi nhận May đã gửi").
         renderKhoNhapDaGhi(box.querySelector('#knDaGhi'), maDH, perm);
       } else if (stageCode === 'GIT') {
@@ -4980,7 +5113,7 @@ window.ModuleQLSX = (function () {
            gì thêm cho "Là" vì Nguyên chỉ nói riêng "Đóng gói" lần này. */
         box.innerHTML = `<div class="form-row"><label>Đóng gói — nhập số Ri + số lẻ; cột "Tổng (cái)" là số sẽ được lưu (màu chưa có số lớp thì nhập thẳng số cái)</label>
           <div class="row-repeater">${dgQtyRowsHtml()}</div></div>`;
-        wireDgTotals(box);   // v8.34: bật tính Tổng theo thời gian gõ
+        wireRiTotals(box, 'dg');   // v8.34: bật tính Tổng theo thời gian gõ (v8.49: dùng chung với KN)
       } else {
         /* v8.29: BỎ nhánh riêng "LA"/"DG" (chọn nhân viên + SL theo màu, giao việc để tính lương khoán
            v5.38 P4b) — Nguyen yêu cầu cả 2 công đoạn Là VÀ Đóng gói đổi thành CHỈ nhập số lượng theo
@@ -5109,25 +5242,27 @@ window.ModuleQLSX = (function () {
           }).filter(g => g.nhanVienId && g.dongiaCongDoanMayId && g.soLuong !== '');
         }
       } else if (stageCode === 'KN') {
-        payload.chiTietMau = Array.from(modal.querySelectorAll('.kho-qty')).filter(i => i.value !== '').map(i => {
-          const mauSacId = i.dataset.mausac;
-          const donViDaChon = modal.querySelector(`.kho-donvi[data-mausac="${mauSacId}"]`).value;
-          return { mauSacId, soLuong: i.value, donViDaChon };
-        });
+        /* v8.49: Kho nhập nhập Ri + SL lẻ như Đóng gói. Gửi lên là số CÁI đã quy đổi sẵn
+           (soLuongRiLe = Ri × số lớp + lẻ) — KHÔNG còn gửi `donViDaChon`, nên TienDoChiTietMau từ
+           nay luôn là CÁI, không còn đường nào ghi lẫn đơn vị.
+           Duyệt theo catMauList để mỗi màu ra ĐÚNG MỘT dòng payload (màu vừa nhập Ri vừa nhập lẻ mà
+           quét theo class thì sinh 2 dòng cùng MauSacID, backend ghi đè/cộng nhầm). */
+        payload.chiTietMau = catMauList.map(ct => {
+          const soLuong = soLuongRiLe(modal, 'kn', ct);
+          return soLuong == null ? null : { mauSacId: ct.MauSacID, soLuong };   // null = màu để trống
+        }).filter(Boolean);
         // v7.57: gửi lựa chọn kết thúc lệnh (chưa đủ + không tích -> backend giữ lại ở Kho nhập).
         payload.ketThucKhoNhap = !!(modal.querySelector('#knKetThuc') || {}).checked;
         /* v7.56: CẢNH BÁO (không chặn) khi đợt này làm tổng vượt SL cắt. Không chặn vì nhập bù /
            hàng làm thêm là có thật; nhưng im lặng thì gõ thừa một số 0 là tồn kho sai mà không ai biết.
-           So ở đơn vị của Ô ĐANG NHẬP: chọn ĐVT quy đổi (Ri) thì 1 = nhiều cái, nên phải nhân hệ số
-           trước khi so với "còn lại" (đang tính theo đơn vị chính) — không nhân là cảnh báo sai hết. */
-        const heSo = Math.max(1, Number(theKho.LoaiRi) || 1);
-        const dvQuyDoi = String(theKho.DonViQuyDoi || '').trim().toLowerCase();
-        const vuot = Array.from(modal.querySelectorAll('.kho-qty')).filter(i => i.value !== '').map(i => {
-          const dv = String(modal.querySelector(`.kho-donvi[data-mausac="${i.dataset.mausac}"]`).value || '').trim().toLowerCase();
-          const nhanHeSo = dvQuyDoi && dv === dvQuyDoi ? heSo : 1;
-          const themCai = (Number(i.value) || 0) * nhanHeSo;
-          const conLai = Number(i.dataset.conlai) || 0;
-          return themCai > conLai ? { ten: i.dataset.tenmau, themCai, conLai } : null;
+           v8.49: không còn phải tự nhân hệ số ở đây nữa — `payload.chiTietMau` vừa dựng ở trên ĐÃ là
+           số CÁI thật, so thẳng với "còn lại" (cũng tính theo cái) là đúng. Trước đây khối này tự
+           nhân LoaiRi theo ô "Đơn vị"; ô đó đã bỏ, giữ lại phép nhân cũ là cảnh báo sai. */
+        const vuot = payload.chiTietMau.map(m => {
+          const oTong = modal.querySelector(`.kn-tong[data-mausac="${m.mauSacId}"]`);
+          const conLai = Number(oTong && oTong.dataset.conlai) || 0;
+          const themCai = Number(m.soLuong) || 0;
+          return themCai > conLai ? { ten: (oTong && oTong.dataset.tenmau) || '', themCai, conLai } : null;
         }).filter(Boolean);
         if (vuot.length && !confirm('Các màu sau nhập VƯỢT phần còn lại so với sổ cắt:\n\n'
           + vuot.map(v => `• ${v.ten}: nhập ${fmtNumber(v.themCai)} / còn lại ${fmtNumber(v.conLai)}`).join('\n')
@@ -5145,20 +5280,12 @@ window.ModuleQLSX = (function () {
         /* v8.34: công thức đổi thành Ri × hệ số + SL LẺ (trước đây chỉ có Ri × hệ số nên phần lẻ
            không nhập được). Duyệt theo catMauList thay vì quét theo class để mỗi màu ra ĐÚNG MỘT
            dòng payload — nếu quét 2 lớp class riêng thì màu vừa nhập Ri vừa nhập lẻ sẽ sinh 2 dòng
-           cùng MauSacID và backend ghi đè/cộng nhầm.
-           ⚠️ Công thức ở đây phải KHỚP với hàm wireDgTotals() (cột "Tổng (cái)" người dùng đang nhìn)
-           — sửa một chỗ thì phải sửa cả chỗ kia. */
+           cùng MauSacID và backend ghi đè/cộng nhầm. */
+        /* v8.49: công thức chuyển vào soLuongRiLe() — CÙNG hàm mà cột "Tổng (cái)" trên màn hình
+           đang dùng, nên số lưu xuống luôn đúng bằng số người dùng vừa nhìn. */
         payload.chiTietMau = catMauList.map(ct => {
-          const heSo = Number(ct.TongSoLop) || 0;
-          const oRi = modal.querySelector(`.dg-ri-qty[data-mausac="${ct.MauSacID}"]`);
-          const oLe = modal.querySelector(`.dg-le-qty[data-mausac="${ct.MauSacID}"]`);
-          const oCai = modal.querySelector(`.mau-qty[data-mausac="${ct.MauSacID}"]`);
-          const coNhap = (oRi && oRi.value !== '') || (oLe && oLe.value !== '') || (oCai && oCai.value !== '');
-          if (!coNhap) return null;                 // màu để trống = không ghi gì cho màu đó
-          const soLuong = Math.round((Number(oRi && oRi.value) || 0) * heSo)
-            + (Number(oLe && oLe.value) || 0)
-            + (Number(oCai && oCai.value) || 0);
-          return { mauSacId: ct.MauSacID, soLuong };
+          const soLuong = soLuongRiLe(modal, 'dg', ct);
+          return soLuong == null ? null : { mauSacId: ct.MauSacID, soLuong };   // null = màu để trống
         }).filter(Boolean);
       } else {
         // v8.29: 'LA' không còn nhánh riêng (xem comment trong renderStageFields) — gửi chiTietMau

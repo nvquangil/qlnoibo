@@ -61,6 +61,34 @@ const MA_CONG_DOAN_MAY = 'MAY';
 // (bo chon nhan vien), nen viec bo han 'LA' khoi luong o day khong lam mat them du lieu luong nao.
 const MA_CONG_DOAN_BO_QUA = ['GV', 'PK', 'HT', 'NCH', 'LA', 'GNGC', 'NNGC', 'GNIT', 'NNIT'];   // v5.31: an GNGC/NNGC cu; v5.33: an GNIT/NNIT (in theu cu trung voi GIT/NIT moi); v8.30: an NCH (gop vao May); v8.33: an LA
 
+/* ================================================================================================
+   v8.50 — SUA LOI: "Nhặt chỉ" VAN DUOC CHUYEN SANG DU v8.30 DA BO NO KHOI LUONG.
+
+   NGUYEN NHAN THAT (Nguyen xac nhan 2026-09-26 bang du lieu that): dong "Nhặt chỉ" trong
+   CongDoanSanXuat co MaCongDoan = 'nhatchi', KHONG phai 'NCH'. Ca file nay lan frontend deu so
+   chuoi CHINH XAC voi 'NCH' nen khong bao gio khop -> cong doan khong bi bo qua, va o chon Cong
+   doan cung khong an duoc no. v8.30 va v8.33 that ra CHUA BAO GIO co tac dung voi NCH.
+
+   Bai hoc: MaCongDoan la du lieu NGUOI DUNG go duoc qua man Danh muc, KHONG phai hang so do code
+   bao dam. So chuoi chinh xac voi no la mot gia dinh, khong phai mot dam bao.
+
+   CACH SUA — HAI LOP, co y lam ca hai:
+     Lop 1 (that su dung): migration_v850.sql chuan hoa MaCongDoan cua dong do ve 'NCH'. Do moi la
+       cach khoi phuc bat bien ma CA HE THONG dang dua vao (hang chuc cho so MaCongDoan voi
+       'CAT'/'MAY'/'KN'/'DG'/'QC'...).
+     Lop 2 (ham nay): so THEM theo TEN cong doan, da chuan hoa, de mot lan go sai ma nua khong am
+       tham lam song lai mot cong doan da bo. Dung dung cach v5.31 da lam cho GNGC/NNGC o frontend.
+   CHI liet ke ten cua 2 cong doan Nguyen DA NOI RO la bo ("Nhặt chỉ", "Là") — KHONG doan ten cua
+   GV/PK/HT, vi doan sai ten la bo nham mot cong doan dang chay.
+   ================================================================================================ */
+const TEN_CONG_DOAN_BO_QUA = ['nhặt chỉ', 'là'];
+function laCongDoanBoQua(candidate) {
+  const ma = String(candidate.MaCongDoan || '').trim().toUpperCase();
+  if (ma && MA_CONG_DOAN_BO_QUA.indexOf(ma) !== -1) return true;
+  const ten = String(candidate.TenCongDoan || '').trim().toLowerCase();
+  return !!ten && TEN_CONG_DOAN_BO_QUA.indexOf(ten) !== -1;
+}
+
 // v5.20 (muc 1/2/3): 2 cong doan MOI thay 1 phan modal "Giao/nhan nha gia cong & nha in" (openVendorForm)
 // da bi XOA khoi Danh sach lenh san xuat (yeu cau muc 3) - nay la 2 CONG DOAN THAT trong chinh luong Ghi
 // nhan tien do, GAN VOI cot da co san tren DonHangSanXuat (NhaGiaCongID/NgayGiaoGC/NgayNhanGC - KHONG doi
@@ -109,7 +137,9 @@ function tinhNextStage(stages, curIndex, order) {
   while (nextIndex < stages.length) {
     const candidate = stages[nextIndex];
     const ma = candidate.MaCongDoan;
-    if (MA_CONG_DOAN_BO_QUA.indexOf(ma) !== -1) { nextIndex++; continue; }
+    // v8.50: so qua laCongDoanBoQua() (khop ca MA da chuan hoa LAN TEN) thay vi so chuoi chinh xac
+    // voi MaCongDoan — dong "Nhặt chỉ" that su co ma 'nhatchi' nen cach cu khong bao gio khop.
+    if (laCongDoanBoQua(candidate)) { nextIndex++; continue; }
     // v5.24: doi tu 1 co "giaCongNgoai" suy ra tu KenhSanXuat (don gia tri) sang 2 co doc lap
     // DaGiaoNhaLam/DaGiaoGiaCong (co the CA HAI cung = 1, don hang chia mot phan lam noi bo mot phan
     // thue ngoai). Chi bo qua "May" khi 100% gia cong ngoai (DaGiaoGiaCong=1 VA DaGiaoNhaLam=0) - neu co
@@ -198,7 +228,14 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
     LEFT JOIN NhaGiaCong ncc1 ON ncc1.NhaGiaCongID = d.NhaGiaCongID
-    ORDER BY d.DonHangID DESC`);
+    /* v8.46: lenh DA XONG bi day XUONG CUOI danh sach — viec dang chay moi la thu can nhin truoc.
+       BA bac: (0) dang chay -> (1) Hoàn thành -> (2) Đã hủy. Huy xuong duoi CUNG vi no khong con la
+       ket qua san xuat, de lan giua cac lenh hoan thanh la nguoi doc de nham.
+       Trong TUNG bac van giu nguyen thu tu cu (DonHangID giam dan = moi nhat len tren).
+       Sap xep o SQL chu khong o frontend: danh sach nay chi ve MOT lan tu res.data, sap o day thi
+       moi cho doc no (ke ca ban in / xuat file sau nay) tu dung, khong phai nho sap lai. */
+    ORDER BY CASE d.TrangThai WHEN N'Hoàn thành' THEN 1 WHEN N'Đã hủy' THEN 2 ELSE 0 END,
+             d.DonHangID DESC`);
 
   const user = req.session.user;
   let orders = result.recordset;
@@ -207,6 +244,16 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
      thì cột Mã rập trắng, dù getMaRapCuaDon() ngay dưới file này đã gộp 2 nguồn từ v6.06. */
   const _mrMap = await maRapTheoDon(pool);
   orders.forEach(o => { o.MaRap = _mrMap[o.DonHangID] || ''; });
+  /* v8.48: SL da ghi nhan o Kho nhap (quy ve don vi chinh) + he so Ri, de cot Trang thai hien
+     "Đã nhập: 40 ri 5 cái" cho lenh DANG o Kho nhap ma CHUA du so luong.
+     MOT truy van cho CA danh sach (khong lap theo tung don) — danh sach nay toi 300+ dong. */
+  const _knMap = await slKhoNhapTheoDon(pool);
+  orders.forEach(o => {
+    const k = _knMap[o.DonHangID];
+    o.SLKhoNhapCai = k ? k.SLKhoNhapCai : 0;   // TONG CAI (de so voi TongSoLuong xem da du chua)
+    o.SLKhoNhapRi = k ? k.SoRi : 0;            // v8.53: ri = tong cai / he so (chia nguyen)
+    o.SLKhoNhapLe = k ? k.SoLe : 0;            // v8.53: le = phan du
+  });
   // v5.18 (muc 1.1): nguoi dung KHONG duoc phan cong bat ky cong doan nao (UserCongDoan rong - dung
   // cho tai khoan "chi xem" thuan tuy, khong phai cong nhan thao tac 1 cong doan cu the) truoc day bi
   // loc con 0 dong (mang rong .indexOf(...) luon la -1 voi moi don) - danh sach trong khong nghia ly gi
@@ -804,6 +851,90 @@ async function getStageActualQtyByColor(pool, donHangId, stageId) {
             GROUP BY ct.MauSacID`);
   const map = {};
   result.recordset.forEach(r => { map[r.MauSacID] = Number(r.SoLuongLuyKe) || 0; });
+  return map;
+}
+
+/* ================================================================================================
+   v8.48 — SL DA GHI NHAN O CONG DOAN KHO NHAP, TACH RA RI CHAN + CAI LE, CHO CA DANH SACH LENH SX.
+   Dung o GET /orders: lenh dang dung o Kho nhap ma CHUA DU so luong thi hien ngay tren danh sach
+   "Đã nhập 40 Ri 5 Cái", khong phai mo tung lenh ra dem.
+
+   v8.52 — VIET LAI CACH QUY DOI. Nguyen xac nhan 2026-09-26: **SO RI CHINH LA SO LOP** o cong doan
+   Cat, va he so quy doi Ri -> Cai la **DonHangSanXuat.HeSoQuyDoi** (so san pham tren mot so do).
+       so ri = so lop  ·  1 ri = HeSoQuyDoi cai  ·  cai = ri × HeSoQuyDoi
+   Ban v8.48 lam NGUOC: lay TongSoLop lam he so roi CHIA. Da bo han khoi CTE 'lop'/'catTd' — khong
+   con can den so lop o ham nay nua.
+
+   ⚠️ BA DIEU PHAI GIU DUNG:
+
+   1) v8.53 — TienDoChiTietMau.SoLuongLuyKe o cong doan KN la TONG CAI (da quy doi san luc ghi:
+      Ri × he so + le), KHONG phai so ri. Ban v8.52 tuong la so ri roi nhan them he so -> phong len
+      dung <he so> lan. Nguyen bat duoc: "ban dang lay so luong cot tong cai x he so".
+      Nen: SLKhoNhapCai = tong tho; SoRi = tong / he so (chia nguyen); SoLe = tong % he so.
+      Tach nguoc duoc chinh xac vi luc ghi, phan le luon nho hon mot ri.
+
+   2) Tap ban ghi "hieu luc" phai GIONG HET effectiveTienDoIds() cua cong doan KN: cac lan ghi
+      CongDonKN = 1 cong don voi nhau, CONG THEM dung MOT lan ghi cu (CongDonKN NULL) moi nhat lam
+      diem bat dau (v7.56). Viet lai kieu khac la danh sach va man hinh Ghi tien do bao hai so khac
+      nhau.
+
+   3) CONG THO SoLuongLuyKe, KHONG loc theo DonViDaChon — de khop voi getStageActualQty() va voi o
+      "Đã nhập" tren form Kho nhap, vi ca hai deu cong tho.
+   ================================================================================================ */
+async function slKhoNhapTheoDon(pool) {
+  const knStage = await getKhoNhapStageId(pool);
+  const catStage = await getCatStageId(pool);
+  if (!knStage) return {};
+  const coCongDon = await coCotCongDonKN(pool);
+  /* Chua chay migration_v692 thi khong co cot CongDonKN -> quay ve dung quy tac cu cua
+     effectiveTienDoIds(): lay ban ghi moi nhat VA ca nhom cung NhomTienDoID voi no. */
+  const cteKN = coCongDon
+    ? `knTd AS (
+         SELECT t.DonHangID, t.TienDoID
+         FROM TienDoSanXuat t
+         WHERE t.StageID = @kn
+           AND (ISNULL(t.CongDonKN, 0) = 1
+                OR t.TienDoID = (SELECT MAX(t2.TienDoID) FROM TienDoSanXuat t2
+                                  WHERE t2.DonHangID = t.DonHangID AND t2.StageID = @kn
+                                    AND t2.CongDonKN IS NULL))
+       )`
+    : `knMax AS (
+         SELECT DonHangID, MAX(TienDoID) AS MaxID FROM TienDoSanXuat
+         WHERE StageID = @kn GROUP BY DonHangID
+       ),
+       knTd AS (
+         SELECT t.DonHangID, t.TienDoID
+         FROM TienDoSanXuat t
+         JOIN knMax ON knMax.DonHangID = t.DonHangID
+         JOIN TienDoSanXuat tm ON tm.TienDoID = knMax.MaxID
+         WHERE t.StageID = @kn
+           AND (t.TienDoID = ISNULL(tm.NhomTienDoID, tm.TienDoID)
+                OR t.NhomTienDoID = ISNULL(tm.NhomTienDoID, tm.TienDoID))
+       )`;
+  const rows = (await pool.request().input('kn', sql.Int, knStage).query(`
+    WITH ${cteKN},
+    tongCai AS (
+      SELECT knTd.DonHangID,
+             SUM(ct.SoLuongLuyKe) AS SLCai,
+             MAX(CASE WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 THEN d.HeSoQuyDoi ELSE 1 END) AS HeSo
+      FROM knTd
+      JOIN TienDoChiTietMau ct ON ct.TienDoID = knTd.TienDoID
+      JOIN DonHangSanXuat d    ON d.DonHangID = knTd.DonHangID
+      GROUP BY knTd.DonHangID
+    )
+    SELECT DonHangID,
+           SLCai        AS SLKhoNhapCai,
+           SLCai / HeSo AS SoRi,       -- INT / INT = chia nguyen (co y)
+           SLCai % HeSo AS SoLe
+    FROM tongCai`)).recordset;
+  const map = {};
+  rows.forEach(r => {
+    map[r.DonHangID] = {
+      SLKhoNhapCai: Number(r.SLKhoNhapCai) || 0,
+      SoRi: Number(r.SoRi) || 0,
+      SoLe: Number(r.SoLe) || 0
+    };
+  });
   return map;
 }
 
