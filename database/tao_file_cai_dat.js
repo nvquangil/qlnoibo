@@ -64,9 +64,14 @@ dsFile.forEach((f, i) => {
   const duong = path.join(THU_MUC, f);
   if (!fs.existsSync(duong)) { console.log(`  (bo qua, khong thay) ${f}`); return; }
   const noiDung = fs.readFileSync(duong, 'utf8');
-  /* ⚠️ v8.61 — SUA LOI: truoc day dung '/'.repeat(98) lam dong ngan cach. "//" KHONG PHAI comment
-     trong T-SQL (chi co "--" va "/* */"), nen file sinh ra bi loi cu phap ngay dong ngan cach dau
-     tien: Msg 102 "Incorrect syntax near '/'". Doi sang '-' — dung cu phap comment mot dong. */
+  // v8.61 — SUA LOI: truoc day dung '/'.repeat(98) lam dong ngan cach. Hai dau gach cheo KHONG
+  // PHAI comment trong T-SQL (T-SQL chi co gach ngang doi, va cap dau sao), nen file sinh ra bi
+  // loi cu phap ngay dong ngan cach dau tien: Msg 102 "Incorrect syntax near '/'".
+  // Doi sang dau gach ngang - dung cu phap comment mot dong cua T-SQL.
+  //
+  // ⚠️ KHOI NAY CO Y VIET BANG "//" CHU KHONG PHAI KHOI /* */: noi dung co nhac toi cap ky tu
+  // dong comment, ma viet cap do BEN TRONG mot khoi comment la DONG SOM khoi do -> SyntaxError.
+  // Da dinh dung loi nay o chinh dong nay (2026-10-01).
   ra += `\n${'-'.repeat(98)}\n`;
   ra += `/* [${String(i + 1).padStart(2)}/${dsFile.length}]  ${f}  */\n`;
   ra += `${'-'.repeat(98)}\n`;
