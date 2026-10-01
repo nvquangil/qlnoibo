@@ -215,6 +215,8 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
            d.NgayDat, d.NgayGiaoDuKien,
            d.TongSoLuong, d.PhanTramHoanThanh, d.TrangThai, c.TenCongDoan, c.StageID AS CongDoanID, c.MaCongDoan,
            d.AnhSanPham, d.NhaGiaCongID, ncc1.TenNha AS TenNhaGiaCong, d.NgayGiaoGC, d.NgayNhanGC, d.SoNgayGC,
+           /* v8.54: 2 co cua cong doan 'GC' — frontend dung de ghi "May" khi don co phan NHA LAM. */
+           d.DaGiaoNhaLam, d.DaGiaoGiaCong,
            d.NhaInID, d.NgayGiaoIn, d.NgayNhanIn, d.SoNgayIn,
            /* v5.99: đơn NHIỀU SƠ ĐỒ cắt nhiều đợt — đếm số sơ đồ của đơn và số sơ đồ ĐÃ CÓ SỔ CẮT,
               để (1) hiện nhắc "còn phải cắt" và (2) tổ Cắt vẫn thấy đơn dù con trỏ công đoạn đã đi tiếp. */
@@ -223,7 +225,40 @@ router.get('/orders', requireAuth, requirePermission('QLSX', 'view'), requireChu
               JOIN CongDoanSanXuat cc ON cc.StageID = td.StageID
               WHERE td.DonHangID = d.DonHangID AND cc.MaCongDoan = 'CAT' AND td.SoDoID IS NOT NULL
                 AND EXISTS (SELECT 1 FROM TienDoCatChiTietCay cay WHERE cay.TienDoID = td.TienDoID)) AS SoSoDoDaCat,
-           ${COT_PHIEU_NHAP_KHO('d')}
+           ${COT_PHIEU_NHAP_KHO('d')},
+           /* v8.54 — TEN NHA GIA CONG / NHA IN THEU DA CHON, de cot "Công đoạn" o Danh sach lenh SX
+              ghi duoc "Nhận nhà gia công - Phương Quốc Oai" / "Nhận nhà in thêu - Đông Đại Tự".
+              ⚠️ KHONG dung d.NhaGiaCongID (cot cu, tu v5.24 KHONG con noi nao ghi vao nua - "mo coi").
+              Nguon THAT: DonHangChiTietNhaGiaCong (nhieu dong, moi dong 1 hang muc) va
+              DonHangNhaInTheu (nhieu dong). Mot nha co the nhan NHIEU hang muc cua cung mot don ->
+              DISTINCT de khong ghi ten lap lai.
+              ⚠️ Subquery nam o COT SELECT, TUYET DOI khong long trong SUM/COUNT/AVG (Msg 130).
+              Dung FOR XML PATH(''), TYPE + .value() chu khong phai FOR XML PATH('') tran: ten nha co
+              dau '&' se ra '&amp;' tren man hinh neu khong boc qua .value(). */
+           STUFF((SELECT DISTINCT N', ' + ncc2.TenNha
+                    FROM DonHangChiTietNhaGiaCong ct2
+                    JOIN NhaGiaCong ncc2 ON ncc2.NhaGiaCongID = ct2.NhaGiaCongID
+                   WHERE ct2.DonHangID = d.DonHangID
+                   FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS TenNhaGiaCongDaChon,
+           STUFF((SELECT DISTINCT N', ' + ncc3.TenNha
+                    FROM DonHangNhaInTheu it2
+                    JOIN NhaGiaCong ncc3 ON ncc3.NhaGiaCongID = it2.NhaInID
+                   WHERE it2.DonHangID = d.DonHangID
+                   FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS TenNhaInTheuDaChon,
+           /* v8.57 — NGAY GIAO, lay tu NGAY GHI NHAN CUA TIEN DO (Nguyen: "lấy ngày cập nhật của
+              ghi tiến độ"), KHONG lay d.NgayGiaoGC / d.NgayGiaoIn: 2 cot do da "mo coi" tu v5.22,
+              khong con noi nao ghi vao nua nen luon NULL voi don moi.
+              Lay lan ghi GAN NHAT cua dung cong doan GIAO tuong ung:
+                - don dang o 'GC' hoac 'NGC'  -> ngay ghi tien do cong doan 'GC'
+                - don dang o 'GIT' hoac 'NIT' -> ngay ghi tien do cong doan 'GIT'
+              Tra ve CA HAI cot, frontend chon theo cong doan hien tai — khong nhet CASE vao day de
+              con dung lai duoc cho cho khac. */
+           (SELECT MAX(t.NgayGhiNhan) FROM TienDoSanXuat t
+              JOIN CongDoanSanXuat c ON c.StageID = t.StageID
+             WHERE t.DonHangID = d.DonHangID AND c.MaCongDoan = N'GC')  AS NgayGiaoGCTienDo,
+           (SELECT MAX(t.NgayGhiNhan) FROM TienDoSanXuat t
+              JOIN CongDoanSanXuat c ON c.StageID = t.StageID
+             WHERE t.DonHangID = d.DonHangID AND c.MaCongDoan = N'GIT') AS NgayGiaoITTienDo
     FROM DonHangSanXuat d
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
@@ -388,7 +423,20 @@ router.get('/orders/:maDH', requireAuth, requirePermission('QLSX', 'view'), requ
     slTheoMauCongDoan[s.MaCongDoan] = await getStageActualQtyByColor(pool, order.DonHangID, s.StageID);
   }
 
-  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, slTheoMauCongDoan, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet } });
+  /* v8.59: danh sach DAI SIZE cua lenh. Rong = lenh KHONG tach -> moi form giu nguyen hinh dang cu. */
+  const daiSizeList = await getDaiSizeList(pool, order.DonHangID);
+  /* v8.59: SL luy ke tach theo MAU x DAI cho cac cong doan nhap theo dai (Q2: May, QC, Dong goi,
+     Kho nhap). CHI truy van khi lenh THUC SU co dai — lenh khong tach thi bo qua han, khong ton
+     them truy van nao va moi form giu nguyen duong cu. */
+  const slTheoMauDai = {};
+  if (daiSizeList.length) {
+    const stageRowsDai = (await pool.request().query(
+      "SELECT StageID, MaCongDoan FROM CongDoanSanXuat WHERE MaCongDoan IN (N'MAY', N'QC', N'DG', N'KN')")).recordset;
+    for (const s of stageRowsDai) {
+      slTheoMauDai[s.MaCongDoan] = await getStageQtyByColorDai(pool, order.DonHangID, s.StageID);
+    }
+  }
+  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, slTheoMauCongDoan, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet, daiSizeList, slTheoMauDai } });
 });
 
 // v5.0: chi tiet vai LONG NHAU - moi dong "Chính" mang theo mang "phoi" cua chinh no (loc theo
@@ -518,10 +566,12 @@ async function getNhaGiaCongChiTiet(pool, donHangId) {
   // v5.30: kem TenHangMuc + don gia CHUNG cua hang muc (DonHangHangMucGiaCong.DonGia, chi xem) - don gia
   // khong con nhap rieng tung nha nua. SoLuongNhan tra ve qua ct.* (cot moi migration_v530).
   const result = await pool.request().input('id', sql.Int, donHangId).query(`
-    SELECT ct.*, ncc.TenNha, hm.TenHangMuc, dhg.DonGia AS DonGiaHangMuc
+    SELECT ct.*, ncc.TenNha, hm.TenHangMuc, dhg.DonGia AS DonGiaHangMuc,
+           ds.TenDai   -- v8.59: ten dai size cua dong giao (NULL khi lenh khong tach)
     FROM DonHangChiTietNhaGiaCong ct
     JOIN NhaGiaCong ncc ON ncc.NhaGiaCongID = ct.NhaGiaCongID
     LEFT JOIN HangMucGiaCong hm ON hm.HangMucGiaCongID = ct.HangMucGiaCongID
+    LEFT JOIN DonHangDaiSize ds ON ds.ID = ct.DaiSizeID
     -- v5.56: nhiều bản đơn giá gia công → TOP 1 (bản đầu tiên), tránh nhân dòng giao nhà gia công.
     OUTER APPLY (SELECT TOP 1 x.DonGia FROM DonHangHangMucGiaCong x
                  WHERE x.HangMucGiaCongID = ct.HangMucGiaCongID AND x.DonHangID = ct.DonHangID
@@ -851,6 +901,32 @@ async function getStageActualQtyByColor(pool, donHangId, stageId) {
             GROUP BY ct.MauSacID`);
   const map = {};
   result.recordset.forEach(r => { map[r.MauSacID] = Number(r.SoLuongLuyKe) || 0; });
+  return map;
+}
+
+/* ================================================================================================
+   v8.59 — GIONG getStageActualQtyByColor() NHUNG TACH THEM THEO DAI SIZE.
+   Khoa cua map la chuoi `MauSacID|DaiSizeID`, voi DaiSizeID rong khi dong do khong gan dai:
+       "7|3"  = mau 7, dai 3        "7|"  = mau 7, khong gan dai (lenh khong tach / du lieu cu)
+   CO Y de ham cu NGUYEN VEN: moi cho dang cong tong theo mau (bao cao nang suat, gia thanh, luong)
+   van goi ham cu va van dung — tach dai chi lam nhieu DONG hon, tong khong doi.
+   Ham nay CHI phuc vu man hinh nhap lieu, de hien "da nhap luy ke" cua DUNG o dang go.
+   ================================================================================================ */
+async function getStageQtyByColorDai(pool, donHangId, stageId) {
+  const ids = await effectiveTienDoIds(pool, donHangId, stageId);
+  if (!ids.length) return {};
+  const result = await pool.request().input('id', sql.Int, donHangId)
+    .query(`SELECT ct.MauSacID, ct.DaiSizeID, SUM(ct.SoLuongLuyKe) AS SoLuongLuyKe
+            FROM TienDoChiTietMau ct
+            WHERE ct.TienDoID IN (${ids.join(',')})
+              -- cung quy uoc loc mau Phoi nhu getStageActualQtyByColor
+              AND ct.MauSacID NOT IN (SELECT MauSacID FROM DonHangChiTietVai
+                                      WHERE DonHangID=@id AND Kieu = N'Phối' AND MauSacID IS NOT NULL)
+            GROUP BY ct.MauSacID, ct.DaiSizeID`);
+  const map = {};
+  result.recordset.forEach(r => {
+    map[`${r.MauSacID}|${r.DaiSizeID == null ? '' : r.DaiSizeID}`] = Number(r.SoLuongLuyKe) || 0;
+  });
   return map;
 }
 
@@ -1597,6 +1673,108 @@ router.delete('/orders/:maDH/sodo/:id', requireAuth, requirePermission('QLSX', '
   }
 });
 
+/* ================================================================================================
+   v8.59 — DAI SIZE CUA MOT LENH SAN XUAT (migration_v859.sql)
+
+   Mot lenh cat chung mot so do nhieu size, nhung dong goi / nhap kho tach theo DAI SIZE.
+   He so so cat 11 -> dai "2-7" (he so 6) + dai "8-12" (he so 5).
+
+   ⚠️ BAT BIEN DUY NHAT, KIEM O DAY: TONG he so cac dai = DonHangSanXuat.HeSoQuyDoi cua lenh.
+   Lech la so cat va so dong goi troi khoi nhau ma khong ai biet. Frontend cung khoa nut Luu, nhung
+   BACKEND LA NOI CHAN THAT DUY NHAT (bai hoc v8.27: chan o form khong phai la chan).
+
+   ⚠️ Lenh KHONG co dong dai nao = KHONG TACH = chay y het truoc v8.59.
+   ================================================================================================ */
+const BANG_THAM_CHIEU_DAI_SIZE = [
+  { bang: 'TienDoChiTietMau', mo_ta: 'dòng ghi tiến độ theo màu' },
+  { bang: 'PhanCongMay', mo_ta: 'dòng giao việc may cho công nhân' },
+  { bang: 'DonHangChiTietNhaGiaCong', mo_ta: 'dòng giao nhà gia công' },
+  { bang: 'DonHangNhaInTheu', mo_ta: 'dòng giao nhà in thêu' }
+];
+/* Dem xem mot dai dang bi nhung dau giu. Tra ve mang mo ta de bao bang TIENG NGUOI — tuyet doi
+   khong de SQL Server nem ten khoa ngoai ra man hinh (bai hoc v8.55). */
+async function dangGiuDaiSize(pool, daiIds) {
+  if (!daiIds.length) return [];
+  const ket = [];
+  for (const t of BANG_THAM_CHIEU_DAI_SIZE) {
+    if ((await pool.request().query(`SELECT COL_LENGTH('${t.bang}','DaiSizeID') AS c`)).recordset[0].c == null) continue;
+    const r = (await pool.request().query(
+      `SELECT COUNT(*) AS n FROM ${t.bang} WHERE DaiSizeID IN (${daiIds.join(',')})`)).recordset[0];
+    if (Number(r.n) > 0) ket.push(`${r.n} ${t.mo_ta}`);
+  }
+  return ket;
+}
+async function getDaiSizeList(pool, donHangId) {
+  return (await pool.request().input('id', sql.Int, donHangId).query(
+    'SELECT ID, TenDai, HeSo, ThuTu FROM DonHangDaiSize WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, 9999), ID')).recordset;
+}
+
+router.get('/orders/:maDH/daisize', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    res.json({ success: true, data: await getDaiSizeList(pool, order.DonHangID), heSoLenh: Number(order.HeSoQuyDoi) || 0 });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: 'Lỗi khi đọc dải size: ' + err.message }); }
+});
+
+/* Luu CA DANH SACH mot lan, theo DIFF — KHONG xoa sach roi chen lai.
+   Giu nguyen ID cua dai da co, vi 4 bang khac dang tro vao ID do (xem BANG_THAM_CHIEU_DAI_SIZE).
+   Dung het bai hoc v8.55: chen lai sinh ID moi la dut sach lien ket ma khong bao loi gi. */
+router.put('/orders/:maDH/daisize', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+
+    const rows = (Array.isArray(req.body.rows) ? req.body.rows : [])
+      .map(r => ({ id: Number(r.id) || null, tenDai: String(r.tenDai || '').trim(), heSo: Number(r.heSo) || 0 }))
+      .filter(r => r.tenDai !== '');
+
+    const heSoLenh = Number(order.HeSoQuyDoi) || 0;
+    if (rows.length) {
+      if (rows.some(r => r.heSo <= 0))
+        return res.status(400).json({ success: false, message: 'Mỗi dải phải có hệ số lớn hơn 0.' });
+      const ten = rows.map(r => r.tenDai.toLowerCase());
+      if (new Set(ten).size !== ten.length)
+        return res.status(400).json({ success: false, message: 'Có hai dải trùng tên. Mỗi dải phải có tên khác nhau.' });
+      const tong = rows.reduce((s, r) => s + r.heSo, 0);
+      if (heSoLenh <= 0)
+        return res.status(400).json({ success: false, message: 'Lệnh chưa khai hệ số quy đổi — không tách dải được. Vào Chỉ định sản xuất khai hệ số trước.' });
+      if (tong !== heSoLenh)
+        return res.status(400).json({ success: false,
+          message: `Tổng hệ số các dải là ${tong}, không khớp hệ số của lệnh (${heSoLenh}). `
+            + 'Phải bằng nhau thì số cắt và số đóng gói mới khớp — sửa lại rồi lưu.' });
+    }
+
+    const cu = (await getDaiSizeList(pool, order.DonHangID)).map(r => Number(r.ID));
+    const idGuiLen = new Set(rows.map(r => r.id).filter(n => Number.isInteger(n) && n > 0));
+    const canXoa = cu.filter(id => !idGuiLen.has(id));
+    if (canXoa.length) {
+      const vuong = await dangGiuDaiSize(pool, canXoa);
+      if (vuong.length)
+        return res.status(400).json({ success: false,
+          message: 'Không xóa/sửa được dải đã dùng: còn ' + vuong.join(', ')
+            + ' đang gắn vào dải đó. Gỡ các dòng đó trước rồi sửa lại. Chưa có thay đổi nào được lưu.' });
+      await pool.request().query(`DELETE FROM DonHangDaiSize WHERE ID IN (${canXoa.join(',')})`);
+    }
+
+    let tt = 0;
+    for (const r of rows) {
+      const rq = pool.request().input('TenDai', sql.NVarChar(100), r.tenDai)
+        .input('HeSo', sql.Int, r.heSo).input('ThuTu', sql.Int, tt++);
+      if (Number.isInteger(r.id) && r.id > 0 && cu.indexOf(r.id) !== -1) {
+        await rq.input('ID', sql.Int, r.id).input('DonHangID', sql.Int, order.DonHangID)
+          .query('UPDATE DonHangDaiSize SET TenDai=@TenDai, HeSo=@HeSo, ThuTu=@ThuTu WHERE ID=@ID AND DonHangID=@DonHangID');
+      } else {
+        await rq.input('DonHangID', sql.Int, order.DonHangID)
+          .query('INSERT INTO DonHangDaiSize (DonHangID, TenDai, HeSo, ThuTu) VALUES (@DonHangID,@TenDai,@HeSo,@ThuTu)');
+      }
+    }
+    res.json({ success: true, data: await getDaiSizeList(pool, order.DonHangID) });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: 'Lỗi khi lưu dải size: ' + err.message }); }
+});
+
 // ============ NHA GIA CONG CHI TIET (Ky thuat -> chuyen sang cong doan 'GC' tu v5.23, v5.13 muc 1.2.1.2) ============
 // Day la co che DUY NHAT con lai de gan nha gia cong cho don hang (thay the han "Nha gia cong (dai
 // dien)" DonHangSanXuat.NhaGiaCongID - cot nay MO COI tu v5.24, xem ghi chu dau file). Nhap truc tiep
@@ -1632,7 +1810,9 @@ router.post('/orders/:maDH/nhagiacongchitiet', requireAuth, requirePermission('Q
         .input('GhiChu', sql.NVarChar, r.ghiChu || null)
         .input('DonGia', sql.Decimal(14, 2), r.donGia || null)
         .input('SoLuong', sql.Int, r.soLuong || null)
-        .query(`INSERT INTO DonHangChiTietNhaGiaCong (DonHangID, NhaGiaCongID, HangMucGiaCongID, GhiChu, DonGia, SoLuong) VALUES (@DonHangID, @NhaGiaCongID, @HangMucGiaCongID, @GhiChu, @DonGia, @SoLuong)`);
+        // v8.59: dai size cua dong giao nay. NULL = lenh khong tach dai -> y het truoc.
+        .input('DaiSizeID', sql.Int, Number(r.daiSizeId) || null)
+        .query(`INSERT INTO DonHangChiTietNhaGiaCong (DonHangID, NhaGiaCongID, HangMucGiaCongID, GhiChu, DonGia, SoLuong, DaiSizeID) VALUES (@DonHangID, @NhaGiaCongID, @HangMucGiaCongID, @GhiChu, @DonGia, @SoLuong, @DaiSizeID)`);
     }
     res.json({ success: true });
   } catch (err) {
@@ -3852,9 +4032,12 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
           // cong doan "Kho nhap") chi dung TAM để tính delta cho The kho hang hoa roi bi bo, khong luu.
           // Voi cac cong doan khac m.donViDaChon la undefined -> NULL, khong anh huong.
           .input('DonViDaChon', sql.NVarChar, m.donViDaChon || null)
-          .query(`INSERT INTO TienDoChiTietMau (TienDoID, MauSacID, SoLuongLuyKe, DonViDaChon)
+          /* v8.59: DAI SIZE cua dong nay. NULL = lenh khong tach dai (hoac cong doan khong nhap
+             theo dai) -> moi truy van cu giu nguyen ket qua. */
+          .input('DaiSizeID', sql.Int, Number(m.daiSizeId) || null)
+          .query(`INSERT INTO TienDoChiTietMau (TienDoID, MauSacID, SoLuongLuyKe, DonViDaChon, DaiSizeID)
                   OUTPUT INSERTED.ID
-                  VALUES (@TienDoID, @MauSacID, @SoLuongLuyKe, @DonViDaChon)`);
+                  VALUES (@TienDoID, @MauSacID, @SoLuongLuyKe, @DonViDaChon, @DaiSizeID)`);
         const chiTietMauId = ctResult.recordset[0].ID;
 
         // Chi tiet mau phu (rieng cong doan "Cắt") - moi mau chinh co the co nhieu dong mau phu

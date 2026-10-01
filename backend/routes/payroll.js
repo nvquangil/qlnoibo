@@ -1232,8 +1232,9 @@ router.get('/bangluong/ck', requireAuth, requirePermission('PAYROLL', 'view'), r
 /* ================================================================
    6. LUONG KHOAN MAY (Phase 3) - tinh tu PhanCongMay x don gia cong doan may cua don hang.
    CHI DOC du lieu QLSX (khong doi schema). Thanh tien = SoLuong * DonGia * HeSo; don gia uu tien
-   theo don hang (DonHangCongDoanMay), fallback don gia he thong (DonGiaCongDoanMay). Loc theo thang
-   ghi nhan tien do (TienDoSanXuat.NgayGhiNhan). "Nghiem thu" = da ghi nhan o cong doan May (PhanCongMay).
+   theo don hang (DonHangCongDoanMay), fallback don gia he thong (DonGiaCongDoanMay).
+   ⚠️ v8.61: KY LUONG loc theo THANG GHI TIEN DO QC (xem khoi CROSS APPLY trong cau SQL), KHONG con
+   theo thang ghi tien do May nhu truoc. Lenh chua qua QC KHONG vao bang luong.
    ================================================================ */
 async function loadLuongKhoanMay(pool, nam, thang, nhanVienId) {
   const reqDb = pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang);
@@ -1258,7 +1259,30 @@ async function loadLuongKhoanMay(pool, nam, thang, nhanVienId) {
     LEFT JOIN CongDoanMay cm ON cm.CongDoanMayID = pc.CongDoanMayID
     LEFT JOIN DonHangCongDoanMay dhg ON dhg.DonHangID = d.DonHangID AND dhg.CongDoanMayID = pc.CongDoanMayID
     LEFT JOIN DonGiaCongDoanMay g ON g.CongDoanMayID = pc.CongDoanMayID
-    WHERE YEAR(td.NgayGhiNhan) = @n AND MONTH(td.NgayGhiNhan) = @t ${extra}
+    /* ============================================================================================
+       v8.61 — KY LUONG TINH THEO THANG GHI TIEN DO QC, KHONG PHAI THANG GHI TIEN DO MAY.
+       Nguyen chot 2026-10-01: "Lenh qua QC. QC ghi nhan o thang nao thi tinh tien thang do.
+       Vi du hang giao thang 8 nhung QC ghi tien do T9 thi luong tinh vao thang 9."
+       + "Dieu kien QC ap cho ca GC/in theu, ca luong khoan may."
+
+       CROSS APPLY (khong phai LEFT): lenh CHUA qua QC se khong co dong nao -> tu dong bi loai khoi
+       bang luong. Dung bang dieu kien "qua QC moi tinh vao luong", khong can viet them EXISTS.
+
+       MIN(q.NgayGhiNhan) = LAN GHI QC DAU TIEN, CO Y khong dung MAX: lay MAX thi moi lan ai do ghi
+       bo sung QC la CA CUC TIEN NHAY SANG THANG KHAC, ke ca thang da chot va da tra. MIN thi ghi
+       QC lan dau xong la thang do chot cung.
+
+       ⚠️ Khop CA MaCongDoan LAN TenCongDoan, da chuan hoa. Ly do: MaCongDoan la DU LIEU nguoi dung
+       go duoc o man Danh muc, khong phai hang so — cong doan "Nhat chi" tung co ma that la 'nhatchi'
+       chu khong phai 'NCH', lam v8.30/v8.33 KHONG BAO GIO chay (xem v8.50). Khong lap lai loi do.
+       ============================================================================================ */
+    CROSS APPLY (SELECT MIN(q.NgayGhiNhan) AS NgayQC
+                   FROM TienDoSanXuat q
+                   JOIN CongDoanSanXuat c ON c.StageID = q.StageID
+                  WHERE q.DonHangID = d.DonHangID
+                    AND (UPPER(LTRIM(RTRIM(ISNULL(c.MaCongDoan, N'')))) = N'QC'
+                         OR UPPER(LTRIM(RTRIM(ISNULL(c.TenCongDoan, N'')))) = N'QC')) qc
+    WHERE YEAR(qc.NgayQC) = @n AND MONTH(qc.NgayQC) = @t ${extra}
     ORDER BY nv.HoTen, d.MaDH`)).recordset;
 }
 function tongHopKhoanMay(rows) {

@@ -282,18 +282,77 @@ router.post('/dongiamay/:maDH', requireAuth, requirePermission('QLSX', 'edit'), 
     const rows = Array.isArray(req.body.rows) ? req.body.rows.filter(r => (r.tenCongDoan || '').trim()) : [];
     const ten = req.body.ten != null ? String(req.body.ten).trim() : '';
     const oldTen = req.body.oldTen != null ? String(req.body.oldTen) : ten;   // hỗ trợ đổi tên bản
-    // Ghi đè theo BẢN: quét sạch bản cũ (theo oldTen) rồi chèn lại với tên mới.
-    await pool.request().input('id', sql.Int, o.DonHangID).input('ot', sql.NVarChar, oldTen)
-      .query(`DELETE FROM DonHangDonGiaCongDoanMay WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ot`);
+
+    /* ============================================================================================
+       v8.55 — BỎ KIỂU "XOÁ SẠCH RỒI CHÈN LẠI". SỬA LỖI Nguyen báo 2026-09-30:
+         "The DELETE statement conflicted with the REFERENCE constraint FK__PhanCongM__DonGi__...
+          table dbo.PhanCongMay, column 'DonGiaCongDoanMayID'"
+
+       Nguyên nhân: mỗi dòng đơn giá là một CÔNG ĐOẠN MAY, và khi giao việc nội bộ thì
+       PhanCongMay.DonGiaCongDoanMayID trỏ thẳng vào ID của dòng đó (v5.34c). Xoá sạch bản để chèn
+       lại là xoá đúng những dòng đang có người được giao việc -> SQL Server chặn.
+
+       ⚠️ Khoá ngoại này đang BẢO VỆ dữ liệu thật, KHÔNG được gỡ. Kể cả nếu DELETE có chạy lọt
+       (vd khoá ngoại đặt ON DELETE CASCADE) thì cũng hỏng nặng hơn: chèn lại sinh ID MỚI, mọi dòng
+       PhanCongMay sẽ mồ côi hoặc bám nhầm công đoạn — mất sạch số liệu lương khoán may mà không
+       báo lỗi gì.
+
+       Nay lưu theo DIFF, giữ nguyên ID:
+         - dòng client gửi kèm `id`  -> UPDATE tại chỗ  (PhanCongMay không đứt liên kết)
+         - dòng không có `id`        -> INSERT mới
+         - dòng cũ không còn trong danh sách -> XOÁ, nhưng CHẶN TRƯỚC nếu đang có người được giao
+           việc, kèm tên công đoạn cụ thể để người dùng biết phải gỡ giao việc ở đâu.
+       Đổi tên bản: UPDATE set luôn TenPhieu = tên mới, nên không cần xoá/chèn lại nữa.
+       ⚠️ ThanhTien là CỘT TÍNH (migration_v534b) — không được đưa vào INSERT/UPDATE.
+       ============================================================================================ */
+    const cu = (await pool.request().input('id', sql.Int, o.DonHangID).input('ot', sql.NVarChar, oldTen)
+      .query(`SELECT ID FROM DonHangDonGiaCongDoanMay WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ot`))
+      .recordset.map(r => Number(r.ID));
+    const idGuiLen = new Set(rows.map(r => Number(r.id)).filter(n => Number.isInteger(n) && n > 0));
+    const canXoa = cu.filter(id => !idGuiLen.has(id));
+
+    if (canXoa.length) {
+      /* Kiểm TRƯỚC rồi mới xoá, để báo được câu người dùng hiểu — thay vì để SQL Server ném
+         nguyên văn tên khoá ngoại ra màn hình như trước. */
+      const vuong = (await pool.request().query(`
+        SELECT dm.TenCongDoan, COUNT(*) AS SoNguoi
+        FROM PhanCongMay pc
+        JOIN DonHangDonGiaCongDoanMay dm ON dm.ID = pc.DonGiaCongDoanMayID
+        WHERE pc.DonGiaCongDoanMayID IN (${canXoa.join(',')})
+        GROUP BY dm.TenCongDoan`)).recordset;
+      if (vuong.length) {
+        /* 400 chứ KHÔNG 401/403: common.js coi mọi 401 là "phiên hết hạn" và đá về /login.html,
+           nuốt mất thông báo thật. */
+        return res.status(400).json({
+          success: false,
+          message: 'Không xoá được công đoạn đã có người được giao việc: '
+            + vuong.map(v => `${v.TenCongDoan} (${v.SoNguoi} dòng giao việc)`).join('; ')
+            + '. Hãy gỡ phần giao việc của công đoạn đó ở màn Ghi nhận tiến độ (công đoạn May) trước, '
+            + 'rồi xoá lại. Các dòng khác trong bản này CHƯA được lưu.'
+        });
+      }
+      await pool.request().query(`DELETE FROM DonHangDonGiaCongDoanMay WHERE ID IN (${canXoa.join(',')})`);
+    }
+
     let tt = 0;
     for (const r of rows) {
-      await pool.request().input('DonHangID', sql.Int, o.DonHangID)
+      const rq = pool.request()
         .input('TenCongDoan', sql.NVarChar, r.tenCongDoan)
         .input('GiayGio', sql.Decimal(14, 4), r.giayGio === '' || r.giayGio == null ? null : Number(r.giayGio))
         .input('HeSoCongDoan', sql.Decimal(14, 4), r.heSoCongDoan === '' || r.heSoCongDoan == null ? null : Number(r.heSoCongDoan))
         .input('HeSoCongNhan', sql.Decimal(14, 4), r.heSoCongNhan === '' || r.heSoCongNhan == null ? 4 : Number(r.heSoCongNhan))
-        .input('ThuTu', sql.Int, tt++).input('TenPhieu', sql.NVarChar, ten || null)
-        .query('INSERT INTO DonHangDonGiaCongDoanMay (DonHangID, TenCongDoan, GiayGio, HeSoCongDoan, HeSoCongNhan, ThuTu, TenPhieu) VALUES (@DonHangID,@TenCongDoan,@GiayGio,@HeSoCongDoan,@HeSoCongNhan,@ThuTu,@TenPhieu)');
+        .input('ThuTu', sql.Int, tt++).input('TenPhieu', sql.NVarChar, ten || null);
+      const id = Number(r.id);
+      if (Number.isInteger(id) && id > 0 && cu.indexOf(id) !== -1) {
+        await rq.input('ID', sql.Int, id).input('DonHangID', sql.Int, o.DonHangID)
+          .query(`UPDATE DonHangDonGiaCongDoanMay
+                     SET TenCongDoan=@TenCongDoan, GiayGio=@GiayGio, HeSoCongDoan=@HeSoCongDoan,
+                         HeSoCongNhan=@HeSoCongNhan, ThuTu=@ThuTu, TenPhieu=@TenPhieu
+                   WHERE ID=@ID AND DonHangID=@DonHangID`);
+      } else {
+        await rq.input('DonHangID', sql.Int, o.DonHangID)
+          .query('INSERT INTO DonHangDonGiaCongDoanMay (DonHangID, TenCongDoan, GiayGio, HeSoCongDoan, HeSoCongNhan, ThuTu, TenPhieu) VALUES (@DonHangID,@TenCongDoan,@GiayGio,@HeSoCongDoan,@HeSoCongNhan,@ThuTu,@TenPhieu)');
+      }
     }
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: 'Lỗi khi lưu đơn giá công đoạn may: ' + err.message }); }
@@ -330,30 +389,57 @@ router.get('/dongiagiacong/:maDH', requireAuth, requirePermission('QLSX', 'view'
   const ten = req.query.ten != null ? String(req.query.ten) : '';
   const rq = pool.request().input('id', sql.Int, o.DonHangID);
   if (hasTen) rq.input('ten', sql.NVarChar, ten);
+  /* v8.60: don gia KHAC NHAU THEO DAI SIZE (Nguyen xac nhan). Moi dong don gia gan toi da mot dai;
+     DaiSizeID = NULL nghia la "ap cho moi dai" — dung y nghia cua toan bo du lieu cu. */
+    const coCotDai = await coCot(pool, 'DonHangHangMucGiaCong', 'DaiSizeID');
   const chosen = (await rq.query(`
     SELECT dhg.HangMucGiaCongID, hm.TenHangMuc, ISNULL(dhg.DonGia, hm.DonGiaMacDinh) AS DonGia
+           ${coCotDai ? ', dhg.DaiSizeID, ds.TenDai' : ", CAST(NULL AS INT) AS DaiSizeID, CAST(NULL AS NVARCHAR(100)) AS TenDai"}
     FROM DonHangHangMucGiaCong dhg JOIN HangMucGiaCong hm ON hm.HangMucGiaCongID = dhg.HangMucGiaCongID
+    ${coCotDai ? 'LEFT JOIN DonHangDaiSize ds ON ds.ID = dhg.DaiSizeID' : ''}
     WHERE dhg.DonHangID = @id${hasTen ? ` AND ISNULL(dhg.TenPhieu, N'')=@ten` : ''} ORDER BY hm.TenHangMuc`)).recordset;
-  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, catalog, chosen });
+  /* Danh sach dai cua lenh, de form dung lam o chon. Rong = lenh khong tach dai -> form giu nguyen.
+     Dung coCot() de do bang co ton tai chua (COL_LENGTH tra NULL ca khi BANG khong co) — man hinh
+     van mo binh thuong tren CSDL chua chay migration_v859. */
+  const daiSizeList = (await coCot(pool, 'DonHangDaiSize', 'ID'))
+    ? (await pool.request().input('id', sql.Int, o.DonHangID).query(
+        'SELECT ID, TenDai, HeSo FROM DonHangDaiSize WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, 9999), ID')).recordset
+    : [];
+  res.json({ success: true, order: ob.order, anhMacDinh: ob.anhMacDinh, catalog, chosen, daiSizeList });
 });
 router.post('/dongiagiacong/:maDH', requireAuth, requirePermission('QLSX', 'edit'), async (req, res) => {
   try {
     const pool = await getPool();
     const o = (await pool.request().input('m', sql.NVarChar, req.params.maDH).query('SELECT DonHangID FROM DonHangSanXuat WHERE MaDH=@m')).recordset[0];
     if (!o) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    /* v8.60: khoa chong trung nay DOI TU "hang muc" SANG "hang muc + dai size".
+       Don gia khac nhau theo dai (Nguyen xac nhan), nen MOT hang muc duoc phep co NHIEU dong —
+       moi dai mot gia. Giu khoa cu la dong dai thu hai bi loai am tham, nguoi dung nhap gia xong
+       luu lai thay mat, khong hieu vi sao. */
+    const coCotDai = await coCot(pool, 'DonHangHangMucGiaCong', 'DaiSizeID');
     const seen = new Set();
-    const items = (Array.isArray(req.body.items) ? req.body.items : []).filter(it => it.hangMucGiaCongId && !seen.has(String(it.hangMucGiaCongId)) && seen.add(String(it.hangMucGiaCongId)));
+    const items = (Array.isArray(req.body.items) ? req.body.items : []).filter(it => {
+      if (!it.hangMucGiaCongId) return false;
+      const k = `${it.hangMucGiaCongId}|${coCotDai ? (it.daiSizeId || '') : ''}`;
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
     const ten = req.body.ten != null ? String(req.body.ten).trim() : '';
     const oldTen = req.body.oldTen != null ? String(req.body.oldTen) : ten;
     const tx = new sql.Transaction(pool);
     await tx.begin();
     try {
+      /* Xoa sach roi chen lai AN TOAN o bang nay: KHONG bang nao tro vao DonHangHangMucGiaCong.ID
+         (loadGiaCong doc gia qua OUTER APPLY theo HangMucGiaCongID, khong theo ID). Khac han
+         DonHangDonGiaCongDoanMay — bang do bi PhanCongMay tro vao, xoa la vo lien ket (xem v8.55). */
       await new sql.Request(tx).input('id', sql.Int, o.DonHangID).input('ot', sql.NVarChar, oldTen)
         .query(`DELETE FROM DonHangHangMucGiaCong WHERE DonHangID=@id AND ISNULL(TenPhieu, N'')=@ot`);
       for (const it of items) {
-        await new sql.Request(tx).input('DonHangID', sql.Int, o.DonHangID).input('HangMucGiaCongID', sql.Int, it.hangMucGiaCongId)
-          .input('DonGia', sql.Decimal(14, 2), Number(it.donGia) || 0).input('HeSo', sql.Decimal(10, 4), 1).input('TenPhieu', sql.NVarChar, ten || null)
-          .query('INSERT INTO DonHangHangMucGiaCong (DonHangID, HangMucGiaCongID, DonGia, HeSo, TenPhieu) VALUES (@DonHangID,@HangMucGiaCongID,@DonGia,@HeSo,@TenPhieu)');
+        const rq2 = new sql.Request(tx).input('DonHangID', sql.Int, o.DonHangID).input('HangMucGiaCongID', sql.Int, it.hangMucGiaCongId)
+          .input('DonGia', sql.Decimal(14, 2), Number(it.donGia) || 0).input('HeSo', sql.Decimal(10, 4), 1).input('TenPhieu', sql.NVarChar, ten || null);
+        if (coCotDai) rq2.input('DaiSizeID', sql.Int, Number(it.daiSizeId) || null);
+        await rq2.query(`INSERT INTO DonHangHangMucGiaCong (DonHangID, HangMucGiaCongID, DonGia, HeSo, TenPhieu${coCotDai ? ', DaiSizeID' : ''})
+                         VALUES (@DonHangID,@HangMucGiaCongID,@DonGia,@HeSo,@TenPhieu${coCotDai ? ', @DaiSizeID' : ''})`);
       }
       await tx.commit();
     } catch (e) { await tx.rollback(); throw e; }

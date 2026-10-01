@@ -64,9 +64,12 @@ dsFile.forEach((f, i) => {
   const duong = path.join(THU_MUC, f);
   if (!fs.existsSync(duong)) { console.log(`  (bo qua, khong thay) ${f}`); return; }
   const noiDung = fs.readFileSync(duong, 'utf8');
-  ra += `\n${'/'.repeat(98)}\n`;
+  /* ⚠️ v8.61 — SUA LOI: truoc day dung '/'.repeat(98) lam dong ngan cach. "//" KHONG PHAI comment
+     trong T-SQL (chi co "--" va "/* */"), nen file sinh ra bi loi cu phap ngay dong ngan cach dau
+     tien: Msg 102 "Incorrect syntax near '/'". Doi sang '-' — dung cu phap comment mot dong. */
+  ra += `\n${'-'.repeat(98)}\n`;
   ra += `/* [${String(i + 1).padStart(2)}/${dsFile.length}]  ${f}  */\n`;
-  ra += `${'/'.repeat(98)}\n`;
+  ra += `${'-'.repeat(98)}\n`;
   ra += `PRINT '';\nPRINT '>>> [${i + 1}/${dsFile.length}] ${f}';\nGO\n\n`;
   ra += noiDung.replace(/﻿/g, '');   // bo BOM giua file, khong SSMS bao loi cu phap la
   if (!/\n\s*GO\s*$/i.test(noiDung)) ra += '\nGO\n';
@@ -74,7 +77,7 @@ dsFile.forEach((f, i) => {
   tong++;
 });
 
-ra += `\n${'/'.repeat(98)}\nPRINT '';\nPRINT '=== CAI DAT XONG. Buoc tiep: Quan ly User -> Ma tran phan quyen -> cap quyen. ===';\nGO\n`;
+ra += `\n${'-'.repeat(98)}\nPRINT '';\nPRINT '=== CAI DAT XONG. Buoc tiep: Quan ly User -> Ma tran phan quyen -> cap quyen. ===';\nGO\n`;
 
 fs.writeFileSync(DAU_RA, ra, 'utf8');
 console.log(`Da gop ${tong} file -> ${DAU_RA}`);

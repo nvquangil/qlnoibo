@@ -1295,8 +1295,12 @@ window.ModuleTaiLieuKyThuat = (function () {
   async function openDonGiaMayEditor(maDH, tenPhieu, onDone) {
     tenPhieu = tenPhieu || '';
     const res = await apiGet('/api/tailieukythuat/dongiamay/' + maDH + '?ten=' + encodeURIComponent(tenPhieu));
-    let rows = (res.data || []).map(r => ({ tenCongDoan: r.TenCongDoan || '', giayGio: r.GiayGio != null ? r.GiayGio : '', heSoCongDoan: r.HeSoCongDoan != null ? r.HeSoCongDoan : '', heSoCongNhan: r.HeSoCongNhan != null ? r.HeSoCongNhan : 4 }));
-    if (!rows.length) rows = [{ tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }];
+    /* v8.55: GIỮ LẠI r.ID và gửi kèm khi Lưu. Backend từ nay lưu theo DIFF (UPDATE tại chỗ / INSERT
+       / XOÁ) thay vì xoá sạch rồi chèn lại — vì PhanCongMay.DonGiaCongDoanMayID trỏ thẳng vào ID
+       của từng dòng công đoạn. Thiếu `id` ở đây là backend coi MỌI dòng là dòng mới: nó sẽ xoá hết
+       dòng cũ (hoặc bị khoá ngoại chặn) rồi chèn lại với ID mới, làm đứt hết phần giao việc may. */
+    let rows = (res.data || []).map(r => ({ id: r.ID, tenCongDoan: r.TenCongDoan || '', giayGio: r.GiayGio != null ? r.GiayGio : '', heSoCongDoan: r.HeSoCongDoan != null ? r.HeSoCongDoan : '', heSoCongNhan: r.HeSoCongNhan != null ? r.HeSoCongNhan : 4 }));
+    if (!rows.length) rows = [{ id: null, tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }];
     const tt = r => (Number(r.giayGio) || 0) * (Number(r.heSoCongDoan) || 0) * (Number(r.heSoCongNhan) || 0);
     const modal = openModal(`<h3>Đơn giá công đoạn may — ${escapeHtml(maDH)}${tenPhieu ? ' · Bản: ' + escapeHtml(tenPhieu) : ''}${orderInfoSuffix(res.order)}</h3>
       <form id="dgmForm">${tenBanRowHtml(tenPhieu)}<div id="dgmBox"></div>
@@ -1332,8 +1336,8 @@ window.ModuleTaiLieuKyThuat = (function () {
         r.giayGio = trEl.querySelector('.dgm-gio').value; r.heSoCongDoan = trEl.querySelector('.dgm-hscd').value; r.heSoCongNhan = trEl.querySelector('.dgm-hscn').value;
         trEl.querySelector('.dgm-tt').textContent = fmtNumber(tt(r));
       }));
-      box.querySelectorAll('.dgm-del').forEach(b => b.addEventListener('click', () => { sync(); rows.splice(Number(b.dataset.i), 1); if (!rows.length) rows.push({ tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }); renderRows(); }));
-      box.querySelector('#dgmAdd').addEventListener('click', () => { sync(); rows.push({ tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }); renderRows(); });
+      box.querySelectorAll('.dgm-del').forEach(b => b.addEventListener('click', () => { sync(); rows.splice(Number(b.dataset.i), 1); if (!rows.length) rows.push({ id: null, tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }); renderRows(); }));
+      box.querySelector('#dgmAdd').addEventListener('click', () => { sync(); rows.push({ id: null, tenCongDoan: '', giayGio: '', heSoCongDoan: '', heSoCongNhan: 4 }); renderRows(); });
     }
     renderRows();
     modal.querySelector('#btnPrintDgm').addEventListener('click', () => { sync(); printHtml('Đơn giá công đoạn may - ' + maDH, `<h2>ĐƠN GIÁ CÔNG ĐOẠN MAY</h2><p><b>Mã ĐH:</b> ${escapeHtml(maDH)}</p><table style="width:100%;border-collapse:collapse;" border="1" cellpadding="4"><thead><tr><th style="width:38px;">STT</th><th>Tên công đoạn</th><th>Giây giờ</th><th>Hệ số công đoạn</th><th>Hệ số công nhân</th><th>Thành tiền</th></tr></thead><tbody>${rows.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.tenCongDoan || '')}</td><td style="text-align:center;">${escapeHtml(String(r.giayGio || ''))}</td><td style="text-align:center;">${escapeHtml(String(r.heSoCongDoan || ''))}</td><td style="text-align:center;">${escapeHtml(String(r.heSoCongNhan || ''))}</td><td style="text-align:right;">${fmtNumber(tt(r))}</td></tr>`).join('')}</tbody></table>`); });
@@ -1354,8 +1358,13 @@ window.ModuleTaiLieuKyThuat = (function () {
     tenPhieu = tenPhieu || '';
     const res = await apiGet('/api/tailieukythuat/dongiagiacong/' + maDH + '?ten=' + encodeURIComponent(tenPhieu));
     let catalog = res.catalog || [];
-    let rows = (res.chosen || []).map(c => ({ hangMucGiaCongId: c.HangMucGiaCongID, donGia: c.DonGia != null ? c.DonGia : '' }));
-    if (!rows.length) rows = [{ hangMucGiaCongId: '', donGia: '' }];
+    /* v8.60: đơn giá KHÁC NHAU THEO DẢI SIZE. Lệnh đã tách dải thì mỗi dòng gắn một dải; để trống
+       nghĩa là "áp cho mọi dải" — đúng ý nghĩa của toàn bộ dữ liệu cũ, nên lệnh chưa tách giữ
+       nguyên hình dạng form như trước. Thứ tự tra giá ở backend: khớp dải → dòng trống → không có. */
+    const daiList = res.daiSizeList || [];
+    const coTachDai = daiList.length > 0;
+    let rows = (res.chosen || []).map(c => ({ hangMucGiaCongId: c.HangMucGiaCongID, donGia: c.DonGia != null ? c.DonGia : '', daiSizeId: c.DaiSizeID || '' }));
+    if (!rows.length) rows = [{ hangMucGiaCongId: '', donGia: '', daiSizeId: '' }];
     const modal = openModal(`<h3>Đơn giá giao gia công — ${escapeHtml(maDH)}${tenPhieu ? ' · Bản: ' + escapeHtml(tenPhieu) : ''}${orderInfoSuffix(res.order)}</h3>
       <form id="dggForm">${tenBanRowHtml(tenPhieu)}<div id="dggBox"></div>
         <div class="toolbar" style="margin-top:6px;"><button type="button" class="btn small secondary" id="dggAddRow">+ Thêm hạng mục</button><button type="button" class="btn small secondary" id="dggNew">+ Mới (danh mục)</button></div>
@@ -1367,20 +1376,31 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnCancelDgg').addEventListener('click', closeModal);
     const box = modal.querySelector('#dggBox');
     function optionsFor(sel) { return catalog.map(c => `<option value="${c.HangMucGiaCongID}" ${String(c.HangMucGiaCongID) === String(sel) ? 'selected' : ''}>${escapeHtml(c.TenHangMuc)}</option>`).join(''); }
+    function optionsDai(sel) {
+      return daiList.map(d => `<option value="${d.ID}" ${String(d.ID) === String(sel) ? 'selected' : ''}>${escapeHtml(d.TenDai)} (hệ số ${fmtNumber(d.HeSo)})</option>`).join('');
+    }
     function sync() {
-      box.querySelectorAll('[data-dggrow]').forEach(el => { const r = rows[Number(el.dataset.i)]; if (!r) return; r.hangMucGiaCongId = el.querySelector('.dgg-hm').value; r.donGia = el.querySelector('.dgg-gia').value; });
+      box.querySelectorAll('[data-dggrow]').forEach(el => {
+        const r = rows[Number(el.dataset.i)]; if (!r) return;
+        r.hangMucGiaCongId = el.querySelector('.dgg-hm').value;
+        r.donGia = el.querySelector('.dgg-gia').value;
+        const oDai = el.querySelector('.dgg-dai');
+        if (oDai) r.daiSizeId = oDai.value;
+      });
     }
     function renderRows() {
       box.innerHTML = `<table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;">
-        <thead><tr><th style="width:38px;">STT</th><th>Hạng mục gia công</th><th>Đơn giá</th><th></th></tr></thead>
+        <thead><tr><th style="width:38px;">STT</th><th>Hạng mục gia công</th>${coTachDai ? '<th style="width:190px;">Dải size</th>' : ''}<th>Đơn giá</th><th></th></tr></thead>
         <tbody>${rows.map((r, i) => `<tr data-dggrow data-i="${i}"><td style="text-align:center;">${i + 1}</td>
           <td><select class="dgg-hm" style="min-width:200px;"><option value="">-- Chọn hạng mục --</option>${optionsFor(r.hangMucGiaCongId)}</select></td>
+          ${coTachDai ? `<td><select class="dgg-dai" style="width:100%;"><option value="">Mọi dải</option>${optionsDai(r.daiSizeId)}</select></td>` : ''}
           <td><input type="number" step="0.01" min="0" class="dgg-gia" value="${r.donGia}" style="width:110px;"></td>
-          <td><button type="button" class="btn small danger dgg-del" data-i="${i}">X</button></td></tr>`).join('')}</tbody></table>`;
-      box.querySelectorAll('.dgg-del').forEach(b => b.addEventListener('click', () => { sync(); rows.splice(Number(b.dataset.i), 1); if (!rows.length) rows.push({ hangMucGiaCongId: '', donGia: '' }); renderRows(); }));
+          <td><button type="button" class="btn small danger dgg-del" data-i="${i}">X</button></td></tr>`).join('')}</tbody></table>
+        ${coTachDai ? '<div class="empty-hint" style="text-align:left;margin-top:4px;">Đơn giá khác nhau theo dải: khai mỗi dải một dòng. Để <b>Mọi dải</b> nghĩa là giá đó áp cho các dải chưa khai riêng.</div>' : ''}`;
+      box.querySelectorAll('.dgg-del').forEach(b => b.addEventListener('click', () => { sync(); rows.splice(Number(b.dataset.i), 1); if (!rows.length) rows.push({ hangMucGiaCongId: '', donGia: '', daiSizeId: '' }); renderRows(); }));
     }
     renderRows();
-    modal.querySelector('#dggAddRow').addEventListener('click', () => { sync(); rows.push({ hangMucGiaCongId: '', donGia: '' }); renderRows(); });
+    modal.querySelector('#dggAddRow').addEventListener('click', () => { sync(); rows.push({ hangMucGiaCongId: '', donGia: '', daiSizeId: '' }); renderRows(); });
     modal.querySelector('#dggNew').addEventListener('click', async () => {
       const ten = prompt('Tên hạng mục gia công mới:'); if (!ten || !ten.trim()) return;
       try { const r = await apiPost('/api/tailieukythuat/dongiagiacong-hangmuc', { tenHangMuc: ten.trim() }); catalog.push(r.data); sync(); rows.push({ hangMucGiaCongId: r.data.HangMucGiaCongID, donGia: r.data.DonGiaMacDinh || '' }); renderRows(); toast('Đã thêm hạng mục.', 'success'); }
@@ -1389,7 +1409,8 @@ window.ModuleTaiLieuKyThuat = (function () {
     modal.querySelector('#btnPrintDgg').addEventListener('click', () => { sync(); const nameOf = id => (catalog.find(c => String(c.HangMucGiaCongID) === String(id)) || {}).TenHangMuc || ''; printHtml('Đơn giá giao gia công - ' + maDH, `<h2>ĐƠN GIÁ GIAO GIA CÔNG</h2><p><b>Mã ĐH:</b> ${escapeHtml(maDH)}</p><table style="width:100%;border-collapse:collapse;" border="1" cellpadding="4"><thead><tr><th style="width:38px;">STT</th><th>Hạng mục gia công</th><th>Đơn giá</th></tr></thead><tbody>${rows.filter(r => r.hangMucGiaCongId).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(nameOf(r.hangMucGiaCongId))}</td><td style="text-align:right;">${fmtNumber(r.donGia)}</td></tr>`).join('')}</tbody></table>`); });
     modal.querySelector('#dggForm').addEventListener('submit', async (e) => {
       e.preventDefault(); if (!perm.canEdit) return; sync();
-      const items = rows.filter(r => r.hangMucGiaCongId).map(r => ({ hangMucGiaCongId: r.hangMucGiaCongId, donGia: r.donGia || 0 }));
+      // v8.60: kèm daiSizeId — rỗng = "áp cho mọi dải" (y hệt cách dữ liệu cũ đang có nghĩa).
+      const items = rows.filter(r => r.hangMucGiaCongId).map(r => ({ hangMucGiaCongId: r.hangMucGiaCongId, donGia: r.donGia || 0, daiSizeId: r.daiSizeId || null }));
       const ten = (modal.querySelector('[name="tenBan"]').value || '').trim();
       try {
         await apiPost('/api/tailieukythuat/dongiagiacong/' + maDH, { items, ten, oldTen: tenPhieu });
