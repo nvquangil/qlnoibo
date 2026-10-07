@@ -1787,35 +1787,71 @@ function boDau(s) {
     .join('').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
 }
 
-function searchBoxHtml(id) {
-  return `<input type="text" id="${id || 'dmSearchBox'}" placeholder="Gõ để tìm..." autocomplete="off" style="min-width:220px;">`;
+function searchBoxHtml(id, goiY) {
+  return `<input type="text" id="${id || 'dmSearchBox'}" placeholder="${escapeHtml(goiY || '🔍 Gõ để tìm trong mọi cột...')}" autocomplete="off" style="min-width:260px;">`;
 }
-function wireTableSearch(body, id) {
+/* ================================================================================================
+   TÌM KIẾM TRONG MỘT BẢNG ĐÃ VẼ — lọc bằng ẩn/hiện dòng, KHÔNG gọi lại API, KHÔNG vẽ lại bảng.
+   Nhờ vậy giữ nguyên mọi sự kiện đã gắn trên dòng (nút Sửa/Xóa, link mở chi tiết) và giữ cột STT
+   tự động (danhLaiStt đánh lại theo các dòng đang hiện).
+
+   v8.72 — NÂNG CẤP BẢN DÙNG CHUNG, thay vì viết bản thứ ba:
+     1. TÁCH TỪ, khớp HẾT (thay cho so nguyên chuỗi). Gõ "cotton do" ra được dòng có "cotton" ở cột
+        này và "đỏ" ở cột kia. So nguyên chuỗi thì chỉ cần gõ thừa một dấu cách là mất sạch kết quả,
+        người dùng tưởng không có dữ liệu. Cùng luật với ô tìm ở Danh sách lệnh SX (v7.92) và Báo
+        cáo kinh doanh (v8.62) — ba nơi nay dùng CHUNG một luật, không còn lệch nhau.
+        ⚠️ Chỉ NỚI RỘNG kết quả so với bản cũ: dòng nào khớp chuỗi liền thì cũng chứa đủ các từ.
+     2. Dòng TỔNG (`data-tong`) LUÔN HIỆN — nó là tổng của cả bảng, không phải một dòng dữ liệu.
+        Ẩn nó theo bộ lọc là người đọc mất mốc đối chiếu. Bản cũ ẩn luôn, đó là lỗi im lặng.
+     3. Bỏ qua dòng rỗng có sẵn (.empty-hint) khi đếm — không thì bảng rỗng vẫn "tìm thấy 1 dòng".
+   ================================================================================================ */
+function wireTableSearch(body, id, opts) {
   const input = body.querySelector('#' + (id || 'dmSearchBox'));
-  const table = body.querySelector('table');
+  const table = (opts && opts.table) || body.querySelector('table');
   if (!input || !table) return;
   const tbody = table.querySelector('tbody');
-  const rows = Array.from(tbody.querySelectorAll(':scope > tr'));
-  if (!rows.length) return;
+  if (!tbody) return;
+  const rows = Array.from(tbody.querySelectorAll(':scope > tr'))
+    .filter(tr => !tr.hasAttribute('data-tong') && !tr.querySelector('.empty-hint'));
+  if (!rows.length) { input.disabled = true; return; }
   // Lay so cot tu <thead> (khong dung rows[0].children.length) - neu bang dang rong (chi co 1 dong
   // "Chua co du lieu" gom 1 <td colspan> duy nhat) thi rows[0].children.length se sai (ra 1 thay vi
   // dung so cot that), lam dong "khong tim thay" hien hep hon ca bang.
   const colCount = table.querySelectorAll('thead th').length || rows[0].children.length;
+  /* Dựng chuỗi tìm SẴN một lần: bảng vài trăm dòng mà normalize lại textContent mỗi lần gõ phím
+     là gõ bị khựng.
+
+     ⚠️ Ô nào gắn `data-notim` thì KHÔNG đưa vào chuỗi tìm. Dùng cho cột "Thao tác": chữ trên nút
+     ("Xuất kho", "Lập/Sửa") giống hệt nhau ở mọi dòng, để lọt vào là gõ đúng chữ đó ra nguyên bảng
+     — người dùng tưởng ô tìm hỏng. Đây đúng là lý do v7.92 ở Danh sách lệnh SX phải tự ghép chuỗi
+     thay vì dùng textContent.
+     Dòng nào đã tự gắn sẵn `data-tim` thì GIỮ NGUYÊN — nơi gọi biết rõ cần tìm theo gì hơn. */
+  rows.forEach(tr => {
+    if (tr.dataset.tim) return;
+    const o = Array.from(tr.children).filter(td => !td.hasAttribute('data-notim'));
+    tr.dataset.tim = boDau(o.map(td => td.textContent || '').join(' '));
+  });
+
+  /* Dòng "không tìm thấy" dựng NGAY BÂY GIỜ, trước khi themCotStt() chèn thêm cột STT — dựng sau
+     là dòng này hụt đúng một ô (bài học v7.92). */
   const noResultRow = document.createElement('tr');
   noResultRow.style.display = 'none';
-  noResultRow.innerHTML = `<td colspan="${colCount}" class="empty-hint">Không tìm thấy kết quả phù hợp.</td>`;
+  noResultRow.innerHTML = `<td colspan="${colCount}" class="empty-hint">Không tìm thấy dòng nào khớp.</td>`;
   tbody.appendChild(noResultRow);
+
+  const info = (opts && opts.infoId) ? body.querySelector('#' + opts.infoId) : null;
   input.addEventListener('input', () => {
-    /* v7.92: so khớp KHÔNG DẤU — gõ "ao thun" vẫn ra "Áo thun". Chỉ NỚI RỘNG kết quả, không loại
-       bớt dòng nào so với bản cũ. */
-    const q = boDau(input.value);
-    let anyVisible = false;
+    const tu = boDau(input.value).split(/\s+/).filter(Boolean);
+    let hien = 0;
     rows.forEach(tr => {
-      const match = !q || boDau(tr.textContent).includes(q);
-      tr.style.display = match ? '' : 'none';
-      if (match) anyVisible = true;
+      const khop = !tu.length || tu.every(t => tr.dataset.tim.indexOf(t) !== -1);
+      tr.style.display = khop ? '' : 'none';
+      if (khop) hien++;
     });
-    noResultRow.style.display = (q && !anyVisible) ? '' : 'none';
+    noResultRow.style.display = hien ? 'none' : '';
+    if (info) info.textContent = tu.length ? `Hiện ${fmtNumber(hien)}/${fmtNumber(rows.length)} dòng` : '';
+    // danhLaiStt tự bỏ qua bảng không có cột STT (table.__cotStt == null) và tự bỏ qua dòng đang ẩn.
+    if (typeof danhLaiStt === 'function') danhLaiStt(table);
   });
 }
 

@@ -31,6 +31,8 @@ const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 /* v7.59: MOT ban cong thuc "da tra / con o khach" — dung chung voi routes/nhaplai.js va 4 man hinh
    hang mau. Xem ghi chu dai trong chinh file do. */
 const { hangMauDangOKhach, gomTheoKhachMa, coCotHangMau } = require('../utils/dongDaBanChoKhach');
+/* v8.70: MOT ban cong thuc "%CK cua ma X vao ngay Y" — dung chung voi man don khach dat hang. */
+const { layKhuyenMaiTheoNgay } = require('../utils/khuyenMai');
 
 const router = express.Router();
 
@@ -279,15 +281,19 @@ router.get('/phieu/export', requireAuth, requirePermission('KHOHANG', 'view'), r
     if (tu) rq2.input('tu', sql.Date, tu);
     if (den) rq2.input('den', sql.Date, den);
     if (tt) rq2.input('tt', sql.NVarChar, tt);
+    /* v8.70.2: cot ChuongTrinhID chi co sau migration_v870 — chua chay thi van phai xuat duoc file. */
+    const coCTKM_xuat = await coCotChuongTrinh(pool);
     const chiTiet = (await rq2.query(`
       SELECT p.SoPhieu, p.NgayBan, p.TenKhach, p.TrangThai,
              h.MaHang, h.TenHang, ms.TenMau,
              ct.SoLuong, ct.DonVi, ct.SoLuongCai, ct.SoLuongQuyDoi, ct.DonViQuyDoi,
              ct.GiaBanLe, ct.PhanTramCKShop, ct.GiaBan, ct.ThanhTien, ct.GhiChu
+             ${coCTKM_xuat ? ', km.TenChuongTrinh' : ", CAST(NULL AS NVARCHAR(200)) AS TenChuongTrinh"}
       FROM PhieuBanHangChiTiet ct
       JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+      ${coCTKM_xuat ? 'LEFT JOIN ChuongTrinhKhuyenMai km ON km.ID = ct.ChuongTrinhID' : ''}
       ${whereSql}
       ORDER BY p.NgayBan DESC, p.PhieuBHID DESC, ct.ID`)).recordset;
 
@@ -357,6 +363,7 @@ router.get('/phieu/export', requireAuth, requirePermission('KHOHANG', 'view'), r
       { header: 'SL quy về ĐVT chính', key: 'SoLuongCai', width: 18 },
       { header: 'Giá bán lẻ', key: 'GiaBanLe', width: 13 },
       { header: '% CK shop', key: 'PhanTramCKShop', width: 10 },
+      { header: 'Chương trình KM', key: 'TenChuongTrinh', width: 24 },
       { header: 'Giá bán', key: 'GiaBan', width: 13 },
       { header: 'Thành tiền', key: 'ThanhTien', width: 15 },
       { header: 'Trạng thái phiếu', key: 'TrangThai', width: 15 },
@@ -368,6 +375,7 @@ router.get('/phieu/export', requireAuth, requirePermission('KHOHANG', 'view'), r
       MaHang: c.MaHang, TenHang: c.TenHang, TenMau: c.TenMau || '',
       SoLuong: so(c.SoLuong), DonVi: c.DonVi || '', SoLuongCai: so(c.SoLuongCai),
       GiaBanLe: so(c.GiaBanLe), PhanTramCKShop: so(c.PhanTramCKShop),
+      TenChuongTrinh: c.TenChuongTrinh || '',
       GiaBan: so(c.GiaBan), ThanhTien: so(c.ThanhTien),
       TrangThai: c.TrangThai, GhiChu: c.GhiChu || ''
     }));
@@ -406,9 +414,11 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
     if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu bán hàng.' });
     const ct = (await pool.request().input('id', sql.Int, req.params.id).query(`
       SELECT ct.*, h.MaHang, h.TenHang, ms.TenMau
+             ${await coCotChuongTrinh(pool) ? ', km.TenChuongTrinh' : ", CAST(NULL AS NVARCHAR(200)) AS TenChuongTrinh"}
       FROM PhieuBanHangChiTiet ct
       JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
       LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+      ${await coCotChuongTrinh(pool) ? 'LEFT JOIN ChuongTrinhKhuyenMai km ON km.ID = ct.ChuongTrinhID' : ''}
       WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
 
     const hai = n => String(n).padStart(2, '0');
@@ -434,7 +444,12 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
       { key: 'TenMau', width: 14 }, { key: 'SoLuong', width: 9 }, { key: 'DonVi', width: 9 },
       { key: 'SoLuongQuyDoi', width: 12 }, { key: 'DonViQuyDoi', width: 12 },
       { key: 'GiaBanLe', width: 13 },
-      { key: 'CKShop', width: 10 }, { key: 'GiaBan', width: 13 }, { key: 'ThanhTien', width: 15 }
+      /* v8.70.2: them cot "Chuong trinh KM" NGAY SAU %CK — doc mot mach: CK 35% vi dang chay
+         chuong trinh nao. SO_COT tinh tu ws.columns.length nen moi merge/SUM tu dieu chinh;
+         nhung HAI mang addRow duoi day la THEO VI TRI, phai chen gia tri dung cho (tieu de + du
+         lieu), neu khong thi so tien roi sang cot khac ma file van mo binh thuong (bai hoc v8.38). */
+      { key: 'CKShop', width: 10 }, { key: 'ChuongTrinhKM', width: 22 },
+      { key: 'GiaBan', width: 13 }, { key: 'ThanhTien', width: 15 }
     ];
     const SO_COT = ws.columns.length;   // đổi số cột là mọi merge/SUM dưới đây tự theo
     const dongTieuDe = (chu) => {
@@ -459,14 +474,14 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
     ws.addRow([]);
 
     const rTitle = ws.addRow(['STT', 'Mã hàng', 'Tên hàng', 'Màu', 'SL', 'Đơn vị',
-      'SL quy đổi', 'ĐVT quy đổi', 'Giá bán lẻ', '% CK shop', 'Giá bán', 'Thành tiền']);
+      'SL quy đổi', 'ĐVT quy đổi', 'Giá bán lẻ', '% CK shop', 'Chương trình KM', 'Giá bán', 'Thành tiền']);
     rTitle.font = { bold: true };
     const dongDau = ws.rowCount + 1;
     ct.forEach((c, i) => ws.addRow([
       i + 1, c.MaHang, c.TenHang, c.TenMau || '', so(c.SoLuong), c.DonVi || '',
       /* NULL = mã không có quy đổi -> để TRỐNG. Ghi 0 là người đọc tưởng quy đổi ra 0. */
       c.SoLuongQuyDoi == null ? '' : so(c.SoLuongQuyDoi), c.DonViQuyDoi || '',
-      so(c.GiaBanLe), so(c.PhanTramCKShop), so(c.GiaBan), so(c.ThanhTien)
+      so(c.GiaBanLe), so(c.PhanTramCKShop), c.TenChuongTrinh || '', so(c.GiaBan), so(c.ThanhTien)
     ]));
     const dongCuoi = ws.rowCount;
 
@@ -671,11 +686,20 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
     FROM PhieuBanHang p LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
     WHERE p.PhieuBHID = @id`)).recordset[0];
   if (!header) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu bán hàng.' });
+  /* ⚠️ v8.70.3 — ROUTE NAY LA NGUON DU LIEU CUA CA MAN XEM PHIEU LAN BAN IN.
+     Thieu LEFT JOIN ChuongTrinhKhuyenMai o day thi `TenChuongTrinh` ve undefined, nen bang chi tiet
+     (bangChiTietBanHangHtml) chi in ra "35%" ma KHONG co ten chuong trinh — dung loi Nguyen bao
+     2026-10-06: "mới hiển thị khi lập phiếu". Luc LAP phieu nhan lay tu /api/khuyenmai/ap-dung
+     (tra song), con luc XEM/IN thi phai lay tu chinh dong phieu da luu => hai duong KHAC NHAU,
+     sua mot duong khong tu sua duong kia. */
+  const coCTKM_xem = await coCotChuongTrinh(pool);
   const chiTiet = (await pool.request().input('id', sql.Int, req.params.id).query(`
     SELECT ct.*, h.MaHang, h.TenHang, h.AnhDaiDien, h.DonViCoBan, h.DonViQuyDoi, h.LoaiRi, ms.TenMau
+           ${coCTKM_xem ? ', km.TenChuongTrinh' : ", CAST(NULL AS NVARCHAR(200)) AS TenChuongTrinh"}
     FROM PhieuBanHangChiTiet ct
     JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+    ${coCTKM_xem ? 'LEFT JOIN ChuongTrinhKhuyenMai km ON km.ID = ct.ChuongTrinhID' : ''}
     WHERE ct.PhieuBHID = @id ORDER BY ct.ID`)).recordset;
 
   /* ==============================================================================================
@@ -765,6 +789,16 @@ async function chuanBiPhieu(pool, b, tonBu) {
   const ckNPP = b.phanTramCKNPP != null && b.phanTramCKNPP !== '' ? so(b.phanTramCKNPP) : 0;
   const vat = b.phanTramVAT != null && b.phanTramVAT !== '' ? so(b.phanTramVAT) : tyLe.vat;
 
+  /* ============================================================================================
+     v8.70 — CHUONG TRINH KHUYEN MAI: THAY THE %CKShop cho ma duoc gan, trong thoi gian chuong
+     trinh. Het han thi khong tra ra gi -> %CKShop ve lai CK dung chung (tyLe.shop) nhu cu.
+
+     ⚠️ Tra theo NGAY CUA PHIEU (b.ngayBan), KHONG phai ngay he thong: lap phieu lui ngay phai ra
+     dung gia cua ngay do. Lay ngay hom nay la phieu lui ngay an nham gia cua chuong trinh dang
+     chay — sai tien ma khong co dau hieu gi.
+     ============================================================================================ */
+  const kmMap = await layKhuyenMaiTheoNgay(pool, sql, b.ngayBan, ids);
+
   // Chuan hoa tung dong + kiem tra ton
   const canTru = new Map();   // "mh|ms" -> SL theo DON VI CHINH (de doi chieu ton kho)
   const dong = [];
@@ -790,7 +824,19 @@ async function chuanBiPhieu(pool, b, tonBu) {
     }
     if (slChinh <= 0) return { loi: (`Dòng ${h.MaHang}: số lượng quy về đơn vị chính (${h.DonViCoBan || 'Cái'}) = 0.`) };
     const giaBanLe = d.giaBanLe != null && d.giaBanLe !== '' ? so(d.giaBanLe) : so(h.GiaBan);
-    const ckShop = d.phanTramCKShop != null && d.phanTramCKShop !== '' ? so(d.phanTramCKShop) : tyLe.shop;
+    /* v8.70: thu tu uu tien %CKShop cua dong — 3 bac, KHONG duoc doi:
+         1. so nguoi lap GO TAY tren form  (sua tay luon thang)
+         2. %CK cua CHUONG TRINH KHUYEN MAI dang hieu luc cho ma nay
+         3. CK dung chung o CauHinhHeThong
+       ChuongTrinhID chi de HIEN THI ten chuong trinh tren phieu; con so that nam o cot
+       PhanTramCKShop nhu tu truoc toi gio, nen phieu da lap giu nguyen % du chuong trinh bi sua. */
+    const km = kmMap[Number(d.maHangId)];
+    const ckShop = d.phanTramCKShop != null && d.phanTramCKShop !== ''
+      ? so(d.phanTramCKShop)
+      : (km ? so(km.PhanTramCK) : tyLe.shop);
+    /* Chi gan chuong trinh khi dong THUC SU ban theo %CK cua chuong trinh do. Nguoi lap go de len
+       mot so khac thi khong con la ban theo chuong trinh nua — gan vao la ghi sai lich su. */
+    const chuongTrinhID = km && ckShop === so(km.PhanTramCK) ? km.ChuongTrinhID : null;
     const giaBan = tien(giaBanLe * (1 - ckShop / 100));
     const heRi = so(h.LoaiRi) || 1;
     dong.push({
@@ -800,6 +846,8 @@ async function chuanBiPhieu(pool, b, tonBu) {
       soLuongQuyDoi: heRi > 1 ? (laDonViGop(donVi, h) ? soCai : lam2(soCai / heRi)) : null,
       donViQuyDoi: heRi > 1 ? (laDonViGop(donVi, h) ? (h.DonViCoBan || 'Cái') : (h.DonViQuyDoi || 'Ri')) : null,
       giaBanLe: tien(giaBanLe), ckShop, giaBan, thanhTien: tien(giaBan * soCai),
+      chuongTrinhID,   // v8.70: null = bán theo CK dùng chung
+      tenChuongTrinh: chuongTrinhID ? km.TenChuongTrinh : null,
       /* v6.25.4: 1 dong co the gom NHIEU don (cung khach + ma hang + mau, dat nhieu lan). */
       donIDs: (Array.isArray(d.donIDs) ? d.donIDs : (d.donID ? [d.donID] : []))
         .map(x => parseInt(x, 10)).filter(x => x > 0),
@@ -977,7 +1025,21 @@ async function taoDonPhanChieu(pool, tran, phieuBHID, d, tt) {
   return r.recordset[0].DonID;
 }
 
+/* v8.70: một bản dò cột PhieuBanHangChiTiet.ChuongTrinhID (migration_v870). Chưa chạy migration
+   thì mọi thứ chạy y như trước, chỉ thiếu đúng phần ghi tên chương trình lên phiếu. */
+let __coCotCTKM = null;
+async function coCotChuongTrinh(pool) {
+  if (__coCotCTKM === null) {
+    try {
+      const r = (await pool.request().query("SELECT COL_LENGTH('PhieuBanHangChiTiet','ChuongTrinhID') AS c")).recordset[0] || {};
+      __coCotCTKM = r.c != null;
+    } catch (e) { __coCotCTKM = false; }
+  }
+  return __coCotCTKM;
+}
+
 async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPhieu) {
+  const coCTKM = await coCotChuongTrinh(pool);
   for (const d of dong) {
     /* v7.58 — LƯỚI AN TOÀN: gắn đơn KHÔNG còn tồn tại thì SQL Server ném lỗi khóa ngoại thô
        ("FK__PhieuBanH__DonID__…") — không ai đọc ra được là chuyện gì. Kiểm trước để báo tiếng Việt.
@@ -1008,11 +1070,13 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPh
       .input('DonID', sql.Int, d.donIDs[0] || null)
       .input('DonIDs', sql.NVarChar, d.donIDs.length ? d.donIDs.join(',') : null)
       .input('GhiChu', sql.NVarChar, d.ghiChu)
+      // v8.70: chương trình khuyến mãi của dòng (null = bán theo CK dùng chung)
+      .input('ChuongTrinhID', sql.Int, coCTKM ? (d.chuongTrinhID || null) : null)
       .query(`INSERT INTO PhieuBanHangChiTiet (PhieuBHID, MaHangID, MauSacID, SoLuong, DonVi, SoLuongCai,
-                SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''})
+                SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''}${coCTKM ? ', ChuongTrinhID' : ''})
               OUTPUT INSERTED.ID
               VALUES (@PhieuBHID, @MaHangID, @MauSacID, @SoLuong, @DonVi, @SoLuongCai,
-                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''})`)).recordset[0].ID;
+                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''}${coCTKM ? ', @ChuongTrinhID' : ''})`)).recordset[0].ID;
 
     /* v7.22 — CHIEU PHIEU -> DON: dong nay khong xuat phat tu don nao (ban thang, hoac vua THEM MA
        MOI luc sua phieu) thi sinh mot dong o Chi tiet dat hang roi GAN NGUOC lai vao dong phieu.

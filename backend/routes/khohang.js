@@ -15,6 +15,8 @@ const nhapLai = require('../utils/nhapLaiHangHoa');
 // v7.46: mot ban do cot TheKhoHangHoa.TenHoaDon (migration_v690) dung chung cho moi route.
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 const { coCotAnTheKho } = require('../utils/theKhoMau');   // v7.85: cờ ẩn khỏi danh sách Thẻ kho
+/* v8.70: MỘT bản công thức "%CK của mã X vào ngày Y" — dùng chung với routes/banhang.js. */
+const { layKhuyenMaiTheoNgay } = require('../utils/khuyenMai');
 
 const router = express.Router();
 
@@ -101,10 +103,47 @@ async function getSoCatTheoMau(pool, donHangId) {
   const latest = await pool.request().input('id', sql.Int, donHangId).input('stage', sql.Int, stageId)
     .query('SELECT TOP 1 TienDoID FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@stage ORDER BY TienDoID DESC');
   if (!latest.recordset.length) return {};
-  const result = await pool.request().input('td', sql.Int, latest.recordset[0].TienDoID)
-    .query('SELECT MauSacID, SoLuongLuyKe FROM TienDoChiTietMau WHERE TienDoID=@td');
+  /* ================================================================================================
+     v8.71 — TINH THANG TU CAY VAI, loai vai PHOI o MUC CAY. Truoc day doc TienDoChiTietMau, ma bang
+     do cong MOI cay cua ban cat (ke ca cay phoi) vao theo MauSacID.
+
+     🔴 PHAI loc o muc CAY, khong duoc loc o muc MAU: hai loai vai khac nhau co the CUNG MauSacID
+     (vd 2DA-NAU34 vai than va BO2DA-NAU34 vai bo deu la MauSacID 7456 o lenh DH2608064). Bo mau do
+     di la mat luon hang that. Xem ghi chu day du o slCatTheoMauTuCay() trong routes/qlsx.js.
+
+     ⚠️ GIU NGUYEN pham vi "TOP 1 ban cat moi nhat" nhu ban cu — co y. Ham nay chi DIEN SAN mot goi y
+     cho form tao The kho, khong phai con so quyet toan; doi pham vi o day se lam no lech voi con so
+     nguoi dung dang quen nhin.
+
+     Luoi an toan: don khong co dong phieu xuat nao khai KieuVai -> giu nguyen moi cay (du lieu cu).
+     Cay khong co dong xuat nao cua don -> van tinh (bao thu, tranh lam mat hang that).
+     ================================================================================================ */
+  const tienDoId = latest.recordset[0].TienDoID;
+  const coKhaiKieu = (await pool.request().input('id', sql.Int, donHangId).query(`
+    SELECT TOP 1 1 AS c FROM PhieuXuatVaiChiTiet px
+    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+    WHERE p.DonHangID = @id AND px.KieuVai IS NOT NULL`)).recordset.length > 0;
+  const coGiatCap = (await pool.request()
+    .query("SELECT COL_LENGTH('TienDoCatChiTietCay','SoCaiGiatCap') AS c")).recordset[0].c != null;
+  const result = await pool.request().input('td', sql.Int, tienDoId).input('id', sql.Int, donHangId)
+    .query(`
+      SELECT dv.MauSacID,
+             SUM(cc.SoLuongLop * cc.HeSoQuyDoi${coGiatCap ? ' + ISNULL(cc.SoCaiGiatCap, 0)' : ''}) AS SoCai
+      FROM TienDoCatChiTietCay cc
+      JOIN VaiCay vc ON vc.CayID = cc.CayID
+      JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+      WHERE cc.TienDoID = @td
+        ${coKhaiKieu ? `AND (
+             EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                     JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                     WHERE px.CayID = cc.CayID AND p.DonHangID = @id AND px.KieuVai = N'Chính')
+             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
+                            JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
+                            WHERE px2.CayID = cc.CayID AND p2.DonHangID = @id)
+           )` : ''}
+      GROUP BY dv.MauSacID`);
   const map = {};
-  result.recordset.forEach(r => { map[r.MauSacID] = Number(r.SoLuongLuyKe) || 0; });
+  result.recordset.forEach(r => { map[r.MauSacID] = Math.round(Number(r.SoCai) || 0); });
   return map;
 }
 
@@ -1176,10 +1215,23 @@ router.get('/orders', requireAuth, requirePermission('KHOHANG', 'view'), require
          với thứ tự người dùng đang nhìn trên màn hình. */
       ORDER BY CASE o.TrangThai WHEN N'Chờ xác nhận' THEN 0 WHEN N'Chờ xử lý' THEN 1 ELSE 2 END,
                o.ThoiGian DESC`);
+    /* ============================================================================================
+       v8.70 — KHUYẾN MÃI trên màn Đơn khách đặt hàng.
+       ⚠️ `DonKhachDatHang` KHÔNG có cột giá/%CK nào (chỉ khách + mã + màu + SL + trạng thái), nên ở
+       đây KHÔNG lưu gì — chỉ TRA SỐNG theo hôm nay để màn hình hiện nhãn "mã này đang khuyến mãi,
+       chương trình nào, bao nhiêu %". Con số chỉ thực sự chốt khi lập Phiếu bán hàng.
+       Nhờ vậy giá không nhảy bất ngờ ở bước lập phiếu — đúng ý "nó chung 1 chương trình".
+       Dùng CHUNG utils/khuyenMai.js với phiếu bán hàng, không viết lại công thức. */
+    let khuyenMai = {};
+    try {
+      khuyenMai = await layKhuyenMaiTheoNgay(pool, sql, new Date(),
+        [...new Set(result.recordset.map(r => r.MaHangID))]);
+    } catch (e) { khuyenMai = {}; }   // chưa chạy migration_v870 thì màn hình vẫn mở bình thường
     res.json({
       success: true, data: result.recordset,
       xemTatCa,   // v8.07: FE dùng để hiện đúng trạng thái ô "Xem tất cả" + thông báo phù hợp khi rỗng
       tyLeCK: await layTyLeCK(pool),   // v6.21: để bảng kê in tính giá sau CK shop/NPP
+      khuyenMai,                       // v8.70: map MaHangID -> { PhanTramCK, ChuongTrinhID, TenChuongTrinh }
       canhBao: duCot ? null : 'Chưa chạy database/migration_v657.sql — chức năng khách tự đặt hàng trên web chưa dùng được (đang hiển thị theo dữ liệu cũ).'
     });
   } catch (err) {

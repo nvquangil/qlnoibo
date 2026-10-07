@@ -1380,12 +1380,18 @@ router.get('/soquy', requireAuth, requirePermission('CONGNO', 'view'), requireCh
     canhBao: kq.coNH ? null : 'Chưa chạy database/migration_v669.sql — chưa tách được quỹ theo từng tài khoản ngân hàng.'
   });
 });
-// So chi tiet 1 quy: liet ke phieu thu/chi theo thoi gian + so du luy ke
-router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'soquy'), async (req, res) => {
-  const pool = await getPool();
+/* ================================================================================================
+   SO CHI TIET 1 QUY: liet ke phieu thu/chi theo thoi gian + so du luy ke.
+
+   v8.72 — TACH THANH HAM RIENG (truoc day tinh noi tuyen trong route).
+   Ly do: tu nay co CA ban XEM tren man hinh LAN ban XUAT EXCEL. De moi ben tu tinh la som muon hai
+   ben ra hai con so — dung bai hoc v6.47 / v7.53. Mot ham, hai noi goi.
+   ================================================================================================ */
+async function duLieuSoQuy(pool, opt) {
+  opt = opt || {};
   const coNH = await coBangTKNH(pool);
-  const loai = req.query.loai === 'NganHang' ? 'NganHang' : (req.query.loai === 'ChuaGan' ? 'ChuaGan' : 'TienMat');
-  const tknh = req.query.taiKhoanNHID ? Number(req.query.taiKhoanNHID) : null;
+  const loai = opt.loai === 'NganHang' ? 'NganHang' : (opt.loai === 'ChuaGan' ? 'ChuaGan' : 'TienMat');
+  const tknh = opt.taiKhoanNHID ? Number(opt.taiKhoanNHID) : null;
   let dk, dauKy = 0, ten = 'Quỹ tiền mặt';
   if (loai === 'TienMat') {
     dk = `ISNULL(HinhThuc, N'Tiền mặt') <> N'Chuyển khoản'`;
@@ -1414,15 +1420,75 @@ router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), r
            ISNULL(TenDoiTuong, N'') AS DoiTuong, DienGiai,
            N'PC' AS CtLoai, PhieuChiID AS CtID
     FROM PhieuChi WHERE ${dk}`)).recordset;
-  const rows = [...thu, ...chi].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay) || String(a.SoPhieu).localeCompare(String(b.SoPhieu)));
+  const tatCa = [...thu, ...chi].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay) || String(a.SoPhieu).localeCompare(String(b.SoPhieu)));
+
+  /* ================================================================================================
+     v8.72 — LOC THEO KY (tu ngay / den ngay), KIEU SO KE TOAN.
+     Nguyen chot 2026-10-07: "chi tiet so quy co loc theo ky tu ngay den ngay".
+
+     🔴 PHAI CONG PHAT SINH TRUOC KY VAO SO DU DAU KY. `dauKy` lay tu cau hinh chi la so du o moc
+     BAN DAU (ngay khai bao he thong), KHONG phai so du dau cua ky nguoi dung chon. Hien thang no
+     khi loc ky la so du cuoi ky SAI het — va sai AM THAM, nhin bang van thay hop ly.
+         so du dau ky = dauKyGoc + (thu - chi) cua MOI phieu truoc tuNgay
+
+     ⚠️ So sanh ngay bang chuoi 'YYYY-MM-DD' (ngayCuaDong), KHONG dung new Date(...) roi so: cot Ngay
+     la DATE, Date() se gan mui gio may chu vao va phieu ngay dau/cuoi ky co the roi nham ben.
+     Cung ly do da ghi o feedback "Ngay theo GIO VN, khong toISOString()".
+     ================================================================================================ */
+  const ngayHopLe = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+  const tuNgay = ngayHopLe(opt.tuNgay);
+  const denNgay = ngayHopLe(opt.denNgay);
+  const ngayCuaDong = (r) => {
+    const d = r.Ngay instanceof Date ? r.Ngay : new Date(r.Ngay);
+    if (isNaN(d)) return '';
+    const h = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${h(d.getMonth() + 1)}-${h(d.getDate())}`;
+  };
+
+  const dauKyGoc = dauKy;
+  let truocKy = 0;
+  const rows = [];
+  tatCa.forEach(r => {
+    const n = ngayCuaDong(r);
+    if (tuNgay && n && n < tuNgay) { truocKy += so(r.Thu) - so(r.Chi); return; }
+    if (denNgay && n && n > denNgay) return;            // ngoai ky, khong tinh vao dau ky lan trong ky
+    rows.push(r);
+  });
+  dauKy = Math.round((dauKyGoc + truocKy) * 100) / 100;
+
   let luy = dauKy;
-  rows.forEach(r => { luy += so(r.Thu) - so(r.Chi); r.SoDu = Math.round(luy * 100) / 100; });
+  let tongThu = 0, tongChi = 0;
+  rows.forEach(r => {
+    tongThu += so(r.Thu); tongChi += so(r.Chi);
+    luy += so(r.Thu) - so(r.Chi);
+    r.SoDu = Math.round(luy * 100) / 100;
+  });
   /* v7.80 — NGÀY MỚI NHẤT LÊN ĐẦU. Ba sổ còn lại của phân hệ này (công nợ khách / NCC / nhà gia
      công) đã `rows.slice().reverse()` từ trước; RIÊNG sổ quỹ bị sót — đúng lỗi Nguyen báo.
      ⚠️ Vẫn phải sắp TĂNG rồi cộng `SoDu` xong MỚI đảo: `SoDu` là số dư lũy kế, đổi `.sort` sang
      giảm là mỗi dòng ra một con số vô nghĩa. Đảo bằng `.slice()` để không sửa mảng đang cộng dở —
      dùng đúng cách của 3 sổ kia cho khỏi lệch lối làm. */
-  res.json({ success: true, data: { ten, dauKy, rows: rows.slice().reverse(), soDu: Math.round(luy * 100) / 100 } });
+  /* v8.72: tra them tuNgay/denNgay + tong thu/chi trong ky de ban XEM va ban EXCEL in cung mot bo so.
+     `dauKy` nay la SO DU DAU CUA KY DANG XEM (da cong phat sinh truoc ky), khong con la so du goc. */
+  return {
+    ten, dauKy, dauKyGoc, tuNgay, denNgay,
+    tongThu: Math.round(tongThu * 100) / 100,
+    tongChi: Math.round(tongChi * 100) / 100,
+    rows: rows.slice().reverse(), soDu: Math.round(luy * 100) / 100
+  };
+}
+
+router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'soquy'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    res.json({ success: true, data: await duLieuSoQuy(pool, {
+      loai: req.query.loai, taiKhoanNHID: req.query.taiKhoanNHID,
+      tuNgay: req.query.tuNgay, denNgay: req.query.denNgay
+    }) });
+  } catch (err) {
+    console.error('[congno GET /soquy/chitiet]', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi dựng sổ quỹ: ' + err.message });
+  }
 });
 
 /* ================================================================================================
@@ -1493,8 +1559,20 @@ router.get('/congnogiacong', requireAuth, requirePermission('CONGNO', 'view'), r
   res.json({ success: true, data: await congNoNhaGiaCong(pool) });
 });
 
-/* So chi tiet cua MOT nha: tung dong gia cong / in theu + phieu chi + dieu chinh, luy ke theo ngay. */
-async function soChiTietNhaGiaCong(pool, id) {
+/* ================================================================================================
+   So chi tiet cua MOT nha: tung dong gia cong / in theu + phieu chi + dieu chinh, luy ke theo ngay.
+
+   v8.72 — THEM LOC THEO KY, KIEU SO KE TOAN (Nguyen chot 2026-10-07).
+   Khong truyen ky -> giu Y NGUYEN hanh vi cu (toan bo luy ke), nen moi cho dang goi ham nay
+   (bang tong hop, xuat Excel cu) khong doi mot so nao.
+
+   🔴 CONG NO LA LUY KE. Loc ky ma chi lay phat sinh trong ky thi cot "con no" SAI — thieu phan no
+   tu truoc ky. Vi vay phai theo mau SO KE TOAN: du dau ky (= cong don MOI dong truoc tuNgay)
+   + phat sinh trong ky + du cuoi ky. Cung luat voi duLieuSoQuy() va duLieuSoKeToan() cua KH/NCC,
+   de ba man doi chieu duoc voi nhau.
+   ================================================================================================ */
+async function soChiTietNhaGiaCong(pool, id, opt) {
+  opt = opt || {};
   const gc = (await loadGiaCong(pool, sql)).filter(r => String(r.NhaGiaCongID) === String(id));
   const it = (await loadInThe(pool, sql)).filter(r => String(r.NhaGiaCongID) === String(id));
   const dongGC = gc.map(r => ({
@@ -1522,18 +1600,52 @@ async function soChiTietNhaGiaCong(pool, id) {
            NULL AS CtLoai, NULL AS CtID
     FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID = @id`)).recordset : [];
 
-  const rows = [...dongGC, ...dongIT, ...chi, ...dc].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
-  let luy = 0;
-  rows.forEach(r => { luy += so(r.PhatSinh) - so(r.ThanhToan); r.LuyKe = lam2(luy); });
+  const tatCa = [...dongGC, ...dongIT, ...chi, ...dc].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
+
+  /* ⚠️ So sanh ngay bang chuoi 'YYYY-MM-DD', KHONG dung new Date(...) roi so: cot Ngay la DATE,
+     Date() se gan mui gio may chu vao va phieu ngay dau/cuoi ky co the roi nham ben ky. */
+  const ngayHopLe = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+  const tuNgay = ngayHopLe(opt.tuNgay);
+  const denNgay = ngayHopLe(opt.denNgay);
+  const ngayCuaDong = (r) => {
+    const d = r.Ngay instanceof Date ? r.Ngay : new Date(r.Ngay);
+    if (isNaN(d)) return '';
+    const h = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${h(d.getMonth() + 1)}-${h(d.getDate())}`;
+  };
+
+  let duDau = 0, tongPhatSinh = 0, tongThanhToan = 0;
+  const rows = [];
+  tatCa.forEach(r => {
+    const n = ngayCuaDong(r);
+    if (tuNgay && n && n < tuNgay) { duDau += so(r.PhatSinh) - so(r.ThanhToan); return; }
+    if (denNgay && n && n > denNgay) return;
+    rows.push(r);
+  });
+  duDau = lam2(duDau);
+
+  let luy = duDau;
+  rows.forEach(r => {
+    tongPhatSinh += so(r.PhatSinh); tongThanhToan += so(r.ThanhToan);
+    luy += so(r.PhatSinh) - so(r.ThanhToan);
+    r.LuyKe = lam2(luy);
+  });
   const ten = (await pool.request().input('id', sql.Int, id)
     .query('SELECT TenNha FROM NhaGiaCong WHERE NhaGiaCongID=@id')).recordset[0] || {};
-  return { nhaGiaCongId: Number(id), tenNha: ten.TenNha || '', rows: rows.slice().reverse(), conNo: lam2(luy) };
+  return {
+    nhaGiaCongId: Number(id), tenNha: ten.TenNha || '',
+    tuNgay, denNgay, duDau,
+    tongPhatSinh: lam2(tongPhatSinh), tongThanhToan: lam2(tongThanhToan),
+    rows: rows.slice().reverse(), conNo: lam2(luy)
+  };
 }
 router.get('/congnogiacong/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnogiacong'), async (req, res) => {
   const pool = await getPool();
   const id = parseInt(req.query.nhaGiaCongId, 10);
   if (!id) return res.status(400).json({ success: false, message: 'Thiếu nhà gia công.' });
-  res.json({ success: true, data: await soChiTietNhaGiaCong(pool, id) });
+  // v8.72: nhan them ky; khong truyen thi ham tra toan bo luy ke y nhu truoc.
+  res.json({ success: true, data: await soChiTietNhaGiaCong(pool, id,
+    { tuNgay: req.query.tuNgay, denNgay: req.query.denNgay }) });
 });
 
 /* ================================================================================================
@@ -2351,7 +2463,9 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
        coi la 'kh' va tra ve file cong no khach hang — nguoi dung bam nut nay lai ra file khac. */
     /* v7.54: + 'gc' = cong no NHA GIA CONG / IN THEU. Phai nam trong danh sach nhan dien nay, keo
        ?loai=gc bi coi la 'kh' va tra ve file cong no khach hang — dung cai bay da mac o v7.32. */
-    const loai = ['ncc', 'gc', 'phieuthu', 'phieuchi'].indexOf(req.query.loai) !== -1 ? req.query.loai : 'kh';
+    /* v8.72: + 'soquy'. Cung cai bay cu — khong ghi vao danh sach nay thi ?loai=soquy bi coi la 'kh'
+       va tra ve file cong no khach hang, nguoi dung bam nut So quy lai nhan file khac han. */
+    const loai = ['ncc', 'gc', 'soquy', 'phieuthu', 'phieuchi'].indexOf(req.query.loai) !== -1 ? req.query.loai : 'kh';
     const wb = new ExcelJS.Workbook();
 
     /* v6.47: XUẤT SỔ CHI TIẾT.
@@ -2425,12 +2539,22 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
        ============================================================================================ */
     const nhaMot = parseInt(req.query.nhaGiaCongId, 10) || 0;
     if (loai === 'gc' && nhaMot) {
-      const d = await soChiTietNhaGiaCong(pool, nhaMot);
+      /* v8.72: truyen ky xuong. Khong chon ky -> tuNgay/denNgay rong -> ham tra toan bo nhu truoc. */
+      const d = await soChiTietNhaGiaCong(pool, nhaMot, { tuNgay, denNgay });
       const ws = wb.addWorksheet('Sổ chi tiết');
       const cot = cotSo(false);
-      dauTrang(ws, cot.length, 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', 'Nhà: ' + (d.tenNha || ''));
+      const moTaKyGC = (d.tuNgay || d.denNgay)
+        ? `Nhà: ${d.tenNha || ''} — Kỳ: ${d.tuNgay ? ngayVN(d.tuNgay) : '...'} → ${d.denNgay ? ngayVN(d.denNgay) : '...'}`
+        : 'Nhà: ' + (d.tenNha || '');
+      dauTrang(ws, cot.length, 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', moTaKyGC);
       const dongTD = dongTieuDeCot(ws, cot).number;
       ghiChuThuTu(ws, cot.length);
+      /* v8.72: co ky thi phai in DU DAU KY — thieu dong nay thi cot luy ke bat dau tu mot con so
+         khong giai thich duoc, nguoi doc tuong file sai. */
+      if (d.tuNgay || d.denNgay) {
+        const rd = ws.addRow({ Loai: 'Dư đầu kỳ', LuyKe: d.duDau });
+        rd.font = { bold: true };
+      }
       doSo(ws, d.rows, null);
       const r = ws.addRow({ Loai: 'CÒN NỢ', LuyKe: d.conNo });
       r.font = { bold: true };
@@ -2480,6 +2604,51 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       ketBang(ws2gc, cot2gc.length, dongTD2gc);
       if (kemChungTu) await sheetPhieuChi(pool, wb, tienIch, null);
       return await guiFile(res, wb, 'cong_no_gia_cong_in_theu.xlsx');
+    }
+
+    /* ============================================================================================
+       v8.72 — XUAT EXCEL SO QUY (Nguyen chot 2026-10-07: "du ca Excel + In/PDF").
+         ?loai=soquy&quy=TienMat|NganHang|ChuaGan[&taiKhoanNHID=<id>][&tuNgay=&denNgay=]
+
+       ⚠️ Dung CHUNG duLieuSoQuy() voi man hinh xem — so trong file BANG so vua duyet tren man.
+       ⚠️ Mang rows da bi DAO (moi nhat len dau) de hop voi man hinh; file Excel kieu so ke toan
+       phai doc CU -> MOI nen phai dao lai. Quen buoc nay thi cot "So du" chay nguoc, nhin van ra
+       so nhung vo nghia.
+       ============================================================================================ */
+    if (loai === 'soquy') {
+      const d = await duLieuSoQuy(pool, {
+        loai: req.query.quy, taiKhoanNHID: req.query.taiKhoanNHID, tuNgay, denNgay
+      });
+      const ws = wb.addWorksheet('Sổ quỹ');
+      const cot = [
+        { header: 'Ngày', key: 'Ngay', width: 12 },
+        { header: 'Loại', key: 'Loai', width: 12 },
+        { header: 'Số phiếu', key: 'SoPhieu', width: 14 },
+        { header: 'Đối tượng', key: 'DoiTuong', width: 28 },
+        { header: 'Diễn giải', key: 'DienGiai', width: 34 },
+        { header: 'Thu', key: 'Thu', width: 16 },
+        { header: 'Chi', key: 'Chi', width: 16 },
+        { header: 'Số dư', key: 'SoDu', width: 18 }
+      ];
+      const moTaKy = (d.tuNgay || d.denNgay)
+        ? `Kỳ: ${d.tuNgay ? ngayVN(d.tuNgay) : '...'} → ${d.denNgay ? ngayVN(d.denNgay) : '...'}`
+        : 'Toàn bộ phát sinh (không giới hạn kỳ)';
+      dauTrang(ws, cot.length, 'SỔ QUỸ — ' + (d.ten || ''), moTaKy);
+      const dongTDq = dongTieuDeCot(ws, cot).number;
+      const rDau = ws.addRow({ DienGiai: 'Số dư đầu kỳ', SoDu: d.dauKy });
+      rDau.font = { bold: true };
+      // Dao lai ve thu tu CU -> MOI cho dung mau so ke toan (xem canh bao o dau khoi).
+      d.rows.slice().reverse().forEach(r => ws.addRow({
+        Ngay: ngayVN(r.Ngay), Loai: r.Loai, SoPhieu: r.SoPhieu || '',
+        DoiTuong: r.DoiTuong || '', DienGiai: r.DienGiai || '',
+        Thu: Number(r.Thu) || 0, Chi: Number(r.Chi) || 0, SoDu: Number(r.SoDu) || 0
+      }));
+      const rPS = ws.addRow({ DienGiai: 'Phát sinh trong kỳ', Thu: d.tongThu, Chi: d.tongChi });
+      rPS.font = { bold: true };
+      const rCuoi = ws.addRow({ DienGiai: 'Số dư cuối kỳ', SoDu: d.soDu });
+      rCuoi.font = { bold: true };
+      ketBang(ws, cot.length, dongTDq);
+      return await guiFile(res, wb, `so_quy_${khongDau(d.ten || 'quy')}.xlsx`);
     }
 
     if (loai === 'kh' && khachMot) {

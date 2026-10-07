@@ -20,7 +20,14 @@ window.ModuleBangKeBTP = (function () {
     catch (err) { container.innerHTML = `<div class="empty-hint">Không tải được Bảng kê BTP: ${escapeHtml(err.message)}.<br>Nếu là tài khoản thường: nhờ Admin tích quyền "Xem — Bảng kê bán thành phẩm" trong Phân quyền chức năng rồi đăng nhập lại.</div>`; return; }
     container.innerHTML = `
       <div class="card">
-        <div class="toolbar"><button class="btn small secondary" id="btnBkMau">📁 Tài liệu mẫu</button></div>
+        ${/* v8.72: ô tìm gõ ký tự bất kỳ, quét TOÀN BỘ các cột (mã ĐH, tên sản phẩm, trạng thái
+             bảng kê). Lọc ở client bằng ẩn/hiện dòng nên không gọi lại API và giữ nguyên sự kiện
+             đã gắn trên nút "Lập/Sửa" + link Mã ĐH. */''}
+        <div class="toolbar">
+          <button class="btn small secondary" id="btnBkMau">📁 Tài liệu mẫu</button>
+          ${searchBoxHtml('bkTim', '🔍 Gõ để tìm mã ĐH, tên sản phẩm...')}
+          <span class="empty-hint" style="padding:0;" id="bkTimInfo"></span>
+        </div>
         <table><thead><tr><th>Mã ĐH</th><th>Sản phẩm</th><th>Bảng kê</th><th style="width:120px"></th></tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td><a href="#" class="bk-lenh" data-madh="${escapeHtml(r.MaDH)}" title="Xem phiếu In lệnh SX">${escapeHtml(r.MaDH)}</a></td><td>${escapeHtml(r.TenSanPham || '')}</td>
@@ -31,6 +38,7 @@ window.ModuleBangKeBTP = (function () {
     container.querySelectorAll('.act-open').forEach(b => b.addEventListener('click', () => openBtpBanList(b.dataset.madh)));   // v5.55: danh sách BẢN
     container.querySelectorAll('.bk-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); if (window.ModuleQLSX && window.ModuleQLSX.printLenhSanXuat) window.ModuleQLSX.printLenhSanXuat(a.dataset.madh); }));   // v5.53: click Mã ĐH → In lệnh SX
     container.querySelector('#btnBkMau').addEventListener('click', openMauManager);
+    wireTableSearch(container, 'bkTim', { infoId: 'bkTimInfo' });   // v8.72
   }
 
   function totalOfRow(r) { return (r.values || []).reduce((s, v) => s + (Number(v) || 0), 0); }

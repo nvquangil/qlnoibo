@@ -294,10 +294,67 @@ window.ModuleBaoCao = (function () {
       + (d.canhBao ? `<div class="empty-hint" style="color:#b26a00;margin-bottom:8px;">⚠️ ${escapeHtml(d.canhBao)}</div>` : '')
       + `<div class="empty-hint" style="margin-bottom:8px;">📘 <b>Cách đọc:</b> Tồn đầu kỳ + Nhập − Xuất = Tồn cuối kỳ (luôn cân đối).
            ${escapeHtml(d.ghiChu || '')}</div>`
-      + `<div class="bang-cuon" style="max-height:calc(100vh - 260px);">${bang}</div>`;
+      + `<div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+           <input type="text" id="bcTim" placeholder="🔍 Gõ để tìm trong toàn bộ bảng..." autocomplete="off"
+                  style="min-width:280px;flex:1;max-width:420px;">
+           <span id="bcTimInfo" class="empty-hint" style="padding:0;"></span>
+         </div>`
+      + `<div class="bang-cuon" style="max-height:calc(100vh - 300px);">${bang}</div>`;
     dinhDongTong(body);
     wireMoChiTiet(body, loai);   // v6.33: bấm mã -> chi tiết xuất nhập
+    wireTimKiemBang(body);       // v8.62: tìm kiếm toàn bộ cột
     wireKy(loai, tenFile);
+  }
+
+  /* ================================================================================================
+     v8.62 — TÌM KIẾM TOÀN BỘ CỘT cho 3 bảng tồn kho (hàng hóa / vải / phụ kiện).
+     Yêu cầu Nguyen: "đánh ký tự bất kỳ tìm kiếm toàn bộ các cột".
+
+     Chuỗi tìm dựng từ CHÍNH `textContent` của từng dòng, KHÔNG liệt kê tên trường. Ba bảng này có
+     ba hình dạng cột khác nhau (14 / 11 / 13 cột), và còn đổi nữa — liệt kê tay là sớm muộn thêm
+     cột mới mà quên cập nhật, rồi gõ đúng chữ đang nhìn thấy lại không ra kết quả.
+
+     Tách thành TỪNG TỪ và bắt buộc khớp HẾT (cùng cách với ô tìm ở Danh sách lệnh SX v7.92): gõ
+     "cotton do" ra được dòng vải cotton màu đỏ dù hai mẩu đó nằm ở hai cột khác nhau. So nguyên
+     chuỗi thì chỉ cần gõ thừa một dấu cách là mất sạch kết quả, người dùng tưởng không có dữ liệu.
+
+     ⚠️ Dòng TỔNG (`data-tong`) LUÔN hiện — nó là tổng của cả kỳ, không phải một dòng dữ liệu. Ẩn nó
+     theo bộ lọc là người đọc mất mốc đối chiếu.
+     Lọc bằng ẩn/hiện dòng, KHÔNG vẽ lại bảng — giữ nguyên mọi link "bấm mã xem chi tiết" đã gắn
+     sự kiện ở wireMoChiTiet(), và giữ cả cột STT tự động nếu có.
+     ================================================================================================ */
+  function wireTimKiemBang(body) {
+    const inp = body.querySelector('#bcTim');
+    const table = body.querySelector('.bang-cuon table');
+    if (!inp || !table) return;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    const dongDuLieu = Array.from(tbody.querySelectorAll(':scope > tr'))
+      .filter(tr => !tr.hasAttribute('data-tong') && !tr.querySelector('.empty-hint'));
+    if (!dongDuLieu.length) { inp.disabled = true; return; }
+    dongDuLieu.forEach(tr => { tr.dataset.tim = boDau(tr.textContent || ''); });
+
+    /* Dòng "không tìm thấy" dựng SẴN ngay bây giờ: số ô của dòng dữ liệu đã tính cả cột STT tự động
+       (nếu có), nên colspan lấy từ đó là khớp — dựng sau dễ hụt đúng một ô. */
+    const soCot = dongDuLieu[0].children.length;
+    const oTrong = document.createElement('tr');
+    oTrong.style.display = 'none';
+    oTrong.innerHTML = `<td colspan="${soCot}" class="empty-hint">Không tìm thấy dòng nào khớp.</td>`;
+    tbody.appendChild(oTrong);
+
+    const info = body.querySelector('#bcTimInfo');
+    const loc = () => {
+      const tu = boDau(inp.value).split(/\s+/).filter(Boolean);
+      let hien = 0;
+      dongDuLieu.forEach(tr => {
+        const khop = !tu.length || tu.every(t => tr.dataset.tim.indexOf(t) !== -1);
+        tr.style.display = khop ? '' : 'none';
+        if (khop) hien++;
+      });
+      oTrong.style.display = hien ? 'none' : '';
+      if (info) info.textContent = tu.length ? `Hiện ${fmtNumber(hien)}/${fmtNumber(dongDuLieu.length)} dòng` : '';
+    };
+    inp.addEventListener('input', loc);
   }
 
   /* v6.33: bấm 1 QUỸ (tiền mặt / tài khoản ngân hàng) hoặc 1 LOẠI TÀI KHOẢN -> popup chi tiết thu chi.

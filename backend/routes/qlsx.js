@@ -362,7 +362,12 @@ router.get('/orders/:maDH', requireAuth, requirePermission('QLSX', 'view'), requ
   // CUU ra StageID o day).
   const catStageResult = await pool.request().query("SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan=N'CAT'");
   const catStageId = catStageResult.recordset.length ? catStageResult.recordset[0].StageID : null;
-  const slCatTheoMau = await getStageActualQtyByColor(pool, order.DonHangID, catStageId);
+  /* v8.71: lấy THẲNG từ slCatTheoMauTuCay để có kèm `soCayChuaRo` cho cảnh báo trên form.
+     Con số `map` y hệt getStageActualQtyByColor(…, catStageId) trả về — cùng một hàm. */
+  const catIdsHieuLuc = catStageId ? await effectiveTienDoIds(pool, order.DonHangID, catStageId) : [];
+  const catTuCay = await slCatTheoMauTuCay(pool, order.DonHangID, catIdsHieuLuc);
+  const slCatTheoMau = catTuCay.map;
+  const soCayChuaRoKieu = catTuCay.soCayChuaRo;
   const slCatTong = Object.values(slCatTheoMau).reduce((s, v) => s + (Number(v) || 0), 0);
   // v5.2: tong so dong "ban cat" (cay vai) cua lan ghi tien do Cat gan nhat - hien tham khao o cong doan May.
   const slCatSoBan = await getStageBanCount(pool, order.DonHangID, catStageId);
@@ -436,7 +441,7 @@ router.get('/orders/:maDH', requireAuth, requirePermission('QLSX', 'view'), requ
       slTheoMauDai[s.MaCongDoan] = await getStageQtyByColorDai(pool, order.DonHangID, s.StageID);
     }
   }
-  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, catMauList, slKhoNhapTheoMau, slTheoMauCongDoan, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet, daiSizeList, slTheoMauDai } });
+  res.json({ success: true, data: { ...order, chiTietVai, slCatTheoMau, slCatTong, slCatSoBan, slCatSoBanTatCa, soCayChuaRoKieu, catMauList, slKhoNhapTheoMau, slTheoMauCongDoan, theKho, chiTietPhuKien, giaoVai, congDoanMayDon, mauSacsWithProgress, soDoList, nhaGiaCongChiTiet, daiSizeList, slTheoMauDai } });
 });
 
 // v5.0: chi tiet vai LONG NHAU - moi dong "Chính" mang theo mang "phoi" cua chinh no (loc theo
@@ -664,80 +669,48 @@ async function getStageBanCount(pool, donHangId, stageId) {
 }
 
 // v5.27.1 (Option 4): danh sach MAU cho theo doi tien do May/Kho nhap - lay tu KET QUA CAT (cay vai da
-// cat, TienDoChiTietMau.MauSacID that tu DanhMucVai) chu KHONG tu DonHangChiTietVai (mau o Ra lenh SX gio
-// go tu do, chi tham khao). Nho vay TienDoChiTietMau.MauSacID luon co gia tri THAT (NOT NULL, khong loi),
-// va mau o Ra lenh SX hoan toan tach roi khoi cac cong doan sau. Moi phan tu: {MauSacID, TenMau, SoLuong-cat}.
+// cat) chu KHONG tu DonHangChiTietVai (mau o Ra lenh SX gio go tu do, chi tham khao). Nho vay mau luon
+// co gia tri THAT, va mau o Ra lenh SX hoan toan tach roi khoi cac cong doan sau.
+// v8.71: nguon so lieu doi tu TienDoChiTietMau sang CHINH CAY VAI (slCatTheoMauTuCay) - bang do cong
+// ca cay phoi vao nen khong dung lam nguon duoc. Moi phan tu: {MauSacID, TenMau, SoLuong, TongSoLop}.
 async function getCatMauList(pool, donHangId, stageId) {
   const ids = await effectiveTienDoIds(pool, donHangId, stageId);
   if (!ids.length) return [];
-  const result = await pool.request().input('id', sql.Int, donHangId)
-    .query(`SELECT ct.MauSacID, ms.TenMau, SUM(ct.SoLuongLuyKe) AS SoLuong
-            FROM TienDoChiTietMau ct
-            LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-            WHERE ct.TienDoID IN (${ids.join(',')})
-              /* ================================================================================
-                 CHI MAU CHINH - dung DUNG nguon cua Bang ke ban thanh pham (routes/bangke.js).
-                 Nguoi dung xac nhan cach BTP loc la dung, nen hai cho phai cung mot luat; hai luat
-                 khac nhau thi "Tong SL ban cat" va bang ke BTP ra hai con so, khong ai doi chieu noi.
+  /* ================================================================================================
+     v8.71 — DANH SACH MAU NAY GIO TINH THANG TU CAY, dung CHUNG slCatTheoMauTuCay() voi
+     getStageActualQtyByColor(). Hai ham phai ra CUNG MOT SO; hai luat khac nhau thi "SL tu Cat"
+     tren form va danh sach mau o day lech nhau, khong ai doi chieu noi (bai hoc v6.47/v7.53).
 
-                 NGUON CHAC CHAN = KieuVai cua DONG PHIEU XUAT KHO VAI, va phai la phieu xuat cua
-                 CHINH don nay. Cau truc vai KHONG dung lam nguon chinh: tu v6.43 mau o Ra lenh SX go
-                 tu do (MauSacID = NULL) nen khong khop duoc.
+     ⚠️ BAN VA v6.60.1 (loc muc MAU qua PhieuXuatVai.KieuVai) DA GO HAN. No KHONG xu ly duoc ca vai
+     phoi CUNG MAU than (BO2DA-NAU34 vs 2DA-NAU34, cung MauSacID 7456) — xem ghi chu dai o
+     slCatTheoMauTuCay(). Dung "sua cho giong ban cu": ban cu SAI, chi la sai o truong hop it gap hon.
+     ================================================================================================ */
+  const { map: slMap } = await slCatTheoMauTuCay(pool, donHangId, ids);
+  const maus = Object.keys(slMap);
+  if (!maus.length) return [];
+  const result = await pool.request()
+    .query(`SELECT ms.MauSacID, ms.TenMau FROM MauSac ms
+            WHERE ms.MauSacID IN (${maus.map(x => parseInt(x, 10)).filter(Number.isInteger).join(',') || '0'})`);
+  const tenMap = new Map(result.recordset.map(r => [String(r.MauSacID), r.TenMau || '']));
 
-                 Lich su: v5.36 loc theo danh sach mau Chinh -> trang bang khi thieu MauSacID.
-                 v6.12 dao thanh loai tru mau Phoi theo MauSacID -> nhung dong Phoi cung NULL nen
-                 khong loai duoc gi, mau phoi van bi cong (dung loi dang sua).
-
-                 LUOI AN TOAN: don nao CHUA co phieu xuat kho vai nao khai KieuVai thi GIU NGUYEN moi
-                 mau. Khong co luoi nay thi hang cap vai khong qua phieu xuat se ra SL = 0 - dung kieu
-                 hong cua v5.36.
-
-                 KHONG so khop mau theo TEN. Da can nhac va bo o bangke.js v6.60.1: noi mo theo chu,
-                 trung ten la loai nham mau chinh ma khong ai biet.
-                 KHONG go dau backtick trong khoi nay - no nam trong chuoi template JS, mot dau
-                 backtick la dut chuoi va sap ca file (su co v6.61).
-                 ================================================================================ */
-              AND (
-                NOT EXISTS (SELECT 1 FROM PhieuXuatVai p0
-                            JOIN PhieuXuatVaiChiTiet px0 ON px0.PhieuXuatID = p0.PhieuXuatID
-                            WHERE p0.DonHangID = @id AND px0.KieuVai IS NOT NULL)
-                OR EXISTS (
-                  SELECT 1
-                  FROM TienDoCatChiTietCay cc
-                  JOIN TienDoSanXuat td2 ON td2.TienDoID = cc.TienDoID
-                  JOIN VaiCay vc ON vc.CayID = cc.CayID
-                  JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
-                  WHERE td2.DonHangID = @id AND dv.MauSacID = ct.MauSacID
-                    AND EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
-                                JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-                                WHERE px.CayID = cc.CayID AND px.KieuVai = N'Chính'
-                                  AND p.DonHangID = @id))
-              )
-              /* Lop chan phu, y nhu bangke.js: gat mau duoc khai RO la Phoi trong Cau truc vai. */
-              AND NOT EXISTS (SELECT 1 FROM DonHangChiTietVai cv
-                              WHERE cv.DonHangID = @id AND cv.Kieu = N'Phối'
-                                AND cv.MauSacID IS NOT NULL AND cv.MauSacID = ct.MauSacID)
-            GROUP BY ct.MauSacID, ms.TenMau
-            ORDER BY ms.TenMau`);
-  /* v8.31: THÊM tổng số lớp đã cắt CHO TỪNG MÀU (TienDoCatChiTietCay.SoLuongLop, cộng dồn mọi cây CÙNG
-     MÀU - Nguyen: "gộp các cây cùng màu vào nhau... nguyên tắc cộng vẫn như vậy" giống cách SoLuong ở
-     trên đang cộng) - dùng làm hệ số quy đổi CÁI -> RI ở công đoạn Đóng gói (xem renderStageFields('DG')
-     trong module.qlsx.js). CỐ Ý viết THÀNH QUERY RIÊNG, không nhét vào query SoLuong ở trên - query đó
-     đã rất rối (lọc màu Chính/Phối phức tạp), tách riêng để không rủi ro phá logic lọc sẵn có. Dùng
-     CHUNG biến ids (effectiveTienDoIds) để cùng phạm vi "lần cắt có hiệu lực" với SoLuong phía trên - khác
-     phạm vi thì SoLuong/TongSoLop lệch nhau, chia ra hệ số Ri sẽ sai. */
+  /* v8.31: TỔNG SỐ LỚP đã cắt CHO TỪNG MÀU — dùng làm hệ số quy đổi CÁI -> RI ở công đoạn Đóng gói
+     (xem renderStageFields('DG') trong module.qlsx.js).
+     ⚠️ v8.71: câu này PHẢI lọc cây y hệt slCatTheoMauTuCay(). Trước đây nó cộng MỌI cây (kể cả vải
+     phối) trong khi SoLuong đã lọc — hai con số khác phạm vi, chia ra hệ số Ri sẽ sai. */
+  const coKhaiKieu = await donCoKhaiKieuVai(pool, donHangId);
   const lopResult = await pool.request().query(`
     SELECT dv.MauSacID, SUM(cc.SoLuongLop) AS TongSoLop
     FROM TienDoCatChiTietCay cc
     JOIN VaiCay vc ON vc.CayID = cc.CayID
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     WHERE cc.TienDoID IN (${ids.join(',')})
+      ${dieuKienCayChinh('cc', Number(donHangId), coKhaiKieu)}
     GROUP BY dv.MauSacID`);
   const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), Number(r.TongSoLop) || 0]));
-  return result.recordset.map(r => ({
-    MauSacID: r.MauSacID, TenMau: r.TenMau || '', SoLuong: Number(r.SoLuong) || 0,
-    TongSoLop: lopMap.get(String(r.MauSacID)) || 0
-  }));
+  return maus.map(k => ({
+    MauSacID: Number(k), TenMau: tenMap.get(String(k)) || '', SoLuong: Number(slMap[k]) || 0,
+    TongSoLop: lopMap.get(String(k)) || 0
+  })).sort((a, b) => String(a.TenMau).localeCompare(String(b.TenMau), 'vi'));
 }
 
 // v5.30: tong SL (mau chinh) tu ket qua Cat gan nhat = tong SoLuong tung mau (dung chung getCatMauList).
@@ -884,14 +857,119 @@ async function getStageActualQty(pool, donHangId, stageId) {
 }
 
 // v4.0: giong getStageActualQty nhung tra ve theo TUNG mau (map MauSacID -> SoLuongLuyKe) thay vi cong
-// don tat ca mau lai - dung cho form "Kho nhập" (hien thi "SL tong tu Cat" theo dung mau) va de tinh
-// DELTA khi cap nhat The kho hang hoa (xem POST /orders/:maDH/tiendo).
+// don tat ca mau lai - dung cho form "Kho nhập" (hien thi "SL tong tu Cat" theo dung mau).
+// ⚠️ v8.71 DINH CHINH: cau "va de tinh DELTA khi cap nhat The kho hang hoa" o ban cu DA SAI TU v6.91 -
+// khoi cong DELTA vao TheKhoChiTietMau.NhapCai DA GO BO HAN (xem ghi chu v6.91 o POST /tiendo).
+// Ham nay CHI phuc vu HIEN THI. Dung tin comment cu de ket luan ton kho bi anh huong.
 // v5.21: cung sua bug gop nhom NhomTienDoID nhu getStageActualQty() o tren (cung ly do) - neu khong sua
 // dong thoi, don >= 2 so do se hien SAI ca o "SL tong tu Cat theo mau" (form Kho nhap) LAN DELTA cong vao
 // The kho hang hoa (chi tinh theo 1 bàn thay vi tat ca).
+/* ================================================================================================
+   v8.71 — MOT BAN DUY NHAT: "CAY VAI NAO DUOC TINH VAO SAN LUONG?"
+
+   Nguyen chot 2026-10-07: "khong co ca nao vai phoi duoc tinh thanh san pham".
+
+   🔴 VI SAO PHAI HOI THEO *CAY*, TUYET DOI KHONG HOI THEO *MAU*:
+   Lenh DH2608064 dung HAI loai vai khac nhau MA CUNG MauSacID:
+       2DA-NAU34    (vai than, Kieu 'Chính')   MauSacID = 7456
+       BO2DA-NAU34  (vai BO,   Kieu 'Phối')    MauSacID = 7456   <-- cung so!
+   MauSacID KHONG dinh danh duoc loai vai. Moi phep loc theo MauSacID deu tron hai cai lam mot:
+     - giu MauSacID 7456  -> cong ca vai bo  => 420 thay vi 210 (dung loi dang sua)
+     - bo  MauSacID 7456  -> mat luon 210 cai hang that
+   Chi co `PhieuXuatVaiChiTiet.KieuVai` (khai o MUC CAY) phan biet duoc.
+
+   ⚠️ Day cung la ly do ban va v6.60.1 cua getCatMauList() KHONG du: no loc o muc MAU
+   ("giu mau nao co it nhat mot cay Chinh") nen voi lenh co vai phoi CUNG MAU than thi van sai.
+
+   BA LUAT DA CHOT (Nguyen duyet 2026-10-07):
+     L1. Cay co IT NHAT MOT dong xuat khai 'Chính' cho don nay  -> TINH.
+         (Cay xuat nhieu lan, lan dau 'Chính' lan sau 'Phối' -> van tinh. Bao thu ve phia khong
+          lam mat hang that.)
+     L2. Cay KHONG co dong xuat nao cho don nay (cap vai tay)   -> VAN TINH, nhung dem vao
+         `soCayChuaRo` de man hinh canh bao. Bo di thi don cap vai tay ra SL = 0.
+     L3. Don KHONG co bat ky dong xuat nao khai KieuVai (du lieu cu truoc khi co cot nay)
+         -> GIU NGUYEN MOI CAY. Cung luoi an toan voi getCatMauList.
+   ================================================================================================ */
+async function donCoKhaiKieuVai(pool, donHangId) {
+  const r = await pool.request().input('id', sql.Int, donHangId).query(`
+    SELECT TOP 1 1 AS c FROM PhieuXuatVaiChiTiet px
+    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+    WHERE p.DonHangID = @id AND px.KieuVai IS NOT NULL`);
+  return r.recordset.length > 0;
+}
+
+/* Manh SQL dung CHUNG cho moi cau truy van "chi lay cay tinh vao san luong".
+   Tham so aliasCay = alias cua bang TienDoCatChiTietCay trong cau goi. Tra ve chuoi rong khi don
+   roi vao luat L3 (khong loc gi ca).
+   ⚠️ TRA VE MANH SQL, khong phai dieu kien tham so hoa — chi noi donHangId (so nguyen doc tu CSDL)
+   vao, khong co chuoi nguoi dung nhap, nen khong co duong tiem SQL. Noi them bat ky gia tri nao
+   KHAC vao day thi phai la so, hoac phai doi sang .input(). */
+function dieuKienCayChinh(aliasCay, donHangId, coKhaiKieu) {
+  if (!coKhaiKieu) return '';   // L3
+  return `AND (
+            /* L1: co it nhat mot dong xuat khai 'Chính' */
+            EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                    WHERE px.CayID = ${aliasCay}.CayID AND p.DonHangID = ${donHangId}
+                      AND px.KieuVai = N'Chính')
+            /* L2: cay khong co dong xuat nao cho don nay -> van tinh (co canh bao rieng) */
+            OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
+                           JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
+                           WHERE px2.CayID = ${aliasCay}.CayID AND p2.DonHangID = ${donHangId})
+          )`;
+}
+
+/* ================================================================================================
+   v8.71 — SL CAT THEO MAU, TINH THANG TU CAY VAI (khong doc TienDoChiTietMau nua).
+
+   ⚠️ CHI DUNG CHO CONG DOAN CAT. Cac cong doan sau (May/QC/Dong goi/Kho nhap) nguoi dung GO TAY
+   so luong theo mau, khong di qua cay nao — du lieu cua chung khong chua vai phoi, nen van doc
+   TienDoChiTietMau nhu cu. Dung ham nay cho cong doan khac la ra 0.
+
+   Cong thuc so cai PHAI khop y het luc GHI (xem vong lap qua grp.chiTietCay o POST /tiendo):
+        soCai = SoLuongLop * HeSoQuyDoi + SoCaiGiatCap
+   Lech mot thanh phan la "SL tu Cat" khac voi so da ghi, khong ai doi chieu noi.
+   ================================================================================================ */
+async function slCatTheoMauTuCay(pool, donHangId, ids) {
+  if (!ids.length) return { map: {}, soCayChuaRo: 0 };
+  const coKhaiKieu = await donCoKhaiKieuVai(pool, donHangId);
+  const coGiatCap = await coCotQLSX(pool, 'TienDoCatChiTietCay', 'SoCaiGiatCap');   // v6.01
+  const bieuThucCai = `cc.SoLuongLop * cc.HeSoQuyDoi${coGiatCap ? ' + ISNULL(cc.SoCaiGiatCap, 0)' : ''}`;
+  const r = await pool.request().query(`
+    SELECT dv.MauSacID, SUM(${bieuThucCai}) AS SoCai
+    FROM TienDoCatChiTietCay cc
+    JOIN VaiCay vc ON vc.CayID = cc.CayID
+    JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+    WHERE cc.TienDoID IN (${ids.join(',')})
+      ${dieuKienCayChinh('cc', Number(donHangId), coKhaiKieu)}
+    GROUP BY dv.MauSacID`);
+  const map = {};
+  r.recordset.forEach(x => { map[x.MauSacID] = Math.round(Number(x.SoCai) || 0); });
+
+  /* L2 — dem cay chua ro de man hinh canh bao. Khong co canh bao thi con so cao hon su that ma
+     khong ai biet: dung kieu sai AM THAM ma ca module nay da dinh nhieu lan. */
+  let soCayChuaRo = 0;
+  if (coKhaiKieu) {
+    soCayChuaRo = Number((await pool.request().query(`
+      SELECT COUNT(*) AS c FROM TienDoCatChiTietCay cc
+      WHERE cc.TienDoID IN (${ids.join(',')})
+        AND NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                        JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                        WHERE px.CayID = cc.CayID AND p.DonHangID = ${Number(donHangId)})`))
+      .recordset[0].c) || 0;
+  }
+  return { map, soCayChuaRo };
+}
+
 async function getStageActualQtyByColor(pool, donHangId, stageId) {
   const ids = await effectiveTienDoIds(pool, donHangId, stageId);
   if (!ids.length) return {};
+  /* v8.71: CONG DOAN CAT tinh thang tu CAY (loai vai phoi dung muc cay). Cong doan khac giu nguyen
+     duong cu — du lieu cua chung go tay theo mau, khong co cay phoi de lan vao. */
+  const catId = await getCatStageId(pool);
+  if (catId && Number(stageId) === Number(catId)) {
+    return (await slCatTheoMauTuCay(pool, donHangId, ids)).map;
+  }
   const result = await pool.request().input('id', sql.Int, donHangId)
     .query(`SELECT ct.MauSacID, SUM(ct.SoLuongLuyKe) AS SoLuongLuyKe FROM TienDoChiTietMau ct
             WHERE ct.TienDoID IN (${ids.join(',')})

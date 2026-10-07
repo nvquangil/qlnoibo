@@ -862,10 +862,12 @@ window.ModuleCongNo = (function () {
         <input type="date" id="soTuNgay" value="${ngayISO(new Date(nay.getFullYear(), 0, 1))}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="soDenNgay" value="${ngayISO(nay)}" style="width:auto;">
+        ${/* v8.72: "Xem sổ" nay DỰNG BẢNG RA MÀN HÌNH (modal), nút In/PDF và Excel nằm NGAY TRONG
+             modal đó — duyệt số xong mới xuất. Nút Excel ở đây giữ lại cho ai muốn tải thẳng. */''}
         <button type="button" class="btn small" id="btnXemSo"
-          title="Mở sổ ra xem ngay trên màn hình. Muốn có file PDF thì trong hộp in chọn máy in &quot;Save as PDF&quot;.">👁️ Xem sổ / In PDF</button>
+          title="Dựng sổ theo kỳ đã chọn và hiện ngay trên màn hình. Xem xong, bấm In/PDF hoặc Xuất Excel ngay trong cửa sổ đó.">👁️ Xem sổ</button>
         <button type="button" class="btn small secondary" id="btnXuatSo"
-          title="Mẫu sổ kế toán 10 cột: Dư đầu kỳ – phát sinh từng chứng từ (kèm dòng hàng) – Dư cuối kỳ">⬇️ Xuất Excel</button>
+          title="Tải thẳng file Excel, không xem trước. Mẫu sổ kế toán 10 cột: Dư đầu kỳ – phát sinh từng chứng từ (kèm dòng hàng) – Dư cuối kỳ">⬇️ Xuất Excel</button>
       </div>`;
   }
   /* `duong` là phần query xác định đối tượng, vd 'loai=kh&khach=...' hoặc 'loai=ncc&nccId=12'.
@@ -884,10 +886,10 @@ window.ModuleCongNo = (function () {
       if (!k) return;
       taiFile(`/api/congno/export?${duong}&kieu=so&tuNgay=${k.tu}&denNgay=${k.den}`, tenFile);
     });
-    const nutXem = modal.querySelector('#btnXemSo');   // v8.05
+    const nutXem = modal.querySelector('#btnXemSo');   // v8.05, v8.72: vẽ ra màn thay vì nhảy vào hộp in
     if (nutXem) nutXem.addEventListener('click', () => {
       const k = kyDangChon(modal);
-      if (k) xemSoKeToan(duong, k.tu, k.den);
+      if (k) xemSoKeToan(duong, k.tu, k.den, tenFile);
     });
   }
 
@@ -907,11 +909,18 @@ window.ModuleCongNo = (function () {
      dòng tổng — vô nghĩa với sổ kế toán, mà ô nhãn gộp cột lại nằm đúng chỗ cột STT (đã từng nuốt
      mất nhãn dòng TỔNG ở v7.91). Sổ này đã có cột "Mã" riêng nên không cần STT.
      ================================================================================================ */
-  async function xemSoKeToan(duong, tu, den) {
-    let d;
-    try { d = (await apiGet(`/api/congno/so-ke-toan?${duong}&tuNgay=${tu}&denNgay=${den}`)).data; }
-    catch (err) { toast('Không dựng được sổ chi tiết: ' + err.message, 'error'); return; }
+  /* ================================================================================================
+     v8.72 — TÁCH PHẦN DỰNG HTML RA KHỎI printHtml().
 
+     Nguyen (2026-10-07): "thêm nút xem khi chọn kỳ từ ngày đến ngày hiển thị ra màn hình xong mới
+     xuất pdf, excel". Bản v8.05 nhảy THẲNG vào hộp in của trình duyệt — không xem được trên trang,
+     muốn đổi kỳ phải đóng hộp in rồi làm lại từ đầu.
+
+     Nay một hàm dựng, HAI nơi dùng: vẽ vào modal để xem, và đưa vào printHtml() để in.
+     Viết hai bản là sớm muộn bản in khác bản đang xem — mà người dùng đã duyệt số trên màn rồi mới
+     bấm in, lệch nhau là lệch đúng chỗ không ai ngờ.
+     ================================================================================================ */
+  function soKeToanHtml(d) {
     /* tien(): 0 để TRỐNG — dòng chứng từ chỉ có một trong hai cột tiền, in số 0 ở cột kia làm rối mắt.
        oPhai(): luôn in số, kể cả 0 — dùng cho 3 dòng tổng kết, ở đó "trống" và "bằng 0" khác nghĩa. */
     const tien = v => (Number(v) ? fmtNumber(v) : '');
@@ -948,9 +957,9 @@ window.ModuleCongNo = (function () {
       return cha + con;
     }).join('') || '<tr><td colspan="10" style="text-align:center;font-style:italic;">(không có phát sinh nào trong kỳ)</td></tr>';
 
-    printHtml(`So chi tiet cong no - ${d.tenDoiTuong || ''}`, `
+    return `
       <h2 style="text-align:center;margin:0 0 4px;">SỔ CHI TIẾT CÔNG NỢ</h2>
-      <div class="p-meta" style="text-align:center;">${(d.laKH ? 'Khách hàng: ' : 'Nhà cung cấp: ') + tenDT}</div>
+      <div class="p-meta" style="text-align:center;">${escapeHtml(d.nhanDoiTuong || (d.laKH ? 'Khách hàng' : 'Nhà cung cấp'))}: ${tenDT}</div>
       <div class="p-meta" style="text-align:center;">${escapeHtml(ky)}</div>
       <div style="font-style:italic;font-size:11px;color:#5f6368;margin-top:6px;">${escapeHtml(d.chuGiaiMa || '')}</div>
       <table data-nostt style="margin-top:6px;width:100%;border-collapse:collapse;" border="1" cellpadding="4">
@@ -980,7 +989,46 @@ window.ModuleCongNo = (function () {
         <div><div class="line">Người lập</div></div>
         <div><div class="line">Kế toán</div></div>
         <div><div class="line">Đối tượng xác nhận</div></div>
-      </div>`, { extraStyle: 'th,td{font-size:10.5px;padding:2px 4px;} h2{font-size:17px;} table{table-layout:fixed;} td{word-wrap:break-word;}' });
+      </div>`;
+  }
+
+  // Kiểu in dùng chung cho mọi bản in sổ kế toán — để bản in luôn khít khổ A4 như nhau.
+  const KIEU_IN_SO = { extraStyle: 'th,td{font-size:10.5px;padding:2px 4px;} h2{font-size:17px;} table{table-layout:fixed;} td{word-wrap:break-word;}' };
+
+  /* ================================================================================================
+     v8.72 — XEM SỔ TRÊN MÀN HÌNH TRƯỚC, XONG MỚI IN / XUẤT EXCEL.
+
+     Luồng mới: chọn kỳ → 👁️ Xem sổ → bảng hiện ngay trong modal → duyệt số → mới bấm 🖨️ In/PDF
+     hoặc ⬇️ Xuất Excel. Sai kỳ thì đóng modal, sửa ngày, xem lại — không phải đi qua hộp in.
+
+     ⚠️ KHÔNG tự tính lại số ở đây. Chia kỳ, dư đầu kỳ, lật thứ tự cũ->mới là chỗ rất dễ sai; route
+     /api/congno/so-ke-toan trả DỮ LIỆU ĐÃ TÍNH, dùng chung nguồn với file Excel nên hai bản không
+     thể lệch nhau. Hàm này chỉ vẽ.
+
+     ⚠️ Nút Excel trong modal này phải dùng ĐÚNG tham số duong + ĐÚNG kỳ vừa xem. Dựng lại query từ
+     ô ngày ở modal CHA là sai: người dùng có thể đã đổi ngày ở modal cha sau khi bấm Xem.
+     ================================================================================================ */
+  async function xemSoKeToan(duong, tu, den, tenFileExcel) {
+    let d;
+    try { d = (await apiGet(`/api/congno/so-ke-toan?${duong}&tuNgay=${tu}&denNgay=${den}`)).data; }
+    catch (err) { toast('Không dựng được sổ chi tiết: ' + err.message, 'error'); return; }
+
+    const than = soKeToanHtml(d);
+    const modal = openModal(`
+      <div class="bang-cuon" style="max-height:62vh;">${than}</div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btnDongSo">Đóng</button>
+        <button type="button" class="btn secondary" id="btnInSoXem" title="Mở hộp in của trình duyệt. Chọn máy in &quot;Save as PDF&quot; để ra file PDF.">🖨️ In / PDF</button>
+        <button type="button" class="btn" id="btnExcelSoXem">⬇️ Xuất Excel</button>
+      </div>`);
+    modal.querySelector('#btnDongSo').addEventListener('click', closeModal);
+    modal.querySelector('#btnInSoXem').addEventListener('click', () => {
+      printHtml(`So chi tiet cong no - ${d.tenDoiTuong || ''}`, than, KIEU_IN_SO);
+    });
+    modal.querySelector('#btnExcelSoXem').addEventListener('click', () => {
+      taiFile(`/api/congno/export?${duong}&kieu=so&tuNgay=${tu}&denNgay=${den}`,
+        tenFileExcel || 'so_chi_tiet_cong_no.xlsx');
+    });
   }
 
   /* v6.55: ô SỐ PHIẾU trong sổ công nợ — bấm được với mọi chứng từ có màn chi tiết.
@@ -1198,38 +1246,105 @@ window.ModuleCongNo = (function () {
     body.querySelectorAll('.act-ct-gc').forEach(a => a.addEventListener('click', () => soChiTietGiaCong(a.dataset.id)));
   }
 
-  async function soChiTietGiaCong(nhaId) {
+  /* ================================================================================================
+     v8.72 — SỔ CÔNG NỢ GIA CÔNG / IN THÊU: LỌC KỲ + XEM TRƯỚC RỒI MỚI XUẤT.
+     Nguyen chốt 2026-10-07: lọc kỳ theo **kiểu sổ kế toán** (dư đầu kỳ + phát sinh + dư cuối kỳ).
+
+     🔴 CÔNG NỢ LÀ LŨY KẾ. Chỉ lấy phát sinh trong kỳ là cột "còn nợ" thiếu phần nợ từ trước kỳ —
+     con số nhìn vẫn hợp lý nên sai mà không ai phát hiện. Dư đầu kỳ do BACKEND cộng dồn mọi dòng
+     trước `tuNgay`; đừng tính lại ở đây.
+
+     Không chọn kỳ -> backend trả toàn bộ lũy kế, y hệt hành vi trước v8.72 (dư đầu kỳ = 0).
+     ================================================================================================ */
+  async function soChiTietGiaCong(nhaId, ky) {
+    ky = ky || {};
     let d;
-    try { d = (await apiGet('/api/congno/congnogiacong/chitiet?nhaGiaCongId=' + encodeURIComponent(nhaId))).data; }
+    const qs = 'nhaGiaCongId=' + encodeURIComponent(nhaId)
+      + (ky.tu ? '&tuNgay=' + ky.tu : '') + (ky.den ? '&denNgay=' + ky.den : '');
+    try { d = (await apiGet('/api/congno/congnogiacong/chitiet?' + qs)).data; }
     catch (err) { toast('Không mở được sổ công nợ: ' + err.message, 'error'); return; }
-    const modal = openModal(`
-      <h3>Sổ công nợ nhà gia công / in thêu: ${escapeHtml(d.tenNha || '')}</h3>
-      <div style="margin-bottom:8px;">Còn nợ: <b style="color:#c0392b;font-size:16px;">${fmtNumber(d.conNo)}</b> đ</div>
-      <div style="max-height:60vh;overflow:auto;">
-      <table><thead><tr><th>Ngày</th><th>Loại</th><th>Lệnh SX / Số phiếu</th><th>Phát sinh</th><th>Đã trả</th><th>Còn nợ lũy kế</th><th>Diễn giải</th></tr></thead>
+    const coKy = !!(d.tuNgay || d.denNgay);
+    // Cùng lưới an toàn với sổ quỹ — xem ghi chú ở soChiTietQuy().
+    const bkCu = (ky.tu || ky.den) && !coKy;
+    if (bkCu) toast('Máy chủ chưa nhận bộ lọc kỳ — nhiều khả năng backend chưa được cập nhật. Cần copy backend\\routes\\congno.js sang D:\\QLSX rồi pm2 restart qlnoibo.', 'error');
+    const moTaKy = coKy
+      ? `Kỳ ${d.tuNgay ? fmtDate(d.tuNgay) : '...'} → ${d.denNgay ? fmtDate(d.denNgay) : '...'}`
+      : (bkCu ? '⚠️ Máy chủ bỏ qua kỳ đã chọn (backend cũ)' : 'Toàn bộ phát sinh (chưa lọc kỳ)');
+
+    const bangHtml = `
+      <table data-nostt style="width:100%;border-collapse:collapse;" border="1" cellpadding="4">
+        <thead><tr><th>Ngày</th><th>Loại</th><th>Lệnh SX / Số phiếu</th>
+          <th style="text-align:right;">Phát sinh</th><th style="text-align:right;">Đã trả</th>
+          <th style="text-align:right;">Còn nợ lũy kế</th><th>Diễn giải</th></tr></thead>
       ${/* Dòng gia công / in thêu KHÔNG phải chứng từ riêng (nó là ghi nhận trên lệnh SX) nên backend
              để CtLoai = null -> oSoPhieu() hiện chữ thường, không giả vờ bấm được. */''}
-      <tbody>${(d.rows || []).map(r => `<tr>
+      <tbody>${coKy ? `<tr data-tong style="background:#f1f3f4;font-weight:600;">
+          <td colspan="5"><i>Dư đầu kỳ</i></td>
+          <td style="text-align:right;">${fmtNumber(d.duDau)}</td><td></td></tr>` : ''}
+        ${(d.rows || []).map(r => `<tr>
         <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.Loai)}</td><td>${oSoPhieu(r)}</td>
         <td style="text-align:right;">${Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''}</td>
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.LuyKe)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
-        || '<tr><td colspan="7" class="empty-hint">Chưa có phát sinh nào</td></tr>'}</tbody></table></div>
+        || `<tr><td colspan="7" class="empty-hint">${coKy ? 'Không có phát sinh nào trong kỳ' : 'Chưa có phát sinh nào'}</td></tr>`}
+        ${coKy ? `<tr data-tong style="background:#f1f3f4;font-weight:600;">
+          <td colspan="3" style="text-align:right;">Phát sinh trong kỳ</td>
+          <td style="text-align:right;">${fmtNumber(d.tongPhatSinh)}</td>
+          <td style="text-align:right;">${fmtNumber(d.tongThanhToan)}</td><td colspan="2"></td></tr>` : ''}
+        <tr data-tong style="background:#e8f0fe;font-weight:700;">
+          <td colspan="5" style="text-align:right;">${coKy ? 'Dư cuối kỳ' : 'CÒN NỢ'}</td>
+          <td style="text-align:right;">${fmtNumber(d.conNo)}</td><td></td></tr>
+        </tbody></table>`;
+
+    const modal = openModal(`
+      <h3>Sổ công nợ nhà gia công / in thêu: ${escapeHtml(d.tenNha || '')}</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+        <span style="font-size:12px;color:#5f6368;">Kỳ:</span>
+        <input type="date" id="gcTuNgay" value="${ky.tu || ''}" style="width:auto;">
+        <span style="font-size:12px;color:#5f6368;">đến</span>
+        <input type="date" id="gcDenNgay" value="${ky.den || ''}" style="width:auto;">
+        <button type="button" class="btn small" id="btnXemGC" title="Dựng lại sổ theo kỳ đã chọn">👁️ Xem</button>
+        <button type="button" class="btn small secondary" id="btnGCCaKy" title="Bỏ lọc kỳ, xem toàn bộ lũy kế">Toàn bộ</button>
+        <span class="empty-hint" style="padding:0;">${escapeHtml(moTaKy)}</span>
+      </div>
+      <div style="margin-bottom:8px;">${coKy ? `Dư đầu kỳ: <b>${fmtNumber(d.duDau)}</b> đ &nbsp;·&nbsp; Dư cuối kỳ: ` : 'Còn nợ: '}
+        <b style="color:#c0392b;font-size:16px;">${fmtNumber(d.conNo)}</b> đ</div>
+      <div class="bang-cuon" style="max-height:56vh;">${bangHtml}</div>
       <div class="modal-actions">
-        <button type="button" class="btn small secondary" id="btnInSoGC">🖨️ In</button>
-        <button type="button" class="btn small secondary" id="btnXuatCTGC" title="Sổ chi tiết của nhà này + sheet phiếu chi">⬇️ Xuất Excel sổ này</button>
-        <button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
+        <button type="button" class="btn secondary" id="btnDong">Đóng</button>
+        <button type="button" class="btn secondary" id="btnInSoGC" title="Mở hộp in của trình duyệt. Chọn máy in &quot;Save as PDF&quot; để ra file PDF.">🖨️ In / PDF</button>
+        <button type="button" class="btn" id="btnXuatCTGC" title="Sổ chi tiết của nhà này + sheet phiếu chi">⬇️ Xuất Excel</button>
+      </div>`, { thayThe: true });
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
-    /* v7.82: sổ gia công / in thêu cũng in được — cùng bộ dựng, chỉ đổi nhãn cột. */
-    modal.querySelector('#btnInSoGC').addEventListener('click', () => inSoCongNo({
-      tieuDe: 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU', doiTuong: d.tenNha || '',
-      dongTom: [`<b>Còn nợ:</b> ${fmtNumber(d.conNo)} đ`],
-      cot: COT_SO_1CHIEU(d.rows || [], { soPhieu: 'Lệnh SX / Số phiếu', thanhToan: 'Đã trả' }),
-      rows: d.rows || [], tenFile: 'So cong no gia cong - ' + (d.tenNha || '')
-    }));
+
+    const kyMoi = () => {
+      const tu = modal.querySelector('#gcTuNgay').value || '';
+      const den = modal.querySelector('#gcDenNgay').value || '';
+      if (tu && den && tu > den) { toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error'); return null; }
+      return { tu, den };
+    };
+    modal.querySelector('#btnXemGC').addEventListener('click', () => {
+      const k = kyMoi();
+      if (k) soChiTietGiaCong(nhaId, k);
+    });
+    modal.querySelector('#btnGCCaKy').addEventListener('click', () => soChiTietGiaCong(nhaId, {}));
+
+    /* In ĐÚNG bảng đang xem (gỡ thẻ <a> để bản in không có link xanh gạch chân). */
+    modal.querySelector('#btnInSoGC').addEventListener('click', () => printHtml(
+      `So cong no gia cong - ${d.tenNha || ''}`,
+      `<h2 style="text-align:center;margin:0 0 4px;">SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU</h2>
+       <div class="p-meta" style="text-align:center;">Nhà: ${escapeHtml(d.tenNha || '')}</div>
+       <div class="p-meta" style="text-align:center;">${escapeHtml(moTaKy)}</div>
+       ${bangHtml.replace(/<a [^>]*>|<\/a>/g, '')}
+       <div class="p-sign"><div><div class="line">Người lập</div></div>
+         <div><div class="line">Kế toán</div></div>
+         <div><div class="line">Nhà gia công xác nhận</div></div></div>`, KIEU_IN_SO));
+
     modal.querySelector('#btnXuatCTGC').addEventListener('click', () =>
-      taiFile('/api/congno/export?loai=gc&nhaGiaCongId=' + encodeURIComponent(nhaId), 'cong_no_gia_cong.xlsx'));
-    noiDaySoPhieu(modal, () => soChiTietGiaCong(nhaId));   // phiếu chi bấm được
+      taiFile('/api/congno/export?loai=gc&nhaGiaCongId=' + encodeURIComponent(nhaId)
+        + (d.tuNgay ? '&tuNgay=' + d.tuNgay : '') + (d.denNgay ? '&denNgay=' + d.denNgay : ''),
+        'cong_no_gia_cong.xlsx'));
+    noiDaySoPhieu(modal, () => soChiTietGiaCong(nhaId, ky));   // phiếu chi bấm được, quay lại ĐÚNG kỳ
   }
 
   /* ============================== 5. ĐIỀU CHỈNH CÔNG NỢ ============================== */
@@ -1392,15 +1507,45 @@ window.ModuleCongNo = (function () {
       soChiTietQuy(el.dataset.loai, el.dataset.id).catch(err => toast(err.message, 'error'))));
   }
 
-  async function soChiTietQuy(loai, id) {
-    const d = (await apiGet(`/api/congno/soquy/chitiet?loai=${encodeURIComponent(loai)}${id ? '&taiKhoanNHID=' + id : ''}`)).data;
-    const modal = openModal(`
-      <h3>Sổ quỹ: ${escapeHtml(d.ten)}</h3>
-      <div style="margin-bottom:8px;">Số dư đầu kỳ: <b>${fmtNumber(d.dauKy)}</b> đ &nbsp;·&nbsp; Số dư hiện tại:
-        <b style="font-size:16px;color:${Number(d.soDu) < 0 ? '#c0392b' : '#137333'};">${fmtNumber(d.soDu)}</b> đ</div>
-      <div style="max-height:60vh;overflow:auto;">
-      <table><thead><tr><th>Ngày</th><th>Loại</th><th>Số phiếu</th><th>Đối tượng</th><th>Thu</th><th>Chi</th><th>Số dư</th><th>Diễn giải</th></tr></thead>
-      <tbody><tr style="background:#f1f3f4;"><td colspan="6"><i>Số dư đầu kỳ</i></td><td style="text-align:right;"><b>${fmtNumber(d.dauKy)}</b></td><td></td></tr>
+  /* ================================================================================================
+     v8.72 — SỔ QUỸ CÓ KỲ + XEM TRƯỚC RỒI MỚI XUẤT.
+     Nguyen chốt 2026-10-07: "chi tiết sổ quỹ có lọc theo kỳ từ ngày đến ngày. Khi chọn ngày có nút
+     xem hiển thị màn hình, xong mới xuất pdf excel" — và "đủ cả Excel + In/PDF".
+
+     🔴 SỐ DƯ ĐẦU KỲ do BACKEND tính (dư gốc + phát sinh TRƯỚC kỳ). Đừng bao giờ tính lại ở đây:
+     lấy thẳng số dư cấu hình làm dư đầu của một kỳ bất kỳ là cả cột "Số dư" sai từ dòng đầu tới
+     dòng cuối, mà nhìn bảng vẫn thấy hợp lý.
+
+     Mở lại chính hàm này sau khi đổi kỳ (thay vì vẽ đè) để dùng đúng một đường dựng bảng — truyền
+     `thayThe: true` cho openModal nên không chồng thêm lớp modal mỗi lần bấm Xem.
+     ================================================================================================ */
+  async function soChiTietQuy(loai, id, ky) {
+    ky = ky || {};
+    const qs = `loai=${encodeURIComponent(loai)}${id ? '&taiKhoanNHID=' + id : ''}`
+      + (ky.tu ? '&tuNgay=' + ky.tu : '') + (ky.den ? '&denNgay=' + ky.den : '');
+    const d = (await apiGet('/api/congno/soquy/chitiet?' + qs)).data;
+    const vTu = ky.tu || '';
+    const vDen = ky.den || '';
+    /* ⚠️ LƯỚI AN TOÀN: gửi kỳ lên mà máy chủ KHÔNG trả kỳ về = backend đang chạy bản CŨ (chưa copy
+       hoặc chưa pm2 restart). Không có cảnh báo này thì bảng hiện y nguyên số cũ và người dùng chỉ
+       thấy "bấm Xem không có gì xảy ra" — mất hàng giờ đi tìm lỗi ở nhầm chỗ. */
+    const bkCu = (ky.tu || ky.den) && !d.tuNgay && !d.denNgay;
+    if (bkCu) toast('Máy chủ chưa nhận bộ lọc kỳ — nhiều khả năng backend chưa được cập nhật. Cần copy backend\\routes\\congno.js sang D:\\QLSX rồi pm2 restart qlnoibo.', 'error');
+    const moTaKy = (d.tuNgay || d.denNgay)
+      ? `Kỳ ${d.tuNgay ? fmtDate(d.tuNgay) : '...'} → ${d.denNgay ? fmtDate(d.denNgay) : '...'}`
+      : (bkCu ? '⚠️ Máy chủ bỏ qua kỳ đã chọn (backend cũ)' : 'Toàn bộ phát sinh (chưa lọc kỳ)');
+
+    const banAn = `
+      <h2 style="text-align:center;margin:0 0 4px;">SỔ QUỸ</h2>
+      <div class="p-meta" style="text-align:center;">${escapeHtml(d.ten || '')}</div>
+      <div class="p-meta" style="text-align:center;">${escapeHtml(moTaKy)}</div>`;
+    const bangHtml = `
+      <table data-nostt style="width:100%;border-collapse:collapse;" border="1" cellpadding="4">
+        <thead><tr><th>Ngày</th><th>Loại</th><th>Số phiếu</th><th>Đối tượng</th>
+          <th style="text-align:right;">Thu</th><th style="text-align:right;">Chi</th>
+          <th style="text-align:right;">Số dư</th><th>Diễn giải</th></tr></thead>
+        <tbody><tr data-tong style="background:#f1f3f4;font-weight:600;"><td colspan="6"><i>Số dư đầu kỳ</i></td>
+          <td style="text-align:right;">${fmtNumber(d.dauKy)}</td><td></td></tr>
         ${(d.rows || []).map(r => `<tr>
         ${/* v6.79: số phiếu BẤM ĐƯỢC — dùng chung oSoPhieu() với sổ công nợ, để hai màn không có
              hai kiểu hiển thị/mở phiếu khác nhau. */''}
@@ -1409,9 +1554,56 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;color:#137333;">${Number(r.Thu) ? fmtNumber(r.Thu) : ''}</td>
         <td style="text-align:right;color:#c0392b;">${Number(r.Chi) ? fmtNumber(r.Chi) : ''}</td>
         <td style="text-align:right;"><b>${fmtNumber(r.SoDu)}</b></td><td>${escapeHtml(r.DienGiai || '')}</td></tr>`).join('')
-        || '<tr><td colspan="8" class="empty-hint">Chưa có phiếu thu/chi nào cho quỹ này</td></tr>'}</tbody></table></div>
-      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDong">Đóng</button></div>`);
+        || '<tr><td colspan="8" class="empty-hint">Không có phiếu thu/chi nào trong kỳ</td></tr>'}
+        <tr data-tong style="background:#f1f3f4;font-weight:600;"><td colspan="4" style="text-align:right;">Phát sinh trong kỳ</td>
+          <td style="text-align:right;">${fmtNumber(d.tongThu)}</td><td style="text-align:right;">${fmtNumber(d.tongChi)}</td><td colspan="2"></td></tr>
+        <tr data-tong style="background:#e8f0fe;font-weight:700;"><td colspan="6" style="text-align:right;">Số dư cuối kỳ</td>
+          <td style="text-align:right;">${fmtNumber(d.soDu)}</td><td></td></tr>
+        </tbody></table>`;
+
+    const modal = openModal(`
+      <h3>Sổ quỹ: ${escapeHtml(d.ten)}</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+        <span style="font-size:12px;color:#5f6368;">Kỳ:</span>
+        <input type="date" id="qTuNgay" value="${vTu}" style="width:auto;">
+        <span style="font-size:12px;color:#5f6368;">đến</span>
+        <input type="date" id="qDenNgay" value="${vDen}" style="width:auto;">
+        <button type="button" class="btn small" id="btnXemQuy" title="Dựng lại sổ theo kỳ đã chọn">👁️ Xem</button>
+        <button type="button" class="btn small secondary" id="btnQuyCaKy" title="Bỏ lọc kỳ, xem toàn bộ phát sinh">Toàn bộ</button>
+        <span class="empty-hint" style="padding:0;">${escapeHtml(moTaKy)}</span>
+      </div>
+      <div style="margin-bottom:8px;">Số dư đầu kỳ: <b>${fmtNumber(d.dauKy)}</b> đ &nbsp;·&nbsp; Số dư cuối kỳ:
+        <b style="font-size:16px;color:${Number(d.soDu) < 0 ? '#c0392b' : '#137333'};">${fmtNumber(d.soDu)}</b> đ</div>
+      <div class="bang-cuon" style="max-height:56vh;">${bangHtml}</div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btnDong">Đóng</button>
+        <button type="button" class="btn secondary" id="btnInQuy" title="Mở hộp in của trình duyệt. Chọn máy in &quot;Save as PDF&quot; để ra file PDF.">🖨️ In / PDF</button>
+        <button type="button" class="btn" id="btnExcelQuy">⬇️ Xuất Excel</button>
+      </div>`, { thayThe: true });
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
+
+    const kyMoi = () => {
+      const tu = modal.querySelector('#qTuNgay').value || '';
+      const den = modal.querySelector('#qDenNgay').value || '';
+      if (tu && den && tu > den) { toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error'); return null; }
+      return { tu, den };
+    };
+    modal.querySelector('#btnXemQuy').addEventListener('click', () => {
+      const k = kyMoi();
+      if (k) soChiTietQuy(loai, id, k).catch(err => toast(err.message, 'error'));
+    });
+    modal.querySelector('#btnQuyCaKy').addEventListener('click', () =>
+      soChiTietQuy(loai, id, {}).catch(err => toast(err.message, 'error')));
+    modal.querySelector('#btnInQuy').addEventListener('click', () => {
+      /* In ĐÚNG bảng đang xem. Dựng lại từ d (không đọc DOM) để bản in không dính nút/link. */
+      printHtml(`So quy - ${d.ten || ''}`, banAn + bangHtml.replace(/<a [^>]*>|<\/a>/g, ''), KIEU_IN_SO);
+    });
+    modal.querySelector('#btnExcelQuy').addEventListener('click', () => {
+      taiFile(`/api/congno/export?loai=soquy&quy=${encodeURIComponent(loai)}`
+        + (id ? '&taiKhoanNHID=' + id : '')
+        + (d.tuNgay ? '&tuNgay=' + d.tuNgay : '') + (d.denNgay ? '&denNgay=' + d.denNgay : ''),
+        'so_quy.xlsx');
+    });
     /* v6.79: bấm số phiếu -> mở chi tiết phiếu thu/chi ĐÈ LÊN sổ quỹ. Đóng nó thì QUAY VỀ sổ quỹ,
        không phải mở lại từ đầu — nhờ ngăn xếp modal của v5.97 (openModal không đóng cái trước nữa).
        KHÔNG truyền `quayLai`: truyền vào là nó tự đóng rồi mở lại sổ quỹ, tức mất chỗ đang cuộn và

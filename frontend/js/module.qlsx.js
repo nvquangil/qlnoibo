@@ -109,6 +109,10 @@ window.ModuleQLSX = (function () {
              (thường do danh mục có 2 bản trùng tên khác ID) mà không phải mở từng đơn. */''}
         <button class="btn small secondary" id="btnRaSoatCdv"
           title="Quét mọi lệnh SX: dòng chỉ định nào không ghép được cây vải nào trong kho, và danh mục nào bị trùng tên khác ID">🔍 Rà soát dữ liệu</button>
+        ${/* v8.72: ô tìm gõ ký tự bất kỳ, quét mọi cột DỮ LIỆU (mã ĐH, tên SP, trạng thái sơ đồ /
+             chỉ định / xuất kho). Cột Thao tác gắn data-notim nên chữ trên nút không lọt vào. */''}
+        ${searchBoxHtml('cdvTim', '🔍 Gõ để tìm mã ĐH, tên sản phẩm, trạng thái...')}
+        <span class="empty-hint" style="padding:0;" id="cdvTimInfo"></span>
       </div>
       <p class="empty-hint">Khai KG vải yêu cầu theo từng loại vải/màu của đơn. Chỉ đơn ĐÃ chỉ định mới được chọn khi lập Phiếu xuất kho vải.</p>
       ${/* v8.01: cot "So do (KT)" dat TRUOC cot "Chi dinh" — dung thu tu nghiep vu that:
@@ -119,7 +123,7 @@ window.ModuleQLSX = (function () {
         <td>${trangThaiSoDoHtml(o)}</td>
         <td>${o.DaChiDinh ? '<span class="badge green">Đã chỉ định</span>' : '<span class="badge">Chưa</span>'}</td>
         <td>${trangThaiXuatKhoHtml(o)}</td>
-        <td><button class="btn small secondary act-cdv" data-madh="${escapeHtml(o.MaDH)}">Chỉ định vải (các bản)</button>
+        <td data-notim><button class="btn small secondary act-cdv" data-madh="${escapeHtml(o.MaDH)}">Chỉ định vải (các bản)</button>
           ${/* v5.69: đã chỉ định thì xuất kho được luôn tại đây */''}
           ${o.DaChiDinh && coQuyenXuatVai() ? `<button class="btn small act-cdv-xuat" data-madh="${escapeHtml(o.MaDH)}" title="Lập Phiếu xuất kho vải cho đơn này">📦 Xuất kho</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có đơn hàng</td></tr>'}</tbody></table>`;   // v8.01: 5 -> 6 cột
@@ -128,6 +132,7 @@ window.ModuleQLSX = (function () {
     body.querySelectorAll('.act-cdv-xuat').forEach(b => b.addEventListener('click', () => xuatKhoTheoChiDinh(b.dataset.madh)));   // v5.69
     body.querySelectorAll('.act-xem-phieuxuat').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); xemPhieuXuatCuaDon(a.dataset.madh); }));   // v5.85
     body.querySelector('#btnRaSoatCdv').addEventListener('click', () => moRaSoatChiDinh(perm));   // v7.37
+    wireTableSearch(body, 'cdvTim', { infoId: 'cdvTimInfo' });   // v8.72
   }
 
   /* ================================================================================================
@@ -3291,6 +3296,14 @@ window.ModuleQLSX = (function () {
     // ma khong bi loc theo Kieu o bat ky buoc nao). Tinh lai o day (thay vi sua truy van backend) tai
     // dung du lieu CHINH XAC theo tung mau da co san, khong dong cham logic tinh slCatTheoMau o server.
     const slCatTongChinh = catMauList.reduce((sum, ct) => sum + Number(ct.SoLuong || 0), 0);
+    /* v8.71: backend nay loc vai phoi o MUC CAY (PhieuXuatVaiChiTiet.KieuVai), nen con so tren da
+       KHONG con gom vai phoi. Cay nao khong co dong phieu xuat nao cua don (cap vai tay) thi VAN
+       duoc tinh — bao thu, tranh lam mat hang that — nhung phai noi ra, khong thi con so cao hon
+       su that ma khong ai biet. */
+    const soCayChuaRoKieu = Number(detail.soCayChuaRoKieu) || 0;
+    const canhBaoCayChuaRo = soCayChuaRoKieu > 0
+      ? `<div class="empty-hint" style="text-align:left;color:#b06000;margin-top:2px;">⚠️ Có <b>${fmtNumber(soCayChuaRoKieu)}</b> cây vải trong sổ cắt chưa có dòng Phiếu xuất kho vải của lệnh này, nên chưa biết là vải <b>chính hay phối</b> — hệ thống <b>vẫn cộng</b> vào số trên. Nếu đó là vải phối thì số này đang cao hơn thực tế; khai Kiểu trên phiếu xuất vải để hết cảnh báo.</div>`
+      : '';
     const theKho = detail.theKho || { DonViCoBan: 'Cái', DonViQuyDoi: 'Ri', LoaiRi: 1 };
     // v5.13 (muc 1.2.2.2): He so quy doi (Cai/Ri) gio KHAI BAO 1 LAN DUY NHAT tren don hang (Ra lenh
     // san xuat, DonHangSanXuat.HeSoQuyDoi) - dung CHUNG cho MOI cay vai o cong doan Cat, thay vi nhap
@@ -5098,7 +5111,8 @@ window.ModuleQLSX = (function () {
           ${/* v6.12: hiện "số bàn cắt đang tính / TỔNG số bàn cắt của đơn" (vd 6/7) — đơn cắt nhiều đợt
                thì 2 số này khác nhau, nhìn là biết còn đợt cắt chưa được tính vào. */''}
           <div class="form-row"><label>Tổng SL cắt (đã quy đổi, chỉ tính màu chính)</label>
-            <div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái — Số bàn cắt: ${fmtNumber(detail.slCatSoBan || 0)}/${fmtNumber(detail.slCatSoBanTatCa != null ? detail.slCatSoBanTatCa : (detail.slCatSoBan || 0))} bàn${Number(detail.slCatSoBanTatCa || 0) > Number(detail.slCatSoBan || 0) ? ' <span style="color:#b06000;">(đơn cắt nhiều đợt — số trên chỉ tính đợt cắt gần nhất)</span>' : ''}</div></div>
+            <div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái — Số bàn cắt: ${fmtNumber(detail.slCatSoBan || 0)}/${fmtNumber(detail.slCatSoBanTatCa != null ? detail.slCatSoBanTatCa : (detail.slCatSoBan || 0))} bàn${Number(detail.slCatSoBanTatCa || 0) > Number(detail.slCatSoBan || 0) ? ' <span style="color:#b06000;">(đơn cắt nhiều đợt — số trên chỉ tính đợt cắt gần nhất)</span>' : ''}</div>
+            ${canhBaoCayChuaRo}</div>
           ${showGiaoViec ? `<div class="form-row"><label>Công đoạn may đã chọn cho đơn hàng này (ở "Kỹ thuật")</label><div id="mayCongDoanMayArea"></div></div>` : `<div class="form-row"><label>Công đoạn may đã chọn cho đơn hàng này (ở "Kỹ thuật")</label>${congDoanMayDaChonTableHtml()}</div>`}
           <div class="form-row"><label>Số lượng lũy kế theo màu (tham khảo SL cắt từng màu)</label>
             <div class="row-repeater">${mauQtyRowsHtml('MAY')}</div>
@@ -5303,7 +5317,7 @@ window.ModuleQLSX = (function () {
         renderKhoNhapDaGhi(box.querySelector('#knDaGhi'), maDH, perm);
       } else if (stageCode === 'GIT') {
         // v5.32: Giao in theu - hien tong SL ban cat mau chinh (tham khao) + chon NHIEU nha in theu + SL giao.
-        box.innerHTML = `<div class="form-row"><label>Tổng SL bàn cắt (màu chính)</label><div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái</div></div>
+        box.innerHTML = `<div class="form-row"><label>Tổng SL bàn cắt (màu chính)</label><div class="readonly-fact">${fmtNumber(slCatTongChinh)} cái</div>${canhBaoCayChuaRo}</div>
           <div class="form-row"><label>Giao nhà in thêu (chọn nhiều nhà + số lượng giao)</label><div id="gitArea"></div></div>`;
         renderInTheBox(box.querySelector('#gitArea'), 'giao');
       } else if (stageCode === 'NIT') {

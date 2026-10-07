@@ -32,6 +32,17 @@ window.ModuleKhoHang = (function () {
      VD giá bán 100.000, 33%/17% → shop 67.000 → NPP 55.610.
      Giá KHÔNG lưu trong CSDL, luôn tính tại chỗ ⇒ sửa Giá bán hoặc tỷ lệ là mọi nơi tự đúng theo. */
   let tyLeCK = { shop: 33, npp: 17 };   // nạp lại từ API mỗi lần render
+  /* v8.70.2 — KHUYẾN MÃI trên màn ĐƠN KHÁCH ĐẶT HÀNG. Backend GET /donhang trả map
+     MaHangID -> { PhanTramCK, ChuongTrinhID, TenChuongTrinh }, tra SỐNG theo HÔM NAY.
+     ⚠️ Chỉ là NHÃN BÁO HIỆU. Đơn khách đặt KHÔNG lưu giá/%CK — con số chỉ chốt khi lập Phiếu bán
+     hàng (theo NGÀY BÁN của phiếu, có thể khác hôm nay). Đừng cộng tiền từ nhãn này. */
+  let kmDonKhach = {};
+  function nhanKMDonHtml(maHangId) {
+    const k = maHangId ? kmDonKhach[String(maHangId)] : null;
+    if (!k) return '';
+    return `<div style="font-size:11px;font-weight:600;color:#c0392b;line-height:1.25;margin-top:2px;"
+      title="Đang có chương trình khuyến mãi — giá chốt khi lập phiếu bán hàng">🎁 ${escapeHtml(k.TenChuongTrinh)} · CK ${fmtNumber(k.PhanTramCK)}%</div>`;
+  }
   function giaShopSauCK(giaBan) {
     return Math.round((Number(giaBan) || 0) * (1 - (Number(tyLeCK.shop) || 0) / 100) * 100) / 100;
   }
@@ -63,6 +74,9 @@ window.ModuleKhoHang = (function () {
       // (muc 1.2.2) - dung 1 chuc nang ChucNang('KHOHANG','baogiaaloha') duy nhat cho ca 2, giong
       // dung cach nguoi dung mo ta chung la 2 "chuc nang con" cua CUNG 1 chuc nang cha "Báo giá Aloha".
       { key: 'baogiaaloha', label: 'Báo giá Aloha' },
+      // v8.70: chương trình khuyến mãi — THAY THẾ %CK Shop cho mã được gán, trong khoảng thời gian
+      // của chương trình. Hết hạn tự về lại CK dùng chung, không phải làm gì thêm.
+      { key: 'khuyenmai', label: 'Chương trình khuyến mãi' },
       // v5.63: tài khoản để KHÁCH đăng nhập đặt hàng trên trang công khai (nhân viên tạo, không tự đăng ký).
       { key: 'taikhoankhach', label: 'Tài khoản khách' }
     ];
@@ -85,6 +99,7 @@ window.ModuleKhoHang = (function () {
 
     if (activeTab === 'items') return renderItems(perm);
     if (activeTab === 'baogiaaloha') return renderBaoGiaAloha(perm);
+    if (activeTab === 'khuyenmai') return renderKhuyenMai(perm);           // v8.70
     if (activeTab === 'taikhoankhach') return renderTaiKhoanKhach(perm);   // v5.63
     if (activeTab === 'banhang') return renderBanHang(perm);               // v6.23
     if (activeTab === 'hangmau') return renderHangMau(perm);               // v7.59
@@ -1906,7 +1921,8 @@ window.ModuleKhoHang = (function () {
       <td><input type="checkbox" class="ord-chon" data-ids="${ids}"></td>
       ${/* v5.65: cột Ảnh = ảnh đại diện chung của mã hàng */''}
       <td>${g.AnhDaiDien ? `<img class="thumb act-zoom-main" loading="lazy" decoding="async" data-src="${escapeHtml(g.AnhDaiDien)}" data-title="${escapeHtml((g.MaHang || '') + ' · ' + (g.TenHang || ''))}" src="${escapeHtml(anhNho(g.AnhDaiDien, 160))}" style="cursor:pointer;" title="Bấm để phóng to">` : ''}</td>
-      <td>${escapeHtml(g.Ngay)}</td><td>${escapeHtml(g.TenKhach)}</td><td>${escapeHtml(g.MaHang)}</td>
+      <td>${escapeHtml(g.Ngay)}</td><td>${escapeHtml(g.TenKhach)}</td>
+      <td>${escapeHtml(g.MaHang)}${nhanKMDonHtml(g.MaHangID)}</td>
       <td>${escapeHtml(g.TenMau)}</td>
       <td><b>${fmtNumber(g.SoLuongDat)}</b>${nhieu ? `<div style="font-size:11px;color:#5f6368;">gộp ${g.dons.length} đơn</div>` : ''}</td>
       <td>${escapeHtml(g.DonVi)}</td>
@@ -1967,6 +1983,7 @@ window.ModuleKhoHang = (function () {
        project_qlnoibo_v807_khach_ncc_theo_id.md). */
     orders.forEach(o => { if (o.TenKhachDanhMuc) { o.TenKhachGoc = o.TenKhach; o.TenKhach = o.TenKhachDanhMuc; } });
     if (ordersRes.tyLeCK) tyLeCK = ordersRes.tyLeCK;   // v6.21: để bảng kê in tính giá sau CK
+    kmDonKhach = ordersRes.khuyenMai || {};            // v8.70.2: nhãn chương trình khuyến mãi
     if (ordersRes.canhBao) toast(ordersRes.canhBao, 'info');   // vd chưa chạy migration_v657
     // v6.21: GỘP các đơn cùng (ngày + khách + mã hàng + màu + đơn vị) — xem gopDonKhach().
     const nhomDon = gopDonKhach(orders);
@@ -2450,12 +2467,24 @@ window.ModuleKhoHang = (function () {
     return `<table><thead><tr><th>STT</th><th>${escapeHtml(nhanCotDau)}</th><th>Màu</th><th>SL</th><th>Đơn vị</th>
         <th>SL (Cái)</th>
         <th>Giá bán<div style="font-weight:400;font-size:10px;">(đ/Cái)</div></th>
-        <th>Giá sau CK shop<div style="font-weight:400;font-size:10px;">(đ/Cái · CK ${fmtNumber(tyLeCK.shop)}%)</div></th>
+        <th>Giá sau CK shop<div style="font-weight:400;font-size:10px;">(đ/Cái · CK dùng chung ${fmtNumber(tyLeCK.shop)}%)</div></th>
         <th>Giá sau CK NPP<div style="font-weight:400;font-size:10px;">(đ/Cái · CK ${fmtNumber(tyLeCK.npp)}% trên giá shop)</div></th></tr></thead>
-      <tbody>${ds.map((r, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(r[cotDau] || '')}</td><td>${escapeHtml(r.TenMau)}</td>
+      ${/* v8.70.2: mã đang có CHƯƠNG TRÌNH KHUYẾN MÃI thì giá ở đây phải tính theo %CK của chương
+           trình, không phải CK dùng chung — nếu không, giấy giao hàng ghi một giá mà phiếu bán hàng
+           tính một giá khác, khách cầm hai tờ đối chiếu là ra chuyện. Ghi rõ tên chương trình ngay
+           dưới con số để người cầm phiếu biết vì sao lệch với mức dùng chung ghi trên đầu cột. */''}
+      <tbody>${ds.map((r, i) => {
+        const km = kmDonKhach[String(r.MaHangID)];
+        const ckShop = km ? Number(km.PhanTramCK) : Number(tyLeCK.shop) || 0;
+        const giaShop = Math.round((Number(r.GiaBan) || 0) * (1 - ckShop / 100) * 100) / 100;
+        const giaNPP = Math.round(giaShop * (1 - (Number(tyLeCK.npp) || 0) / 100) * 100) / 100;
+        return `<tr><td>${i + 1}</td><td>${escapeHtml(r[cotDau] || '')}</td><td>${escapeHtml(r.TenMau)}</td>
         <td>${fmtNumber(r.SoLuongDat)}</td><td>${escapeHtml(r.DonVi)}</td>
         <td>${fmtNumber(slSangCai(r.SoLuongDat, r.DonVi, r.LoaiRi, r))}</td>
-        <td>${fmtNumber(r.GiaBan)}</td><td>${fmtNumber(giaShopSauCK(r.GiaBan))}</td><td>${fmtNumber(giaNPPSauCK(r.GiaBan))}</td></tr>`).join('')}
+        <td>${fmtNumber(r.GiaBan)}</td>
+        <td>${fmtNumber(giaShop)}${km ? `<div style="font-size:10px;font-weight:600;">🎁 ${escapeHtml(km.TenChuongTrinh)} · CK ${fmtNumber(ckShop)}%</div>` : ''}</td>
+        <td>${fmtNumber(giaNPP)}</td></tr>`;
+      }).join('')}
         <tr><td colspan="5" style="text-align:right;"><b>Tổng SL (Cái)</b></td><td><b>${fmtNumber(tong)}</b></td><td colspan="3"></td></tr></tbody></table>`;
   }
 
@@ -2830,6 +2859,221 @@ window.ModuleKhoHang = (function () {
   }
 
   // ============ BAO GIA ALOHA (v5.17, muc 1.2) ============
+  /* ================================================================================================
+     v8.70 — CHƯƠNG TRÌNH KHUYẾN MÃI.
+     Chương trình THAY THẾ %CK Shop cho các mã được gán, trong khoảng thời gian của nó. Hết hạn thì
+     tự về lại CK dùng chung — không có nút nào phải bấm.
+
+     ⚠️ Ô "% CK" ở đây là TỔNG %CK thay thế, KHÔNG phải phần cộng thêm. Ví dụ CK dùng chung 33%,
+     muốn khuyến mãi thì gõ 35 (không gõ 2). Nhãn trên form nói rõ điều này — gõ nhầm là bán sai giá.
+     ================================================================================================ */
+  async function renderKhuyenMai(perm) {
+    const body = document.getElementById('khBody');
+    const res = await apiGet('/api/khuyenmai');
+    const rows = res.data || [];
+    const mauHieuLuc = { 'Đang chạy': 'ok', 'Chưa tới': 'info', 'Đã hết': 'warn', 'Tạm dừng': 'danger' };
+    body.innerHTML = `
+      <div class="toolbar">
+        ${perm.canCreate ? '<button class="btn" id="btnThemKM">+ Tạo chương trình</button>' : ''}
+        <span class="empty-hint" style="padding:0;">% khai trong chương trình là <b>TỔNG % CK</b> thay thế CK dùng chung — hết hạn tự quay về CK dùng chung.</span>
+      </div>
+      <table><thead><tr><th>Tên chương trình</th><th>Từ ngày</th><th>Đến ngày</th><th>Tổng % CK</th>
+        <th>Số mã</th><th>Hiệu lực</th><th>Ghi chú</th><th style="width:170px">Thao tác</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td><b>${escapeHtml(r.TenChuongTrinh)}</b></td>
+        <td>${fmtDate(r.TuNgay)}</td><td>${fmtDate(r.DenNgay)}</td>
+        <td style="text-align:right;"><b>${fmtNumber(r.PhanTramCK)}%</b></td>
+        <td style="text-align:right;">${fmtNumber(r.SoMaHang)}</td>
+        <td><span class="badge ${mauHieuLuc[r.HieuLuc] || 'info'}">${escapeHtml(r.HieuLuc)}</span></td>
+        <td>${escapeHtml(r.GhiChu || '')}</td>
+        <td>${perm.canEdit ? `<button class="btn small secondary km-sua" data-id="${r.ID}">Sửa</button>` : ''}
+            ${perm.canDelete ? `<button class="btn small danger km-xoa" data-id="${r.ID}">Xóa</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có chương trình khuyến mãi nào</td></tr>'}</tbody></table>`;
+
+    const bThem = body.querySelector('#btnThemKM');
+    if (bThem) bThem.addEventListener('click', () => openKhuyenMaiForm(null, perm));
+    body.querySelectorAll('.km-sua').forEach(b => b.addEventListener('click', () => openKhuyenMaiForm(b.dataset.id, perm)));
+    body.querySelectorAll('.km-xoa').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Xóa chương trình khuyến mãi này?')) return;
+      try { await apiDelete('/api/khuyenmai/' + b.dataset.id); toast('Đã xóa.', 'success'); renderKhuyenMai(perm); }
+      catch (err) { toast(err.message, 'error'); }
+    }));
+  }
+
+  async function openKhuyenMaiForm(id, perm) {
+    let d = { TenChuongTrinh: '', TuNgay: '', DenNgay: '', PhanTramCK: '', TrangThai: 'Hoạt động', GhiChu: '', chiTiet: [] };
+    if (id) d = (await apiGet('/api/khuyenmai/' + id)).data;
+    let ct = (d.chiTiet || []).map(x => ({ maHangId: x.MaHangID, maHang: x.MaHang, tenHang: x.TenHang, giaBan: x.GiaBan, phanTramCK: x.PhanTramCK != null ? x.PhanTramCK : '' }));
+    const ngay = v => (v ? String(v).slice(0, 10) : '');
+
+    const modal = openModal(`<h3>${id ? 'Sửa' : 'Tạo'} chương trình khuyến mãi</h3>
+      <form id="kmForm"><div class="form-grid">
+        <div class="form-row"><label>Tên chương trình <span class="bat-buoc">*</span></label><input name="ten" value="${escapeHtml(d.TenChuongTrinh || '')}" required></div>
+        <div class="form-row"><label>Trạng thái</label><select name="trangThai">
+          <option value="Hoạt động" ${d.TrangThai !== 'Tạm dừng' ? 'selected' : ''}>Hoạt động</option>
+          <option value="Tạm dừng" ${d.TrangThai === 'Tạm dừng' ? 'selected' : ''}>Tạm dừng</option></select></div>
+        <div class="form-row"><label>Từ ngày <span class="bat-buoc">*</span></label><input type="date" name="tuNgay" value="${ngay(d.TuNgay)}" required></div>
+        <div class="form-row"><label>Đến ngày <span class="bat-buoc">*</span></label><input type="date" name="denNgay" value="${ngay(d.DenNgay)}" required></div>
+        <div class="form-row"><label>TỔNG % CK của chương trình <span class="bat-buoc">*</span></label>
+          <input type="number" step="0.01" min="0" max="100" name="phanTramCK" value="${d.PhanTramCK != null ? d.PhanTramCK : ''}" required>
+          <div class="empty-hint" style="text-align:left;">Đây là <b>tổng</b> % CK thay thế, không phải phần cộng thêm. CK dùng chung 33% → muốn khuyến mãi thì gõ <b>35</b>.</div></div>
+        <div class="form-row"><label>Ghi chú</label><input name="ghiChu" value="${escapeHtml(d.GhiChu || '')}"></div>
+      </div>
+      <div class="form-row"><label>Mã hàng tham gia</label>
+        <div style="margin-bottom:6px;">
+          <button type="button" class="btn small" id="btnChonMaKM">📋 Chọn mã hàng (hàng còn tồn)</button>
+        </div>
+        <div id="kmCtBox"></div>
+      </div>
+      <div id="kmCanhBao"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btnHuyKM">${perm.canEdit ? 'Hủy' : 'Đóng'}</button>
+        ${perm.canEdit ? '<button type="submit" class="btn">💾 Lưu</button>' : ''}
+      </div></form>`);
+    modal.querySelector('#btnHuyKM').addEventListener('click', closeModal);
+    const box = modal.querySelector('#kmCtBox');
+
+    function syncCt() {
+      box.querySelectorAll('[data-kmrow]').forEach(el => {
+        const r = ct[Number(el.dataset.i)]; if (!r) return;
+        r.phanTramCK = el.querySelector('.km-pt').value;
+      });
+    }
+    function veCt() {
+      box.innerHTML = `<table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;">
+        <thead><tr><th style="width:38px;">STT</th><th>Mã hàng</th><th>Tên hàng</th><th>Giá bán lẻ</th>
+          <th style="width:150px;">% CK riêng</th><th style="width:40px;"></th></tr></thead>
+        <tbody>${ct.map((r, i) => `<tr data-kmrow data-i="${i}">
+          <td style="text-align:center;">${i + 1}</td>
+          <td><b>${escapeHtml(r.maHang || '')}</b></td><td>${escapeHtml(r.tenHang || '')}</td>
+          <td style="text-align:right;">${fmtNumber(r.giaBan || 0)}</td>
+          <td><input type="number" step="0.01" min="0" max="100" class="km-pt" value="${r.phanTramCK}" placeholder="theo chương trình" style="width:100%;"></td>
+          <td><button type="button" class="btn small danger km-del" data-i="${i}">X</button></td></tr>`).join('')
+          || '<tr><td colspan="6" class="empty-hint">Chưa chọn mã hàng nào — chương trình chưa áp cho mã nào cả.</td></tr>'}</tbody></table>
+        <div class="empty-hint" style="text-align:left;margin-top:4px;">Để trống cột <b>% CK riêng</b> thì mã đó dùng tổng % của chương trình.</div>`;
+      box.querySelectorAll('.km-del').forEach(b => b.addEventListener('click', () => { syncCt(); ct.splice(Number(b.dataset.i), 1); veCt(); }));
+    }
+    veCt();
+
+    modal.querySelector('#btnChonMaKM').addEventListener('click', () => {
+      syncCt();
+      openChonMaHangKM(ct.map(x => x.maHangId), (daChon) => {
+        /* Giữ lại %CK riêng của mã đã có; mã mới thì để trống (theo % chương trình). */
+        const cu = new Map(ct.map(x => [String(x.maHangId), x.phanTramCK]));
+        ct = daChon.map(h => ({
+          maHangId: h.MaHangID, maHang: h.MaHang, tenHang: h.TenHang, giaBan: h.GiaBan,
+          phanTramCK: cu.has(String(h.MaHangID)) ? cu.get(String(h.MaHangID)) : ''
+        }));
+        veCt();
+      });
+    });
+
+    modal.querySelector('#kmForm').addEventListener('submit', async (e) => {
+      e.preventDefault(); if (!perm.canEdit) return; syncCt();
+      const fd = new FormData(e.target);
+      const payload = {
+        id: id || 0,
+        tenChuongTrinh: fd.get('ten'), tuNgay: fd.get('tuNgay'), denNgay: fd.get('denNgay'),
+        phanTramCK: fd.get('phanTramCK'), trangThai: fd.get('trangThai'), ghiChu: fd.get('ghiChu'),
+        chiTiet: ct.map(x => ({ maHangId: x.maHangId, phanTramCK: x.phanTramCK }))
+      };
+      /* v8.70: CẢNH BÁO (không chặn) mã nào đang nằm trong chương trình khác chồng thời gian.
+         Lúc áp giá, hệ thống lấy %CK CAO NHẤT — nên người khai phải nhìn thấy trước là có chồng. */
+      try {
+        const kq = await apiPost('/api/khuyenmai/kiem-trung', payload);
+        const trung = kq.data || [];
+        if (trung.length) {
+          const mo = trung.map(t => `• ${t.MaHang} — đang ở "${t.TenChuongTrinh}" (${fmtNumber(t.PhanTramCK)}%, ${fmtDate(t.TuNgay)}–${fmtDate(t.DenNgay)})`).join('\n');
+          if (!confirm(`Có ${trung.length} mã đã nằm trong chương trình khác CHỒNG THỜI GIAN:\n\n${mo}\n\n`
+            + 'Khi bán, hệ thống lấy % CK CAO NHẤT trong số các chương trình còn hiệu lực. Vẫn lưu?')) return;
+        }
+      } catch (err) { /* kiểm trùng lỗi thì vẫn cho lưu — không chặn người dùng vì một bước phụ */ }
+      try {
+        if (id) await apiPut('/api/khuyenmai/' + id, payload);
+        else await apiPost('/api/khuyenmai', payload);
+        closeModal(); toast('Đã lưu chương trình khuyến mãi.', 'success');
+        renderKhuyenMai(perm);
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  /* ================================================================================================
+     v8.70.1 — BẢNG CHỌN MÃ HÀNG cho chương trình khuyến mãi (Nguyen: "list hàng hóa còn tồn trong
+     kho, có lọc theo danh mục thẻ kho, loại hàng, chọn từng mã hoặc chọn tất cả").
+
+     ⚠️ "Chọn tất cả" tích đúng những dòng ĐANG HIỆN sau bộ lọc, KHÔNG phải toàn bộ kho. Lọc còn
+     3 mã rồi bấm "chọn tất cả" mà hệ thống tích cả 800 mã là tai nạn, và người dùng chỉ phát hiện
+     khi hóa đơn đã bán sai giá.
+     Mã đã tích ở lần lọc trước vẫn giữ nguyên khi đổi bộ lọc — trạng thái tích nằm ở biến daTich,
+     không phải ở DOM.
+     ================================================================================================ */
+  async function openChonMaHangKM(dangCo, onXong) {
+    let ds = [];
+    try { ds = (await apiGet('/api/khuyenmai/chon-ma-hang')).data || []; }
+    catch (err) { toast(err.message, 'error'); return; }
+    const daTich = new Set((dangCo || []).map(String));
+    const dsDanhMuc = [...new Set(ds.map(h => h.TenTheKho))].sort();
+    const dsLoai = [...new Set(ds.map(h => h.TenNhom))].sort();
+
+    const modal = openModal(`<h3>Chọn mã hàng tham gia khuyến mãi</h3>
+      <p class="empty-hint" style="text-align:left;">Chỉ hiện mã <b>còn tồn trong kho</b> (tồn &gt; 0).</p>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr 2fr;gap:8px;">
+        <div class="form-row"><label>Danh mục thẻ kho</label><select id="cmDanhMuc"><option value="">-- Tất cả --</option>${dsDanhMuc.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Loại hàng</label><select id="cmLoai"><option value="">-- Tất cả --</option>${dsLoai.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Tìm</label><input id="cmTim" placeholder="🔍 Gõ mã hoặc tên hàng..." autocomplete="off"></div>
+      </div>
+      <div class="toolbar" style="gap:8px;">
+        <button type="button" class="btn small secondary" id="cmChonHet">☑️ Chọn tất cả (dòng đang hiện)</button>
+        <button type="button" class="btn small secondary" id="cmBoHet">☐ Bỏ chọn (dòng đang hiện)</button>
+        <span class="empty-hint" style="padding:0;" id="cmDem"></span>
+      </div>
+      <div class="bang-cuon" style="max-height:46vh;"><div id="cmBox"></div></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="cmHuy">Hủy</button>
+        <button type="button" class="btn" id="cmXong">✅ Dùng các mã đã chọn</button>
+      </div>`);
+    modal.querySelector('#cmHuy').addEventListener('click', closeModal);
+    const box = modal.querySelector('#cmBox');
+
+    const locHienTai = () => {
+      const dm1 = modal.querySelector('#cmDanhMuc').value;
+      const lh = modal.querySelector('#cmLoai').value;
+      const tu = boDau(modal.querySelector('#cmTim').value).split(/\s+/).filter(Boolean);
+      return ds.filter(h => (!dm1 || h.TenTheKho === dm1) && (!lh || h.TenNhom === lh)
+        && (!tu.length || tu.every(t => boDau(`${h.MaHang} ${h.TenHang || ''}`).indexOf(t) !== -1)));
+    };
+    function ve() {
+      const rows = locHienTai();
+      box.innerHTML = `<table><thead><tr><th style="width:38px;"></th><th>Mã hàng</th><th>Tên hàng</th>
+          <th>Danh mục thẻ kho</th><th>Loại hàng</th><th>Tồn</th><th>Giá bán lẻ</th></tr></thead>
+        <tbody>${rows.map(h => `<tr>
+          <td style="text-align:center;"><input type="checkbox" class="cm-ck" data-id="${h.MaHangID}" ${daTich.has(String(h.MaHangID)) ? 'checked' : ''}></td>
+          <td><b>${escapeHtml(h.MaHang)}</b></td><td>${escapeHtml(h.TenHang || '')}</td>
+          <td>${escapeHtml(h.TenTheKho)}</td><td>${escapeHtml(h.TenNhom)}</td>
+          <td style="text-align:right;">${fmtNumber(h.TongTon)}</td>
+          <td style="text-align:right;">${fmtNumber(h.GiaBan || 0)}</td></tr>`).join('')
+          || '<tr><td colspan="7" class="empty-hint">Không có mã nào khớp bộ lọc.</td></tr>'}</tbody></table>`;
+      box.querySelectorAll('.cm-ck').forEach(c => c.addEventListener('change', () => {
+        if (c.checked) daTich.add(c.dataset.id); else daTich.delete(c.dataset.id);
+        demLai();
+      }));
+      demLai();
+    }
+    function demLai() {
+      const el = modal.querySelector('#cmDem');
+      if (el) el.innerHTML = `Đang hiện <b>${fmtNumber(locHienTai().length)}</b> mã · đã chọn <b>${fmtNumber(daTich.size)}</b>`;
+    }
+    ['#cmDanhMuc', '#cmLoai'].forEach(s => modal.querySelector(s).addEventListener('change', ve));
+    modal.querySelector('#cmTim').addEventListener('input', ve);
+    modal.querySelector('#cmChonHet').addEventListener('click', () => { locHienTai().forEach(h => daTich.add(String(h.MaHangID))); ve(); });
+    modal.querySelector('#cmBoHet').addEventListener('click', () => { locHienTai().forEach(h => daTich.delete(String(h.MaHangID))); ve(); });
+    modal.querySelector('#cmXong').addEventListener('click', () => {
+      closeModal();
+      onXong(ds.filter(h => daTich.has(String(h.MaHangID))));
+    });
+    ve();
+  }
+
   // Danh sach bao gia da tao (muc 1.2.2) + nut mo form tao moi (muc 1.2.1). Xuat Excel dung the <a
   // href> thang toi route backend (giong dung tien le "⬇️ Tải file mẫu Excel" o module.qlsx.js) -
   // trinh duyet tu tai file qua session cookie hien co, khong can goi fetch/blob rieng.
@@ -3446,7 +3690,9 @@ window.ModuleKhoHang = (function () {
   function gopTheoMaHang(ct) {
     const map = new Map();
     (ct || []).forEach(r => {
-      const khoa = [r.MaHangID, r.DonVi || '', Number(r.GiaBanLe) || 0, Number(r.PhanTramCKShop) || 0].join('|');
+      /* v8.70: gộp thêm theo CHƯƠNG TRÌNH KHUYẾN MÃI. Hai dòng cùng %CK nhưng khác chương trình thì
+         không được gộp — gộp xong chỉ in ra được MỘT tên chương trình, tên kia biến mất im lặng. */
+      const khoa = [r.MaHangID, r.DonVi || '', Number(r.GiaBanLe) || 0, Number(r.PhanTramCKShop) || 0, r.ChuongTrinhID || ''].join('|');
       let g = map.get(khoa);
       if (!g) {
         // Sao chép dòng đầu làm khung, rồi cộng dồn phần số vào — giữ nguyên mọi trường hiển thị khác.
@@ -3517,7 +3763,10 @@ window.ModuleKhoHang = (function () {
                để nó tự xuống dòng là tên màu bị cắt làm đôi, đọc rất khó. */''}
           <td style="text-align:right;white-space:nowrap;">${moTaQuyDoiVaMau(g)}</td>
           <td style="text-align:right;">${fmtTien(g.GiaBanLe)}</td>
-          <td style="text-align:center;">${fmtNumber(g.PhanTramCKShop)}%</td>
+          ${/* v8.70 (Nguyen chốt): dưới % CK ghi thêm TÊN CHƯƠNG TRÌNH KHUYẾN MÃI của dòng đó.
+               Trống = bán theo CK dùng chung, không hiện gì — phiếu cũ nhìn y hệt trước. */''}
+          <td style="text-align:center;">${fmtNumber(g.PhanTramCKShop)}%${g.TenChuongTrinh
+            ? `<div style="font-size:11px;font-weight:600;color:#c0392b;line-height:1.25;margin-top:2px;">🎁 ${escapeHtml(g.TenChuongTrinh)}</div>` : ''}</td>
           <td style="text-align:right;">${fmtTien(g.GiaBan)}</td>
           <td style="text-align:right;"><b>${fmtTien(g.ThanhTien)}</b></td></tr>`).join('')}
         <tr data-tong style="font-weight:bold;background:#f1f3f4;">
@@ -3806,6 +4055,26 @@ window.ModuleKhoHang = (function () {
        ẩn đi, form phiếu bán hàng chạy y như trước (không được để một phân hệ mới làm vỡ phiếu bán). */
     const dmsShop = await apiGet('/api/dms/shop').then(r => r.data || []).catch(() => []);
     const dmsNV = await apiGet('/api/dms/danhmuc').then(r => (r.data || {}).nhanVien || []).catch(() => []);
+    /* ================================================================================================
+       v8.70.2 — CHƯƠNG TRÌNH KHUYẾN MÃI điền sẵn %CK shop theo NGÀY BÁN.
+
+       ⚠️ Backend chỉ lấy %KM khi ô %CK gửi lên TRỐNG — mà form này LUÔN gửi một con số. Nếu đây
+       không điền sẵn thì chương trình khuyến mãi coi như không tồn tại ở màn lập phiếu: vẫn bán
+       33%, ChuongTrinhID luôn NULL, và người lập phiếu không hề thấy có khuyến mãi.
+       Người dùng GÕ ĐÈ lên ô %CK = cố ý đặt giá khác ⇒ dòng đó KHÔNG gắn chương trình nữa
+       (backend chỉ ghi ChuongTrinhID khi con số gửi lên khớp đúng %KM).
+       ================================================================================================ */
+    let kmMap = {};
+    const ngayBan0 = phieuSua ? String(phieuSua.header.NgayBan).slice(0, 10) : homNayISO();
+    try { kmMap = (await apiGet('/api/khuyenmai/ap-dung?ngay=' + ngayBan0)).data || {}; } catch (e) { kmMap = {}; }
+    const kmCua = (maHangId) => (maHangId ? kmMap[String(maHangId)] : null) || null;
+    /* %CK mặc định của một mã: có khuyến mãi thì lấy %KM, không thì CK dùng chung. */
+    const ckMacDinh = (maHangId) => { const k = kmCua(maHangId); return k ? k.PhanTramCK : bhTyLe.shop; };
+    const nhanKMHtml = (r) => {
+      const k = kmCua(r.maHangId);
+      if (!k || Number(r.ckShop) !== Number(k.PhanTramCK)) return '';
+      return `<div style="font-size:10px;font-weight:600;color:#c0392b;line-height:1.2;margin-top:2px;">🎁 ${escapeHtml(k.TenChuongTrinh)}</div>`;
+    };
     let idx = 0;
     /* v6.23.2: mọi dòng nhập theo CÁI, cột quy đổi hiện RI (yêu cầu: "Số lượng thể hiện cái, đơn vị
        quy đổi là ri") — kể cả dòng lấy từ đơn đặt ghi đơn vị Ri thì cũng quy về Cái ở đây.
@@ -3819,7 +4088,7 @@ window.ModuleKhoHang = (function () {
         gopDon.set(k, {
           idx: ++idx, maHangId: d.MaHangID, mauSacId: d.MauSacID, maHang: d.MaHang, tenHang: d.TenHang,
           tenMau: d.TenMau, soLuong: 0, donVi: 'Cái', loaiRi: d.LoaiRi, donViCoBan: d.DonViCoBan, donViQuyDoi: d.DonViQuyDoi,
-          giaBanLe: d.GiaBan, ckShop: bhTyLe.shop, donIDs: [], moTaDon: []
+          giaBanLe: d.GiaBan, ckShop: ckMacDinh(d.MaHangID), donIDs: [], moTaDon: []
         });
       }
       const g = gopDon.get(k);
@@ -3856,7 +4125,9 @@ window.ModuleKhoHang = (function () {
         return {
           idx: ++idx, maHangId: c.MaHangID, mauSacId: c.MauSacID, maHang: c.MaHang, tenHang: c.TenHang,
           tenMau: c.TenMau, soLuong: Number(c.SoLuongCai) || 0, donVi: 'Cái', loaiRi: c.LoaiRi, donViCoBan: c.DonViCoBan, donViQuyDoi: c.DonViQuyDoi,
-          giaBanLe: c.GiaBanLe, ckShop: c.PhanTramCKShop, donIDs: ids,
+          /* v8.70.2: SỬA phiếu đã lưu -> giữ NGUYÊN %CK đã chốt lúc bán (đánh dấu `ckTuTay`), không
+             để chương trình khuyến mãi hiện hành ghi đè làm đổi tiền của một phiếu đã phát hành. */
+          giaBanLe: c.GiaBanLe, ckShop: c.PhanTramCKShop, ckTuTay: true, donIDs: ids,
           slDonGoc: ids.length ? `từ ${ids.length} đơn: ${ids.map(x => '#' + x).join(', ')}` : ''
         };
       });
@@ -3946,7 +4217,8 @@ window.ModuleKhoHang = (function () {
           <span class="bh-dvt" style="font-size:11px;color:#5f6368;">${escapeHtml(dvGoc(r.donViCoBan, r.donViQuyDoi))}</span></td>
         <td class="bh-ri" style="text-align:right;font-size:12px;color:#5f6368;"></td>
         <td><input type="number" class="bh-gia" step="0.01" min="0" style="width:105px;" value="${r.giaBanLe != null ? r.giaBanLe : ''}"></td>
-        <td><input type="number" class="bh-ck" step="0.01" min="0" max="100" style="width:64px;" value="${r.ckShop != null ? r.ckShop : bhTyLe.shop}"></td>
+        <td><input type="number" class="bh-ck" step="0.01" min="0" max="100" style="width:64px;" value="${r.ckShop != null ? r.ckShop : bhTyLe.shop}">
+          <span class="bh-km">${nhanKMHtml(r)}</span></td>
         <td class="bh-giaban" style="text-align:right;"></td>
         <td class="bh-tt" style="text-align:right;font-weight:bold;"></td>
         <td style="white-space:nowrap;">
@@ -4004,6 +4276,7 @@ window.ModuleKhoHang = (function () {
        không mất vị trí con trỏ, và chân phiếu vẫn nằm dưới cùng. */
     /* `sauIdx` = chèn NGAY DƯỚI dòng có idx đó (nút "+" trên từng dòng); bỏ trống = thêm vào cuối. */
     function themDongMoi(sauIdx) {
+      // Dòng mới chưa chọn mã -> chưa biết có khuyến mãi không; %CK được điền lại khi chọn mã hàng.
       const r = { idx: ++idx, maHangId: '', mauSacId: '', soLuong: '', donVi: 'Cái', donViCoBan: '', ckShop: bhTyLe.shop };
       const viTri = sauIdx != null ? dong.findIndex(x => String(x.idx) === String(sauIdx)) : -1;
       if (viTri >= 0) dong.splice(viTri + 1, 0, r); else dong.push(r);
@@ -4060,12 +4333,23 @@ window.ModuleKhoHang = (function () {
             const oDVT = el.querySelector('.bh-dvt');
             if (oDVT) oDVT.textContent = dvGoc(r.donViCoBan, r.donViQuyDoi);
             el.querySelector('.bh-gia').value = it.GiaBan != null ? it.GiaBan : '';
+            /* v8.70.2: đổi mã hàng = đổi hẳn mặt hàng -> %CK phải tính LẠI theo mã mới (có khuyến
+               mãi thì lấy %KM). Kể cả dòng người dùng đã gõ tay %CK: con số cũ là của mã CŨ, giữ lại
+               là bán mã mới bằng chiết khấu của mã khác. */
+            r.ckShop = ckMacDinh(r.maHangId); r.ckTuTay = false;
+            el.querySelector('.bh-ck').value = r.ckShop;
+            el.querySelector('.bh-km').innerHTML = nhanKMHtml(r);
             nap(); tinhTong();
           });
         }
         el.querySelector('.bh-sl').addEventListener('input', e => { r.soLuong = e.target.value; tinhTong(); });
         el.querySelector('.bh-gia').addEventListener('input', e => { r.giaBanLe = e.target.value; tinhTong(); });
-        el.querySelector('.bh-ck').addEventListener('input', e => { r.ckShop = e.target.value; tinhTong(); });
+        el.querySelector('.bh-ck').addEventListener('input', e => {
+          r.ckShop = e.target.value; r.ckTuTay = true;
+          // Gõ lệch %KM thì nhãn chương trình TẮT ngay — nhãn còn hiện mà số đã khác là nói dối.
+          el.querySelector('.bh-km').innerHTML = nhanKMHtml(r);
+          tinhTong();
+        });
         el.querySelector('.bh-them-duoi').addEventListener('click', () => themDongMoi(r.idx));
         el.querySelector('.bh-xoa').addEventListener('click', () => {
           /* v7.17: dòng lấy TỪ ĐƠN KHÁCH — xóa khỏi phiếu thì đơn quay về "Chờ xử lý" và VẪN GIỮ tồn.
@@ -4196,6 +4480,24 @@ window.ModuleKhoHang = (function () {
       apKhach(k);
     });
     veDong();
+
+    /* v8.70.2: ĐỔI NGÀY BÁN -> nạp lại bảng khuyến mãi của ngày đó rồi điền lại %CK cho những dòng
+       người dùng CHƯA gõ tay. Lập phiếu lùi ngày (hoặc đẩy sang ngày mai) phải ra đúng giá của ngày
+       ghi trên phiếu — backend xét hiệu lực theo NgayBan, nên nếu màn hình không nạp lại thì số trên
+       phiếu và số backend chấp nhận sẽ lệch nhau mà không ai báo. */
+    const oNgayBan = modal.querySelector('[name="ngayBan"]');
+    if (oNgayBan) oNgayBan.addEventListener('change', async () => {
+      try { kmMap = (await apiGet('/api/khuyenmai/ap-dung?ngay=' + oNgayBan.value)).data || {}; }
+      catch (e2) { return; }
+      modal.querySelectorAll('.bh-row').forEach(el => {
+        const r = dong.find(x => String(x.idx) === el.dataset.idx);
+        if (!r || r.ckTuTay || !r.maHangId) return;
+        r.ckShop = ckMacDinh(r.maHangId);
+        el.querySelector('.bh-ck').value = r.ckShop;
+        el.querySelector('.bh-km').innerHTML = nhanKMHtml(r);
+      });
+      tinhTong();
+    });
 
     modal.querySelector('#fBH').addEventListener('submit', async (e) => {
       e.preventDefault();
