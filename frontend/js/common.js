@@ -1840,6 +1840,57 @@ function wireTableSearch(body, id, opts) {
   tbody.appendChild(noResultRow);
 
   const info = (opts && opts.infoId) ? body.querySelector('#' + opts.infoId) : null;
+
+  /* ================================================================================================
+     v8.89 — DÒNG TỔNG CỘNG LẠI THEO KẾT QUẢ ĐANG LỌC  (opts.tongTheoLoc)
+
+     Nguyen 2026-10-12: *"khi gõ tìm kiếm phần tổng cộng có thể thay đổi theo hiển thị khách hàng
+     hiện tại, đang cộng cố định tổng công nợ của tất cả các khách"*.
+     Lọc còn 1 khách mà dòng TỔNG vẫn là tổng của toàn bộ ⇒ người đọc tưởng đó là số của khách đang
+     xem. Đây là con số tiền, không phải cột trang trí.
+
+     ⚠️ CỘNG THEO `data-so`, KHÔNG parse lại chuỗi đã định dạng. "163.031.698" parse ngược được,
+     nhưng chỉ cần một ô đổi cách hiển thị (thêm đơn vị, thêm thẻ <b>, số âm trong ngoặc) là phép
+     cộng ra số khác mà vẫn in đẹp. Ô nào muốn được cộng thì nơi gọi gắn:
+         data-cot="<tên cột>" data-so="<số thô>"
+
+     ⚠️ KHỚP THEO TÊN CỘT, KHÔNG theo vị trí. Khớp theo chỉ số ô thì hiện tại vẫn đúng, nhưng chỉ
+     vì ô gộp (colspan) của dòng tổng đang nằm ở CUỐI. Ai thêm một ô gộp vào GIỮA dòng tổng — rất
+     tự nhiên, kiểu <td colspan="2">TỔNG</td> — là tiền rơi nhầm cột, in ra vẫn đẹp, không báo lỗi
+     gì. Đây là số tiền.
+
+     `opts.tomTat(tt)` (tùy chọn): gọi sau mỗi lần lọc, để nơi nào có dòng tóm tắt NGOÀI bảng tự vẽ
+     lại. Thiếu nó thì màn hình có hai con số tiền mâu thuẫn: trong bảng "TỔNG (đang lọc)" một kiểu,
+     thanh công cụ phía trên một kiểu.
+       tt = { hien, tong: { <tên cột>: <số> }, dangLoc }
+
+     Mặc định TẮT: không truyền tongTheoLoc thì mọi bảng chạy y như trước.
+     ================================================================================================ */
+  const dongTong = (opts && opts.tongTheoLoc)
+    ? tbody.querySelector(':scope > tr[data-tong]') : null;
+  const nhanTong = dongTong ? dongTong.querySelector('[data-nhan-tong]') : null;
+  const nhanTongGoc = nhanTong ? nhanTong.textContent : '';
+  function congLaiTong(hien, dangLoc) {
+    if (!dongTong) return;
+    const tong = {};
+    rows.forEach(tr => {
+      if (tr.style.display === 'none') return;
+      tr.querySelectorAll('[data-cot][data-so]').forEach(o => {
+        tong[o.dataset.cot] = (tong[o.dataset.cot] || 0) + (Number(o.dataset.so) || 0);
+      });
+    });
+    dongTong.querySelectorAll('[data-cot][data-so]').forEach(oTong => {
+      const v = tong[oTong.dataset.cot] || 0;
+      oTong.dataset.so = v;
+      // Giữ nguyên lớp bọc (vd <b style="color:...">) nếu ô vốn có, chỉ thay phần số.
+      const trong = oTong.firstElementChild;
+      if (trong && !trong.nextElementSibling) trong.textContent = fmtNumber(v);
+      else oTong.textContent = fmtNumber(v);
+    });
+    if (nhanTong) nhanTong.textContent = dangLoc ? nhanTongGoc + ' (đang lọc)' : nhanTongGoc;
+    if (opts && typeof opts.tomTat === 'function') opts.tomTat({ hien, tong, dangLoc });
+  }
+
   input.addEventListener('input', () => {
     const tu = boDau(input.value).split(/\s+/).filter(Boolean);
     let hien = 0;
@@ -1849,6 +1900,7 @@ function wireTableSearch(body, id, opts) {
       if (khop) hien++;
     });
     noResultRow.style.display = hien ? 'none' : '';
+    congLaiTong(hien, tu.length > 0);
     if (info) info.textContent = tu.length ? `Hiện ${fmtNumber(hien)}/${fmtNumber(rows.length)} dòng` : '';
     // danhLaiStt tự bỏ qua bảng không có cột STT (table.__cotStt == null) và tự bỏ qua dòng đang ẩn.
     if (typeof danhLaiStt === 'function') danhLaiStt(table);

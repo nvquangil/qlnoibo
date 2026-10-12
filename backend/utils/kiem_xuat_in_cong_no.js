@@ -230,9 +230,12 @@ bang(bangSo(banInCuoi.html).hang[1].o.slice(1, 4), ['100.000', '900.000', '-800.
    ================================================================================================ */
 console.log('\n=== 4. Nut In tren cac popup so ===');
 function catHamFe(ten) { return catKhoi(sFe, 'async function ' + ten + '(', '{', '}'); }
+/* v8.87: so khach hang doi tieu de thanh "SO TONG HOP" — bang nay liet ke theo CHUNG TU, con so
+   10 cot cua nut "Xem so" moi la so chi tiet (co dong hang). Hai ban in cung mot ten thi nguoi nhan
+   khong phan biet duoc dang cam cai nao. Ba so con lai GIU nguyen ten cu. */
 [
-  ['soChiTietKH', 'btnInSo', 'SỔ CHI TIẾT CÔNG NỢ KHÁCH HÀNG'],
-  ['soChiTietNCC', 'btnInSoNCC', 'SỔ CHI TIẾT CÔNG NỢ NHÀ CUNG CẤP'],
+  ['soChiTietKH', 'btnInSo', 'SỔ TỔNG HỢP CÔNG NỢ KHÁCH HÀNG'],
+  ['soChiTietNCC', 'btnInSoNCC', 'SỔ TỔNG HỢP CÔNG NỢ NHÀ CUNG CẤP'],   // v8.89: doi cung so KH
   ['soChiTietGiaCong', 'btnInSoGC', 'SỔ CHI TIẾT CÔNG NỢ NHÀ GIA CÔNG / IN THÊU'],
   ['soDoiTac2Chieu', 'btnIn2c', 'SỔ CÔNG NỢ 2 CHIỀU']
 ].forEach(([ten, id, tieuDe]) => {
@@ -335,9 +338,113 @@ const { taoTienIch } = require(path.join(G, 'routes/congno.js')).__kiemThu;
   const buf = await wb.xlsx.writeBuffer();
   kiem(buf.length > 5000, 'ghi ra file .xlsx that duoc', buf.length + ' byte');
 
-  console.log('\n=== 6. Bump ?v= ===');
+  /* ================================================================================================
+     6. v8.87 — SO CONG NO KHACH HANG LOC THEO KY
+     ================================================================================================ */
+  const sBE = fs.readFileSync(path.join(__dirname, '..', 'routes', 'congno.js'), 'utf8');
+  const iHam = sBE.indexOf('async function soChiTietKH(pool');
+  const hamBE = iHam < 0 ? '' : sBE.slice(iHam, sBE.indexOf("router.get('/congnokh/chitiet'"));
+
+  console.log('\n=== 6a. Luy ke tinh TRUOC khi cat ky (neu khong thi cot "Con no luy ke" ra SO SAI) ===');
+  kiem(iHam >= 0, 'cat duoc soChiTietKH() o backend');
+  // Dua ky vao WHERE cua SQL la cong don lai tu 0 -> sai so ma van in dep de.
+  kiem(!/WHERE[^`]{0,400}@tuNgay/i.test(hamBE), 'KHONG loc ky trong cau SQL');
+  kiem(hamBE.indexOf('r.LuyKe = Math.round') < hamBE.indexOf('const tu = chuanNgay'),
+    'tinh LuyKe xong roi MOI cat ky');
+  kiem(/const truocKy = tu \? rows\.filter/.test(hamBE), 'duDauKy lay tu cac dong TRUOC tuNgay');
+  kiem(/duCuoiKy = trongKy\.length \? trongKy\[trongKy\.length - 1\]\.LuyKe : duDauKy/.test(hamBE),
+    'ky rong thi duCuoiKy = duDauKy (khong phai 0)');
+
+  console.log('\n=== 6b. Ngay: UTC va dung dinh dang, khong de new Date() tu doan ===');
+  // new Date('2026-10-31') ra UTC, new Date('2026-1-5') ra gio may -> tron hai kieu la lech ngay.
+  kiem(/\^\(\\d\{4\}\)-\(\\d\{2\}\)-\(\\d\{2\}\)\$/.test(sBE), 'chuanNgay() chi nhan YYYY-MM-DD');
+  kiem(/Date\.UTC\(/.test(sBE) && !/setHours\(23, 59, 59/.test(sBE),
+    'dung Date.UTC, KHONG dung setHours (setHours sua theo gio may, cat mat cuoi ngay)');
+  kiem(/cuoiNgay \? 23 : 0/.test(sBE), '"Den ngay" lay HET ngay (23:59:59.999)');
+  // Quy tac du an: ngay vong ve phai la chuoi nguoi dung gui, khong qua toISOString().
+  kiem(!/tu\.toISOString\(\)/.test(sBE) && /function vongNgay/.test(sBE),
+    'vong ngay ve bang chuoi goc, KHONG dung toISOString()');
+  kiem(/err\.loiNhapLieu\) return res\.status\(400\)/.test(sBE),
+    'ky nhap sai tra 400 (loi nghiep vu), khong 500 va khong am tham bo bo loc');
+
+  console.log('\n=== 6c. Tuong thich nguoc: khong truyen ky = y nhu truoc ===');
+  kiem(/if \(!tu && !den\) \{[\s\S]{0,200}rows: rows\.slice\(\)\.reverse\(\), conNo/.test(hamBE),
+    'khong co ky -> tra dung hinh cu (dashboard va cac cho goi cu khong phai sua)');
+  kiem(/conNo,\s*\n\s*tuNgay: vongNgay/.test(hamBE) || /conNo,/.test(hamBE),
+    'conNo GIU NGUYEN nghia "con no den hom nay" (duCuoiKy la truong rieng)');
+
+  console.log('\n=== 6d. Frontend: dong DU DAU KY va modal khong chong nhau ===');
+  const hKH = catHamFe('soChiTietKH');
+  kiem(/<tr data-tong[^>]*>\s*\n?\s*<td>\$\{d\.tuNgay/.test(hKH) || /data-tong[\s\S]{0,200}DƯ ĐẦU KỲ/.test(hKH),
+    'dong DU DAU KY co data-tong (khong thi bi danh so thu tu nhu mot chung tu)');
+  kiem(/DƯ ĐẦU KỲ<\/td>/.test(hKH), 'co dong DU DAU KY');
+  // closeModal() roi moi await la so cu bi day vao ngan xep, so moi mo chong len.
+  kiem(/if \(dongTruoc\) closeModal\(\);/.test(hKH), 'dong modal cu SAU khi co du lieu, truoc khi mo modal moi');
+  kiem(!/closeModal\(\); soChiTietKH\(/.test(hKH), 'KHONG closeModal() roi moi goi lai (co await o giua)');
+  kiem(/Còn nợ hiện tại/.test(hKH), 'khi loc ky hien CA duCuoiKy LAN conNo');
+  kiem(/Xuất Excel toàn bộ/.test(hKH),
+    'nut xuat Excel noi ro la TOAN BO (route /export chua nhan ky — de nhan cu la hai ban lech nhau)');
+
+  /* ================================================================================================
+     7. v8.89 — SO NCC LAM GIONG SO KH + DONG TONG CONG LAI THEO KET QUA LOC
+     ================================================================================================ */
+  console.log('\n=== 7a. So NCC dung CHUNG ham cat ky voi so KH ===');
+  kiem(/function catTheoKy\(rows, conNo, tuNgay, denNgay\)/.test(sBE), 'co ham dung chung catTheoKy()');
+  // Hai so cat ky bang hai doan code rieng thi som muon mot ben tinh du dau ky kieu khac -> lech TIEN.
+  kiem((sBE.match(/catTheoKy\(rows, conNo, tuNgay, denNgay\)/g) || []).length >= 2,
+    'CA HAI so (KH va NCC) deu goi catTheoKy — khong viet hai ban');
+  kiem(/async function soChiTietNCC\(pool, id, tuNgay, denNgay\)/.test(sBE), 'soChiTietNCC nhan ky');
+  const khoiRouteNCC = sBE.slice(sBE.indexOf("router.get('/congnoncc/chitiet'"),
+    sBE.indexOf("router.get('/congnoncc/chitiet'") + 700);
+  kiem(/req\.query\.tuNgay, req\.query\.denNgay/.test(khoiRouteNCC), 'route NCC vong lai ky');
+  /* Kiem ky PHAI o route, truoc khi chay truy van: so NCC chay 8 cau SQL roi moi toi catTheoKy(). */
+  kiem(/const lk = loiKy\(req\.query\.tuNgay, req\.query\.denNgay\)/.test(khoiRouteNCC),
+    'route NCC: kiem ky TRUOC khi chay truy van');
+  kiem(/if \(lk\) return res\.status\(400\)/.test(khoiRouteNCC), 'route NCC: ky sai -> 400');
+  const khoiRouteKH = sBE.slice(sBE.indexOf("router.get('/congnokh/chitiet'"),
+    sBE.indexOf("router.get('/congnokh/chitiet'") + 700);
+  kiem(/const lk = loiKy\(/.test(khoiRouteKH) && /if \(lk\) return res\.status\(400\)/.test(khoiRouteKH),
+    'route KH: kiem ky truoc khi chay truy van, sai -> 400');
+
+  const hNCC2 = catHamFe('soChiTietNCC');
+  kiem(/if \(dongTruoc\) closeModal\(\);/.test(hNCC2), 'so NCC: dong modal cu SAU khi co du lieu');
+  kiem(/DƯ ĐẦU KỲ<\/td>/.test(hNCC2), 'so NCC: co dong DU DAU KY');
+  kiem(/Còn nợ hiện tại/.test(hNCC2), 'so NCC: hien ca duCuoiKy lan conNo khi loc ky');
+
+  console.log('\n=== 7b. Dong TONG cong lai theo ket qua dang loc ===');
+  /* Loc con 1 khach ma dong TONG van la tong cua toan bo -> nguoi doc tuong do la so cua khach dang
+     xem. Day la con so TIEN. (Nguyen 2026-10-12) */
+  const sCommon = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'common.js'), 'utf8');
+  kiem(/function congLaiTong\(hien, dangLoc\)/.test(sCommon), 'wireTableSearch co congLaiTong()');
+  kiem(/opts && opts\.tongTheoLoc/.test(sCommon), 'mac dinh TAT — bang nao khong bat thi chay y nhu cu');
+  // Cong theo data-so (so tho), KHONG parse lai chuoi da dinh dang.
+  kiem(/Number\(o\.dataset\.so\)/.test(sCommon), 'cong theo data-so (so tho), khong parse chuoi da dinh dang');
+  /* 🔴 Khop theo TEN cot, khong theo vi tri. Khop theo chi so o van dung — nhung CHI VI o gop
+     (colspan) cua dong tong dang nam o CUOI. Them mot o gop vao GIUA dong tong la tien roi nham
+     cot, in ra van dep, khong bao loi gi. */
+  kiem(/querySelectorAll\('\[data-cot\]\[data-so\]'\)/.test(sCommon), 'khop theo TEN cot (data-cot)');
+  kiem(!/tr\.children\[i\]/.test(sCommon), 'KHONG con khop theo chi so o');
+  kiem(/congLaiTong\(hien, tu\.length > 0\)/.test(sCommon), 'cong lai sau MOI lan go tim kiem');
+  kiem(/data-nhan-tong/.test(sCommon), 'co nhan "(dang loc)" de biet dong TONG dang la tong cua gi');
+  kiem(/typeof opts\.tomTat === 'function'/.test(sCommon),
+    'co opts.tomTat de dong tom tat NGOAI bang cung doi theo (khong thi man hinh co 2 so mau thuan)');
+  [['renderCongNoKH', 'khach hang', 'cnTomTatKH'], ['renderCongNoNCC', 'nha cung cap', 'cnTomTatNCC']]
+  .forEach(([ten, nhan, idTom]) => {
+    const h = catKhoi(sFe, 'async function ' + ten + '(', '{', '}');
+    kiem(/tongTheoLoc: true/.test(h), `bang ${nhan}: bat tongTheoLoc`);
+    kiem(/<span data-nhan-tong>TỔNG<\/span>/.test(h), `bang ${nhan}: nhan TONG boc trong data-nhan-tong`);
+    kiem((h.match(/data-cot="[A-Za-z]+" data-so="\$\{/g) || []).length >= 8,
+      `bang ${nhan}: cac o tien deu co data-cot + data-so (ca dong du lieu lan dong TONG)`);
+    kiem(h.includes(`id="${idTom}"`) && h.includes(`#${idTom}`),
+      `bang ${nhan}: dong tom tat tren thanh cong cu cung doi theo ket qua loc`);
+    kiem(/tt\.tong\.ConNo/.test(h), `bang ${nhan}: tom tat lay tong tu ten cot ConNo`);
+  });
+
+  console.log('\n=== 8. Bump ?v= ===');
   const v = (sIndex.match(/module\.congno\.js\?v=([\d.]+)/) || [])[1];
-  kiem(v && parseFloat(v) >= 7.82, 'index.html: module.congno.js?v= >= 7.82', String(v));
+  kiem(v && parseFloat(v) >= 8.89, 'index.html: module.congno.js?v= >= 8.89', String(v));
+  const vc = (sIndex.match(/\/js\/common\.js\?v=([\d.]+)/) || [])[1];
+  kiem(vc && parseFloat(vc) >= 8.89, 'index.html: common.js?v= >= 8.89 (sua wireTableSearch)', String(vc));
 
   console.log('\n================================================================');
   console.log(`KET QUA: ${dat} dat / ${truot} truot`);

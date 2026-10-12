@@ -42,8 +42,19 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
    do dung de LUI tu ton hien tai. */
 const nhapLai = require('../utils/nhapLaiHangHoa');
 const { mapGiaNhap } = require('../utils/giaNhapHangHoa');   // v7.88: dùng chung với Danh mục hàng hóa
+const { CT_LOAI, docChungTu } = require('../utils/chungTu');  // v8.77: bấm số phiếu -> xem chứng từ
 
 const router = express.Router();
+
+/* v8.77 — LAY MA CtLoai QUA HAM NAY, KHONG GO CHUOI TAY.
+   Loi da vo o v7.48: mot ben sinh ma CtLoai, ben kia doc — hai danh sach khong ai buoc phai khop,
+   nguoi dung bam vao thi nhan "Loai chung tu khong ho tro xem chi tiet". Go sai ten o day se NEM LOI
+   NGAY luc goi route (nhin thay duoc), thay vi am tham tra ve mot ma khong ai doc duoc.
+   Danh sach ma hop le nam o utils/chungTu.js (hang CT_LOAI) — them loai moi thi sua ben do. */
+function ctLoai(ma) {
+  if (!CT_LOAI[ma]) throw new Error(`CtLoai "${ma}" khong co trong CT_LOAI (utils/chungTu.js)`);
+  return ma;
+}
 
 // Luoi an toan cho handler async (giong khohang.js/banhang.js - Express 4 khong tu bat loi trong async)
 ['get', 'post', 'put', 'delete'].forEach(method => {
@@ -325,6 +336,30 @@ async function baoCaoTonVai(pool, ky) {
       FROM VaiCay GROUP BY VaiID
     )
     SELECT v.MaVai, lv.TenLoaiVai, ms.TenMau, v.KhoVai,
+           /* ================================================================================
+              v8.73 — DANH SACH MA CAY cua ma vai nay, de o TIM tren man bao cao go duoc MA CAY.
+              Nguyen (2026-10-08): "bao cao ton kho vai them tim kiem theo ma cay, hien tai moi
+              theo ma vai".
+
+              ⚠️ Bang nay gom theo MA VAI (moi dong = 1 ma vai, GROUP BY vc.VaiID) nen ma cay
+              KHONG co trong DOM — o tim doc tr.textContent nen khong the thay. Phai tra chuoi
+              ma cay xuong roi frontend gan vao data-tim.
+
+              ⚠️ Dung STUFF + FOR XML PATH, KHONG dung STRING_AGG: ham do chi co tu SQL Server
+              2017. Ca du an dang dung STUFF (xem COT_PHIEU_NHAP_KHO ben qlsx.js) — giu nguyen
+              loi lam de khong ke them mot rang buoc phien ban may chu.
+              Phan ", TYPE" + ".value(...)" la BAT BUOC: khong co no thi ma cay chua & < > bi escape
+              thanh &amp; &lt; &gt; va go dung ma van khong ra.
+              ⚠️ KHOI COMMENT NAY NAM TRONG TEMPLATE LITERAL — tuyet doi khong go dau huyen nguoc
+              (backtick) o day, mot dau la DUT CHUOI va SAP CA FILE. Da lam sap production 2 lan:
+              v7.98 va v8.73 (chinh khoi nay).
+
+              Lay MOI cay cua ma vai (khong gioi han ky): nguoi dung cam cay vai trong tay di tra
+              xem no thuoc ma nao — gioi han theo ky thi cay nhap tu truoc se khong tim duoc.
+              ================================================================================ */
+           STUFF((SELECT N' ' + c.MaCay FROM VaiCay c
+                   WHERE c.VaiID = v.VaiID AND c.MaCay IS NOT NULL
+                   ORDER BY c.MaCay FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS DanhSachMaCay,
            ISNULL(n.KG_Truoc,0) - ISNULL(x.KG_Truoc,0) AS TonDauKG,
            ISNULL(n.KG_Ky,0)   AS NhapKG,
            ISNULL(x.KG_Ky,0)   AS XuatKG,
@@ -348,6 +383,7 @@ async function baoCaoTonVai(pool, ky) {
         TonDauMet: lam2(r.TonDauMet), NhapMet: lam2(r.NhapMet), XuatMet: lam2(r.XuatMet),
         TonCuoiMet: lam2(so(r.TonDauMet) + so(r.NhapMet) - so(r.XuatMet)),
         SoCayNhapKy: r.SoCayNhapKy || 0,
+        DanhSachMaCay: r.DanhSachMaCay || '',   // v8.73: chỉ để frontend nạp vào ô tìm
         DonGiaBQ: tien(r.DonGiaBQ),
         GiaTriTon: tien(tonCuoiKG * so(r.DonGiaBQ))
       };
@@ -603,6 +639,13 @@ async function baoCaoTaiChinh(pool, ky) {
 
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
+  /* v8.78: THU LAI TU NCC tru vao "Da tra" — PHAI KHOP voi congNoNCC() trong congno.js
+     (o do: daTra = SUM(PhieuChi) - SUM(PhieuThu cua NCC)). Khong sua o day thi muc B cua bao cao
+     tai chinh va man Cong no NCC ra HAI con so khac nhau cho cung mot thoi diem. */
+  const coNCCThu = await coCot(pool, 'PhieuThu', 'NCC_ID');
+  const sqlThuLaiNCC = coNCCThu
+    ? `(SELECT ISNULL(SUM(SoTien),0) FROM PhieuThu WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL AND NgayThu <= @den)`
+    : '0';
   const phaiTra = (await rqKy(pool, ky).query(`
     SELECT
       ${coGiaVai ? `(SELECT ISNULL(SUM(vc.KGNhap * ISNULL(vc.DonGiaNhap,0)),0)
@@ -611,7 +654,9 @@ async function baoCaoTaiChinh(pool, ky) {
       ${coGiaPK ? `(SELECT ISNULL(SUM(ct.SoLuong * ISNULL(ct.DonGia,0)),0)
           FROM PhieuPhuKien p JOIN PhieuPhuKienChiTiet ct ON ct.PhieuID = p.PhieuID
           WHERE p.LoaiPhieu = N'Nhập' AND p.NCC_ID IS NOT NULL AND p.Ngay <= @den)` : '0'} AS NhapPhuKien,
-      (SELECT ISNULL(SUM(SoTien),0) FROM PhieuChi WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL AND NgayChi <= @den) AS DaTra,
+      (SELECT ISNULL(SUM(SoTien),0) FROM PhieuChi WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL AND NgayChi <= @den)
+        - ${sqlThuLaiNCC} AS DaTra,
+      ${sqlThuLaiNCC} AS ThuLaiNCC,
       (SELECT ISNULL(SUM(SoTien),0) FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL AND Ngay <= @den) AS DieuChinh`)).recordset[0];
 
   /* ---------- C. DONG TIEN THEO LOAI TAI KHOAN ---------- */
@@ -654,7 +699,8 @@ async function baoCaoTaiChinh(pool, ky) {
       PhaiThu: tongPhaiThu, PhaiThu_BanHang: tien(phaiThu.BanHang), PhaiThu_DaThu: tien(phaiThu.DaThu),
       PhaiThu_DieuChinh: tien(phaiThu.DieuChinh),
       PhaiTra: tongPhaiTra, PhaiTra_Vai: tien(phaiTra.NhapVai), PhaiTra_PhuKien: tien(phaiTra.NhapPhuKien),
-      PhaiTra_DaTra: tien(phaiTra.DaTra), PhaiTra_DieuChinh: tien(phaiTra.DieuChinh)
+      PhaiTra_DaTra: tien(phaiTra.DaTra), PhaiTra_DieuChinh: tien(phaiTra.DieuChinh),
+      PhaiTra_ThuLaiNCC: tien(phaiTra.ThuLaiNCC)   // v8.78: tien NCC hoan lai, DA tru trong DaTra
     },
     theoTK,
     chuyenThang,
@@ -809,6 +855,33 @@ async function baoCaoKinhDoanh(pool, ky) {
    ================================================================================================ */
 const CN = c => [requireAuth, requirePermission('BAOCAO', 'view'), requireChucNang('BAOCAO', c)];
 
+/* ================================================================================================
+   v8.77 — XEM CHI TIET 1 CHUNG TU TU BAO CAO (bam vao cot "So phieu" trong cac popup chi tiet)
+   ------------------------------------------------------------------------------------------------
+   Phan DOC nam o utils/chungTu.js, dung chung voi So cong no. O day CHI gate quyen.
+
+   ⚠️ CO Y gate bang BAOCAO/view chu KHONG phai quyen cua tung phan he (KHOVAI / PHUKIEN / KHOHANG):
+   nguoi xem duoc con so tren bao cao thi phai xem duoc chung tu tao ra con so do — bat ho phai co
+   them quyen cua 3 phan he kia thi link bam vao chi ra 403. Dung nguyen tac da chot cho So cong no
+   (congno.js v6.55) va cho QLSX (qlsx.js v8.x "doc qua route cua QLSX nen khong can them quyen Kho vai").
+   Modal ben frontend CHI XEM — khong co nut Sua / Huy / Xoa.
+
+   KHONG gan requireChucNang o day: cot "So phieu" xuat hien o CA 4 popup (ton vai / ton phu kien /
+   ton hang hoa / chi tiet thu chi), moi popup mot chuc nang khac nhau. Gan cung mot chuc nang nao
+   cung sai ba cai con lai. Quyen doc da duoc chan o chinh route sinh ra dong co so phieu do.
+   ================================================================================================ */
+router.get('/chungtu', requireAuth, requirePermission('BAOCAO', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const kq = await docChungTu(pool, req.query.loai, req.query.id);
+    if (kq.status) return res.status(kq.status).json({ success: false, message: kq.message });
+    return res.json({ success: true, data: kq.data });
+  } catch (err) {
+    console.error('[baocao GET /chungtu] ', err);
+    return res.status(400).json({ success: false, message: 'Lỗi khi đọc chứng từ: ' + err.message });
+  }
+});
+
 router.get('/tonhanghoa', ...CN('tonhanghoa'), async (req, res) => {
   const pool = await getPool(); const ky = layKy(req.query);
   res.json({ success: true, ky, data: await baoCaoTonHangHoa(pool, ky) });
@@ -857,8 +930,10 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
      Da bo duong "tung lan ghi tien do Kho nhap" cho khop voi bang tong hop: tu v6.91 nguon nhap duy
      nhat la phieu nhap kho. Neu hai man hinh lay hai nguon khac nhau thi bam vao mot ma se thay chi
      tiet khong cong ra dung cot "Nhap trong ky" - dung kieu lech tung lam mat long tin vao bao cao. */
+  /* v8.77: SELECT them p.PhieuNKID. No DA co trong GROUP BY tu truoc nhung khong duoc lay ra, nen
+     frontend chi co chuoi SoPhieu — khong du de mo chi tiet phieu. */
   const nhap = (await coBang(pool, 'PhieuNhapKhoHangChiTiet')) ? (await rq().query(`
-    SELECT p.NgayNhap AS Ngay, p.SoPhieu, p.LoaiNhap,
+    SELECT p.NgayNhap AS Ngay, p.SoPhieu, p.LoaiNhap, p.PhieuNKID,
            ISNULL(ncc.TenNCC, ISNULL(d.MaDH, N'')) AS DoiTuong,
            ISNULL(SUM(ct.SoLuongChinh), 0) AS PhatSinh
     FROM PhieuNhapKhoHangChiTiet ct
@@ -876,7 +951,7 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
 
   // --- XUAT 1: phieu ban hang ---
   const xuatBH = (await rq().query(`
-    SELECT p.NgayBan AS Ngay, p.SoPhieu, p.TenKhach, ms.TenMau, ct.SoLuongCai
+    SELECT p.NgayBan AS Ngay, p.SoPhieu, p.PhieuBHID, p.TenKhach, ms.TenMau, ct.SoLuongCai
     FROM PhieuBanHangChiTiet ct
     JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
@@ -904,17 +979,23 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   nhap.forEach(r => { if (so(r.PhatSinh)) rows.push({
     Ngay: r.Ngay,
     Loai: r.LoaiNhap === 'SanXuat' ? 'Nhập kho (từ sản xuất)' : 'Nhập kho (từ NCC)',
-    SoPhieu: r.SoPhieu, DoiTuong: r.DoiTuong || '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
+    SoPhieu: r.SoPhieu, CtLoai: ctLoai('PNKH'), CtID: r.PhieuNKID,
+    DoiTuong: r.DoiTuong || '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
   /* v7.38: dong NHAP LAI. `PhatSinh` da duoc quy ve DON VI CHINH ngay trong cau SQL (xem
      SL_VE_DON_VI_CHINH trong utils/nhapLaiHangHoa.js) nen o day KHONG quy doi lai lan hai. */
   nhapTraLai.forEach(r => { if (so(r.PhatSinh)) rows.push({
     Ngay: r.Ngay, Loai: 'Nhập lại (khách trả)', SoPhieu: r.SoPhieu,
+    CtLoai: ctLoai('PNL'), CtID: r.PhieuNLID,
     DoiTuong: r.TenKhach || '', GhiChu: r.DienGiai || '',
     Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
   xuatBH.forEach(r => rows.push({
     Ngay: r.Ngay, Loai: 'Phiếu bán hàng', SoPhieu: r.SoPhieu, DoiTuong: r.TenKhach || '',
+    CtLoai: ctLoai('PBH'), CtID: r.PhieuBHID,
     TenMau: r.TenMau || '', Nhap: 0,
     Xuat: donViChinhLaGop(h) && heSo > 0 ? lam2(so(r.SoLuongCai) / heSo) : so(r.SoLuongCai) }));
+  /* v8.77: dong "Don khach (du lieu cu)" CO Y khong co CtLoai/CtID — no khong sinh ra tu phieu nao
+     ca (du lieu truoc v6.23 tru ton thang tu don). Frontend thay thieu CtID thi de nguyen chu, khong
+     dung link. Dung gan dai CtLoai='PBH' vi DonID KHONG phai PhieuBHID. */
   xuatDon.forEach(r => {
     const cai = laGop(r.DonVi) ? so(r.SoLuongDat) * heSo : so(r.SoLuongDat);
     rows.push({ Ngay: r.Ngay, Loai: 'Đơn khách (dữ liệu cũ)', SoPhieu: 'Đơn #' + r.DonID,
@@ -983,10 +1064,14 @@ router.get('/tonvai/chitiet', ...CN('tonvai'), async (req, res) => {
     WHERE c.VaiID=@id AND px.NgayXuat BETWEEN @tu AND @den
     ORDER BY px.NgayXuat, px.PhieuXuatID`)).recordset;
 
+  /* v8.77: CtLoai + CtID de bam vao so phieu mo duoc chung tu. PhieuID giu nguyen cho ban JS cu
+     con nam trong cache trinh duyet. */
   const rows = [
     ...nhap.map(r => ({ Ngay: r.Ngay, Loai: 'Nhập kho', SoPhieu: r.SoPhieu, PhieuID: r.PhieuID,
+      CtLoai: ctLoai('PNV'), CtID: r.PhieuID,
       MaCay: r.MaCay, DoiTuong: r.DoiTuong, Nhap: lam2(r.KG), Xuat: 0, NhapMet: lam2(r.Met), XuatMet: 0 })),
     ...xuat.map(r => ({ Ngay: r.Ngay, Loai: 'Xuất kho', SoPhieu: r.SoPhieu, PhieuID: r.PhieuID,
+      CtLoai: ctLoai('PXV'), CtID: r.PhieuID,
       MaCay: r.MaCay, DoiTuong: [r.DoiTuong, r.MaDon].filter(Boolean).join(' · '),
       Nhap: 0, Xuat: lam2(r.KG), NhapMet: 0, XuatMet: lam2(r.Met) }))
   ].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
@@ -1030,6 +1115,8 @@ router.get('/tonphukien/chitiet', ...CN('tonphukien'), async (req, res) => {
       Ngay: r.Ngay, Loai: r.LoaiPhieu === 'Nhập' ? 'Nhập kho' : 'Xuất kho',
       SoPhieu: (r.LoaiPhieu === 'Nhập' ? 'PN#' : 'PX#') + r.PhieuID, PhieuID: r.PhieuID,
       LoaiPhieu: r.LoaiPhieu,
+      // v8.77: PhieuPhuKien dung CHUNG mot bang cho ca nhap lan xuat -> CtLoai quyet dinh bang LoaiPhieu.
+      CtLoai: ctLoai(r.LoaiPhieu === 'Nhập' ? 'PNPK' : 'PXPK'), CtID: r.PhieuID,
       DoiTuong: [r.TenNCC, r.MaDon].filter(Boolean).join(' · '),
       DonVi: r.DonVi || pk.DonViCoBan, DonGia: r.DonGia == null ? null : tien(r.DonGia),
       Nhap: r.LoaiPhieu === 'Nhập' ? lam2(r.SoLuong) : 0,
@@ -1064,7 +1151,7 @@ router.get('/taichinh/chitiet', ...CN('taichinh'), async (req, res) => {
      v7.94 da mac mot lan. */
   const coCQ = await coCot(pool, 'PhieuThu', 'LaChuyenQuy') && await coCot(pool, 'PhieuChi', 'LaChuyenQuy');
   const dsThu = (await rq().query(`
-    SELECT t.NgayThu AS Ngay, t.SoPhieu, t.SoTien, t.HinhThuc, t.DienGiai, ${cotNH} AS TaiKhoanNHID,
+    SELECT t.NgayThu AS Ngay, t.SoPhieu, t.PhieuThuID, t.SoTien, t.HinhThuc, t.DienGiai, ${cotNH} AS TaiKhoanNHID,
            ISNULL(t.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK,
            ${coCQ ? 'ISNULL(t.LaChuyenQuy, 0)' : '0'} AS LaChuyenQuy,
            ${SQL_NHOM_DONG_TIEN('t', false, coCQ)} AS TenLoai
@@ -1073,7 +1160,7 @@ router.get('/taichinh/chitiet', ...CN('taichinh'), async (req, res) => {
     LEFT JOIN DanhMucLoaiTaiKhoan lt ON lt.LoaiTKID = tk.LoaiTKID
     WHERE t.NgayThu BETWEEN @tu AND @den`)).recordset;
   const dsChi = (await rq().query(`
-    SELECT c.NgayChi AS Ngay, c.SoPhieu, c.SoTien, c.HinhThuc, c.DienGiai, ${cotNH} AS TaiKhoanNHID,
+    SELECT c.NgayChi AS Ngay, c.SoPhieu, c.PhieuChiID, c.SoTien, c.HinhThuc, c.DienGiai, ${cotNH} AS TaiKhoanNHID,
            ISNULL(c.TenDoiTuong, N'') AS DoiTuong, ISNULL(tk.TenTK, N'') AS TenTK,
            ${coCQ ? 'ISNULL(c.LaChuyenQuy, 0)' : '0'} AS LaChuyenQuy,
            ${SQL_NHOM_DONG_TIEN('c', true, coCQ)} AS TenLoai
@@ -1111,9 +1198,11 @@ router.get('/taichinh/chitiet', ...CN('taichinh'), async (req, res) => {
 
   const rows = [
     ...dsThu.filter(loc).map(r => ({ Ngay: r.Ngay, Loai: 'Phiếu thu', SoPhieu: r.SoPhieu,
+      CtLoai: ctLoai('PT'), CtID: r.PhieuThuID,
       DoiTuong: r.DoiTuong, TenTK: r.TenTK, TenLoai: r.TenLoai, HinhThuc: r.HinhThuc,
       Thu: tien(r.SoTien), Chi: 0, DienGiai: r.DienGiai || '' })),
     ...dsChi.filter(loc).map(r => ({ Ngay: r.Ngay, Loai: 'Phiếu chi', SoPhieu: r.SoPhieu,
+      CtLoai: ctLoai('PC'), CtID: r.PhieuChiID,
       DoiTuong: r.DoiTuong, TenTK: r.TenTK, TenLoai: r.TenLoai, HinhThuc: r.HinhThuc,
       Thu: 0, Chi: tien(r.SoTien), DienGiai: r.DienGiai || '' }))
   ].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay) || String(a.SoPhieu).localeCompare(String(b.SoPhieu)));

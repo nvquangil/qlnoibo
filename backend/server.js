@@ -108,7 +108,17 @@ const PORT = Number(process.env.PORT || 3000);                 // nội bộ
 const PUBLIC_PORT = Number(process.env.PUBLIC_PORT || 80);     // công khai (0 = tắt hẳn)
 const TACH_CONG = PUBLIC_PORT > 0 && PUBLIC_PORT !== PORT;     // 2 cổng trùng nhau -> không chặn gì
 
-// Đường dẫn tĩnh mà trang catalogue cần để hiển thị được.
+/* Đường dẫn tĩnh mà trang catalogue cần để hiển thị được.
+
+   🔴 v8.80 — ĐỌC KỸ TRƯỚC KHI THÊM DÒNG VÀO DANH SÁCH NÀY
+   Mọi thứ liệt kê ở đây tải được từ CỔNG 80 CÔNG KHAI, KHÔNG cần đăng nhập. `/uploads/` nằm trong
+   danh sách vì catalogue cần ảnh sản phẩm — đó là chủ ý và không sao với ảnh vải / ảnh hàng hóa.
+   NHƯNG nghĩa là: BẤT KỲ file nào đặt vào backend/uploads/ đều công khai ra internet cho ai biết
+   (hoặc đoán được) tên file.
+   Vì vậy hồ sơ nhân sự (ảnh chân dung, bản scan CCCD, hợp đồng lao động, quyết định lương, giấy tờ
+   người phụ thuộc) KHÔNG được để trong uploads/ — nó nằm ở backend/uploads_hr/, không có
+   express.static nào trỏ tới, chỉ đọc được qua route GET /api/hrm/file/:id có kiểm quyền HRM.
+   ĐỪNG thêm '/uploads_hr/' vào hàm này. */
 function duocPhepCongKhai(duong) {
   return duong === '/catalogue.html'
     || duong === '/js/catalogue.js'
@@ -116,7 +126,7 @@ function duocPhepCongKhai(duong) {
     || duong.startsWith('/api/public/')
     || duong.startsWith('/css/')
     || duong.startsWith('/icons/')
-    || duong.startsWith('/uploads/')       // ảnh sản phẩm (ảnh gốc)
+    || duong.startsWith('/uploads/')       // ảnh sản phẩm (ảnh gốc) — xem cảnh báo ở trên
     || duong.startsWith('/anh/')           // v6.07: ảnh xem trước cỡ nhỏ (routes/anh.js) — catalogue dùng
     || duong.startsWith('/.well-known/');  // để Let's Encrypt (win-acme) xác thực được qua cổng 80
 }

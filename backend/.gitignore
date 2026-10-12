@@ -2,3 +2,10 @@ node_modules/
 .env
 uploads/*
 !uploads/.gitkeep
+
+# 🔴 v8.80 — HỒ SƠ NHÂN SỰ: TUYỆT ĐỐI KHÔNG ĐƯA VÀO GIT
+# uploads_hr chứa bản scan CCCD, hợp đồng lao động, quyết định lương, ảnh chân dung nhân viên,
+# giấy tờ người phụ thuộc. Lỡ commit một lần là nó nằm trong LỊCH SỬ git vĩnh viễn — xóa file ở
+# commit sau không gỡ được, phải viết lại lịch sử. Dòng này phải có TRƯỚC khi ai đó tải file đầu tiên.
+uploads_hr/*
+!uploads_hr/.gitkeep

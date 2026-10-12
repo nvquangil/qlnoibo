@@ -53,7 +53,7 @@ const SQL_TONG_THEO_MAU = `
 /* (2) TUNG CHUNG TU nhap lai cua 1 ma hang trong ky — dung cho bang chi tiet o Bao cao ton kho.
    Gom theo PHIEU (mot phieu co the co nhieu mau cua cung ma hang). */
 const SQL_CHUNG_TU = `
-  SELECT p.NgayNhap AS Ngay, p.SoPhieu, p.TenKhach,
+  SELECT p.NgayNhap AS Ngay, p.SoPhieu, p.PhieuNLID, p.TenKhach,
          ISNULL(p.LyDo, p.GhiChu) AS DienGiai,
          SUM(${SL_VE_DON_VI_CHINH}) AS PhatSinh
   FROM PhieuNhapLaiChiTiet ct

@@ -123,8 +123,12 @@ kiem(!/<table[^>]*>[\s\S]{0,400}Còn nợ lũy kế/.test(srcDash),
   'dashboard KHONG tu dung lai bang so cong no');
 
 console.log('\n=== 9. soChiTietKH bat loi 403 (route con chan requireChucNang) ===');
-const doanSo = srcCN.slice(srcCN.indexOf('async function soChiTietKH(khach)'),
-  srcCN.indexOf('function ngayISO'));
+/* ⚠️ Neo theo 'async function soChiTietKH(' chu KHONG theo ca chu ky. v8.87 them tham so
+   (khach, ky, dongTruoc) lam phep kiem cu tim khong thay -> indexOf = -1 -> slice(-1,...) ra chuoi
+   rong -> hai phep kiem duoi bao SAI du code dung. */
+const iSo = srcCN.indexOf('async function soChiTietKH(');
+const doanSo = iSo < 0 ? '' : srcCN.slice(iSo, srcCN.indexOf('function ngayISO'));
+kiem(iSo >= 0, 'tim thay ham soChiTietKH() trong module.congno.js');
 kiem(/try \{[\s\S]*apiGet\('\/api\/congno\/congnokh\/chitiet/.test(doanSo),
   'apiGet nam trong try');
 kiem(/catch \(err\) \{[\s\S]{0,200}toast\(/.test(doanSo), 'catch co toast bao loi');

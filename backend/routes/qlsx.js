@@ -601,7 +601,8 @@ async function getNhaGiaCongChiTiet(pool, donHangId) {
 //  - Công đoạn CẮT: CỘNG DỒN theo từng SƠ ĐỒ — lấy bản ghi MỚI NHẤT của mỗi SoDoID (cắt lại 1 sơ đồ thì
 //    lấy lần mới nhất; thêm sơ đồ mới thì cộng thêm). Bản ghi không gắn sơ đồ (SoDoID NULL) giữ tất cả.
 //    Nhờ vậy cắt BỔ SUNG nhiều đợt (vải về từng phần) vẫn tính đúng tổng, không chỉ theo lần Gửi cuối.
-//  - Công đoạn KHÁC (May/Kho nhập...): GIỮ NGUYÊN "batch gần nhất" (SoLuongLuyKe là luỹ kế, không cộng dồn).
+//  - Kho nhập (v7.56), QC và Đóng gói (v8.74): CỘNG DỒN các đợt đã đánh cờ — xem khối giữa hàm.
+//  - Công đoạn KHÁC (May, Là...): GIỮ NGUYÊN "batch gần nhất" (SoLuongLuyKe là luỹ kế, không cộng dồn).
 async function effectiveTienDoIds(pool, donHangId, stageId) {
   if (!stageId) return [];
   const catId = await getCatStageId(pool);
@@ -615,26 +616,37 @@ async function effectiveTienDoIds(pool, donHangId, stageId) {
     return r.recordset.map(x => x.TienDoID);
   }
   /* ================================================================================================
-     v7.56 — KHO NHAP GHI NHIEU DOT, CONG DON (migration_v692).
+     GHI NHIEU DOT, CONG DON — Kho nhap (v7.56, migration_v692) + QC & Dong goi (v8.74, v874).
+
      Hang khong hoan thien mot luc: nhap 100 hom nay, mai nhap tiep 50 -> tong phai la 150. Truoc day
      nhanh nay chi lay LAN GHI GAN NHAT nen ghi lan 2 la THAY THE lan 1.
 
-     ⚠️ CHI cong don cac lan ghi CO CO `CongDonKN = 1` (tuc ghi tu ban nay tro di) + CONG THEM lan ghi
-     CU gan nhat. Ly do nguoi dung da chot: truoc ban nay, "ghi lai" duoc hieu la GHI LAI DE SUA, nen
-     cong don ca du lieu cu se lam moi lenh tung ghi lai bi CONG GAP LEN — doi "SL hoan thanh", gia
-     thanh, bao cao nang suat ma khong ai biet.
+     ⚠️ CHI cong don cac lan ghi DA DUOC DANH CO (= 1, tuc ghi tu ban nang cap tro di) + CONG THEM
+     lan ghi CU gan nhat. Ly do nguoi dung da chot: truoc cac ban do, "ghi lai" duoc hieu la GHI LAI
+     DE SUA, nen cong don ca du lieu cu se lam moi lenh tung ghi lai bi CONG GAP LEN — doi "SL hoan
+     thanh", gia thanh, bao cao nang suat ma khong ai biet.
      Giu lan CU gan nhat lam DIEM BAT DAU: do dung la con so ma he thong dang hien truoc khi nang cap,
      nen lenh dang nhap do (1 lan cu + cac dot moi) khong bi mat phan da nhap.
+
+     Cong doan nao thuoc che do nay -> xem CHE_DO_CONG_DON / coCheDoCongDon() ben duoi (MOT noi duy nhat).
      ================================================================================================ */
-  const knId = await getKhoNhapStageId(pool);
-  if (knId && Number(stageId) === Number(knId) && await coCotCongDonKN(pool)) {
+  const congDon = await coCheDoCongDon(pool, stageId);
+  if (congDon) {
+    /* ⚠️ v8.74 SUA MOT LOI CO SAN CUA NHANH KN:
+       ban cu viet `... UNION SELECT TOP 1 ... ORDER BY TienDoID DESC`. Trong T-SQL, ORDER BY dat sau
+       UNION ap cho TOAN BO ket qua hop nhat, con SELECT TOP 1 o nhanh duoi KHONG co ORDER BY rieng
+       => ban ghi CU duoc chon lam diem bat dau la KHONG XAC DINH (SQL Server thuong chon dung nen
+       chua ai thay, nhung do la may man chu khong phai bao dam).
+       Nay dung subquery MAX(TienDoID) — ro rang, dung chuan, va KHOP y het cach `slKhoNhapTheoDon()`
+       dien ta cung luat nay bang SQL (xem ham do). Hai noi phai cung mot luat, neu khong danh sach
+       lenh SX va form nhap lieu se ra hai con so khac nhau. */
     const r = await pool.request().input('id', sql.Int, donHangId).input('stage', sql.Int, stageId).query(`
-      SELECT TienDoID FROM TienDoSanXuat
-      WHERE DonHangID=@id AND StageID=@stage AND ISNULL(CongDonKN, 0) = 1
-      UNION
-      SELECT TOP 1 TienDoID FROM TienDoSanXuat
-      WHERE DonHangID=@id AND StageID=@stage AND CongDonKN IS NULL
-      ORDER BY TienDoID DESC`);
+      SELECT t.TienDoID FROM TienDoSanXuat t
+      WHERE t.DonHangID=@id AND t.StageID=@stage
+        AND (ISNULL(t.${congDon.cot}, 0) = 1
+             OR t.TienDoID = (SELECT MAX(t2.TienDoID) FROM TienDoSanXuat t2
+                               WHERE t2.DonHangID=@id AND t2.StageID=@stage
+                                 AND t2.${congDon.cot} IS NULL))`);
     return r.recordset.map(x => x.TienDoID);
   }
 
@@ -656,6 +668,57 @@ async function coCotCongDonKN(pool) {
     } catch (e) { __coCongDonKN = false; }
   }
   return __coCongDonKN;
+}
+/* v8.74: tuong tu cho cot CongDonQCDG (migration_v874). */
+let __coCongDonQCDG = null;
+async function coCotCongDonQCDG(pool) {
+  if (__coCongDonQCDG === null) {
+    try {
+      const r = (await pool.request().query("SELECT COL_LENGTH('TienDoSanXuat','CongDonQCDG') AS c")).recordset[0] || {};
+      __coCongDonQCDG = r.c != null;
+    } catch (e) { __coCongDonQCDG = false; }
+  }
+  return __coCongDonQCDG;
+}
+
+/* ================================================================================================
+   v8.74 — MOT NOI DUY NHAT tra loi: "cong doan nay co ghi nhieu dot (cong don) khong, bang cot nao?"
+
+   Tra ve { ma, cot } hoac null. Dung o CA BA cho can biet dieu nay:
+     1. effectiveTienDoIds()  — doc: cong nhung dot nao
+     2. POST /tiendo          — ghi : dat co = 1 cho dot moi
+     3. slKhoNhapTheoDon()    — ban do theo don cho danh sach lenh SX
+
+   ⚠️ Viet luat nay o ba noi roi roi la chac chan trong ra khoi nhau — dung bai hoc v6.47 / v7.53.
+   Them cong doan moi vao che do cong don => sua DUNG MOT CHO nay.
+
+   ⚠️ Chua chay migration -> tra null -> moi thu chay y nhu truoc, khong gay vo.
+   ================================================================================================ */
+const CHE_DO_CONG_DON = [
+  { ma: 'KN', cot: 'CongDonKN' },    // v7.56
+  { ma: 'QC', cot: 'CongDonQCDG' },  // v8.74
+  { ma: 'DG', cot: 'CongDonQCDG' }   // v8.74 — dung CHUNG cot voi QC, StageID da phan biet roi
+];
+let __stageCongDon = null;
+async function napBanDoCongDon(pool) {
+  if (__stageCongDon) return __stageCongDon;
+  const rows = (await pool.request().query(
+    `SELECT StageID, MaCongDoan FROM CongDoanSanXuat
+      WHERE MaCongDoan IN (${CHE_DO_CONG_DON.map(x => `N'${x.ma}'`).join(',')})`)).recordset;
+  const map = new Map();
+  rows.forEach(r => {
+    const d = CHE_DO_CONG_DON.find(x => x.ma === String(r.MaCongDoan).trim().toUpperCase());
+    if (d) map.set(Number(r.StageID), d);
+  });
+  __stageCongDon = map;
+  return map;
+}
+async function coCheDoCongDon(pool, stageId) {
+  if (!stageId) return null;
+  const d = (await napBanDoCongDon(pool)).get(Number(stageId));
+  if (!d) return null;
+  const san = d.cot === 'CongDonKN' ? await coCotCongDonKN(pool) : await coCotCongDonQCDG(pool);
+  return san ? d : null;
 }
 async function getStageBanCount(pool, donHangId, stageId) {
   const ids = await effectiveTienDoIds(pool, donHangId, stageId);
@@ -1554,20 +1617,54 @@ async function getInTheList(pool, donHangId) {
     WHERE it.DonHangID = @id ORDER BY it.ID`);
   return r.recordset;
 }
-// v6.01: danh sách hạng mục in/thêu của đơn (tên + đơn giá) để form Giao in thêu có ô chọn.
-// Nhiều BẢN đơn giá (TenPhieu) -> gộp theo TÊN hạng mục, đơn giá lấy của bản ĐẦU TIÊN (cùng quy ước
-// với payroll: ORDER BY ISNULL(TenPhieu,''), ID) — xem [[project_qlnoibo_v554_multiban]].
+/* ================================================================================================
+   v6.01: danh sách hạng mục in/thêu của đơn (tên + đơn giá) để form Giao in thêu có ô chọn.
+
+   🔴 v8.75 — SỬA LỖI: ô chọn chỉ hiện hạng mục của BẢN ĐẦU TIÊN (Nguyen báo 2026-10-09:
+   "đơn giá in thêu có dòng hạng mục, NHIỀU BẢN, nhưng giao in thêu chỉ hiện 1 lựa chọn").
+
+   Bản cũ có dòng:
+       AND ISNULL(g.TenPhieu, N'') = (SELECT MIN(ISNULL(y.TenPhieu, N'')) ...)
+   Dòng đó CHẶN mọi bản trừ bản đầu — trái hẳn với chính comment ở trên nó ("nhiều BẢN -> gộp theo
+   TÊN hạng mục"). Comment mô tả đúng ý định, câu SQL làm ngược lại. Nay bỏ hẳn điều kiện đó.
+
+   ⚠️ VẪN gộp theo TÊN, không trả mỗi bản một dòng. Lý do bắt buộc: cột lưu ở dòng giao là
+   `DonHangNhaInTheu.HangMucInThe` — một chuỗi TÊN, KHÔNG có mã bản (migration_v662 cố ý lưu snapshot
+   tên vì màn Đơn giá in thêu xóa-chèn lại nên ID đổi). Trả hai dòng cùng tên khác bản thì lưu xuống
+   không phân biệt được, mà lương cũng khớp theo tên.
+
+   ⚠️ ĐƠN GIÁ phải lấy ĐÚNG bản mà bảng lương sẽ lấy — luongGiaCongInThe.js dùng
+   TOP 1 ... ORDER BY ISNULL(TenPhieu,N''), ID. Nên ROW_NUMBER ở đây phải sắp y hệt, nếu không ô
+   chọn hiện một giá mà lương tính một giá khác.
+
+   Trả thêm SoBan + GiaKhacNhau để màn hình CẢNH BÁO khi cùng tên hạng mục nhưng các bản khai giá
+   khác nhau — trường hợp đó lương lấy giá bản đầu, im lặng là sai tiền mà không ai biết.
+   ================================================================================================ */
 async function getHangMucInTheList(pool, donHangId) {
-  // ROW_NUMBER theo ID (không phải MIN(DonGia)) để đơn giá hiện ở ô chọn TRÙNG với đơn giá bảng lương lấy
-  // (payroll.js: TOP 1 ... ORDER BY ISNULL(TenPhieu,N''), ID) — hiện 1 giá khác giá tính lương là gây nhầm.
   const r = await pool.request().input('id', sql.Int, donHangId).query(`
-    SELECT x.Ten, x.DonGia FROM (
-      SELECT g.Ten, g.DonGia, ROW_NUMBER() OVER (PARTITION BY g.Ten ORDER BY g.ID) AS rn
+    SELECT x.Ten, x.DonGia, g2.SoBan, g2.SoGiaKhac
+    FROM (
+      SELECT g.Ten, g.DonGia,
+             ROW_NUMBER() OVER (PARTITION BY LTRIM(RTRIM(g.Ten))
+                                ORDER BY ISNULL(g.TenPhieu, N''), g.ID) AS rn
       FROM DonHangDonGiaInThe g
       WHERE g.DonHangID = @id AND LTRIM(RTRIM(ISNULL(g.Ten, N''))) <> N''
-        AND ISNULL(g.TenPhieu, N'') = (SELECT MIN(ISNULL(y.TenPhieu, N'')) FROM DonHangDonGiaInThe y WHERE y.DonHangID = @id)
-    ) x WHERE x.rn = 1 ORDER BY x.Ten`);
-  return r.recordset.map(x => ({ Ten: x.Ten, DonGia: x.DonGia == null ? null : Number(x.DonGia) }));
+    ) x
+    JOIN (
+      SELECT LTRIM(RTRIM(y.Ten)) AS TenChuan,
+             COUNT(DISTINCT ISNULL(y.TenPhieu, N'')) AS SoBan,
+             COUNT(DISTINCT ISNULL(CAST(y.DonGia AS NVARCHAR(50)), N'')) AS SoGiaKhac
+      FROM DonHangDonGiaInThe y
+      WHERE y.DonHangID = @id AND LTRIM(RTRIM(ISNULL(y.Ten, N''))) <> N''
+      GROUP BY LTRIM(RTRIM(y.Ten))
+    ) g2 ON g2.TenChuan = LTRIM(RTRIM(x.Ten))
+    WHERE x.rn = 1 ORDER BY x.Ten`);
+  return r.recordset.map(x => ({
+    Ten: x.Ten,
+    DonGia: x.DonGia == null ? null : Number(x.DonGia),
+    SoBan: Number(x.SoBan) || 1,
+    GiaKhacNhau: Number(x.SoGiaKhac) > 1   // cùng tên, các bản khai giá khác nhau
+  }));
 }
 router.get('/orders/:maDH/inthe', requireAuth, requirePermission('QLSX', 'view'), async (req, res) => {
   const pool = await getPool();
@@ -2354,48 +2451,83 @@ router.delete('/orders/:maDH/ghinhanmay/:tienDoId', requireAuth, requirePermissi
    ⚠️ XÓA một đợt làm TỔNG SL nhập kho của đơn GIẢM đúng phần đó -> đổi "SL hoàn thành", giá thành,
    báo cáo năng suất. Frontend phải nói rõ trong hộp xác nhận (giống xóa sổ cắt v5.99).
    ================================================================================================== */
-async function timTienDoKhoNhap(pool, tienDoId, donHangId) {
+/* ================================================================================================
+   v8.74 — BA ROUTE NAY NAY DUNG CHUNG CHO KN / QC / DG, khong rieng Kho nhap nua.
+
+   Duong dan MOI:  /orders/:maDH/ghinhandot/:ma      (ma = KN | QC | DG)
+   Duong dan CU :  /orders/:maDH/ghinhankhonhap      -> GIU LAI, goi lai dung ham ben duoi.
+
+   ⚠️ PHAI giu duong dan cu: trinh duyet dang cache ban module.qlsx.js v7.56; go route cu di la nguoi
+   dung chua Ctrl+F5 bam "Kho nhap da ghi" se nhan 404 ma khong hieu vi sao.
+   ================================================================================================ */
+async function timTienDoDot(pool, tienDoId, donHangId, maChoPhep) {
   const td = (await pool.request().input('id', sql.Int, tienDoId).query(`
-    SELECT td.TienDoID, td.DonHangID, c.MaCongDoan FROM TienDoSanXuat td
+    SELECT td.TienDoID, td.DonHangID, td.StageID, td.NgayGhiNhan, c.MaCongDoan, c.TenCongDoan
+    FROM TienDoSanXuat td
     JOIN CongDoanSanXuat c ON c.StageID = td.StageID WHERE td.TienDoID=@id`)).recordset[0];
   if (!td || td.DonHangID !== donHangId) return { loi: 'Không tìm thấy ghi nhận của đơn hàng này.' };
-  if (td.MaCongDoan !== 'KN') return { loi: 'Bản ghi này không phải công đoạn Kho nhập — không sửa ở đây.' };
+  if (String(td.MaCongDoan).trim().toUpperCase() !== maChoPhep) {
+    return { loi: `Bản ghi này không phải công đoạn ${maChoPhep} — không sửa ở đây.` };
+  }
   return { td };
 }
-router.get('/orders/:maDH/ghinhankhonhap', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
-  const pool = await getPool();
-  const order = await getOrderByMaDH(pool, req.params.maDH);
-  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
-  const knId = await getKhoNhapStageId(pool);
-  if (!knId) return res.json({ success: true, data: { records: [], mau: [], dangTinh: [] } });
+/* Ma cong doan hop le cho nhom route nay = dung cac cong doan dang o che do CONG DON. */
+function maDotHopLe(ma) {
+  const m = String(ma || '').trim().toUpperCase();
+  return CHE_DO_CONG_DON.some(x => x.ma === m) ? m : null;
+}
+async function stageIdTheoMa(pool, ma) {
+  const r = (await pool.request().input('m', sql.NVarChar, ma)
+    .query('SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan = @m')).recordset[0];
+  return r ? r.StageID : null;
+}
+
+async function docCacDot(pool, order, ma, res) {
+  const stageId = await stageIdTheoMa(pool, ma);
+  if (!stageId) return res.json({ success: true, data: { records: [], mau: [], dangTinh: [] } });
   /* `dangTinh` = danh sách TienDoID mà hệ thống ĐANG CỘNG vào tổng (theo quy tắc ở effectiveTienDoIds).
      Trả kèm để màn hình đánh dấu rõ đợt nào đang được tính — lệnh cũ có 2 đợt thì chỉ đợt cuối được
      tính, không nói ra thì người dùng cộng tay lại không khớp và tưởng hệ thống sai. */
-  const dangTinh = await effectiveTienDoIds(pool, order.DonHangID, knId);
-  const coCongDon = await coCotCongDonKN(pool);
-  const recs = (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, knId).query(`
+  const dangTinh = await effectiveTienDoIds(pool, order.DonHangID, stageId);
+  const cd = await coCheDoCongDon(pool, stageId);
+  const recs = (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, stageId).query(`
     SELECT td.TienDoID, td.NgayGhiNhan, td.ThoiGianNhap, td.GhiChu, u.HoTen AS NguoiCapNhat,
-           ${coCongDon ? 'ISNULL(td.CongDonKN, 0)' : 'CAST(0 AS BIT)'} AS CongDonKN,
+           ${cd ? `ISNULL(td.${cd.cot}, 0)` : 'CAST(0 AS BIT)'} AS CongDonKN,
            ISNULL((SELECT SUM(ct.SoLuongLuyKe) FROM TienDoChiTietMau ct WHERE ct.TienDoID = td.TienDoID), 0) AS TongSL
     FROM TienDoSanXuat td
     LEFT JOIN Users u ON u.UserID = td.NguoiCapNhatID
     WHERE td.DonHangID = @id AND td.StageID = @s
     ORDER BY td.TienDoID`)).recordset;
-  const mau = recs.length ? (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, knId).query(`
+  const mau = recs.length ? (await pool.request().input('id', sql.Int, order.DonHangID).input('s', sql.Int, stageId).query(`
     SELECT ct.TienDoID, ct.MauSacID, ms.TenMau, ct.SoLuongLuyKe
     FROM TienDoChiTietMau ct
     JOIN TienDoSanXuat td ON td.TienDoID = ct.TienDoID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
     WHERE td.DonHangID = @id AND td.StageID = @s
     ORDER BY ms.TenMau`)).recordset : [];
-  res.json({ success: true, data: { records: recs, mau, dangTinh } });
+  /* Cot `CongDonKN` giu NGUYEN TEN trong ket qua tra ve du nguon co the la CongDonQCDG — frontend
+     v7.56 doc theo ten nay. Doi ten la ban JS dang nam trong cache hien sai nhan "khong duoc tinh". */
+  res.json({ success: true, data: { records: recs, mau, dangTinh, maCongDoan: ma } });
+}
+
+router.get('/orders/:maDH/ghinhandot/:ma', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ma = maDotHopLe(req.params.ma);
+  if (!ma) return res.status(400).json({ success: false, message: 'Công đoạn này không ghi theo đợt.' });
+  await docCacDot(pool, order, ma, res);
 });
-router.put('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+router.get('/orders/:maDH/ghinhankhonhap', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  await docCacDot(pool, order, 'KN', res);   // v8.74: đường dẫn cũ, giữ cho bản JS đang cache
+});
+
+async function suaMotDot(pool, order, ma, req, res) {
   try {
-    const pool = await getPool();
-    const order = await getOrderByMaDH(pool, req.params.maDH);
-    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
-    const { loi } = await timTienDoKhoNhap(pool, Number(req.params.tienDoId), order.DonHangID);
+    const { loi } = await timTienDoDot(pool, Number(req.params.tienDoId), order.DonHangID, ma);
     if (loi) return res.status(400).json({ success: false, message: loi });
     const id = Number(req.params.tienDoId);
     const b = req.body || {};
@@ -2420,27 +2552,102 @@ router.put('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermiss
     }
     res.json({ success: true });
   } catch (err) {
-    console.error('[qlsx PUT /ghinhankhonhap] ', err);
-    res.status(400).json({ success: false, message: 'Lỗi khi sửa đợt nhập kho: ' + err.message });
+    console.error('[qlsx PUT /ghinhandot] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi sửa đợt ghi nhận: ' + err.message });
   }
+}
+
+router.put('/orders/:maDH/ghinhandot/:ma/:tienDoId', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ma = maDotHopLe(req.params.ma);
+  if (!ma) return res.status(400).json({ success: false, message: 'Công đoạn này không ghi theo đợt.' });
+  await suaMotDot(pool, order, ma, req, res);
 });
-router.delete('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+router.put('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  await suaMotDot(pool, order, 'KN', req, res);   // v8.74: đường dẫn cũ
+});
+
+/* ================================================================================================
+   🔴 v8.74 — XÓA MỘT ĐỢT: CHẶN XÓA ĐỢT QC ĐẦU TIÊN CỦA LỆNH.
+
+   Nguyen chốt 2026-10-08. Lý do KHÔNG hiển nhiên nên ghi rõ ở đây:
+
+   Tiền lương KHÔNG đọc số lượng QC — nó lấy MIN(NgayGhiNhan) của công đoạn QC làm MỐC KỲ:
+       payroll.js (lương khoán may) · utils/luongGiaCongInThe.js (lương GC/in thêu VÀ công nợ nhà GC)
+   MIN là CÓ Ý, không phải MAX (payroll.js v8.61): lấy MAX thì mỗi lần ghi bổ sung QC là cả cục tiền
+   nhảy sang tháng khác, kể cả tháng ĐÃ CHỐT và ĐÃ TRẢ.
+
+   => Ghi THÊM đợt QC : MIN không đổi -> kỳ lương đứng yên. An toàn.
+   => XÓA đợt QC ĐẦU  : MIN dịch sang đợt sau -> tiền của tháng đã chốt nhảy tháng, ÂM THẦM.
+
+   Chặn ở BACKEND chứ không chỉ ở giao diện — đây là nơi duy nhất bảo vệ được.
+   Muốn sửa ngày của đợt đầu thì dùng PUT (sửa NgayGhiNhan), ở đó người dùng thấy rõ mình đang đổi gì.
+   ================================================================================================ */
+async function xoaMotDot(pool, order, ma, req, res) {
   try {
-    const pool = await getPool();
-    const order = await getOrderByMaDH(pool, req.params.maDH);
-    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
-    const { loi } = await timTienDoKhoNhap(pool, Number(req.params.tienDoId), order.DonHangID);
+    const { loi, td } = await timTienDoDot(pool, Number(req.params.tienDoId), order.DonHangID, ma);
     if (loi) return res.status(400).json({ success: false, message: loi });
     const id = Number(req.params.tienDoId);
+
+    if (ma === 'QC') {
+      /* ⚠️ Chan theo MIN(NgayGhiNhan), KHONG phai MIN(TienDoID).
+         Luong doc MIN(NgayGhiNhan) — xem payroll.js / luongGiaCongInThe.js. Dot ghi TRUOC khong chac
+         co ngay som hon: nguoi dung hoan toan co the ghi dot 2 voi ngay LUI VE truoc dot 1. Khi do
+         dot quyet dinh ky luong la dot 2, va chan theo TienDoID se bao ve nham ban ghi.
+
+         Cach dung: so MIN(NgayGhiNhan) HIEN TAI voi MIN(NgayGhiNhan) SAU KHI bo ban ghi nay. Khac
+         nhau (hoac het sach ban ghi) => xoa no lam ky luong dich => CHAN.
+         Nho vay: nhieu dot CUNG ngay som nhat thi xoa mot cai van duoc, vi MIN khong doi. */
+      const mc = (await pool.request().input('id', sql.Int, order.DonHangID)
+        .input('s', sql.Int, td.StageID).input('td', sql.Int, id).query(`
+        SELECT (SELECT MIN(NgayGhiNhan) FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@s) AS MinHienTai,
+               (SELECT MIN(NgayGhiNhan) FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@s AND TienDoID<>@td) AS MinConLai,
+               (SELECT COUNT(*) FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@s AND TienDoID<>@td) AS SoConLai
+      `)).recordset[0] || {};
+      const ngay = (v) => (v ? new Date(v).getTime() : null);
+      const doiMoc = Number(mc.SoConLai || 0) === 0 || ngay(mc.MinHienTai) !== ngay(mc.MinConLai);
+      if (doiMoc) {
+        const hai = n => String(n).padStart(2, '0');
+        const dd = (v) => { const x = new Date(v); return isNaN(x) ? '' : `${hai(x.getDate())}/${hai(x.getMonth() + 1)}/${x.getFullYear()}`; };
+        return res.status(400).json({ success: false, message:
+          'Không xóa được đợt QC này — nó đang giữ MỐC NGÀY QC SỚM NHẤT của lệnh'
+          + (mc.MinHienTai ? ` (${dd(mc.MinHienTai)})` : '') + '.\n\n'
+          + 'Ngày QC sớm nhất quyết định tiền lương gia công / in thêu và lương khoán may rơi vào THÁNG NÀO. '
+          + 'Xóa nó là đẩy cả cục tiền sang tháng khác — kể cả tháng đã chốt và đã trả.\n\n'
+          + 'Nếu ghi nhầm NGÀY: bấm Sửa đợt đó rồi đổi ngày.\n'
+          + 'Nếu ghi nhầm SỐ LƯỢNG: bấm Sửa đợt đó rồi sửa số, không cần xóa.' });
+      }
+    }
+
     try { await pool.request().input('id', sql.Int, id).query('DELETE FROM TienDoChiTietMau WHERE TienDoID=@id'); }
     catch (e) { /* bảng có thể chưa có ở DB rất cũ */ }
     const kq = await pool.request().input('id', sql.Int, id).query('DELETE FROM TienDoSanXuat WHERE TienDoID=@id');
-    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Đợt nhập kho đã bị xóa trước đó.' });
+    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Đợt ghi nhận đã bị xóa trước đó.' });
     res.json({ success: true });   // KHÔNG kéo lùi công đoạn hiện tại của đơn (giống xóa sổ cắt v5.99)
   } catch (err) {
-    console.error('[qlsx DELETE /ghinhankhonhap] ', err);
-    res.status(400).json({ success: false, message: 'Không xóa được đợt nhập kho: ' + err.message });
+    console.error('[qlsx DELETE /ghinhandot] ', err);
+    res.status(400).json({ success: false, message: 'Không xóa được đợt ghi nhận: ' + err.message });
   }
+}
+
+router.delete('/orders/:maDH/ghinhandot/:ma/:tienDoId', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  const ma = maDotHopLe(req.params.ma);
+  if (!ma) return res.status(400).json({ success: false, message: 'Công đoạn này không ghi theo đợt.' });
+  await xoaMotDot(pool, order, ma, req, res);
+});
+router.delete('/orders/:maDH/ghinhankhonhap/:tienDoId', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
+  const pool = await getPool();
+  const order = await getOrderByMaDH(pool, req.params.maDH);
+  if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+  await xoaMotDot(pool, order, 'KN', req, res);   // v8.74: đường dẫn cũ
 });
 
 /* v5.85: DANH SÁCH PHIẾU XUẤT KHO VẢI CỦA 1 ĐƠN — cho popup "bấm vào trạng thái Đã xuất kho ở màn
@@ -3892,13 +4099,18 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       }
     }
 
-    // v5.9: 4 dieu kien duoi day (isKhoNhap + Ky thuat/May/Cat ben duoi) doi tu so sanh stage.TenCongDoan
+    // v5.9: cac dieu kien duoi day (Ky thuat/May/Cat ben duoi) doi tu so sanh stage.TenCongDoan
     // (TEN hien thi, tu do doi duoc qua Danh muc tu sau khi nang cap nay) sang stage.MaCongDoan (MA on
     // dinh, da duoc KHOA cho 8 cong doan he thong qua cot LaHeThong - xem migration_v59.sql +
-    // backend/routes/danhmuc.js). 'KN' = Kho nhập (xem migration_v59.sql cho toan bo bang ma).
-    const isKhoNhap = stage.MaCongDoan === 'KN';
-    // v7.56: chua chay migration_v692 thi khong ghi cot -> he thong chay y nhu truoc (lan gan nhat).
-    const coCongDon = await coCotCongDonKN(pool);
+    // backend/routes/danhmuc.js).
+    // v8.74: bo bien `isKhoNhap` — gate "chua du thi giu lai" nay ap cho CA KN/QC/DG, quyet dinh
+    // bang `cheDoCongDon` (CHE_DO_CONG_DON) chu khong so sanh ma cong doan bang tay o day nua.
+    /* v7.56 / v8.74: cong doan nao thuoc che do GHI NHIEU DOT - CONG DON (KN, QC, DG) thi danh co
+       cho dot nay. Chua chay migration -> coCheDoCongDon() tra null -> khong ghi cot nao, he thong
+       chay y nhu truoc (chi tinh lan gan nhat).
+       ⚠️ MOT noi duy nhat quyet dinh "cong doan nao cong don" la CHE_DO_CONG_DON; dung so sanh
+       MaCongDoan bang tay o day, se trong ra khoi nhanh doc trong effectiveTienDoIds(). */
+    const cheDoCongDon = await coCheDoCongDon(pool, stage.StageID);
 
     // v5.24 (sua tiep v5.23 - checkbox doc lap thay radio): ghi 2 co DaGiaoNhaLam/DaGiaoGiaCong - nguon
     // THAT SU cho tinhNextStage() (May) va frontend showGiaoViec (module.qlsx.js), thay cho cot don gia
@@ -4050,13 +4262,14 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
         // v5.13 (muc 1.2.2.1): chi co y nghia o cong doan Cat (frontend chi gui khi don co > 1 so do) -
         // NULL cho moi cong doan khac hoac don chua khai bao/chi co 1 so do.
         .input('SoDoID', sql.Int, stage.MaCongDoan === 'CAT' ? (soDoId || null) : null)
-        /* v7.56: danh dau lan ghi KHO NHAP thuoc che do CONG DON (migration_v692). Chi dat = 1 cho
-           dung cong doan 'KN'; moi cong doan khac de NULL. Cac lan ghi CU (= NULL) van chi tinh lan
-           gan nhat -> so cua lenh cu KHONG doi. Xem quy tac doc o effectiveTienDoIds(). */
-        .input('CongDonKN', sql.Bit, isKhoNhap ? 1 : null)
-        .query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu, MetSoDoDai, KhoVaiSoDo, MaRap, SttSoCat, NhanVienTraiVaiID, NhanVienCatID, TenNhaGiaCongTaiThoiDiem, SoDoID${coCongDon ? ', CongDonKN' : ''})
+        /* v7.56 (KN) / v8.74 (QC, DG): danh dau lan ghi nay thuoc che do CONG DON. Chi dat = 1 cho
+           dung cong doan nam trong CHE_DO_CONG_DON; moi cong doan khac khong ghi cot nao. Cac lan
+           ghi CU (= NULL) van chi tinh lan gan nhat -> so cua lenh cu KHONG doi.
+           Xem quy tac doc o effectiveTienDoIds(). */
+        .input('CoCongDon', sql.Bit, cheDoCongDon ? 1 : null)
+        .query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu, MetSoDoDai, KhoVaiSoDo, MaRap, SttSoCat, NhanVienTraiVaiID, NhanVienCatID, TenNhaGiaCongTaiThoiDiem, SoDoID${cheDoCongDon ? ', ' + cheDoCongDon.cot : ''})
                 OUTPUT INSERTED.TienDoID
-                VALUES (@DonHangID, @NgayGhiNhan, @StageID, @NguoiCapNhatID, @GhiChu, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @SttSoCat, @NhanVienTraiVaiID, @NhanVienCatID, @TenNhaGiaCongTaiThoiDiem, @SoDoID${coCongDon ? ', @CongDonKN' : ''})`);
+                VALUES (@DonHangID, @NgayGhiNhan, @StageID, @NguoiCapNhatID, @GhiChu, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @SttSoCat, @NhanVienTraiVaiID, @NhanVienCatID, @TenNhaGiaCongTaiThoiDiem, @SoDoID${cheDoCongDon ? ', @CoCongDon' : ''})`);
       tienDoId = tdResult.recordset[0].TienDoID;
 
       // v5.2: luu DAY DU danh sach nhan vien trai vai (cho phep toi da 2 nguoi, xem TienDoTraiVai trong
@@ -4181,18 +4394,25 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
            (thuc te: hoan thien khong du theo so cat la binh thuong — hang loi, hut, huy...)
        ⚠️ So sanh sau khi DA GHI dot nay (khoi INSERT o tren da chay), va dung CHINH
        getStageActualQty + getTongSLCatForOrder — cung ham voi con so man hinh hien, khong tinh lai. */
+    /* v8.74: gate nay MO CHO CA QC VA DONG GOI (Nguyen chot 2026-10-08), khong con rieng Kho nhap.
+       Dung CHINH `cheDoCongDon` — cong doan nao ghi nhieu dot thi cong doan do phai co gate giu lai,
+       neu khong thi ngay dot 1 da bi day sang cong doan sau va khong con cho nhap tiep (dung cai loi
+       ma v7.57 phai sua cho KN).
+       ⚠️ Moc so sanh la TONG SO CAT cho CA BA cong doan (Q1) — mot cong thuc duy nhat, de doi chieu. */
+    const coGateGiuLai = !!cheDoCongDon;
     let knChuaDu = false, knDaNhap = 0, knSoCat = 0;
-    if (isKhoNhap) {
+    if (coGateGiuLai) {
       /* ⚠️ Tinh CA KHI isLast: Kho nhap THUONG LA cong doan cuoi — do chinh la truong hop nguoi dung
          bao ("nhap xong ghi la chuyen sang hoan thanh"). Neu chi tinh khi !isLast thi khoi nay khong
          bao gio chay va sua nay vo tac dung. */
       knDaNhap = await getStageActualQty(pool, order.DonHangID, stage.StageID);
       knSoCat = await getTongSLCatForOrder(pool, order.DonHangID);
-      /* So cat = 0 (chua ghi Cat) thi KHONG coi la "chua du" — khong co moc de so, giu hanh vi cu. */
+      /* So cat = 0 (chua ghi Cat) thi KHONG coi la "chua du" — khong co moc de so, giu hanh vi cu.
+         Nguyen chot (Q4): QC/DG lam y het Kho nhap o diem nay. */
       knChuaDu = knSoCat > 0 && knDaNhap < knSoCat;
       /* ⚠️ KHONG dat `isLast = false` o day. Kho nhap thuong LA cong doan cuoi nen nextIndex = -1;
          ep isLast = false se lam dong duoi (`stages[nextIndex].StageID`) doc stages[-1] -> TypeError,
-         moi lan ghi Kho nhap deu vang. Viec "giu lai" xu ly BANG `giuLaiOKhoNhap` o khoi con tro ben
+         moi lan ghi Kho nhap deu vang. Viec "giu lai" xu ly BANG `giuLaiOCongDoan` o khoi con tro ben
          duoi — khong can dung den isLast. */
     }
     const nextStageId = isLast ? null : stages[nextIndex].StageID;
@@ -4205,19 +4425,19 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
       ? stages.findIndex(s => s.StageID === order.CongDoanHienTaiID)
       : lenStages;                                 // NULL = đã hoàn thành = coi như sau công đoạn cuối
     const wouldBeIdx = isLast ? lenStages : nextIndex;
-    /* v7.57: KN chua du va nguoi dung KHONG tich "Đã hoàn thành" -> KHONG tien con tro. Don o lai
-       dung cong doan Kho nhap de nhap tiep dot sau. */
-    const giuLaiOKhoNhap = isKhoNhap && knChuaDu && !ketThucKhoNhap;
-    const advanced = !giuLaiOKhoNhap && wouldBeIdx > curPointerIdx;
+    /* v7.57 (KN) / v8.74 (QC, DG): chua du va nguoi dung KHONG tich "Đã hoàn thành" -> KHONG tien
+       con tro. Lenh o lai dung cong doan do de nhap tiep dot sau. */
+    const giuLaiOCongDoan = coGateGiuLai && knChuaDu && !ketThucKhoNhap;
+    const advanced = !giuLaiOCongDoan && wouldBeIdx > curPointerIdx;
 
     let finalStageId, finalPercent, finalTrangThai;
     if (advanced) {
       finalStageId = nextStageId;                  // null nếu isLast (hoàn thành)
       finalPercent = isLast ? 100 : Math.round(((curIndex + 1) / lenStages) * 100);
       finalTrangThai = isLast ? 'Hoàn thành' : 'Đang sản xuất';
-    } else if (giuLaiOKhoNhap) {
-      /* v7.57: DUNG lai o cong doan KHO NHAP. Con tro phai tro vao CHINH cong doan Kho nhap — neu giu
-         nguyen con tro cu (co the dang o cong doan TRUOC) thi don khong hien o danh sach Kho nhap va
+    } else if (giuLaiOCongDoan) {
+      /* v7.57 / v8.74: DUNG lai o CHINH cong doan vua ghi. Con tro phai tro vao no — neu giu nguyen
+         con tro cu (co the dang o cong doan TRUOC) thi lenh khong hien o danh sach cong doan do va
          van khong nhap tiep duoc, tuc khong sua duoc gi. */
       finalStageId = stage.StageID;
       finalPercent = Math.round(((curIndex + 1) / lenStages) * 100);
@@ -4240,8 +4460,13 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
     /* v7.57: gom ket qua Kho nhap de tra ve cho frontend noi RO chuyen gi da xay ra — giu lai o Kho
        nhap de nhap tiep, hay da ket thuc lenh. Khong noi ra thi nguoi dung bam Gui, thay man hinh
        khong doi va khong biet la thanh cong hay khong. */
-    const ketQuaKhoNhap = isKhoNhap
-      ? { daNhap: knDaNhap, soCat: knSoCat, chuaDu: knChuaDu, giuLai: giuLaiOKhoNhap, ketThuc: !!ketThucKhoNhap }
+    /* v8.74: dung chung cho KN / QC / DG. Giu NGUYEN TEN truong `ketQuaKhoNhap` va cac khoa ben trong
+       — frontend v7.57 da doc theo ten nay; doi ten la ban JS cu (dang nam trong cache trinh duyet)
+       im lang mat thong bao, nguoi dung bam Gui ma khong biet chuyen gi xay ra. Them `maCongDoan` de
+       frontend noi dung ten cong doan trong thong bao. */
+    const ketQuaKhoNhap = coGateGiuLai
+      ? { maCongDoan: stage.MaCongDoan, tenCongDoan: stage.TenCongDoan,
+          daNhap: knDaNhap, soCat: knSoCat, chuaDu: knChuaDu, giuLai: giuLaiOCongDoan, ketThuc: !!ketThucKhoNhap }
       : null;
 
     // Bao cho cac user phu trach cong doan KE TIEP biet de cap nhat tien do (CHI khi thuc su tien toi cong doan moi).

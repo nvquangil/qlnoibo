@@ -27,6 +27,9 @@ const { loadGiaCong, loadInThe } = require('../utils/luongGiaCongInThe');
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/khovai.js (tong tien tren
    phieu nhap kho vai). Phieu va so cong no phai ra cung mot con so. */
 const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL } = require('../utils/tienVaiNhap');
+/* v8.77: phan DOC chi tiet chung tu nam o utils/chungTu.js de Bao cao kinh doanh dung chung.
+   Hang CT_LOAI trong file do la noi DUY NHAT khai danh sach loai chung tu doc duoc. */
+const { docChungTu } = require('../utils/chungTu');
 
 const router = express.Router();
 ['get', 'post', 'put', 'delete'].forEach(method => {
@@ -40,11 +43,23 @@ function so(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 // v7.53: lam tron 2 so le — dung dung quy tac `Math.round(x*100)/100` da dung khap file nay.
 function lam2(v) { return Math.round(so(v) * 100) / 100; }
 /* Chuan hoa 1 phieu THU: neu gan vao phieu ban hang thi BAT BUOC la khoan thu cua KHACH do va lay
-   DUNG TenKhach cua phieu (cong no khach nhom theo TEN, go lech dau/khoang trang la mat tien). */
+   DUNG TenKhach cua phieu (cong no khach nhom theo TEN, go lech dau/khoang trang la mat tien).
+
+   🔴 v8.78 — DOC KY TRUOC KHI SUA DONG `loai:` BEN DUOI
+   Ban cu viet: `loai: b.loaiDoiTuong === 'Khac' ? 'Khac' : 'KhachHang'` — tuc la WHITELIST NGUOC:
+   MOI gia tri khac 'Khac' deu bi ep thanh 'KhachHang'. Khi them loai NhaCungCap, neu de nguyen dong
+   do thi phieu thu cua NCC se duoc LUU XUONG LA 'KhachHang' mang ten NCC, roi congNoKhachHang()
+   (gom "Da thu" theo TEN voi dieu kien LoaiDoiTuong = N'KhachHang') cong thang so tien do vao cong
+   no cua mot "khach hang" trung ten NCC. Khong bao loi, khong ai thay.
+   Nang hon voi DOI TAC 2 CHIEU (v7.81, NhaCungCap.KhachHangID): tien se TRU no phai thu cua chinh
+   doi tac do thay vi tac dong len no phai tra => lech GAP DOI.
+   Nay dung whitelist XUOI nhu chuanHoaPhieuChi(): chi nhan dung 3 gia tri, la thi ve mac dinh. */
+const LOAI_DOI_TUONG_THU = ['KhachHang', 'NhaCungCap', 'Khac'];
 async function chuanHoaPhieuThu(pool, b) {
   const out = {
-    loai: b.loaiDoiTuong === 'Khac' ? 'Khac' : 'KhachHang',
+    loai: LOAI_DOI_TUONG_THU.includes(b.loaiDoiTuong) ? b.loaiDoiTuong : 'KhachHang',
     khachHangId: b.khachHangId || null,
+    nccId: b.nccId || null,
     ten: (b.tenDoiTuong || '').trim() || null,
     phieuBHID: b.phieuBHID || null
   };
@@ -60,7 +75,19 @@ async function chuanHoaPhieuThu(pool, b) {
   if (out.loai === 'KhachHang' && !out.ten) {
     return { loi: 'Thu của khách hàng thì phải có TÊN KHÁCH (công nợ nhóm theo tên khách).' };
   }
+  /* v8.78: thu cua NCC thi BAT BUOC chon NCC tu danh muc — cong no NCC nhom theo NCC_ID (khong theo
+     ten nhu ben khach), thieu id la khoan tien do khong vao so cua ai ca. */
+  if (out.loai === 'NhaCungCap') {
+    if (!out.nccId) return { loi: 'Thu của nhà cung cấp thì phải CHỌN nhà cung cấp từ danh mục.' };
+    const n = (await pool.request().input('id', sql.Int, out.nccId)
+      .query('SELECT TenNCC FROM NhaCungCap WHERE NCC_ID=@id')).recordset[0];
+    if (!n) return { loi: 'Nhà cung cấp được chọn không còn tồn tại.' };
+    if (!out.ten) out.ten = String(n.TenNCC || '').trim();
+  }
+  /* NULL hoa CHEO — y het chuanHoaPhieuChi(). Form an o chon van gui id cu: khong NULL hoa thi mot
+     phieu thu cua khach van mang NCC_ID -> rot vao cong no NCC, va nguoc lai. */
   if (out.loai !== 'KhachHang') out.khachHangId = null;
+  if (out.loai !== 'NhaCungCap') out.nccId = null;
   return out;
 }
 /* Chuan hoa 1 phieu CHI: chi giu NCC_ID khi that su chi cho NHA CUNG CAP, giu NhaGiaCongID khi chi cho
@@ -404,12 +431,27 @@ router.post('/phieuthu', requireAuth, requirePermission('CONGNO', 'create'), req
   if (loiTK) return res.status(400).json({ success: false, message: loiTK });
   const ch = await chuanHoaPhieuThu(pool, b);
   if (ch.loi) return res.status(400).json({ success: false, message: ch.loi });
+  // v8.78: do cot truoc — CSDL chua chay migration_v875 van lap duoc phieu thu khach nhu cu.
+  const coNCCThu = await coCot(pool, 'PhieuThu', 'NCC_ID');
+  if (ch.loai === 'NhaCungCap' && !coNCCThu) {
+    return res.status(400).json({ success: false,
+      message: 'CSDL chưa chạy migration_v875 nên chưa lưu được phiếu thu của nhà cung cấp.' });
+  }
+  /* v8.78: CHAN to hop vo nghia "NCC hoan tien" + "Chuyen thang".
+     Chuyen thang (v6.54) la: KHACH tra tien nhung chuyen thang cho NCC -> he thong tu sinh phieu chi
+     di kem. Ap vao khoan NCC hoan tien thi dien giai thanh 'Khách "<tên NCC>" chuyển thẳng...', va
+     neu chon dung chinh NCC do thi cong no +1tr roi -1tr, TRIET TIEU am tham. */
+  if (ch.loai === 'NhaCungCap' && hinhThuc === HT_CHUYEN_THANG) {
+    return res.status(400).json({ success: false,
+      message: 'Khoản NCC hoàn tiền thì không dùng hình thức "Chuyển thẳng" — tiền này về quỹ của mình.' });
+  }
   const soPhieu = await sinhSoPhieu(pool, 'PhieuThu', 'SoPhieu', 'PT');
   const kq = await pool.request()
     .input('SoPhieu', sql.NVarChar, soPhieu)
     .input('NgayThu', sql.Date, b.ngay || new Date())
     .input('Loai', sql.NVarChar, ch.loai)
     .input('KhachHangID', sql.Int, ch.khachHangId)
+    .input('NCC_ID', sql.Int, ch.nccId)
     .input('Ten', sql.NVarChar, ch.ten)
     .input('TaiKhoanID', sql.Int, b.taiKhoanId || null)
     .input('PhieuBHID', sql.Int, ch.phieuBHID)
@@ -419,10 +461,10 @@ router.post('/phieuthu', requireAuth, requirePermission('CONGNO', 'create'), req
     .input('NguoiTaoID', sql.Int, req.session.user.userId)
     .input('TaiKhoanNHID', sql.Int, tknh)
     .query(`INSERT INTO PhieuThu (SoPhieu, NgayThu, LoaiDoiTuong, KhachHangID, TenDoiTuong, TaiKhoanID,
-              PhieuBHID, SoTien, HinhThuc, DienGiai, NguoiTaoID${coNH ? ', TaiKhoanNHID' : ''})
+              PhieuBHID, SoTien, HinhThuc, DienGiai, NguoiTaoID${coNH ? ', TaiKhoanNHID' : ''}${coNCCThu ? ', NCC_ID' : ''})
             OUTPUT INSERTED.PhieuThuID
             VALUES (@SoPhieu, @NgayThu, @Loai, @KhachHangID, @Ten, @TaiKhoanID,
-              @PhieuBHID, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID${coNH ? ', @TaiKhoanNHID' : ''})`);
+              @PhieuBHID, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID${coNH ? ', @TaiKhoanNHID' : ''}${coNCCThu ? ', @NCC_ID' : ''})`);
   const phieuThuId = (kq.recordset[0] || {}).PhieuThuID;
 
   /* v6.54: CHUYỂN THẲNG -> tự sinh PHIẾU CHI đi kèm, cùng ngày/số tiền/hình thức.
@@ -495,10 +537,16 @@ router.put('/phieuthu/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
   if (loiTK) return res.status(400).json({ success: false, message: loiTK });
   const ch = await chuanHoaPhieuThu(pool, b);
   if (ch.loi) return res.status(400).json({ success: false, message: ch.loi });
+  const coNCCThu = await coCot(pool, 'PhieuThu', 'NCC_ID');
+  if (ch.loai === 'NhaCungCap' && !coNCCThu) {
+    return res.status(400).json({ success: false,
+      message: 'CSDL chưa chạy migration_v875 nên chưa lưu được phiếu thu của nhà cung cấp.' });
+  }
   await pool.request().input('id', sql.Int, req.params.id)
     .input('NgayThu', sql.Date, b.ngay || new Date())
     .input('Loai', sql.NVarChar, ch.loai)
     .input('KhachHangID', sql.Int, ch.khachHangId)
+    .input('NCC_ID', sql.Int, ch.nccId)
     .input('Ten', sql.NVarChar, ch.ten)
     .input('TaiKhoanID', sql.Int, b.taiKhoanId || null)
     .input('PhieuBHID', sql.Int, ch.phieuBHID)
@@ -509,7 +557,10 @@ router.put('/phieuthu/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
     /* v6.59: trường nào client KHÔNG gửi thì GIỮ NGUYÊN (ISNULL), gửi rồi mới ghi đè — kể cả ghi về
        rỗng. Form hiện gửi đủ nên chưa lộ, nhưng chỉ cần một chỗ gọi API thiếu một trường là cột đó
        về NULL: mất tài khoản, mất liên kết phiếu bán hàng, mất diễn giải. */
+    /* v8.78: NCC_ID ghi THANG (khong dung ISNULL giu cu) y het KhachHangID ngay tren — doi loai tu
+       NhaCungCap sang KhachHang ma van giu NCC_ID cu thi tien van nam trong cong no NCC. */
     .query(`UPDATE PhieuThu SET NgayThu=@NgayThu, LoaiDoiTuong=@Loai, KhachHangID=@KhachHangID,
+              ${coNCCThu ? 'NCC_ID=@NCC_ID,' : ''}
               TenDoiTuong=@Ten, SoTien=@SoTien, HinhThuc=@HinhThuc,
               ${coGui(b, 'taiKhoanId') ? 'TaiKhoanID=@TaiKhoanID' : 'TaiKhoanID=ISNULL(@TaiKhoanID, TaiKhoanID)'},
               ${coGui(b, 'phieuBHID') ? 'PhieuBHID=@PhieuBHID' : 'PhieuBHID=ISNULL(@PhieuBHID, PhieuBHID)'},
@@ -899,7 +950,7 @@ router.get('/congnokh', requireAuth, requirePermission('CONGNO', 'view'), requir
    rieng se troi khoi nhau (bai hoc "Dat hang nhanh" v6.44).
    v6.47: tra ve NGAY MOI NHAT LEN TRUOC. Luu y: LUY KE VAN PHAI TINH TU CU DEN MOI roi moi lat
    nguoc - tinh trong khi da dao chieu se ra so vo nghia. */
-async function soChiTietKH(pool, ten) {
+async function soChiTietKH(pool, ten, tuNgay, denNgay) {
   const rq = () => pool.request().input('k', sql.NVarChar, ten);
   /* v7.59: đánh dấu dòng phiếu GỬI MẪU. Khi đối chiếu nợ với khách, khoản này thường là thứ khách
      cãi ("cái này là mẫu anh mượn mà") — phải nhìn ra ngay trên sổ, không phải mở từng phiếu.
@@ -933,13 +984,99 @@ async function soChiTietKH(pool, ten) {
   const rows = [...ban, ...thu, ...dc, ...traLai].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
   let luy = 0;
   rows.forEach(r => { luy += so(r.PhatSinh) - so(r.ThanhToan); r.LuyKe = Math.round(luy * 100) / 100; });
-  return { khach: ten, rows: rows.slice().reverse(), conNo: Math.round(luy * 100) / 100 };
+  const conNo = Math.round(luy * 100) / 100;
+
+  /* ================================================================================================
+     v8.87 — CAT THEO KY (Nguyen 2026-10-12: "chon ky thi bang tong hop chua loc theo ky")
+
+     ⚠️ LUY KE PHAI TINH TREN TOAN BO PHAT SINH TRUOC, ROI MOI CAT — khong duoc dua ky vao menh de
+     WHERE cua cac cau SELECT ben tren. Loc o SQL thi cot "Con no luy ke" cong don lai tu 0, ra SO SAI
+     ma van in dep de va van duoc mang di doi chieu voi khach. Day la so tien, khong phai cot hien thi.
+
+     duDauKy = luy ke cua dong CUOI CUNG TRUOC tuNgay (khong co dong nao => 0).
+     duCuoiKy = luy ke cua dong CUOI CUNG TRONG KY (ky rong => bang duDauKy).
+     conNo    GIU NGUYEN NGHIA CU = con no tinh den HOM NAY. Khong doi nghia mot truong dang co:
+              dashboard va man danh sach dang doc no. Khi denNgay lui ve qua khu thi duCuoiKy va
+              conNo KHAC NHAU — frontend phai hien ca hai, dung de nguoi doc tu doan.
+     ================================================================================================ */
+  return Object.assign({ khach: ten, conNo }, catTheoKy(rows, conNo, tuNgay, denNgay));
 }
+
+/* Cat mot so cong no theo ky. DUNG CHUNG cho so khach hang va so nha cung cap — hai so cat khac
+   nhau thi som muon mot ben tinh du dau ky kieu khac, ma lech o day la lech TIEN.
+   `rows` phai la mang da sap xep CU -> MOI va DA co cot LuyKe. */
+function catTheoKy(rows, conNo, tuNgay, denNgay) {
+  const tu = chuanNgay(tuNgay), den = chuanNgay(denNgay, true);
+  if (tu === undefined || den === undefined) {
+    const e = new Error('Ngày lọc không hợp lệ (phải là YYYY-MM-DD).'); e.loiNhapLieu = true; throw e;
+  }
+  if (tu && den && tu > den) {
+    const e = new Error('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.'); e.loiNhapLieu = true; throw e;
+  }
+  if (!tu && !den) {
+    return { rows: rows.slice().reverse(), tuNgay: null, denNgay: null, duDauKy: 0, duCuoiKy: conNo };
+  }
+  const truocKy = tu ? rows.filter(r => new Date(r.Ngay) < tu) : [];
+  const duDauKy = truocKy.length ? truocKy[truocKy.length - 1].LuyKe : 0;
+  const trongKy = rows.filter(r => {
+    const d = new Date(r.Ngay);
+    return (!tu || d >= tu) && (!den || d <= den);
+  });
+  const duCuoiKy = trongKy.length ? trongKy[trongKy.length - 1].LuyKe : duDauKy;
+  return {
+    rows: trongKy.slice().reverse(),
+    tuNgay: vongNgay(tuNgay), denNgay: vongNgay(denNgay),
+    duDauKy, duCuoiKy
+  };
+}
+
+/* ⚠️ CHI NHAN DUNG 'YYYY-MM-DD' va dung Date.UTC — khong dua chuoi cho new Date() tu doan.
+   Ly do (ra cheo 2026-10-12 bat duoc):
+     - new Date('2026-10-31') parse thanh UTC 00:00Z, nhung new Date('2026-1-5') lai parse theo
+       GIO MAY. Tron hai kieu la chung tu ngay dau ky bi tinh vao "Du dau ky" — tien chay nham o.
+     - mssql de useUTC = true, nen r.Ngay tu CSDL ve cung la UTC. Moc so sanh phai cung he UTC.
+   Chuoi sai dinh dang tra undefined (KHAC null) de ben goi phan biet "khong chon" voi "chon sai",
+   thay vi am tham bo bo loc roi hien "Toan bo phat sinh" nhu the nguoi dung chua chon gi. */
+function chuanNgay(v, cuoiNgay) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return null;                                  // khong chon
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return undefined;                             // chon sai
+  const [, nam, thang, ngay] = m;
+  /* 'Den ngay' phai lay HET ngay do (23:59:59.999 UTC). De nguyen 00:00 thi moi chung tu lap TRONG
+     ngay cuoi ky deu bi rot ra ngoai — ky thang 10 mat sach phieu ngay 31/10 ma khong bao gi.
+     Dung setUTCHours chu KHONG phai setHours: setHours sua theo gio may (+7) nen moc that lui ve
+     16:59:59Z, cat mat phan cuoi ngay. */
+  const t = Date.UTC(Number(nam), Number(thang) - 1, Number(ngay),
+    cuoiNgay ? 23 : 0, cuoiNgay ? 59 : 0, cuoiNgay ? 59 : 0, cuoiNgay ? 999 : 0);
+  const d = new Date(t);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+// Vong lai dung chuoi NGUOI DUNG GUI, khong dung toISOString() — xem feedback "ngay theo gio VN".
+function vongNgay(v) {
+  const s = String(v == null ? '' : v).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/* Kiem ky NGAY O ROUTE, truoc khi chay truy van. So NCC chay 8 cau SQL roi moi toi catTheoKy() —
+   go sai mot ky xong phai doi het 8 cau de nhan "ngay khong hop le" la vo ly.
+   Tra chuoi loi, hoac null neu hop le. */
+function loiKy(tuNgay, denNgay) {
+  const tu = chuanNgay(tuNgay), den = chuanNgay(denNgay, true);
+  if (tu === undefined || den === undefined) return 'Ngày lọc không hợp lệ (phải là YYYY-MM-DD).';
+  if (tu && den && tu > den) return 'Từ ngày phải nhỏ hơn hoặc bằng đến ngày.';
+  return null;
+}
+
 router.get('/congnokh/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
   const pool = await getPool();
   const ten = String(req.query.khach || '').trim();
   if (!ten) return res.status(400).json({ success: false, message: 'Thiếu tên khách.' });
-  res.json({ success: true, data: await soChiTietKH(pool, ten) });
+  // Ky nhap sai -> 400 (loi nghiep vu), KHONG 401/500. Xem feedback "khong tra 401 cho loi nghiep vu".
+  const lk = loiKy(req.query.tuNgay, req.query.denNgay);
+  if (lk) return res.status(400).json({ success: false, message: lk });
+  // Khong truyen ky => tra y nhu truoc v8.87. Dashboard va cac cho goi cu khong phai sua gi.
+  res.json({ success: true, data: await soChiTietKH(pool, ten, req.query.tuNgay, req.query.denNgay) });
 });
 
 /* ================================================================================================
@@ -959,6 +1096,15 @@ async function congNoNCC(pool) {
   const chi = (await pool.request().query(`
     SELECT NCC_ID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuChi
     WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap' GROUP BY NCC_ID`)).recordset;
+  /* v8.78 — THU LAI TU NCC (NCC hoan tien thua / hang loi / chiet khau tra sau).
+     Tien chay NGUOC chieu phieu chi: minh da tra IT DI => tru vao "Da tra" => CON NO TANG lai.
+     ⚠️ Cong thuc nay phai KHOP voi soChiTietNCC() ben duoi (o do phieu thu vao cot ThanhToan voi
+     DAU AM). Hai ban tinh song song ma lech nhau thi bang tong va so chi tiet ra hai con so khac
+     nhau — dung lop loi da ghi o comment v6.78 ngay duoi. */
+  const coNCCThu = await coCot(pool, 'PhieuThu', 'NCC_ID');
+  const thuLai = coNCCThu ? (await pool.request().query(`
+    SELECT NCC_ID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuThu
+    WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap' GROUP BY NCC_ID`)).recordset : [];
   const dc = (await pool.request().query(`
     SELECT NCC_ID, SUM(SoTien) AS Tien FROM CongNoDieuChinh
     WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL GROUP BY NCC_ID`)).recordset;
@@ -998,18 +1144,24 @@ async function congNoNCC(pool) {
   const g = (arr, id) => so((arr.find(x => x.NCC_ID === id) || {}).Tien);
   const gp = (arr, id) => so((arr.find(x => x.NCC_ID === id) || {}).SoPhieu);
   const rows = ncc.map(n => {
-    const tienVai = g(vai, n.NCC_ID), tienPK = g(pk, n.NCC_ID), dieuChinh = g(dc, n.NCC_ID), daTra = g(chi, n.NCC_ID);
+    const tienVai = g(vai, n.NCC_ID), tienPK = g(pk, n.NCC_ID), dieuChinh = g(dc, n.NCC_ID);
     const traLai = g(traVai, n.NCC_ID) + g(traPK, n.NCC_ID);
     const tienHH = g(nhapHH, n.NCC_ID);                  // v6.78: nhap kho hang hoa tu NCC
+    /* v8.78: "Da tra" = tien CHI ra TRU tien NCC HOAN lai. Thu lai cang nhieu thi da tra cang it,
+       nen con no tang — dung chieu nghiep vu. Khop voi soChiTietNCC(): o do phieu thu la ThanhToan AM. */
+    const thuLaiNCC = g(thuLai, n.NCC_ID);
+    const daTra = g(chi, n.NCC_ID) - thuLaiNCC;
     const phaiTra = tienVai + tienPK + tienHH + dieuChinh - traLai;
     return {
       NCC_ID: n.NCC_ID, TenNCC: n.TenNCC,
       TienVai: Math.round(tienVai * 100) / 100, TienPhuKien: Math.round(tienPK * 100) / 100,
       TienHangHoa: Math.round(tienHH * 100) / 100,
       DieuChinh: Math.round(dieuChinh * 100) / 100, TraLai: Math.round(traLai * 100) / 100,
+      ThuLai: Math.round(thuLaiNCC * 100) / 100,       // v8.78: tien NCC hoan lai, de doi chieu
       PhaiTra: Math.round(phaiTra * 100) / 100, DaTra: Math.round(daTra * 100) / 100,
       ConNo: Math.round((phaiTra - daTra) * 100) / 100,
       SoPhieuNhapVai: gp(vai, n.NCC_ID), SoPhieuNhapPK: gp(pk, n.NCC_ID), SoPhieuChi: gp(chi, n.NCC_ID),
+      SoPhieuThu: gp(thuLai, n.NCC_ID),
       SoPhieuTraLai: gp(traVai, n.NCC_ID) + gp(traPK, n.NCC_ID),
       SoPhieuNhapHH: gp(nhapHH, n.NCC_ID)
     };
@@ -1023,7 +1175,7 @@ router.get('/congnoncc', requireAuth, requirePermission('CONGNO', 'view'), requi
 });
 // So chi tiet 1 NCC: tung phieu nhap vai / nhap phu kien / phieu chi / dieu chinh
 // v6.47: tach ham rieng (dung chung voi xuat Excel) + tra ve NGAY MOI NHAT LEN TRUOC.
-async function soChiTietNCC(pool, id) {
+async function soChiTietNCC(pool, id, tuNgay, denNgay) {
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
   const rq = () => pool.request().input('id', sql.Int, id);
@@ -1054,6 +1206,19 @@ async function soChiTietNCC(pool, id) {
     SELECT NgayChi AS Ngay, SoPhieu, 0 AS PhatSinh, SoTien AS ThanhToan, N'Phiếu chi' AS Loai, DienGiai,
            N'PC' AS CtLoai, PhieuChiID AS CtID
     FROM PhieuChi WHERE NCC_ID = @id AND LoaiDoiTuong = N'NhaCungCap'`)).recordset;
+  /* v8.78 — THU LAI TU NCC: ghi vao cot ThanhToan voi DAU AM.
+     Luy ke = PhatSinh - ThanhToan, nen ThanhToan am => luy ke TANG => con no tang. Dung chieu:
+     NCC hoan tien tuc la minh da tra it di.
+     ⚠️ VI SAO vao ThanhToan chu khong phai PhatSinh (am/duong): comment v6.66 ngay duoi noi ro cot
+     ThanhToan la TIEN THUC, khong duoc tron hang tra vao. Phieu thu DUNG la tien thuc, chi khac
+     chieu — nen no thuoc cot nay. PhatSinh danh cho gia tri HANG HOA.
+     ⚠️ Cong thuc PHAI KHOP congNoNCC(): o tren daTra = SUM(chi) - SUM(thu). */
+  const coNCCThu2 = await coCot(pool, 'PhieuThu', 'NCC_ID');
+  const thuNCC = coNCCThu2 ? (await rq().query(`
+    SELECT NgayThu AS Ngay, SoPhieu, 0 AS PhatSinh, -SoTien AS ThanhToan,
+           N'Thu lại từ NCC' AS Loai, DienGiai,
+           N'PT' AS CtLoai, PhieuThuID AS CtID
+    FROM PhieuThu WHERE NCC_ID = @id AND LoaiDoiTuong = N'NhaCungCap'`)).recordset : [];
   const dc = (await rq().query(`
     SELECT Ngay, N'' AS SoPhieu, SoTien AS PhatSinh, 0 AS ThanhToan, N'Điều chỉnh' AS Loai, DienGiai,
            NULL AS CtLoai, NULL AS CtID
@@ -1095,17 +1260,24 @@ async function soChiTietNCC(pool, id) {
            N'PNKH' AS CtLoai, p.PhieuNKID AS CtID
     FROM PhieuNhapKhoHang p
     WHERE p.LoaiNhap = N'NhaCungCap' AND p.NCC_ID = @id AND p.TrangThai <> N'Đã hủy'`)).recordset : [];
-  const rows = [...vai, ...pk, ...chi, ...dc, ...traVai, ...traPK, ...nhapHH].sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
+  const rows = [...vai, ...pk, ...chi, ...thuNCC, ...dc, ...traVai, ...traPK, ...nhapHH]
+    .sort((a, b) => new Date(a.Ngay) - new Date(b.Ngay));
   let luy = 0;
   rows.forEach(r => { luy += so(r.PhatSinh) - so(r.ThanhToan); r.LuyKe = Math.round(luy * 100) / 100; });
   const ten = (await rq().query('SELECT TenNCC FROM NhaCungCap WHERE NCC_ID=@id')).recordset[0] || {};
-  return { nccId: id, tenNCC: ten.TenNCC || '', rows: rows.slice().reverse(), conNo: Math.round(luy * 100) / 100 };
+  const conNo = Math.round(luy * 100) / 100;
+  // v8.89: cat ky bang CUNG mot ham voi so khach hang — xem catTheoKy().
+  return Object.assign({ nccId: id, tenNCC: ten.TenNCC || '', conNo },
+    catTheoKy(rows, conNo, tuNgay, denNgay));
 }
 router.get('/congnoncc/chitiet', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnoncc'), async (req, res) => {
   const pool = await getPool();
   const id = parseInt(req.query.nccId, 10);
   if (!id) return res.status(400).json({ success: false, message: 'Thiếu nhà cung cấp.' });
-  res.json({ success: true, data: await soChiTietNCC(pool, id) });
+  const lk = loiKy(req.query.tuNgay, req.query.denNgay);
+  if (lk) return res.status(400).json({ success: false, message: lk });
+  // Khong truyen ky => tra y nhu truoc v8.89.
+  res.json({ success: true, data: await soChiTietNCC(pool, id, req.query.tuNgay, req.query.denNgay) });
 });
 
 /* ================================================================================================
@@ -1651,158 +1823,27 @@ router.get('/congnogiacong/chitiet', requireAuth, requirePermission('CONGNO', 'v
 /* ================================================================================================
    v6.55 — XEM CHI TIET 1 CHUNG TU TU SO CONG NO
    ------------------------------------------------------------------------------------------------
-   1 route dung chung cho 4 loai chung tu xuat hien trong so cong no. Tra ve { header, dong[] };
-   phieu thu/chi khong co dong nen dong = [].
+   Tra ve { tieuDe, header, dong[] }; phieu thu/chi khong co dong nen dong = [].
    Quyen: chi can CONGNO/view — nguoi xem so cong no phai xem duoc chung tu tao ra so do, khong the
    bat ho phai co them quyen cua phan he Kho vai / Phu kien.
+
+   v8.77 — PHAN DOC da chuyen sang utils/chungTu.js vi Bao cao kinh doanh cung can dung no, ma hai
+   man hinh khong the dung chung route (quyen khac nhau: CONGNO/view vs BAOCAO/view). Route nay gio
+   chi lam mot viec: gate quyen roi goi docChungTu(). Them loai chung tu moi thi sua utils/chungTu.js,
+   KHONG sua o day — sua mot ben la lech ngay.
    ================================================================================================ */
 router.get('/chungtu', requireAuth, requirePermission('CONGNO', 'view'), async (req, res) => {
   try {
     const pool = await getPool();
-    const loai = String(req.query.loai || '').trim();
-    const id = parseInt(req.query.id, 10);
-    if (!id) return res.status(400).json({ success: false, message: 'Thiếu mã chứng từ.' });
-    const rq = () => pool.request().input('id', sql.Int, id);
-
-    if (loai === 'PT') {
-      const h = (await rq().query(`
-        SELECT t.*, tk.MaTK, tk.TenTK, u.HoTen AS NguoiTao
-        FROM PhieuThu t LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = t.TaiKhoanID
-        LEFT JOIN Users u ON u.UserID = t.NguoiTaoID WHERE t.PhieuThuID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu thu.' });
-      return res.json({ success: true, data: { tieuDe: 'Phiếu thu ' + (h.SoPhieu || ''), header: h, dong: [] } });
-    }
-    if (loai === 'PC') {
-      const h = (await rq().query(`
-        SELECT c.*, tk.MaTK, tk.TenTK, ncc.TenNCC, u.HoTen AS NguoiTao
-        FROM PhieuChi c LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
-        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
-        LEFT JOIN Users u ON u.UserID = c.NguoiTaoID WHERE c.PhieuChiID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu chi.' });
-      return res.json({ success: true, data: { tieuDe: 'Phiếu chi ' + (h.SoPhieu || ''), header: h, dong: [] } });
-    }
-    if (loai === 'PNV') {
-      const h = (await rq().query(`
-        SELECT pn.*, ncc.TenNCC FROM PhieuNhapVai pn
-        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = pn.NCC_ID WHERE pn.PhieuNhapID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập vải.' });
-      /* v6.56.1: DanhMucVai KHÔNG có cột TenVai — tên vải là ghép của Loại vải + Màu (giống mọi
-         truy vấn khác trong khovai.js). Mã hiện là MaCay (mã cây), phần tên ghép từ 2 bảng kia. */
-      const dong = (await rq().query(`
-        SELECT vc.MaCay,
-               LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
-               ${await bieuThucSoLuongTinhTien(pool, 'vc', 'pnv')} AS SoLuong,
-               ${await bieuThucDonViSQL(pool, 'pnv')} AS DonVi, vc.DonGiaNhap AS DonGia,
-               ${await bieuThucTienCay(pool, 'vc', 'pnv')} AS ThanhTien
-        FROM VaiCay vc
-        JOIN PhieuNhapVai pnv ON pnv.PhieuNhapID = vc.PhieuNhapID
-        LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
-        LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
-        LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
-        WHERE vc.PhieuNhapID = @id ORDER BY vc.CayID`)).recordset;
-      // v6.56.2: tiêu đề dùng ĐÚNG số phiếu như màn Phiếu nhập kho vải, không dùng số hóa đơn NCC.
-      const soPN = 'NKV-' + String(id).padStart(5, '0');   // v6.57
-      return res.json({ success: true, data: { tieuDe: 'Phiếu nhập vải ' + soPN + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''), header: h, dong } });
-    }
-    /* v7.48: PNPK (nhập) va PXPK (tra phu kien ve NCC) dung CUNG hai bang — chi khac tien to so phieu
-       va nhan tieu de. Viet hai nhanh rieng la som muon lech mot ben. */
-    if (loai === 'PNPK' || loai === 'PXPK') {
-      const laTra = loai === 'PXPK';
-      const h = (await rq().query(`
-        SELECT p.*, ncc.TenNCC FROM PhieuPhuKien p
-        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID WHERE p.PhieuID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu phụ kiện.' });
-      const dong = (await rq().query(`
-        SELECT pk.MaPhuKien AS MaCay, pk.TenPhuKien AS Ten, ct.SoLuong, pk.DonViCoBan AS DonVi,
-               ct.DonGia, (ISNULL(ct.SoLuong,0) * ISNULL(ct.DonGia,0)) AS ThanhTien
-        FROM PhieuPhuKienChiTiet ct LEFT JOIN DanhMucPhuKien pk ON pk.PhuKienID = ct.PhuKienID
-        WHERE ct.PhieuID = @id ORDER BY ct.ID`)).recordset;
-      // v6.56.2: so phieu dem 5 chu so, GIONG chuoi so cong no dang hien (NPK-/XPK-).
-      const soPK = (laTra ? 'XPK-' : 'NPK-') + String(id).padStart(5, '0');
-      const nhan = laTra ? 'Phiếu trả phụ kiện NCC ' : 'Phiếu nhập phụ kiện ';
-      return res.json({ success: true, data: { tieuDe: nhan + soPK + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''), header: h, dong } });
-    }
-    /* ============================================================================================
-       v7.48 — BA loai chung tu CO trong so cong no NCC nhung TRUOC DAY khong mo duoc:
-         PNKH = Phieu nhap kho hang hoa (dong "Nhập kho hàng hóa" — nguoi dung bam vao bao
-                "Loại chứng từ không hỗ trợ xem chi tiết")
-         PXV  = Phieu xuat vai TRA NCC        PXPK = Phieu xuat phu kien TRA NCC (o nhanh tren)
-       Goc loi: soChiTietNCC() sinh 7 CtLoai (PNV, PNPK, PC, PXV, PXPK, PNKH) ma route /chungtu chi
-       xu ly 4. Sinh o mot ben, doc o ben kia, hai danh sach khong ai buoc phai khop nhau.
-       ============================================================================================ */
-    if (loai === 'PNKH') {
-      const h = (await rq().query(`
-        SELECT p.*, ncc.TenNCC, u.HoTen AS NguoiTao FROM PhieuNhapKhoHang p
-        LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
-        LEFT JOIN Users u ON u.UserID = p.NguoiTaoID WHERE p.PhieuNKID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho hàng hóa.' });
-      const dong = (await rq().query(`
-        SELECT hh.MaHang AS MaCay,
-               LTRIM(RTRIM(ISNULL(hh.TenHang, '') + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
-               ct.SoLuong, ct.DonVi, ct.DonGia, ct.ThanhTien
-        FROM PhieuNhapKhoHangChiTiet ct
-        LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
-        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-        WHERE ct.PhieuNKID = @id ORDER BY ct.ID`)).recordset;
-      return res.json({ success: true, data: {
-        tieuDe: 'Phiếu nhập kho hàng hóa ' + (h.SoPhieu || '') + (h.SoHoaDon ? ` (HĐ ${h.SoHoaDon})` : ''),
-        header: h, dong } });
-    }
-    /* PNL = phieu NHAP LAI (hang khach tra). Xuat hien o so cong no KHACH HANG (dong "Phiếu nhập lại")
-       va truoc day cung KHONG mo duoc — cung mot goc loi voi PNKH, phat hien khi doi chieu danh sach
-       CtLoai sinh ra vs doc duoc (xem utils/kiem_chungtu_congno_ncc.js muc 1). */
-    if (loai === 'PNL') {
-      const h = (await rq().query(`
-        SELECT p.*, p.TenKhach AS TenDoiTuong, p.TongThanhToan AS SoTien, u.HoTen AS NguoiTao
-        FROM PhieuNhapLai p LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
-        WHERE p.PhieuNLID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập lại.' });
-      /* TenDoiTuong / SoTien la BUT DANH cho modal xem chung tu dung chung (no doc 2 ten nay) —
-         khong phai cot that cua bang. Doi ten o modal thi phai doi ca o day. */
-      const dong = (await rq().query(`
-        SELECT hh.MaHang AS MaCay,
-               LTRIM(RTRIM(ISNULL(hh.TenHang, '') + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
-               ct.SoLuong, ct.DonVi, ct.GiaBan AS DonGia, ct.ThanhTien
-        FROM PhieuNhapLaiChiTiet ct
-        LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
-        LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
-        WHERE ct.PhieuNLID = @id ORDER BY ct.ID`)).recordset;
-      return res.json({ success: true, data: {
-        tieuDe: 'Phiếu nhập lại (khách trả) ' + (h.SoPhieu || ''), header: h, dong } });
-    }
-    if (loai === 'PXV') {
-      /* NCC_ID / LaTraNCC den tu migration_v6.66 — do cot truoc khi JOIN, khong thi CSDL chua chay
-         migration se bao "Invalid column name" thay vi mo duoc phieu. */
-      const coNCC = await coCot(pool, 'PhieuXuatVai', 'NCC_ID');
-      const h = (await rq().query(`
-        SELECT px.*${coNCC ? ', ncc.TenNCC' : ''} FROM PhieuXuatVai px
-        ${coNCC ? 'LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = px.NCC_ID' : ''}
-        WHERE px.PhieuXuatID = @id`)).recordset[0];
-      if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu xuất vải.' });
-      const coGia = await coCot(pool, 'VaiCay', 'DonGiaNhap');
-      const cotGia = coGia ? 'vc.DonGiaNhap' : 'CAST(NULL AS DECIMAL(14,2))';
-      const dong = (await rq().query(`
-        SELECT vc.MaCay,
-               LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
-               ct.KGXuat AS SoLuong, N'Kg' AS DonVi, ${cotGia} AS DonGia,
-               (ISNULL(ct.KGXuat,0) * ISNULL(${cotGia}, 0)) AS ThanhTien
-        FROM PhieuXuatVaiChiTiet ct
-        JOIN VaiCay vc ON vc.CayID = ct.CayID
-        LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
-        LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
-        LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
-        WHERE ct.PhieuXuatID = @id ORDER BY ct.ID`)).recordset;
-      // Chuoi so phieu GIONG so cong no dang hien (XKV-#####), de doi chieu khong phai doan.
-      const soPX = 'XKV-' + String(id).padStart(5, '0');
-      return res.json({ success: true, data: { tieuDe: 'Phiếu trả vải NCC ' + soPX, header: h, dong } });
-    }
-    return res.status(400).json({ success: false,
-      message: `Loại chứng từ "${loai || '(trống)'}" không hỗ trợ xem chi tiết.` });
+    const kq = await docChungTu(pool, req.query.loai, req.query.id);
+    if (kq.status) return res.status(kq.status).json({ success: false, message: kq.message });
+    return res.json({ success: true, data: kq.data });
   } catch (err) {
     console.error('[congno GET /chungtu] ', err);
-    res.status(400).json({ success: false, message: 'Lỗi khi đọc chứng từ: ' + err.message });
+    return res.status(400).json({ success: false, message: 'Lỗi khi đọc chứng từ: ' + err.message });
   }
 });
+
 
 /* ================================================================================================
    8. XUAT EXCEL cong no (KH hoac NCC) — 1 route dung chung
@@ -2125,8 +2166,12 @@ async function coBang(pool, ten) {
 }
 /* Ma viet tat o cot "Ma", dat theo mau nguoi dung dua (HD = hoa don ban hang, PT = phieu thu...).
    Co chu giai ngay duoi tieu de sheet nen nguoi doc khong phai doan. */
+/* ⚠️ KHOA cua bang nay la chuoi `Loai` do soChiTietKH()/soChiTietNCC() sinh ra. Them mot nhan `Loai`
+   moi o hai ham do ma quen them o day thi cot "Ma" cua dong do BO TRONG — moi dong khac deu co ma,
+   rieng no trong, khong bao loi gi. (v8.78 them 'Thu lại từ NCC'.) */
 const MA_CHUNG_TU = {
   'Phiếu bán hàng': 'HD', 'Phiếu thu': 'PT', 'Phiếu chi': 'PC',
+  'Thu lại từ NCC': 'PT',
   'Phiếu nhập lại': 'NL', 'Điều chỉnh': 'DC',
   'Nhập vải': 'NV', 'Nhập phụ kiện': 'NPK', 'Nhập kho hàng hóa': 'NKH',
   'Trả vải NCC': 'TV', 'Trả phụ kiện NCC': 'TPK'
@@ -2259,10 +2304,19 @@ async function dongHangTheoChungTu(pool, rows) {
 /* Chia doi so tien cua mot dong so thanh (tang no / giam no).
    PhatSinh AM (phieu nhap lai, tra hang NCC, dieu chinh am) phai chay sang cot GIAM NO duoi dang so
    DUONG - de nguyen so am o cot tang no thi cot do vua cong vua tru, dong "Phat sinh trong ky" se ra
-   con so khong doi chieu duoc voi bat ky chung tu nao. */
+   con so khong doi chieu duoc voi bat ky chung tu nao.
+
+   v8.78: THANH TOAN cung co the AM — phieu thu lai tu NCC (soChiTietNCC ghi ThanhToan = -SoTien).
+   Ban cu chi xu ly PhatSinh am, nen so am do roi thang vao cot "Phieu chi" => cot do vua cong vua
+   tru, Y HET lop loi ma doan tren mo ta, chi khac CHIEU. Nguy hiem o cho SO DU CUOI KY VAN DUNG
+   (tangNo - giamNo tu triet tieu) nen canh bao "Lech" khong he no ra — sai im lang.
+   Nay xu ly doi xung ca hai cot. */
 function xeTien(r) {
   const ps = so(r.PhatSinh), tt = so(r.ThanhToan);
-  return { tangNo: ps > 0 ? ps : 0, giamNo: tt + (ps < 0 ? -ps : 0) };
+  return {
+    tangNo: (ps > 0 ? ps : 0) + (tt < 0 ? -tt : 0),
+    giamNo: (tt > 0 ? tt : 0) + (ps < 0 ? -ps : 0)
+  };
 }
 
 /* Lay du lieu (can CSDL) roi giao cho veSoKeToan() ve ra sheet.

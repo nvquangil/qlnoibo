@@ -157,6 +157,77 @@ window.ModuleBaoCao = (function () {
      v6.33: BAM VAO MA (hang hoa / vai / phu kien) -> POPUP CHI TIET XUAT NHAP TRONG KY.
      Ton dau ky lay tu chinh ham bao cao o backend nen so tren popup LUON khop bang tong hop.
      ================================================================================================ */
+  /* ================================================================================================
+     v8.77 — BAM VAO CỘT "SỐ PHIẾU" ĐỂ XEM CHI TIẾT CHỨNG TỪ
+     ------------------------------------------------------------------------------------------------
+     Dùng chung cho CẢ 4 popup: chi tiết tồn vải / tồn phụ kiện / tồn hàng hóa / chi tiết thu chi.
+     Backend trả kèm CtLoai + CtID ngay trong từng dòng; dòng nào KHÔNG có (ví dụ "Đơn khách (dữ liệu
+     cũ)" — nó không sinh ra từ phiếu nào) thì để nguyên chữ, không dựng link.
+
+     Đọc qua /api/baocao/chungtu (gate BAOCAO/view), KHÔNG gọi thẳng route của phân hệ Kho vải /
+     Phụ kiện / Bán hàng — mấy route đó gate bằng quyền của phân hệ, người chỉ có quyền Báo cáo bấm
+     vào sẽ nhận 403. Cùng cách làm với module.congno.js (xemChungTu) và module.qlsx.js.
+     (Cố ý KHÔNG viết đường dẫn đầy đủ của mấy route đó trong comment này: bộ tự kiểm
+     kiem_chungtu_congno_ncc.js quét cả file để chắc chắn không ai gọi thẳng, nó không phân biệt
+     được code với comment.)
+     Modal này CHỈ XEM — không có nút Sửa / Hủy / Xóa.
+     ================================================================================================ */
+  function oSoPhieu(r) {
+    const nhan = escapeHtml(r.SoPhieu || '');
+    if (!r.CtLoai || !r.CtID) return nhan;
+    return `<a href="javascript:void(0)" class="act-ct-xem" data-loai="${escapeHtml(r.CtLoai)}"`
+      + ` data-id="${escapeHtml(String(r.CtID))}"><b>${nhan || '(xem)'}</b></a>`;
+  }
+
+  async function xemChungTu(loai, id) {
+    let d;
+    try {
+      d = (await apiGet(`/api/baocao/chungtu?loai=${encodeURIComponent(loai)}&id=${encodeURIComponent(id)}`)).data;
+    } catch (err) { toast('Không mở được chứng từ: ' + err.message, 'error'); return; }
+    const h = d.header || {};
+    const dong = d.dong || [];
+    // Mỗi loại phiếu đặt tên cột ngày một kiểu — thử lần lượt thay vì bắt backend đổi tên.
+    const ngay = h.NgayThu || h.NgayChi || h.NgayNhap || h.NgayXuat || h.NgayBan || h.Ngay;
+    const doiTuong = h.TenDoiTuong || h.TenNCC || h.TenKhach || h.NguoiNhan || '';
+    const tong = dong.reduce((s, x) => s + (Number(x.ThanhTien) || 0), 0);
+    const m = openModal(`
+      <h3>${escapeHtml(d.tieuDe || 'Chứng từ')}</h3>
+      <div style="font-size:13px;margin-bottom:8px;">
+        <b>Ngày:</b> ${fmtDate(ngay)}${doiTuong ? ` · <b>Đối tượng:</b> ${escapeHtml(doiTuong)}` : ''}
+        ${h.MaTK ? ` · <b>Tài khoản:</b> ${escapeHtml(h.MaTK + ' - ' + (h.TenTK || ''))}` : ''}
+        ${h.HinhThuc ? ` · <b>Hình thức:</b> ${escapeHtml(h.HinhThuc)}` : ''}
+        ${h.SoTien != null ? `<div style="font-size:15px;margin-top:4px;">Số tiền: <b style="color:#c0392b;">${fmtNumber(h.SoTien)}</b> đ</div>` : ''}
+        ${h.DienGiai || h.GhiChu ? `<div style="color:#5f6368;">Diễn giải: ${escapeHtml(h.DienGiai || h.GhiChu)}</div>` : ''}
+        ${h.NguoiTao ? `<div style="color:#5f6368;">Người tạo: ${escapeHtml(h.NguoiTao)}</div>` : ''}
+      </div>
+      ${dong.length ? `<div style="max-height:50vh;overflow:auto;">
+        <table><thead><tr><th>STT</th><th>Mã</th><th>Tên</th><th>SL</th><th>ĐVT</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+        <tbody>${dong.map((x, i) => `<tr>
+          <td>${i + 1}</td><td>${escapeHtml(x.MaCay || '')}</td><td>${escapeHtml(x.Ten || '')}</td>
+          <td style="text-align:right;">${fmtNumber(x.SoLuong)}</td><td>${escapeHtml(x.DonVi || '')}</td>
+          <td style="text-align:right;">${fmtNumber(x.DonGia)}</td>
+          <td style="text-align:right;"><b>${fmtNumber(x.ThanhTien)}</b></td></tr>`).join('')}
+          <tr data-tong style="font-weight:bold;background:#f1f3f4;"><td colspan="6" style="text-align:right;">TỔNG</td>
+            <td style="text-align:right;">${fmtNumber(tong)}</td></tr></tbody></table></div>`
+        : '<div class="empty-hint">Chứng từ này không có dòng chi tiết.</div>'}
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="btnDongCT">Đóng</button>
+      </div>`);
+    // Modal stack của common.js tự khôi phục popup cha khi đóng — không phải tự vẽ lại.
+    m.querySelector('#btnDongCT').addEventListener('click', closeModal);
+  }
+
+  // Gắn sự kiện cho mọi ô số phiếu bấm được trong 1 popup.
+  function noiDaySoPhieu(modal) {
+    modal.querySelectorAll('.act-ct-xem').forEach(a => a.addEventListener('click',
+      () => xemChungTu(a.dataset.loai, a.dataset.id)));
+  }
+
+  // v8.77: bản IN không nên hiện link xanh gạch chân — trả chữ về đen, bỏ gạch.
+  const CSS_IN_BANG = 'table{width:100%;border-collapse:collapse;font-size:12px;}'
+    + 'th,td{border:1px solid #333;padding:4px 6px;}th{background:#eee;text-align:center;}'
+    + 'a{color:inherit;text-decoration:none;}';
+
   const nhanApi = { tonhanghoa: 'maHang', tonvai: 'maVai', tonphukien: 'maPhuKien' };
   async function moChiTietTon(loai, ma) {
     const res = await apiGet(`/api/baocao/${loai}/chitiet?${nhanApi[loai]}=${encodeURIComponent(ma)}`
@@ -179,7 +250,7 @@ window.ModuleBaoCao = (function () {
           <td style="text-align:center;">${i + 1}</td>
           <td>${fmtDate(r.Ngay)}</td>
           <td>${r.Nhap ? '<span style="color:#137333;">' : '<span style="color:#c0392b;">'}${escapeHtml(r.Loai)}</span></td>
-          <td>${escapeHtml(r.SoPhieu || '')}</td>
+          <td>${oSoPhieu(r)}</td>
           ${laVai ? `<td>${escapeHtml(r.MaCay || '')}</td>` : ''}
           <td>${escapeHtml(r.DoiTuong || r.TenMau || '')}</td>
           <td style="text-align:right;color:#137333;">${r.Nhap ? fmtNumber(r.Nhap) : ''}</td>
@@ -204,10 +275,11 @@ window.ModuleBaoCao = (function () {
         <button type="button" class="btn" id="ctIn">🖨️ In</button>
       </div>`);
     modal.querySelector('#ctDong').addEventListener('click', closeModal);
+    noiDaySoPhieu(modal);   // v8.77
     modal.querySelector('#ctIn').addEventListener('click', () => printHtml(`Chi tiết ${d.ma}`,
       `<h2 style="text-align:center;margin:0 0 2px;">CHI TIẾT XUẤT NHẬP — ${escapeHtml(d.ma)}</h2>
        <div style="text-align:center;font-style:italic;margin-bottom:10px;">${escapeHtml(d.ten || '')} · Kỳ ${fmtDate(ky.tuNgay)} – ${fmtDate(ky.denNgay)}</div>
-       ${bang}`, { logo: true, extraStyle: 'table{width:100%;border-collapse:collapse;font-size:12px;}th,td{border:1px solid #333;padding:4px 6px;}th{background:#eee;text-align:center;}' }));
+       ${bang}`, { logo: true, extraStyle: CSS_IN_BANG }));
   }
   // Gắn sự kiện cho mọi ô mã trong bảng tồn kho (dùng lại sau mỗi lần vẽ bảng).
   function wireMoChiTiet(goc, loai) {
@@ -244,8 +316,15 @@ window.ModuleBaoCao = (function () {
           <td colspan="4" style="text-align:right;">TỔNG</td>
           ${oSo(t.TonDauKG)}${oSo(t.NhapKG)}${oSo(t.XuatKG)}${oSo(t.TonCuoiKG)}
           <td colspan="4"></td><td></td>${oTien(t.GiaTriTon)}</tr>` : ''}
-        ${rows.map(r => `<tr>
-          <td><a href="javascript:void(0)" class="bc-ma" data-ma="${escapeHtml(r.MaVai)}" title="Xem chi tiết xuất nhập trong kỳ">${escapeHtml(r.MaVai)}</a></td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
+        ${/* v8.73: data-tim gắn SẴN, gồm cả DANH SÁCH MÃ CÂY — mã cây không nằm trong bảng (bảng
+             gom theo mã vải) nên ô tìm đọc textContent sẽ không bao giờ thấy. Gõ mã cây ra đúng
+             dòng mã vải chứa cây đó; bấm vào mã vải để xem chi tiết từng cây.
+             ⚠️ wireTimKiemBang() phải TÔN TRỌNG data-tim có sẵn, xem ghi chú ở hàm đó. */''}
+        ${rows.map(r => `<tr data-tim="${escapeHtml(boDau(
+            [r.MaVai, r.TenLoaiVai, r.TenMau, r.KhoVai, r.TonDauKG, r.NhapKG, r.XuatKG, r.TonCuoiKG,
+             r.TonDauMet, r.NhapMet, r.XuatMet, r.TonCuoiMet, r.DonGiaBQ, r.GiaTriTon, r.DanhSachMaCay]
+            .filter(x => x != null && x !== '').join(' ')))}">
+          <td><a href="javascript:void(0)" class="bc-ma" data-ma="${escapeHtml(r.MaVai)}" title="${r.DanhSachMaCay ? 'Mã cây: ' + escapeHtml(r.DanhSachMaCay.split(' ').slice(0, 30).join(', ')) + (r.DanhSachMaCay.split(' ').length > 30 ? ' …' : '') + '\n\n' : ''}Xem chi tiết xuất nhập trong kỳ">${escapeHtml(r.MaVai)}</a></td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
           ${oSo(r.KhoVai)}
           ${oSo(r.TonDauKG)}${oSo(r.NhapKG)}${oSo(r.XuatKG)}<td style="text-align:right;"><b>${fmtNumber(r.TonCuoiKG)}</b></td>
           ${oSo(r.TonDauMet)}${oSo(r.NhapMet)}${oSo(r.XuatMet)}${oSo(r.TonCuoiMet)}
@@ -295,7 +374,7 @@ window.ModuleBaoCao = (function () {
       + `<div class="empty-hint" style="margin-bottom:8px;">📘 <b>Cách đọc:</b> Tồn đầu kỳ + Nhập − Xuất = Tồn cuối kỳ (luôn cân đối).
            ${escapeHtml(d.ghiChu || '')}</div>`
       + `<div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-           <input type="text" id="bcTim" placeholder="🔍 Gõ để tìm trong toàn bộ bảng..." autocomplete="off"
+           <input type="text" id="bcTim" placeholder="${loai === 'tonvai' ? '🔍 Gõ để tìm trong toàn bộ bảng, kể cả MÃ CÂY...' : '🔍 Gõ để tìm trong toàn bộ bảng...'}" autocomplete="off"
                   style="min-width:280px;flex:1;max-width:420px;">
            <span id="bcTimInfo" class="empty-hint" style="padding:0;"></span>
          </div>`
@@ -332,7 +411,11 @@ window.ModuleBaoCao = (function () {
     const dongDuLieu = Array.from(tbody.querySelectorAll(':scope > tr'))
       .filter(tr => !tr.hasAttribute('data-tong') && !tr.querySelector('.empty-hint'));
     if (!dongDuLieu.length) { inp.disabled = true; return; }
-    dongDuLieu.forEach(tr => { tr.dataset.tim = boDau(tr.textContent || ''); });
+    /* ⚠️ v8.73: dòng nào ĐÃ TỰ GẮN `data-tim` thì GIỮ NGUYÊN — nơi dựng bảng biết rõ cần tìm theo
+       gì hơn. Bảng Tồn kho vải gắn sẵn cả DANH SÁCH MÃ CÂY vào đây; mã cây không nằm trong bảng
+       (bảng gom theo mã vải) nên ghi đè bằng textContent là xoá mất, gõ mã cây không ra gì.
+       Cùng luật với wireTableSearch() ở common.js v8.72. */
+    dongDuLieu.forEach(tr => { if (!tr.dataset.tim) tr.dataset.tim = boDau(tr.textContent || ''); });
 
     /* Dòng "không tìm thấy" dựng SẴN ngay bây giờ: số ô của dòng dữ liệu đã tính cả cột STT tự động
        (nếu có), nên colspan lấy từ đó là khớp — dựng sau dễ hụt đúng một ô. */
@@ -378,7 +461,7 @@ window.ModuleBaoCao = (function () {
           <td style="text-align:center;">${i + 1}</td>
           <td>${fmtDate(r.Ngay)}</td>
           <td style="color:${r.Thu ? '#137333' : '#c0392b'};">${escapeHtml(r.Loai)}</td>
-          <td>${escapeHtml(r.SoPhieu || '')}</td>
+          <td>${oSoPhieu(r)}</td>
           <td>${escapeHtml(r.DoiTuong || '')}</td>
           <td>${escapeHtml(r.TenTK || '')}</td>
           <td>${escapeHtml(r.HinhThuc || '')}</td>
@@ -403,10 +486,11 @@ window.ModuleBaoCao = (function () {
         <button type="button" class="btn" id="tcIn">🖨️ In</button>
       </div>`);
     modal.querySelector('#tcDong').addEventListener('click', closeModal);
+    noiDaySoPhieu(modal);   // v8.77
     modal.querySelector('#tcIn').addEventListener('click', () => printHtml('Chi tiết thu chi',
       `<h2 style="text-align:center;margin:0 0 2px;">CHI TIẾT THU CHI</h2>
        <div style="text-align:center;font-style:italic;margin-bottom:10px;">${escapeHtml(d.tieuDe || '')} · Kỳ ${fmtDate(ky.tuNgay)} – ${fmtDate(ky.denNgay)}</div>
-       ${bang}`, { logo: true, extraStyle: 'table{width:100%;border-collapse:collapse;font-size:12px;}th,td{border:1px solid #333;padding:4px 6px;}th{background:#eee;text-align:center;}' }));
+       ${bang}`, { logo: true, extraStyle: CSS_IN_BANG }));
   }
 
   /* ================================================================================================
