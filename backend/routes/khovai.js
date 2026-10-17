@@ -8,7 +8,8 @@ const { xuatKhoVai } = require('../utils/vaiXuatService');
 const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung } = require('../utils/tonVai');
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/congno.js. Tong tien tren
    phieu nhap PHAI bang dung so ma cong no NCC ghi no cho chinh phieu do. */
-const { bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia } = require('../utils/tienVaiNhap');
+const { bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia,
+        coCotDonGiaTra, chuanDonGiaTra } = require('../utils/tienVaiNhap');   // v8.91
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
 
@@ -853,8 +854,12 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // cung don vi nen doi chieu sai/vo nghia.
   // v5.7: them v.ViTriKho + v.NgayNhap - dung de nhan hien thi o go-tim ma cay luc SUA phieu xuat
   // (labelForRoll trong openXuatEditModal) hien DAY DU thong tin cay vai, khong chi ma/loai/mau/KG con.
+  // v8.91: do cot DonGiaTra qua HAM CHUNG (utils/tienVaiNhap.js) — chua chay migration_v879 thi
+  // ban in lui ve DonGiaNhap nhu truoc. Dung ham chung de KHONG the lech voi cau cong no NCC.
+  const coDgTraDoc = await coCotDonGiaTra(pool);
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
-    SELECT ct.ID, ct.CayID, ct.KGXuat, ct.SoMet, ct.KieuVai, v.MaCay, v.KGNhap, v.KhoVaiThucTe, v.ViTriKho, v.NgayNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau,
+    SELECT ct.ID, ct.CayID, ct.KGXuat, ct.SoMet, ct.KieuVai, ${coDgTraDoc ? 'ct.DonGiaTra' : 'CAST(NULL AS DECIMAL(18,2)) AS DonGiaTra'},
+           v.MaCay, v.KGNhap, v.KhoVaiThucTe, v.ViTriKho, v.NgayNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau,
            ${/* v7.49: PHIEU NHAP GOC cua tung cay — ban in phieu TRA NCC phai ghi "tra theo phieu nhap
                 nao, ngay nao". Lay tu PhieuNhapVai chu khong dung `v.NgayNhap`: v.NgayNhap la ngay cua
                 CAY (co the lech khi nhap bu), con doi chieu voi NCC thi phai theo NGAY CUA PHIEU.
@@ -957,6 +962,8 @@ router.put('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
       }
 
       // 3) Ghi de dong co san / them dong moi.
+      // v8.91: do cot DonGiaTra qua HAM CHUNG — xem ghi chu o utils/tienVaiNhap.js (khong cache).
+      const coDgTraSua = await coCotDonGiaTra(pool);
       for (const line of lines) {
         const cayId = Number(line.cayId);
         const kgXuat = Number(line.kgXuat) || 0;
@@ -967,12 +974,29 @@ router.put('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
         affectedCayIds.add(cayId);
         const kieuVai = line.kieuVai === 'Phối' ? 'Phối' : 'Chính';   // v5.31
         const lineMet = (line.soMet === '' || line.soMet == null) ? null : Number(line.soMet);   // v5.50
+        /* v8.91: don gia tra NCC. ĐỂ TRỐNG => NULL => cong no dung VaiCay.DonGiaNhap nhu cu.
+           Luat chuan hoa (ke ca vi sao so 0 cung thanh NULL) o utils/tienVaiNhap.js — MOT ban.
+
+           🔴 CHI GHI DonGiaTra KHI BEN GOI CO GUI KHOA 'donGiaTra' — giong cach 'donHangId' o tren.
+           Vi sao: form Sua phieu (va bat ky noi goi cu nao) co the KHONG gui khoa nay. Neu cu ghi
+           thi `undefined` -> NULL -> GHI DE NULL len don gia da go, cho MOI dong. Hau qua that:
+           lap phieu tra voi gia thoa thuan 50.000 (gia nhap 85.000), sau do chi sua NGAY XUAT thoi
+           la cong no NCC nhay tu KG×50.000 sang KG×85.000 — 500 kg la lech 17,5 trieu, khong log,
+           khong ai thay. Khong gui khoa => giu nguyen gia dang co trong CSDL. */
+        const coGuiDgTra = Object.prototype.hasOwnProperty.call(line, 'donGiaTra');
+        const ghiDgTra = coDgTraSua && coGuiDgTra;
+        const dgTra = chuanDonGiaTra(line.donGiaTra);
+        const rq = pool.request()
+          .input('CayID', sql.Int, cayId).input('KGXuat', sql.Decimal(10, 2), kgXuat)
+          .input('SoMet', sql.Decimal(10, 2), lineMet).input('KieuVai', sql.NVarChar, kieuVai)
+          .input('DonGiaTra', sql.Decimal(18, 2), ghiDgTra ? dgTra : null);
         if (line.id) {
-          await pool.request().input('id', sql.Int, Number(line.id)).input('CayID', sql.Int, cayId).input('KGXuat', sql.Decimal(10, 2), kgXuat).input('SoMet', sql.Decimal(10, 2), lineMet).input('KieuVai', sql.NVarChar, kieuVai)
-            .query('UPDATE PhieuXuatVaiChiTiet SET CayID=@CayID, KGXuat=@KGXuat, SoMet=@SoMet, KieuVai=@KieuVai WHERE ID=@id');
+          await rq.input('id', sql.Int, Number(line.id))
+            .query(`UPDATE PhieuXuatVaiChiTiet SET CayID=@CayID, KGXuat=@KGXuat, SoMet=@SoMet, KieuVai=@KieuVai${ghiDgTra ? ', DonGiaTra=@DonGiaTra' : ''} WHERE ID=@id`);
         } else {
-          await pool.request().input('PhieuXuatID', sql.Int, id).input('CayID', sql.Int, cayId).input('KGXuat', sql.Decimal(10, 2), kgXuat).input('SoMet', sql.Decimal(10, 2), lineMet).input('KieuVai', sql.NVarChar, kieuVai)
-            .query('INSERT INTO PhieuXuatVaiChiTiet (PhieuXuatID, CayID, KGXuat, SoMet, KieuVai) VALUES (@PhieuXuatID, @CayID, @KGXuat, @SoMet, @KieuVai)');
+          await rq.input('PhieuXuatID', sql.Int, id)
+            .query(`INSERT INTO PhieuXuatVaiChiTiet (PhieuXuatID, CayID, KGXuat, SoMet, KieuVai${ghiDgTra ? ', DonGiaTra' : ''})
+                    VALUES (@PhieuXuatID, @CayID, @KGXuat, @SoMet, @KieuVai${ghiDgTra ? ', @DonGiaTra' : ''})`);
         }
       }
     }

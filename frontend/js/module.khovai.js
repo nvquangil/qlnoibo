@@ -702,6 +702,19 @@ window.ModuleKhoVai = (function () {
     // Cột LaTraNCC có từ migration v6.66; phiếu cũ / CSDL chưa chạy migration -> coi như không phải.
     return !!header && (header.LaTraNCC === true || Number(header.LaTraNCC) === 1);
   }
+  /* v8.91: ĐƠN GIÁ và TIỀN của MỘT dòng trả NCC — một bản duy nhất cho popup xem và bản in.
+     Phải là ẢNH PHẢN CHIẾU của biểu thức SQL mà công nợ dùng (backend/utils/tienVaiNhap.js ·
+     bieuThucTienTraVai): COALESCE(DonGiaTra, DonGiaNhap). Viết riêng ở hai chỗ thì sớm muộn một
+     chỗ quên DonGiaTra và tờ phiếu in ra một giá, sổ công nợ ghi một giá khác. */
+  function giaTraCuaDong(r) {
+    if (!r) return 0;
+    const dg = (r.DonGiaTra != null && r.DonGiaTra !== '') ? Number(r.DonGiaTra) : null;
+    if (dg != null && isFinite(dg) && dg > 0) return dg;
+    return Number(r.DonGiaNhap) || 0;
+  }
+  function tienTraCuaDong(r) {
+    return (Number(r && r.KGXuat) || 0) * giaTraCuaDong(r);
+  }
   /* `keDanhSach` = có in dòng tóm tắt "Theo phiếu nhập: ..." hay không.
      BẢN IN truyền false: mỗi dòng hàng đã mang phiếu nhập của CHÍNH cây đó ở cột Ghi chú (v7.50, theo
      yêu cầu), in lại danh sách gộp ở đầu phiếu là nói hai lần cùng một thứ trên tờ giấy chật.
@@ -743,12 +756,23 @@ window.ModuleKhoVai = (function () {
              ========================================================================================== */''}
       ${(() => {
         const laTra = laTraNCC(header);
-        const dauTT = 7;                        // số cột TRƯỚC "SL xuất thực tế" (STT..Khổ vải)
-        const soCotTruoc = laTra ? dauTT : dauTT + 1;   // xuất SX có thêm "Kg chỉ định"
-        const soCotSau = laTra ? 4 : 1;         // trả NCC: Đơn giá, Số HĐ, Ngày HĐ, Ghi chú
-        const tieuDe = ['STT', 'Mã vải', 'Loại vải', 'Mầu', 'Kiểu', 'Mã cây', 'Khổ vải']
+        /* v8.91: bản in TRẢ NCC bỏ cột "Kiểu" và "Số mét" — Nguyen 2026-10-15: *"trả nhà cung cấp:
+           bỏ cột Kiểu, chỉ cần cột Mã cây và Số kg"*. Bản in xuất cho sản xuất GIỮ NGUYÊN cả hai.
+           ⚠️ Đổi số cột thì phải đổi cả `dauTT`/`soCotSau` — hai số đó định vị dòng TỔNG CỘNG; lệch
+           là dòng tổng rơi nhầm cột, số vẫn ra nên không ai thấy ngay (bài học v8.12). */
+        /* Đếm lại cho rõ, đừng sửa bằng cảm tính:
+           TRẢ NCC   : STT · Mã vải · Loại vải · Mầu · Mã cây · Khổ vải || SL xuất || Đơn giá · Số HĐ · Ngày HĐ · Ghi chú
+                       => trước = 6, ô tổng = 1 (không có Số mét), sau = 4  ⇒ tổng 11 cột
+           XUẤT SX   : STT · Mã vải · Loại vải · Mầu · Kiểu · Mã cây · Khổ vải · Kg chỉ định || SL xuất · Số mét || Ghi chú
+                       => trước = 8, ô tổng = 2, sau = 1                     ⇒ tổng 11 cột */
+        const soCotTruoc = laTra ? 6 : 8;
+        const soCotSau = laTra ? 4 : 1;
+        const tieuDe = ['STT', 'Mã vải', 'Loại vải', 'Mầu']
+          .concat(laTra ? [] : ['Kiểu'])
+          .concat(['Mã cây', 'Khổ vải'])
           .concat(laTra ? [] : ['Kg chỉ định'])
-          .concat(['SL xuất thực tế', 'Số mét'])
+          .concat(['SL xuất thực tế'])
+          .concat(laTra ? [] : ['Số mét'])
           .concat(laTra ? ['Đơn giá', 'Số HĐ NCC', 'Ngày HĐ'] : [])
           .concat(['Ghi chú']);
         const oDau = (t, i) => `<th${i === 0 ? ' style="width:38px;"' : ''}>${t}</th>`;
@@ -757,19 +781,23 @@ window.ModuleKhoVai = (function () {
         const oDong = (r, i) => `<tr>
           <td style="text-align:center;">${i + 1}</td>
           <td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
-          <td>${escapeHtml(r.KieuVai || 'Chính')}</td><td>${escapeHtml(r.MaCay)}</td>
+          ${laTra ? '' : `<td>${escapeHtml(r.KieuVai || 'Chính')}</td>`}
+          <td>${escapeHtml(r.MaCay)}</td>
           <td>${fmtNumber(r.KhoVaiThucTe)}</td>
           ${laTra ? '' : `<td>${r.SLTheoChiDinh != null ? fmtNumber(r.SLTheoChiDinh) : ''}</td>`}
           <td>${fmtNumber(r.KGXuat)}</td>
-          <td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>
-          ${laTra ? `<td style="text-align:right;">${r.DonGiaNhap != null ? fmtTien(r.DonGiaNhap) : ''}</td>
+          ${laTra ? '' : `<td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>`}
+          ${/* v8.91: in ĐÚNG đơn giá công nợ dùng — DonGiaTra gõ tay nếu có, không thì giá nhập.
+               In một giá mà công nợ ghi giá khác là nguồn cãi nhau với nhà cung cấp. */''}
+          ${laTra ? `<td style="text-align:right;">${giaTraCuaDong(r) ? fmtTien(giaTraCuaDong(r)) : ''}</td>
           <td>${escapeHtml(r.SoHoaDonNhap || '')}</td>
           <td>${r.NgayHoaDonNhap ? fmtDate(r.NgayHoaDonNhap) : ''}</td>` : ''}
           <td>${laTra ? escapeHtml(nhanPhieuNhapCuaDong(r, false)) : ''}</td></tr>`;
         return `<table><thead><tr>${tieuDe.map(oDau).join('')}</tr></thead>
-          ${/* v5.93: + dòng TỔNG CỘNG (kg xuất thực tế / số mét) ở cuối bảng */''}
+          ${/* v5.93: + dòng TỔNG CỘNG (kg xuất thực tế / số mét) ở cuối bảng.
+               v8.91: trả NCC không có cột Số mét -> chỉ một ô tổng. */''}
           <tbody>${lines.map(oDong).join('')}
-            ${dongTongKgMet(lines, 'KGXuat', 'SoMet', soCotTruoc, soCotSau)}</tbody></table>`;
+            ${dongTongKgMet(lines, 'KGXuat', 'SoMet', soCotTruoc, soCotSau, !laTra)}</tbody></table>`;
       })()}
       <div class="p-sign"><div><div class="line">Người lập</div></div><div><div class="line">Bộ phận cắt</div></div><div><div class="line">NV chỉ định NPL</div></div><div><div class="line">Thủ kho</div></div></div>`);
   }
@@ -784,10 +812,23 @@ window.ModuleKhoVai = (function () {
       ${/* true: bảng trên màn hình không có cột Ghi chú nên vẫn cần dòng tóm tắt. */''}
       ${khoiTraNCCHtml(header, lines, true)}
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
-      <table><thead><tr><th style="width:38px;">STT</th><th>Kiểu</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG xuất</th><th>Số mét</th></tr></thead>
+      ${/* v8.91: popup xem phải cùng bộ cột với BẢN IN. Để lệch thì người dùng mở phiếu trả ra xem
+            không thấy Đơn giá đâu (phải bấm In mới thấy) — mà đơn giá mới là thứ quyết định số
+            giảm công nợ. Đếm cột: trả NCC 4+1+2 = 7, xuất SX 5+2+0 = 7. */''}
+      <table><thead><tr><th style="width:38px;">STT</th>${laTraNCC(header) ? '' : '<th>Kiểu</th>'}<th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG xuất</th>${laTraNCC(header) ? '<th>Đơn giá</th><th>Thành tiền</th>' : '<th>Số mét</th>'}</tr></thead>
       ${/* v6.13: Mã cây bấm được -> xem lịch sử nhập/xuất của chính cây đó (modal xếp chồng). */''}
-      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.KieuVai || 'Chính')}</td><td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${fmtNumber(r.KGXuat)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td></tr>`).join('')}
-        ${dongTongKgMet(lines, 'KGXuat', 'SoMet', 5, 0)}</tbody></table>
+      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>${laTraNCC(header) ? '' : `<td>${escapeHtml(r.KieuVai || 'Chính')}</td>`}<td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${fmtNumber(r.KGXuat)}</td>${laTraNCC(header) ? `<td style="text-align:right;">${giaTraCuaDong(r) ? fmtNumber(giaTraCuaDong(r)) : ''}</td><td style="text-align:right;">${tienTraCuaDong(r) ? fmtNumber(Math.round(tienTraCuaDong(r))) : ''}</td>` : `<td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>`}</tr>`).join('')}
+        ${/* v8.91: phiếu trả NCC cộng thêm ô TỔNG TIỀN — đây chính là con số mà sổ công nợ NCC ghi
+              giảm nợ, có nó ở đây thì mở phiếu ra là đối chiếu được ngay, không phải tính tay.
+              Đếm cột dòng tổng: 4 (STT→Mầu) + 1 (KG) + 1 (Đơn giá để trống) + 1 (Tổng tiền) = 7,
+              bằng đúng 7 cột tiêu đề. */''}
+        ${laTraNCC(header)
+          ? `<tr data-tong style="font-weight:700;background:#f1f3f4;">
+               <td colspan="4" style="text-align:right;">TỔNG CỘNG</td>
+               <td style="text-align:right;">${fmtNumber(Math.round(lines.reduce((t, r) => t + (Number(r.KGXuat) || 0), 0) * 100) / 100)}</td>
+               <td></td>
+               <td style="text-align:right;">${fmtNumber(Math.round(lines.reduce((t, r) => t + tienTraCuaDong(r), 0)))}</td></tr>`
+          : dongTongKgMet(lines, 'KGXuat', 'SoMet', 5, 0)}</tbody></table>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnCloseXuatView">Đóng</button>
         ${coQuyenSuaKhoVai() ? '<button type="button" class="btn secondary" id="btnSuaXuatView">✏️ Sửa phiếu</button>' : ''}
@@ -805,11 +846,25 @@ window.ModuleKhoVai = (function () {
   // phieu nay" = KGNhap-OtherXuat, vi vw_TonCayVai da tru ca xuat cua chinh phieu dang sua, se thap
   // hon thuc te neu dung thang so lieu do). Backend se kiem tra lai chinh xac truoc khi ghi.
   async function openXuatEditModal(row) {
-    const [detailRes, rollsRes] = await Promise.all([
-      apiGet('/api/khovai/xuat/' + row.PhieuXuatID),
-      apiGet('/api/khovai/rolls?available=true')
-    ]);
+    const detailRes = await apiGet('/api/khovai/xuat/' + row.PhieuXuatID);
+    /* v8.91: PHIẾU TRẢ NCC thì danh sách cây để chọn phải GIỚI HẠN trong cây của CHÍNH nhà cung cấp
+       đó — giống form Tạo đã làm từ v6.66.4. Trước đây form Sửa nạp toàn kho, nên mở một phiếu trả
+       ra sửa là có thể thay vào cây của NCC khác: phiếu vẫn mang NCC cũ nên công nợ GIẢM NỢ NHẦM
+       nhà cung cấp, mà không màn nào báo gì. Lỗ này có từ v5.3; v8.91 cho gõ đơn giá nên nó đắt hơn.
+       Lỗi tải danh sách theo NCC KHÔNG được chặn việc sửa phiếu — lùi về toàn kho như cũ. */
+    const nccCuaPhieu = detailRes.data.header && detailRes.data.header.NCC_ID;
+    const laTraCuaPhieu = laTraNCC(detailRes.data.header);
+    let rollsRes;
+    if (laTraCuaPhieu && nccCuaPhieu) {
+      try { rollsRes = await apiGet('/api/khovai/ncc/' + nccCuaPhieu + '/cay'); }
+      catch (e) { rollsRes = await apiGet('/api/khovai/rolls?available=true'); }
+    } else {
+      rollsRes = await apiGet('/api/khovai/rolls?available=true');
+    }
+    /* v8.91: chế độ phiếu đọc từ `header` của API, KHÔNG từ `row` truyền vào — `row` có thể là DÒNG
+       DANH SÁCH (bấm nút Sửa ngay ở bảng) và dòng đó không mang cờ `LaTraNCC`. */
     const { lines } = detailRes.data;
+    const laTraSua = laTraCuaPhieu;
     const rollMap = {};
     rollsRes.data.forEach(r => { rollMap[r.CayID] = r; });
     lines.forEach(l => {
@@ -844,24 +899,44 @@ window.ModuleKhoVai = (function () {
 
     let rowCount = 0;
     // v5.80: bảng thật, cùng bố cục với form Tạo phiếu xuất.
-    const COLS_XUAT_SUA = `<colgroup>
-      <col style="width:11%"><col style="width:52%"><col style="width:11%"><col style="width:11%">
-      <col style="width:90px"><col style="width:42px">
-    </colgroup>`;
+    /* ============================================================================================
+       v8.91 — FORM SỬA PHIẾU CŨNG PHẢI ĐỔI BỘ CỘT THEO CHẾ ĐỘ, và quan trọng hơn: PHẢI GỬI ĐƠN GIÁ.
+
+       🔴 Bản nháp đầu của v8.91 chỉ sửa form TẠO phiếu. Hậu quả: lập phiếu trả với giá thỏa thuận
+       50.000 (giá nhập 85.000), sau đó chỉ cần mở ra sửa NGÀY XUẤT rồi Lưu là backend nhận
+       `donGiaTra = undefined` cho mọi dòng và ghi đè NULL lên giá đã gõ ⇒ công nợ nhảy từ
+       KG×50.000 sang KG×85.000. Trên 500 kg là lệch 17,5 triệu, không log, không ai thấy.
+       Nay backend chỉ ghi khi CÓ khóa `donGiaTra` (xem routes/khovai.js), còn form này thì gửi.
+
+       Khác form Tạo: chế độ ở đây CỐ ĐỊNH lúc mở (phiếu đã lập rồi, không có checkbox để bật/tắt),
+       nên dựng thẳng đúng bộ cột — không cần mẹo ẩn/hiện bằng CSS.
+       Kiểu và Số mét ở chế độ trả NCC: GIỮ LẠI dưới dạng input ẩn mang đúng giá trị đang có trong
+       CSDL. Bỏ hẳn thì lưu xong `KieuVai` về 'Chính' và `SoMet` về NULL — sửa ngày xuất mà lặng lẽ
+       đổi dữ liệu khác là đúng cái bẫy vừa nêu ở trên, chỉ khác là ở cột khác.
+       ============================================================================================ */
+    const COLS_XUAT_SUA = '';   // bề rộng đặt thẳng lên <th> — xem ghi chú ở form Tạo
     const HEAD_XUAT_SUA = `<thead><tr>
-      <th>Kiểu</th><th>Mã cây</th><th>KG xuất</th><th>Số mét</th><th></th><th></th>
+      ${laTraSua ? '' : '<th style="width:11%">Kiểu</th>'}
+      <th style="width:${laTraSua ? '55' : '52'}%">Mã cây</th>
+      <th style="width:11%">KG xuất</th>
+      ${laTraSua ? '<th style="width:14%">Đơn giá</th>' : '<th style="width:11%">Số mét</th>'}
+      <th style="width:90px"></th><th style="width:42px"></th>
     </tr></thead>`;
     function rowTemplate(line) {
       rowCount++;
       const idx = rowCount;
       const preselect = line ? line.CayID : null;
       const kieu = line && line.KieuVai === 'Phối' ? 'Phối' : 'Chính';   // v5.31
+      const met = (line && line.SoMet != null) ? line.SoMet : '';
+      const dg = (line && line.DonGiaTra != null) ? line.DonGiaTra : '';
       return `<tr data-row data-idx="${idx}" data-lineid="${line ? line.ID : ''}">
-        <td><select class="xe-kieu"><option value="Chính"${kieu === 'Chính' ? ' selected' : ''}>Chính</option><option value="Phối"${kieu === 'Phối' ? ' selected' : ''}>Phối</option></select></td>
-        <td>${searchableSelectHtml('xecay_' + idx, currentRolls, 'CayID', labelForRoll, preselect)}</td>
+        ${laTraSua ? '' : `<td><select class="xe-kieu"><option value="Chính"${kieu === 'Chính' ? ' selected' : ''}>Chính</option><option value="Phối"${kieu === 'Phối' ? ' selected' : ''}>Phối</option></select></td>`}
+        <td>${searchableSelectHtml('xecay_' + idx, currentRolls, 'CayID', labelForRoll, preselect)}${laTraSua ? `<input type="hidden" class="xe-kieu" value="${kieu}"><input type="hidden" class="xe-met" value="${met}">` : ''}</td>
         ${/* v5.89: KG KHÔNG bắt buộc — xuất theo KG hoặc theo MÉT hoặc cả hai (kiểm tra khi Lưu). */''}
         <td class="col-so"><input class="xe-kg" type="number" step="0.01" min="0" value="${line ? line.KGXuat : ''}"></td>
-        <td class="col-so"><input class="xe-met" type="number" step="0.01" min="0" value="${line && line.SoMet != null ? line.SoMet : ''}"></td>
+        ${laTraSua
+          ? `<td class="col-so"><input class="xe-dg" type="number" step="0.01" min="1" placeholder="giá nhập" value="${dg}"></td>`
+          : `<td class="col-so"><input class="xe-met" type="number" step="0.01" min="0" value="${met}"></td>`}
         <td class="col-nut"><button type="button" class="btn small secondary xe-qr" title="Quét QR chọn cây">📷 QR</button></td>
         <td class="col-nut"><button type="button" class="btn small danger xe-remove" title="Xóa dòng">X</button></td>
       </tr>`;
@@ -950,13 +1025,22 @@ window.ModuleKhoVai = (function () {
     modal.querySelector('#xEditForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const editLines = Array.from(modal.querySelectorAll('#xeRows > [data-row]')).map(r => ({
-        id: r.dataset.lineid || null,
-        cayId: getSearchableValue('xecay_' + r.dataset.idx),
-        kgXuat: r.querySelector('.xe-kg').value,
-        soMet: r.querySelector('.xe-met').value || null,
-        kieuVai: r.querySelector('.xe-kieu') ? r.querySelector('.xe-kieu').value : 'Chính'   // v5.31
-      }));
+      const editLines = Array.from(modal.querySelectorAll('#xeRows > [data-row]')).map(r => {
+        const oMet = r.querySelector('.xe-met');
+        const oDg = r.querySelector('.xe-dg');
+        const l = {
+          id: r.dataset.lineid || null,
+          cayId: getSearchableValue('xecay_' + r.dataset.idx),
+          kgXuat: r.querySelector('.xe-kg').value,
+          soMet: (oMet && oMet.value) ? oMet.value : null,
+          kieuVai: r.querySelector('.xe-kieu') ? r.querySelector('.xe-kieu').value : 'Chính'   // v5.31
+        };
+        /* v8.91: CHỈ gắn khóa `donGiaTra` ở phiếu trả NCC. Phiếu xuất cho sản xuất không có cột này
+           — gửi khóa rỗng lên thì backend sẽ coi là "người dùng xóa giá" và ghi NULL (vô hại vì
+           dòng xuất SX vốn không có giá, nhưng ghi thừa một cột là mời gọi lỗi sau này). */
+        if (laTraSua) l.donGiaTra = oDg ? oDg.value : '';
+        return l;
+      });
       if (canhBaoThieuSoLuong(editLines.filter(l => l.cayId), 'kgXuat', 'soMet', 'KG xuất')) return;   // v5.89
       try {
         const selDon = modal.querySelector('#xeDonHang');
@@ -1000,23 +1084,58 @@ window.ModuleKhoVai = (function () {
       return `${r.MaCay} — ${r.TenLoaiVai || ''} ${r.TenMau || ''} — còn ${fmtNumber(r.KGCon)} KG${kho}${met}${viTri}${ngay}${giaoTam}`;
     }
 
-    /* v5.80: bảng thật — Mã cây là cột RỘNG NHẤT (nhãn dài: mã + loại vải + màu + KG còn + vị trí). */
-    const COLS_XUAT = `<colgroup>
-      <col style="width:11%"><col style="width:52%"><col style="width:11%"><col style="width:11%">
-      <col style="width:90px"><col style="width:42px">
-    </colgroup>`;
+    /* ============================================================================================
+       v8.91 — BẢNG DÒNG CÓ HAI BỘ CỘT, ĐỔI THEO CHẾ ĐỘ
+
+       Nguyen 2026-10-15: *"Phiếu xuất kho vải, trả nhà cung cấp: bỏ cột Kiểu, chỉ cần cột Mã cây và
+       Số kg, thêm cột Đơn giá."*
+
+       | Chế độ            | Cột hiện                                      |
+       |-------------------|-----------------------------------------------|
+       | Xuất cho sản xuất | Kiểu · Mã cây · KG xuất · Số mét              |
+       | Trả nhà cung cấp  | Mã cây · KG xuất · Đơn giá · Thành tiền       |
+
+       🔴 ẨN bằng CSS, KHÔNG XÓA `.x-kieu` khỏi DOM. `rowTemplate()` dùng chung cho cả hai chế độ và
+       không biết checkbox "Trả NCC" đang bật hay tắt. Xóa hẳn ô Kiểu thì mọi dòng xuất cho sản xuất
+       sẽ gửi lên thiếu `kieuVai` ⇒ backend mặc định ghi `'Chính'` (vaiXuatService.js) ⇒ cây vải
+       PHỐI bị tính thành CHÍNH ⇒ sản lượng cắt theo màu cộng dư. Đúng con bug DH2608064 mà v8.71
+       vừa sửa (2400 → 600). Ô vẫn nằm đó, chỉ không nhìn thấy khi trả NCC.
+       ============================================================================================ */
+    /* ⚠️ KHÔNG dùng <colgroup> cho bảng này. `display:none` KHÔNG phải cách hợp lệ để bỏ một <col>
+       khỏi bảng — trình duyệt vẫn đếm đủ 8 <col> rồi gán lần lượt cho 6 ô còn nhìn thấy, nên ở chế độ
+       trả NCC cột "Mã cây" lĩnh 11% thay vì 40% còn hai nút lĩnh 12%. Dữ liệu không lệch (ô ẩn biến
+       mất hẳn khỏi dòng) nhưng bảng méo. Đặt bề rộng thẳng lên <th> thì tự đúng ở cả hai chế độ. */
+    const COLS_XUAT = '';
     const HEAD_XUAT = `<thead><tr>
-      <th>Kiểu</th><th>Mã cây</th><th>KG xuất</th><th>Số mét</th><th></th><th></th>
+      <th class="c-kieu" style="width:11%">Kiểu</th><th style="width:40%">Mã cây</th>
+      <th style="width:11%">KG xuất</th><th class="c-met" style="width:11%">Số mét</th>
+      <th class="c-dg" style="width:12%">Đơn giá</th><th class="c-tt" style="width:12%">Thành tiền</th>
+      <th style="width:90px"></th><th style="width:42px"></th>
     </tr></thead>`;
+    /* Ẩn/hiện theo class trên chính thẻ <table>. Dùng CSS thay vì sửa style từng ô: dòng được vẽ
+       lại nhiều lần (veLaiDongTheoRolls, thêm dòng, khôi phục nháp) nên sửa từng ô là sớm muộn có
+       một đường vẽ lại quên áp. */
+    const CSS_XUAT = `<style>
+      table.bang-xuat .c-dg, table.bang-xuat .c-tt { display:none; }
+      table.bang-xuat.tra-ncc .c-kieu, table.bang-xuat.tra-ncc .c-met { display:none; }
+      table.bang-xuat.tra-ncc .c-dg, table.bang-xuat.tra-ncc .c-tt { display:table-cell; }
+    </style>`;
     function rowTemplate(preselect) {
       rowCount++;
       const idx = rowCount;
       return `<tr data-row data-idx="${idx}">
-        <td><select class="x-kieu"><option value="Chính">Chính</option><option value="Phối">Phối</option></select></td>
+        <td class="c-kieu"><select class="x-kieu"><option value="Chính">Chính</option><option value="Phối">Phối</option></select></td>
         <td>${searchableSelectHtml('xcay_' + idx, currentRolls, 'CayID', labelForRoll, preselect)}</td>
         ${/* v5.89: KG KHÔNG bắt buộc — xuất theo KG hoặc theo MÉT hoặc cả hai (kiểm tra khi Lưu). */''}
         <td class="col-so"><input class="x-kg" type="number" step="0.01" min="0"></td>
-        <td class="col-so"><input class="x-met" type="number" step="0.01" min="0"></td>
+        <td class="col-so c-met"><input class="x-met" type="number" step="0.01" min="0"></td>
+        ${/* v8.91: chọn cây xong tự điền giá nhập của CHÍNH cây đó; sửa được khi thỏa thuận giá khác.
+             Xóa trắng ô này = quay về giá nhập (backend ghi NULL).
+             `min="1"`, KHÔNG phải min="0": gõ 0 là phiếu trả giảm nợ 0 đồng, tức công nợ phải trả
+             phình lên nguyên giá trị lô hàng một cách im lặng. Backend cũng quy 0 về NULL cho chắc
+             (utils/tienVaiNhap.js · chuanDonGiaTra) — đây chỉ là lớp chặn ở bàn phím. */''}
+        <td class="col-so c-dg"><input class="x-dg" type="number" step="0.01" min="1" placeholder="giá nhập"></td>
+        <td class="col-so c-tt" style="text-align:right;"><span class="x-tt" style="color:#5f6368;"></span></td>
         <td class="col-nut"><button type="button" class="btn small secondary x-qr" title="Quét QR chọn cây">📷 QR</button></td>
         <td class="col-nut"><button type="button" class="btn small danger x-remove" title="Xóa dòng">X</button></td>
       </tr>`;   // v5.31: them cot Kiểu (Chính/Phối)
@@ -1046,8 +1165,9 @@ window.ModuleKhoVai = (function () {
           <div class="form-row"><label>Người nhận</label><input name="nguoiNhan"></div>
           <div class="form-row"><label>Ghi chú</label><input name="ghiChu"></div>
           ${/* v6.66: TRẢ HÀNG VỀ NHÀ CUNG CẤP. Tích ô này thì phiếu xuất GIẢM công nợ phải trả cho NCC
-                (congno.js: congNoNCC + soChiTietNCC). Đơn giá KHÔNG phải gõ — hệ thống lấy đúng
-                VaiCay.DonGiaNhap của từng cây, nên số giảm nợ luôn khớp số đã ghi nợ lúc nhập. */''}
+                (congno.js: congNoNCC + soChiTietNCC).
+                v8.91: đơn giá GÕ ĐƯỢC. Để trống thì vẫn lấy đúng VaiCay.DonGiaNhap của từng cây như
+                trước — ghi NULL xuống CSDL, nên mọi phiếu trả lập trước v8.91 giữ nguyên số tiền. */''}
           <div class="form-row">
             <label style="display:flex;gap:6px;align-items:center;">
               <input type="checkbox" id="xTraNCC" name="laTraNCC"> Trả nhà cung cấp
@@ -1069,12 +1189,14 @@ window.ModuleKhoVai = (function () {
         <div class="empty-hint" id="xTraNCCHint" style="display:none;color:#e65100;">
           Chỉ chọn được cây vải <b>của nhà cung cấp đã chọn</b> (mọi phiếu nhập). Muốn thu hẹp cho dễ tìm
           thì chọn thêm một phiếu nhập — không bắt buộc, một phiếu trả gộp được cây của nhiều phiếu nhập.
-          Phiếu này sẽ <b>giảm công nợ phải trả</b>, tính theo <b>đơn giá nhập của từng cây</b> — không phải gõ giá.
+          Phiếu này sẽ <b>giảm công nợ phải trả</b>. Cột <b>Đơn giá</b> tự điền giá nhập của từng cây và
+          <b>sửa được</b> khi thỏa thuận giá khác; <b>để trống là dùng giá nhập</b>.
         </div>
         <!-- v5.19 (muc 3.1, yeu cau "nếu theo đơn hàng thì hiển thị tổng số lượng theo chỉ định vải SX
              để tham khảo xuất hàng"): chi THAM KHAO (khong chan/khoa gi) - xem applyOrderFilter(). -->
         <div id="xChiDinhInfo"></div>
-        <div class="lap-wrap"><table class="lap-table">${COLS_XUAT}${HEAD_XUAT}
+        ${CSS_XUAT}
+        <div class="lap-wrap"><table class="lap-table bang-xuat" id="xBang">${COLS_XUAT}${HEAD_XUAT}
           <tbody id="xRows">${rowsBodyHtml(true)}</tbody></table></div>
         <div class="empty-hint" id="xEmptyHint" style="${currentRolls.length ? 'display:none;' : ''}">Không còn cây vải nào trong kho để xuất</div>
         <button type="button" class="btn small secondary" id="btnAddX" style="${currentRolls.length ? '' : 'display:none;'}">+ Thêm cây vải</button>
@@ -1086,13 +1208,51 @@ window.ModuleKhoVai = (function () {
       </form>`);
     modal.querySelector('#btnCancelXuat').addEventListener('click', closeModal);
 
+    /* v8.91: cột "Thành tiền" chỉ để NHÌN cho đỡ gõ nhầm — số ghi giảm công nợ là do SQL tính
+       (utils/tienVaiNhap.js · bieuThucTienTraVai). Ô trống = dùng giá nhập, nên xem trước cũng
+       phải lùi về giá nhập, không thì để trống lại hiện 0 đồng và người dùng tưởng mất tiền.
+       Làm tròn ở đây là của RIÊNG phần hiển thị (SQL không làm tròn) — lệch tối đa 0,5đ/dòng. */
+    function veThanhTienCuaDong(rowEl, idx) {
+      const oTt = rowEl.querySelector('.x-tt');
+      if (!oTt) return;
+      const oDg = rowEl.querySelector('.x-dg');
+      const oKg = rowEl.querySelector('.x-kg');
+      const kg = Number(oKg && oKg.value) || 0;
+      const cay = currentRolls.find(r => String(r.CayID) === String(getSearchableValue('xcay_' + idx)));
+      const giaGo = (oDg && oDg.value !== '') ? Number(oDg.value) : 0;
+      const gia = giaGo > 0 ? giaGo : (Number(cay && cay.DonGiaNhap) || 0);
+      oTt.textContent = (kg > 0 && gia > 0) ? fmtNumber(Math.round(kg * gia)) : '';
+    }
+
     function wireRow(rowEl) {
       const idx = rowEl.dataset.idx;
-      wireSearchableSelect('xcay_' + idx, currentRolls, 'CayID', labelForRoll);
+      /* v8.91: truyền `onResolve` (tham số thứ 5) để biết NGAY khi người dùng chọn xong cây.
+         🔴 KHÔNG nghe sự kiện 'change' của `#xcay_<idx>`: id đó KHÔNG TỒN TẠI. searchableSelectHtml
+         chỉ sinh `xcay_<idx>_text` (ô gõ) và `xcay_<idx>_val` (ô ẩn) — bản nháp đầu của v8.91 gắn
+         listener vào `#xcay_<idx>` nên querySelector trả null và ô Đơn giá không bao giờ tự điền. */
+      wireSearchableSelect('xcay_' + idx, currentRolls, 'CayID', labelForRoll, (cay) => {
+        const o = rowEl.querySelector('.x-dg');
+        if (o && o.value === '' && cay && Number(cay.DonGiaNhap) > 0) o.value = Number(cay.DonGiaNhap);
+        veThanhTienCuaDong(rowEl, idx);
+      });
       const removeBtn = rowEl.querySelector('.x-remove');
       if (removeBtn) removeBtn.onclick = () => {
         if (modal.querySelectorAll('#xRows > [data-row]').length > 1) rowEl.remove();
       };
+      /* ========================================================================================
+         v8.91 — ĐƠN GIÁ TRẢ NCC
+         Chọn cây xong tự điền `DonGiaNhap` của CHÍNH cây đó (currentRolls có sẵn cột này khi nạp
+         theo NCC — xem GET /api/khovai/ncc/:id/cay). Người dùng sửa được khi thỏa thuận giá khác;
+         XÓA TRẮNG ô này là quay về giá nhập (backend ghi NULL, công nợ dùng DonGiaNhap).
+         ⚠️ Chỉ điền khi ô đang TRỐNG — đổi cây sau khi đã gõ giá tay thì giữ giá người dùng gõ,
+         không im lặng đè lên con số họ vừa nhập.
+         ======================================================================================== */
+      const oDg = rowEl.querySelector('.x-dg');
+      const oKg = rowEl.querySelector('.x-kg');
+      const veThanhTien = () => veThanhTienCuaDong(rowEl, idx);
+      if (oDg) oDg.addEventListener('input', veThanhTien);
+      if (oKg) oKg.addEventListener('input', veThanhTien);
+
       const qrBtn = rowEl.querySelector('.x-qr');
       if (qrBtn) qrBtn.onclick = () => {
         openQrScanner(text => {
@@ -1100,6 +1260,12 @@ window.ModuleKhoVai = (function () {
           if (!found) { baoLoiQuetCay(text); return; }      // tra cứu để báo ĐÚNG nguyên nhân
           modal.querySelector('#xcay_' + idx + '_text').value = labelForRoll(found);
           modal.querySelector('#xcay_' + idx + '_val').value = found.CayID;
+          /* v8.91: gán thẳng vào ô ẩn thì KHÔNG kích hoạt `onResolve` của wireSearchableSelect,
+             nên phải tự điền giá + vẽ lại Thành tiền. Bỏ qua thì quét QR xong ô Đơn giá vẫn trống
+             (số vẫn đúng — trống = giá nhập — nhưng người dùng không thấy giá để đối chiếu). */
+          const oDgQr = rowEl.querySelector('.x-dg');
+          if (oDgQr && oDgQr.value === '' && Number(found.DonGiaNhap) > 0) oDgQr.value = Number(found.DonGiaNhap);
+          veThanhTienCuaDong(rowEl, idx);
         });
       };
     }
@@ -1239,7 +1405,11 @@ window.ModuleKhoVai = (function () {
         cayText: modal.querySelector('#xcay_' + r.dataset.idx + '_text').value,
         cayId: getSearchableValue('xcay_' + r.dataset.idx),
         kgXuat: r.querySelector('.x-kg').value,
-        soMet: r.querySelector('.x-met').value
+        soMet: r.querySelector('.x-met').value,
+        /* v8.91: nháp trước đây KHÔNG lưu `kieuVai` — người dùng chọn "Phối", tắt trình duyệt,
+           khôi phục nháp thì lặng lẽ về "Chính" rồi cây phối bị tính thành chính. Vá luôn. */
+        kieuVai: (r.querySelector('.x-kieu') || {}).value || 'Chính',
+        donGiaTra: (r.querySelector('.x-dg') || {}).value || ''
       }));
       return {
         ngayXuat: fd.get('ngayXuat'), donHangId: fd.get('donHangId'),   // v5.76: bỏ maDon (ô đó nay là Mã rập, chỉ xem)
@@ -1289,6 +1459,10 @@ window.ModuleKhoVai = (function () {
           modal.querySelector('#xNccWrap').style.display = b ? '' : 'none';
           modal.querySelector('#xNhapWrap').style.display = b ? '' : 'none';
           modal.querySelector('#xTraNCCHint').style.display = b ? '' : 'none';
+          // v8.91: đổi bộ cột của bảng dòng — xem CSS_XUAT. Chỉ ẩn/hiện, không xóa ô nào.
+          modal.querySelector('#xBang').classList.toggle('tra-ncc', b);
+          /* Cột Thành tiền vừa hiện ra phải có số ngay, không đợi người dùng gõ lại. */
+          modal.querySelectorAll('#xRows [data-row]').forEach(r => veThanhTienCuaDong(r, r.dataset.idx));
           if (!b) {
             selNcc.value = '';
             selNhap.innerHTML = '<option value="">-- Chọn nhà cung cấp trước --</option>';
@@ -1343,6 +1517,10 @@ window.ModuleKhoVai = (function () {
         modal.querySelector('#xcay_' + r.dataset.idx + '_val').value = d.cayId || '';
         r.querySelector('.x-kg').value = d.kgXuat || '';
         r.querySelector('.x-met').value = d.soMet || '';
+        // v8.91: khôi phục cả Kiểu và Đơn giá — xem ghi chú ở collectDraftXuat().
+        if (d.kieuVai) r.querySelector('.x-kieu').value = d.kieuVai;
+        if (d.donGiaTra) r.querySelector('.x-dg').value = d.donGiaTra;
+        veThanhTienCuaDong(r, r.dataset.idx);   // v8.91: vẽ lại cột Thành tiền sau khi đổ giá trị
       });
       toast('Đã khôi phục dữ liệu xuất kho đang dở từ lần trước (chưa lưu).', 'success');
     })();
@@ -1354,7 +1532,10 @@ window.ModuleKhoVai = (function () {
       const fd = new FormData(e.target);
       const rolls = Array.from(modal.querySelectorAll('#xRows > [data-row]')).map(r => ({
         cayId: getSearchableValue('xcay_' + r.dataset.idx), kgXuat: r.querySelector('.x-kg').value, soMet: r.querySelector('.x-met').value || null,
-        kieuVai: r.querySelector('.x-kieu') ? r.querySelector('.x-kieu').value : 'Chính'   // v5.31
+        kieuVai: r.querySelector('.x-kieu') ? r.querySelector('.x-kieu').value : 'Chính',   // v5.31
+        /* v8.91: đơn giá trả NCC. Ô này chỉ hiện ở chế độ trả NCC; chế độ xuất SX luôn trống nên
+           gửi null, backend ghi NULL và không ảnh hưởng gì. Để trống = dùng giá nhập của cây. */
+        donGiaTra: (r.querySelector('.x-dg') || {}).value || null
       }));
       if (!rolls.length) {
         toast('Không có cây vải nào để xuất.', 'error');
@@ -1734,12 +1915,16 @@ window.ModuleKhoVai = (function () {
       met: t.met + (Number(r[fMet]) || 0)
     }), { kg: 0, met: 0 });
   }
-  function dongTongKgMet(lines, fKg, fMet, soCotTruoc, soCotSau) {
+  /* `coCotMet` (v8.91): bảng in phiếu TRẢ NCC không còn cột "Số mét", nên dòng tổng chỉ đặt MỘT ô.
+     Bất biến phải giữ: soCotTruoc + (số ô tổng) + soCotSau === tổng số cột của tiêu đề. Lệch là
+     dòng TỔNG rơi nhầm cột — số vẫn ra nên không ai thấy ngay (bài học v8.12 tfoot lệch cột). */
+  function dongTongKgMet(lines, fKg, fMet, soCotTruoc, soCotSau, coCotMet) {
     const t = congKgMet(lines, fKg, fMet);
+    const hienMet = coCotMet !== false;
     return `<tr data-tong style="font-weight:700;background:#f1f3f4;">
       <td colspan="${soCotTruoc}" style="text-align:right;">TỔNG CỘNG</td>
       <td style="text-align:right;">${fmtNumber(Math.round(t.kg * 100) / 100)}</td>
-      <td style="text-align:right;">${t.met ? fmtNumber(Math.round(t.met * 100) / 100) : ''}</td>
+      ${hienMet ? `<td style="text-align:right;">${t.met ? fmtNumber(Math.round(t.met * 100) / 100) : ''}</td>` : ''}
       ${soCotSau > 0 ? `<td colspan="${soCotSau}"></td>` : ''}</tr>`;
   }
 

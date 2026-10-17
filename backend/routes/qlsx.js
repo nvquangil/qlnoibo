@@ -761,19 +761,50 @@ async function getCatMauList(pool, donHangId, stageId) {
      ⚠️ v8.71: câu này PHẢI lọc cây y hệt slCatTheoMauTuCay(). Trước đây nó cộng MỌI cây (kể cả vải
      phối) trong khi SoLuong đã lọc — hai con số khác phạm vi, chia ra hệ số Ri sẽ sai. */
   const coKhaiKieu = await donCoKhaiKieuVai(pool, donHangId);
+  /* ================================================================================================
+     v8.92 — HỆ SỐ QUY ĐỔI RI → CÁI PHẢI LÀ HỆ SỐ ĐÃ DÙNG THẬT Ở CẮT, không phải của lệnh.
+
+     Nguyen 2026-10-17: *"Ghi tiến độ, công đoạn đóng gói và kho nhập 1 ri = 1 cái (hệ số quy đổi của
+     lệnh) đang bị sai. Ví dụ lệnh DH2609111 ở công đoạn cắt đang hệ số 11 nhưng ra đóng gói và kho
+     nhập là 1."*
+
+     Vì sao lệch: từ v6.08 công đoạn Cắt cho sửa hệ số TỪNG CÂY (TienDoCatChiTietCay.HeSoQuyDoi) và
+     SL cái ở Cắt = lớp × hệ số CỦA CÂY. Trong khi Đóng gói / Kho nhập (v8.52) lại quy đổi Ri bằng
+     DonHangSanXuat.HeSoQuyDoi — ô "Hệ số quy đổi" ở Ra lệnh SX, mặc định 1, ít ai sửa. Lệnh ra với
+     hệ số 1, tổ cắt gõ 11 trên từng cây: Cắt ra 11 cái/lớp, nhưng Đóng gói gõ "5 ri" thì hệ thống
+     lưu 5 cái thay vì 55. Hai công đoạn đếm "ri" bằng hai thước khác nhau trên cùng một lệnh.
+
+     Chốt: **"1 ri" ở mọi công đoạn sau Cắt = đúng số cái mà một lớp cắt đã cho ra** = HeSoQuyDoi
+     đã ghi trên cây ở Cắt. Lệnh chỉ là giá trị mặc định khi Cắt chưa ghi gì.
+     Mỗi màu trả thêm:
+         HeSoCat      — hệ số ở Cắt của màu đó, khi MỌI cây của màu cùng một hệ số; NULL nếu lệch
+         HeSoCatLech  — 1 khi các cây cùng màu mang hệ số khác nhau (không có cỡ ri duy nhất)
+     Lọc cây y hệt câu TongSoLop ở trên (cây chính) — hệ số của cây phối không nói gì về ri thành phẩm.
+     Bỏ qua cây có hệ số NULL/0 (dữ liệu trước v6.08 hoặc ghi dở).
+     ================================================================================================ */
   const lopResult = await pool.request().query(`
-    SELECT dv.MauSacID, SUM(cc.SoLuongLop) AS TongSoLop
+    SELECT dv.MauSacID, SUM(cc.SoLuongLop) AS TongSoLop,
+           MIN(CASE WHEN ISNULL(cc.HeSoQuyDoi, 0) > 0 THEN cc.HeSoQuyDoi END) AS HeSoMin,
+           MAX(CASE WHEN ISNULL(cc.HeSoQuyDoi, 0) > 0 THEN cc.HeSoQuyDoi END) AS HeSoMax
     FROM TienDoCatChiTietCay cc
     JOIN VaiCay vc ON vc.CayID = cc.CayID
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     WHERE cc.TienDoID IN (${ids.join(',')})
       ${dieuKienCayChinh('cc', Number(donHangId), coKhaiKieu)}
     GROUP BY dv.MauSacID`);
-  const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), Number(r.TongSoLop) || 0]));
-  return maus.map(k => ({
-    MauSacID: Number(k), TenMau: tenMap.get(String(k)) || '', SoLuong: Number(slMap[k]) || 0,
-    TongSoLop: lopMap.get(String(k)) || 0
-  })).sort((a, b) => String(a.TenMau).localeCompare(String(b.TenMau), 'vi'));
+  const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), r]));
+  return maus.map(k => {
+    const r = lopMap.get(String(k)) || {};
+    const hMin = Number(r.HeSoMin) || 0, hMax = Number(r.HeSoMax) || 0;
+    const lech = hMin > 0 && hMax > 0 && Math.abs(hMax - hMin) > 1e-9;
+    return {
+      MauSacID: Number(k), TenMau: tenMap.get(String(k)) || '', SoLuong: Number(slMap[k]) || 0,
+      TongSoLop: Number(r.TongSoLop) || 0,
+      HeSoCat: (!lech && hMax > 0) ? hMax : null,
+      HeSoCatLech: lech ? 1 : 0,
+      HeSoCatMin: hMin || null, HeSoCatMax: hMax || null
+    };
+  }).sort((a, b) => String(a.TenMau).localeCompare(String(b.TenMau), 'vi'));
 }
 
 // v5.30: tong SL (mau chinh) tu ket qua Cat gan nhat = tong SoLuong tung mau (dung chung getCatMauList).
@@ -1128,21 +1159,63 @@ async function slKhoNhapTheoDon(pool) {
            AND (t.TienDoID = ISNULL(tm.NhomTienDoID, tm.TienDoID)
                 OR t.NhomTienDoID = ISNULL(tm.NhomTienDoID, tm.TienDoID))
        )`;
-  const rows = (await pool.request().input('kn', sql.Int, knStage).query(`
+  /* v8.92: he so tach Ri phai la he so DA DUNG O CAT (TienDoCatChiTietCay.HeSoQuyDoi), cung luat
+     voi getCatMauList() va form Ghi tien do — xem ghi chu dai o do. Chi lui ve DonHangSanXuat.HeSoQuyDoi
+     khi Cat chua ghi he so nao, hoac cac cay cua lenh mang he so KHAC NHAU (khong co co ri duy nhat).
+     Dung lech voi form: danh sach bao "43 Ri" ma mo lenh ra form bao "4 Ri" la khong ai doi chieu noi.
+     Lay MOI ban ghi Cat cua lenh (khong loc effectiveTienDoIds): he so la thuoc tinh cua cay, ghi
+     lai so cat cung khong doi he so; loc them chi lam cau CTE kho doc hon.
+
+     🔴 PHAI LOC CAY CHINH y het dieuKienCayChinh() ma getCatMauList() dung — ban nhap dau khong loc,
+     ra sao bay gio: cay PHOI thuong de he so mac dinh 1 trong khi cay chinh go 11 => HMin ≠ HMax =>
+     lui ve lenh (= 1) => danh sach bao "55 Ri" ma mo form ra bao "5 Ri". Viet lai dang tuong quan
+     theo t.DonHangID vi dieuKienCayChinh() nhan MOT donHangId cu the, con day la cau cho MOI lenh:
+        L1  cay co dong xuat khai 'Chính' cho lenh nay
+        L2  cay KHONG co dong xuat nao cho lenh nay (cap vai tay) -> van tinh
+        L3  lenh chua khai KieuVai o bat ky dong xuat nao -> khong loc gi (giong coKhaiKieu = false)
+     Gioi han con lai, CO Y: danh sach chi hien MOT con so cho ca lenh, nen lay he so chung cua moi
+     mau chinh; lenh ma hai mau chinh dung hai he so khac nhau thi lui ve lenh — form (tinh theo
+     tung mau) van dung, chi danh sach la "xap xi" va cung chi la dong chu nho duoi Trang thai. */
+  const cteHeCat = catStage
+    ? `heCat AS (
+         SELECT t.DonHangID,
+                MIN(cc.HeSoQuyDoi) AS HMin, MAX(cc.HeSoQuyDoi) AS HMax
+         FROM TienDoSanXuat t
+         JOIN TienDoCatChiTietCay cc ON cc.TienDoID = t.TienDoID
+         WHERE t.StageID = @cat AND ISNULL(cc.HeSoQuyDoi, 0) > 0
+           AND (
+             EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                     JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                     WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID AND px.KieuVai = N'Chính')
+             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
+                            JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
+                            WHERE px2.CayID = cc.CayID AND p2.DonHangID = t.DonHangID)
+             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px3
+                            JOIN PhieuXuatVai p3 ON p3.PhieuXuatID = px3.PhieuXuatID
+                            WHERE p3.DonHangID = t.DonHangID AND px3.KieuVai IS NOT NULL)
+           )
+         GROUP BY t.DonHangID
+       ),`
+    : `heCat AS (SELECT CAST(NULL AS INT) AS DonHangID, CAST(NULL AS DECIMAL(10,3)) AS HMin, CAST(NULL AS DECIMAL(10,3)) AS HMax WHERE 1 = 0),`;
+  const rows = (await pool.request().input('kn', sql.Int, knStage).input('cat', sql.Int, catStage || 0).query(`
     WITH ${cteKN},
+    ${cteHeCat}
     tongCai AS (
       SELECT knTd.DonHangID,
              SUM(ct.SoLuongLuyKe) AS SLCai,
-             MAX(CASE WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 THEN d.HeSoQuyDoi ELSE 1 END) AS HeSo
+             MAX(CASE WHEN hc.HMin IS NOT NULL AND hc.HMin = hc.HMax THEN hc.HMax
+                      WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 THEN d.HeSoQuyDoi
+                      ELSE 1 END) AS HeSo
       FROM knTd
       JOIN TienDoChiTietMau ct ON ct.TienDoID = knTd.TienDoID
       JOIN DonHangSanXuat d    ON d.DonHangID = knTd.DonHangID
+      LEFT JOIN heCat hc       ON hc.DonHangID = knTd.DonHangID
       GROUP BY knTd.DonHangID
     )
     SELECT DonHangID,
-           SLCai        AS SLKhoNhapCai,
-           SLCai / HeSo AS SoRi,       -- INT / INT = chia nguyen (co y)
-           SLCai % HeSo AS SoLe
+           SLCai                              AS SLKhoNhapCai,
+           FLOOR(SLCai / HeSo)                AS SoRi,   -- HeSo la DECIMAL(10,3): phai FLOOR, khong co chia nguyen ngam
+           SLCai - FLOOR(SLCai / HeSo) * HeSo AS SoLe
     FROM tongCai`)).recordset;
   const map = {};
   rows.forEach(r => {

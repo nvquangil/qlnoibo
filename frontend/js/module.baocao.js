@@ -717,13 +717,23 @@ window.ModuleBaoCao = (function () {
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input type="search" id="gvTim" placeholder="Tìm mã hàng / tên hàng..." style="width:260px;">
         <label style="font-size:13px;"><input type="checkbox" id="gvChuaKhai"> Chỉ hiện mã CHƯA khai giá vốn</label>
-        ${perm.canEdit ? `<button type="button" class="btn small" id="gvNap">⟳ Lấy giá thành từ lệnh SX</button>` : ''}
+        ${/* v8.90: nút này KHÔNG bỏ đi dù giá vốn đã tự nạp. Nó vẫn cần cho: mã cũ có lệnh SX nhưng
+             chưa từng lập phiếu nhập kho (dữ liệu trước v8.90), và khi muốn nạp lại hàng loạt. */''}
+        ${perm.canEdit ? `<button type="button" class="btn small secondary" id="gvNap" title="Quét toàn bộ mã có lệnh SX và nạp lại giá thành. Từ v8.90 việc này đã tự chạy khi lưu phiếu nhập kho, nút này chỉ dùng cho dữ liệu cũ hoặc khi muốn nạp lại hàng loạt.">⟳ Nạp lại hàng loạt từ lệnh SX</button>` : ''}
         <span class="empty-hint" style="margin-left:auto;padding:0;">${rows.length} mã hàng · <b style="color:${chuaKhai ? '#c0392b' : '#137333'};">${chuaKhai} chưa khai</b></span>
       </div>
       <div class="empty-hint" style="margin-bottom:8px;">📘 Giá vốn là <b>giá thành 1 cái</b>, dùng để tính lãi/lỗ.
         Hàng mua từ <b>nhà cung cấp</b>: từ v8.07 tự động lấy theo giá nhập (bình quân gia quyền) mỗi khi lưu/sửa/hủy phiếu nhập kho từ NCC — không cần khai tay, và số này <b>tự đổi theo</b> các phiếu nhập sau (không chốt cứng).
-        Hàng <b>tự sản xuất</b>: vẫn dùng nút <b>“Lấy giá thành từ lệnh SX”</b> — số này được <b>chốt lại</b>, sửa chi phí lệnh SX sau này không làm đổi lãi/lỗ của kỳ đã báo cáo.
+        Hàng <b>tự sản xuất</b>: từ v8.90 <b>tự lấy giá thành của lệnh SX</b> mỗi khi lưu/sửa/hủy/xóa <b>phiếu nhập kho từ sản xuất</b> — không cần bấm nút nữa.
+        Mỗi lần như vậy, <b>mọi mã hàng của lệnh đó</b> đều được tính lại (không chỉ mã trên phiếu vừa lưu), vì giá thành chia cho tổng số lượng nhập kho của cả lệnh — nhập làm nhiều đợt thì giá tự về đúng khi nhập xong.
+        Giá vốn đang thuộc <b>lệnh SX khác</b> hoặc <b>khai tay</b> thì không bị đụng tới, và màn hình sẽ báo rõ mã nào bị bỏ qua.
+        Khi lệnh <b>chưa có phiếu nhập kho nào</b> (mới có SL cắt) thì chưa tính giá vốn — tránh lấy số lượng cắt làm mẫu số rồi ra giá thấp giả.
         Mã đặt ngoài <b>chưa có phiếu nhập NCC nào</b> (hàng mới) thì bấm vào ô giá vốn để khai tay tạm — khai tay thì hệ thống KHÔNG bao giờ tự ghi đè.</div>
+      ${/* v8.90: nói thẳng hệ quả về số tiền. Bảng GiaVonHangHoa chỉ giữ MỘT giá mỗi mã, không có
+           lịch sử theo kỳ, mà báo cáo lãi/lỗ join thẳng bảng này. */''}
+      <div class="empty-hint" style="margin-bottom:8px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:8px 10px;text-align:left;">
+        ⚠️ Mỗi mã hàng chỉ lưu <b>một</b> giá vốn, không có lịch sử theo kỳ. Nên khi giá vốn được cập nhật lại,
+        <b>lãi gộp của các kỳ đã chốt cũng đổi theo</b>. Đã in báo cáo gửi đi thì giữ lại bản in đó để đối chiếu.</div>
       <div class="bang-cuon" style="max-height:calc(100vh - 280px);">
       <table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>Loại</th><th>Lệnh SX</th>
         <th>Giá bán (1 cái)</th><th>Giá vốn (1 cái)</th><th>Lãi gộp 1 cái</th><th>Nguồn</th><th>Cập nhật</th>

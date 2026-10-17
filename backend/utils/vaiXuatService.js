@@ -21,6 +21,14 @@ async function coCotTraNCC(pool) {
   return __coCotTraNCC;
 }
 
+/* v8.91: don gia tra go tay (migration_v879). Chua chay migration thi van xuat kho binh thuong,
+   chi la khong luu duoc don gia go va cong no van dung VaiCay.DonGiaNhap.
+   ⚠️ DUNG CHUNG ham do cot cua utils/tienVaiNhap.js — KHONG tu do rieng o day. Ly do: ban nhap dau
+   cua v8.91 co hai ban do cot rieng, moi ban mot cache; chay migration ma quen pm2 restart thi mot
+   ben thay cot, mot ben khong => phieu IN ra don gia go tay con cong no NCC ghi no theo gia nhap.
+   Ham chung do cot MOI LAN GOI (khong cache) nen hai ben khong bao gio lech nhau. */
+const { coCotDonGiaTra, chuanDonGiaTra } = require('./tienVaiNhap');
+
 async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan, mucDich, ghiChu, nguoiTaoId, rolls, laTraNCC, nccId }) {
   if (!ngayXuat || !Array.isArray(rolls) || !rolls.length) {
     throw new Error('Thiếu ngày xuất hoặc danh sách cây vải.');
@@ -29,6 +37,11 @@ async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan,
   if (traNCC && !nccId) throw new Error('Phiếu xuất đánh dấu "Trả nhà cung cấp" nhưng chưa chọn nhà cung cấp.');
   const coTra = await coCotTraNCC(pool);
   if (traNCC && !coTra) throw new Error('Chưa chạy migration_v676 nên chưa lưu được phiếu trả nhà cung cấp.');
+  const coDgTra = await coCotDonGiaTra(pool);   // v8.91
+  // Go don gia ma CSDL chua co cot thi phai bao — im lang la nguoi dung go gia roi mat sach.
+  if (traNCC && !coDgTra && (rolls || []).some(r => r && chuanDonGiaTra(r.donGiaTra) != null)) {
+    throw new Error('Chưa chạy migration_v879 nên chưa lưu được Đơn giá trả. Bỏ trống cột Đơn giá để dùng giá nhập, hoặc chạy migration rồi pm2 restart.');
+  }
 
   const rqPhieu = pool.request()
     .input('NgayXuat', sql.Date, ngayXuat)
@@ -61,6 +74,9 @@ async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan,
     const cay = cayResult.recordset[0];
     const kgXuat = Number(roll.kgXuat) || 0;
     const soMet = (roll.soMet === '' || roll.soMet == null) ? null : Number(roll.soMet);   // v5.50
+    /* v8.91: don gia tra NCC go tay. ĐỂ TRỐNG => NULL => cong no dung VaiCay.DonGiaNhap nhu cu.
+       Luat chuan hoa (ke ca vi sao so 0 cung thanh NULL) nam o utils/tienVaiNhap.js — MOT ban. */
+    const dgTra = chuanDonGiaTra(roll.donGiaTra);
 
     await pool.request()
       .input('PhieuXuatID', sql.Int, phieuXuatId)
@@ -68,7 +84,9 @@ async function xuatKhoVai(pool, { ngayXuat, maDon, donHangId, chuyen, nguoiNhan,
       .input('KGXuat', sql.Decimal(10, 2), kgXuat)
       .input('SoMet', sql.Decimal(10, 2), soMet)   // v5.50
       .input('KieuVai', sql.NVarChar, roll.kieuVai === 'Phối' ? 'Phối' : 'Chính')   // v5.31: Chính/Phối tung cay
-      .query('INSERT INTO PhieuXuatVaiChiTiet (PhieuXuatID, CayID, KGXuat, SoMet, KieuVai) VALUES (@PhieuXuatID, @CayID, @KGXuat, @SoMet, @KieuVai)');
+      .input('DonGiaTra', sql.Decimal(18, 2), coDgTra ? dgTra : null)
+      .query(`INSERT INTO PhieuXuatVaiChiTiet (PhieuXuatID, CayID, KGXuat, SoMet, KieuVai${coDgTra ? ', DonGiaTra' : ''})
+              VALUES (@PhieuXuatID, @CayID, @KGXuat, @SoMet, @KieuVai${coDgTra ? ', @DonGiaTra' : ''})`);
 
     /* v7.36: dung HAM CHUNG capNhatTrangThaiCay (utils/tonVai.js) thay vi copy cong thuc.
        Ham do xet CA MET — truoc day cho nay chi xet KG nen cay quan theo MET/CAY (KGNhap = 0 =>

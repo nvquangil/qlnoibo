@@ -180,13 +180,27 @@ for (sauNgoac = 1, j = batDau + 1; j < sFe.length && sauNgoac > 0; j++) {
 const thanBang = dauIIFE >= 0 && sauNgoac === 0 ? sFe.slice(batDau + 1, j - 1) : null;
 kiem(!!thanBang, 'cat duoc doan dung bang tu printPhieuXuatFromData()');
 if (thanBang) {
-  const dongTongKgMet = (ls, fKg, fMet, truoc, sau) =>
-    `<tr data-tong><td colspan="${truoc}">TỔNG CỘNG</td><td>kg</td><td>met</td>`
+  /* `giaTraCuaDong` thi KHONG lam ham gia: cat HAM THAT tu module.khovai.js ra chay. No la cong
+     thuc TIEN (DonGiaTra neu co, khong thi DonGiaNhap) — viet lai mot ban cho test la tu tay bo di
+     dung cai minh dinh kiem. */
+  const mGia = sFe.match(/function giaTraCuaDong\(r\) \{[\s\S]*?\n  \}/);
+  if (!mGia) { console.log('   ✗ khong cat duoc giaTraCuaDong() tu module.khovai.js'); process.exitCode = 1; }
+  const giaTraCuaDongThat = mGia ? new Function('return (' + mGia[0] + ')')() : (r => 0);
+
+  /* 🔴 HAM GIA NAY PHAI GIONG HAM THAT (module.khovai.js · dongTongKgMet), ke ca thuoc tinh style.
+     Ban dau toi viet thieu tham so thu 6 `coCotMet` va in o tong bang `<td>kg</td>` tran — the la
+     kiemBatBien() ben duoi dem duoc 0 o tong (no dem chuoi `<td style="text-align:right;">`) va
+     BAO SAI 4 phep kiem trong khi code that dung. Test bao sai con te hon test bao dung nham:
+     lan sau co loi that thi khong ai tin mau do nua. */
+  const dongTongKgMet = (ls, fKg, fMet, truoc, sau, coCotMet) =>
+    `<tr data-tong><td colspan="${truoc}" style="text-align:right;">TỔNG CỘNG</td>`
+    + `<td style="text-align:right;">kg</td>`
+    + (coCotMet !== false ? `<td style="text-align:right;">met</td>` : '')
     + (sau > 0 ? `<td colspan="${sau}"></td>` : '') + '</tr>';
   const veBang = (header, lines) => new Function(
-    'header', 'lines', 'laTraNCC', 'nhanPhieuNhapCuaDong', 'dongTongKgMet',
+    'header', 'lines', 'laTraNCC', 'nhanPhieuNhapCuaDong', 'dongTongKgMet', 'giaTraCuaDong',
     'escapeHtml', 'fmtNumber', 'fmtTien', 'fmtDate', thanBang
-  )(header, lines, laTra, nhan, dongTongKgMet, escapeHtml,
+  )(header, lines, laTra, nhan, dongTongKgMet, giaTraCuaDongThat, escapeHtml,
     v => String(v == null ? '' : v), v => 'T' + String(v), fmtDate);
 
   const dongDayDu = {
@@ -202,15 +216,28 @@ if (thanBang) {
 
   const bangTra = veBang({ LaTraNCC: 1, TenNCC: 'A' }, [dongDayDu]);
   const bangSX = veBang({ LaTraNCC: 0 }, [dongDayDu]);
-  kiem(demTh(bangTra) === 13, 'phieu TRA NCC: 13 cot (bo Kg chi dinh, them Don gia/So HD/Ngay HD)', String(demTh(bangTra)));
-  kiem(demTh(bangSX) === 11, 'phieu xuat SX: 11 cot nhu cu (VAN co Kg chi dinh)', String(demTh(bangSX)));
-  kiem(demO(bangTra) === 13, 'so O du lieu = so cot (tra NCC) — khong lech cot', String(demO(bangTra)));
+  /* v8.91 (Nguyen 2026-10-15: "tra nha cung cap: bo cot Kieu, chi can Ma cay va So kg"):
+     phieu TRA NCC bo them "Kieu" va "So met" => 13 - 2 = 11 cot. Phieu xuat SX GIU NGUYEN 11. */
+  kiem(demTh(bangTra) === 11, 'phieu TRA NCC: 11 cot (bo Kg chi dinh + Kieu + So met, them Don gia/So HD/Ngay HD)', String(demTh(bangTra)));
+  kiem(demTh(bangSX) === 11, 'phieu xuat SX: 11 cot nhu cu (VAN co Kieu, Kg chi dinh, So met)', String(demTh(bangSX)));
+  kiem(demO(bangTra) === 11, 'so O du lieu = so cot (tra NCC) — khong lech cot', String(demO(bangTra)));
   kiem(demO(bangSX) === 11, 'so O du lieu = so cot (xuat SX)', String(demO(bangSX)));
   kiem(!/Kg chỉ định/.test(bangTra), 'tra NCC: KHONG con cot "Kg chi dinh"');
   kiem(/Kg chỉ định/.test(bangSX), 'xuat SX: VAN giu cot "Kg chi dinh"');
+  // v8.91 — hai cot vua bo. Kiem CA HAI chieu: bo o phieu tra, nhung PHAI con o phieu xuat SX.
+  kiem(!/<th[\s>][^<]*Kiểu/.test(bangTra), 'tra NCC: KHONG con cot "Kieu"');
+  kiem(/<th[\s>][^<]*Kiểu/.test(bangSX), 'xuat SX: VAN giu cot "Kieu" (bo la vai Phoi thanh Chinh)');
+  kiem(!/<th[\s>][^<]*Số mét/.test(bangTra), 'tra NCC: KHONG con cot "So met"');
+  kiem(/<th[\s>][^<]*Số mét/.test(bangSX), 'xuat SX: VAN giu cot "So met"');
   ['Đơn giá', 'Số HĐ NCC', 'Ngày HĐ'].forEach(t =>
     kiem(bangTra.includes(t) && !bangSX.includes(t), `"${t}" chi co o phieu tra NCC`));
-  kiem(/T85000/.test(bangTra), 'don gia lay tu VaiCay.DonGiaNhap (qua fmtTien)');
+  kiem(/T85000/.test(bangTra), 'don gia lay tu VaiCay.DonGiaNhap khi KHONG go tay (qua fmtTien)');
+  /* v8.91: go don gia tay thi ban in phai in DUNG gia do — in mot gia ma cong no ghi gia khac la
+     nguon cai nhau voi nha cung cap. */
+  const bangTraGo = veBang({ LaTraNCC: 1, TenNCC: 'A' },
+    [Object.assign({}, dongDayDu, { DonGiaTra: 70000 })]);
+  kiem(/T70000/.test(bangTraGo) && !/T85000/.test(bangTraGo),
+    'go DonGiaTra thi ban in dung gia go, KHONG dung DonGiaNhap');
   kiem(/HD-771/.test(bangTra), 'so hoa don NCC lay tu phieu nhap');
   kiem(/16\/08\/2026/.test(bangTra), 'ngay hoa don NCC lay tu phieu nhap (khong phai ngay nhap)');
   kiem(/NKV-09136 \(17\/08\/2026\)/.test(bangTra), 'cot Ghi chu van co phieu nhap cua chinh cay do');
@@ -222,19 +249,27 @@ if (thanBang) {
   /* Dong TONG CONG: 2 o tong phai roi DUNG vao cot "SL xuat thuc te" va "So met". */
   const tongTra = (bangTra.match(/<tr data-tong>.*?<\/tr>/s) || [''])[0];
   const tongSX = (bangSX.match(/<tr data-tong>.*?<\/tr>/s) || [''])[0];
-  kiem(/colspan="7">TỔNG CỘNG/.test(tongTra), 'tra NCC: TONG CONG chiem 7 cot dau (den "Kho vai")', tongTra);
-  kiem(/colspan="8">TỔNG CỘNG/.test(tongSX), 'xuat SX: TONG CONG chiem 8 cot dau (co Kg chi dinh)', tongSX);
+  // v8.91: tra NCC bo cot "Kieu" => 7 - 1 = 6 cot dau. Xuat SX giu nguyen 8.
+  /* `[^>]*` giua colspan va `>`: o TONG CONG co ca `style="text-align:right;"`. Regex cu dinh
+     `colspan="6">` nen vua them style vao ham gia la 4 phep kiem bao do oan. */
+  kiem(/colspan="6"[^>]*>TỔNG CỘNG/.test(tongTra), 'tra NCC: TONG CONG chiem 6 cot dau (den "Kho vai", khong con "Kieu")', tongTra);
+  kiem(/colspan="8"[^>]*>TỔNG CỘNG/.test(tongSX), 'xuat SX: TONG CONG chiem 8 cot dau (co Kg chi dinh)', tongSX);
   kiem(/colspan="4"><\/td>/.test(tongTra), 'tra NCC: duoi dong tong chiem 4 cot (Don gia/So HD/Ngay HD/Ghi chu)');
   kiem(/colspan="1"><\/td>/.test(tongSX), 'xuat SX: duoi dong tong chiem 1 cot (Ghi chu)');
-  /* Bat bien that su: colspanTruoc + 2 + colspanSau === so cot cua tieu de. */
-  const kiemBatBien = (bang, tong, ten) => {
-    const t = (tong.match(/colspan="(\d+)">TỔNG/) || [])[1];
+  /* 🔴 BAT BIEN THAT SU: colspanTruoc + (so O TONG) + colspanSau === so cot cua tieu de.
+     v8.91: so O TONG khong con co dinh la 2 — phieu TRA NCC bo cot "So met" nen chi con 1 o.
+     Dem thang tu HTML thay vi hard-code: hard-code 2 la lan sau bo them mot cot thi phep kiem
+     van xanh trong khi dong TONG da roi nham cot (bai hoc v8.12 tfoot lech cot). */
+  const kiemBatBien = (bang, tong, ten, soOTongMong) => {
+    const t = (tong.match(/colspan="(\d+)"[^>]*>TỔNG/) || [])[1];
     const s = (tong.match(/colspan="(\d+)"><\/td>/) || [])[1] || '0';
-    kiem(Number(t) + 2 + Number(s) === demTh(bang),
-      `${ten}: dong TONG CONG phu dung so cot cua tieu de (${t}+2+${s} = ${demTh(bang)})`);
+    const soOTong = ((tong.match(/<td style="text-align:right;">/g) || []).length);
+    kiem(soOTong === soOTongMong, `${ten}: dong TONG co ${soOTongMong} o so`, 'dang co ' + soOTong);
+    kiem(Number(t) + soOTong + Number(s) === demTh(bang),
+      `${ten}: dong TONG CONG phu dung so cot cua tieu de (${t}+${soOTong}+${s} = ${demTh(bang)})`);
   };
-  kiemBatBien(bangTra, tongTra, 'tra NCC');
-  kiemBatBien(bangSX, tongSX, 'xuat SX');
+  kiemBatBien(bangTra, tongTra, 'tra NCC', 1);   // khong con cot So met
+  kiemBatBien(bangSX, tongSX, 'xuat SX', 2);
 }
 
 console.log('\n=== 6c. Backend tra du 3 truong moi ===');
@@ -245,6 +280,132 @@ kiem(/ALTER TABLE PhieuNhapVai ADD NgayHoaDon DATE NULL/.test(schemaPNV),
   'PhieuNhapVai.NgayHoaDon co that trong schema (migration_v54)');
 kiem(/ALTER TABLE VaiCay ADD DonGiaNhap DECIMAL\(14,2\) NULL/.test(schemaPNV),
   'VaiCay.DonGiaNhap co that trong schema');
+
+/* ================================================================================================
+   8. v8.91 — DON GIA TRA GO TAY
+   ------------------------------------------------------------------------------------------------
+   🔴 DAY LA TIEN. Cong no NCC khi tra hang = KG xuat x don gia. Truoc v8.91 don gia luon la
+   VaiCay.DonGiaNhap ("khong ai phai go, khong the lech voi luc nhap"). Nay cho go, nen phai khoa
+   lai BA dieu:
+     (a) De trong = NULL = dung gia nhap nhu cu  -> du lieu cu KHONG doi so.
+     (b) Bang tong va so chi tiet dung CUNG mot bieu thuc -> hai man hinh khong the ra hai so.
+     (c) Khong quy gia trong ve 0 -> khong co phieu tra nao giam no 0 dong.
+   ================================================================================================ */
+console.log('\n=== 8a. Mot bieu thuc dung chung cho CA HAI man cong no ===');
+const sTien = doc('utils/tienVaiNhap.js');
+const sCongNo = doc('routes/congno.js');
+kiem(/async function bieuThucTienTraVai\(pool, biDanhCT, biDanhCay\)/.test(sTien),
+  'co ham dung chung bieuThucTienTraVai()');
+/* Truoc v8.91 cong thuc nay bi CHEP RIENG o congNoNCC() va soChiTietNCC(). Hai ban chep la som muon
+   sua mot quen mot, roi bang tong va so chi tiet ra hai con so khac nhau. */
+kiem((sCongNo.match(/bieuThucTienTraVai\(pool\)/g) || []).length >= 2,
+  'CA HAI noi (bang tong + so chi tiet) deu goi bieuThucTienTraVai');
+kiem(!/SUM\(ISNULL\(ct\.KGXuat,0\) \* ISNULL\(vc\.DonGiaNhap,0\)\)/.test(sCongNo),
+  'KHONG con ban chep cong thuc trong congno.js');
+
+console.log('\n=== 8b. De trong = dung gia nhap (du lieu cu khong doi so) ===');
+kiem(/COALESCE\(\$\{ct\}\.DonGiaTra, \$\{vc\}\.DonGiaNhap, 0\)/.test(sTien),
+  'COALESCE: uu tien DonGiaTra, khong co thi DonGiaNhap');
+kiem(/ISNULL\(\$\{vc\}\.DonGiaNhap, 0\)/.test(sTien),
+  'chua chay migration_v879 thi lui ve cong thuc cu');
+const sMig = doc('../database/migration_v879.sql');
+kiem(/ALTER TABLE PhieuXuatVaiChiTiet ADD DonGiaTra DECIMAL\(18,2\) NULL/.test(sMig),
+  'cot DonGiaTra la NULL (KHONG DEFAULT 0 — default 0 la moi phieu tra cu bong dung giam no 0 dong)');
+kiem(/IF COL_LENGTH\('PhieuXuatVaiChiTiet', 'DonGiaTra'\) IS NULL/.test(sMig), 'migration co guard, chay lai duoc');
+kiem(!/UPDATE PhieuXuatVaiChiTiet/.test(sMig.replace(/\/\*[\s\S]*?\*\//g, '')),
+  'migration KHONG dung den du lieu cu');
+
+console.log('\n=== 8c. Khong quy gia trong ve 0 (CHAY ham that, khong do chuoi) ===');
+const sDichVu = doc('utils/vaiXuatService.js');
+const sKhoVai = doc('routes/khovai.js');
+/* Truoc day muc nay do CHUOI `isNaN(Number(x.donGiaTra))) ? null`. Do chuoi chi chung minh "co cau
+   do trong file", KHONG chung minh no XU LY DUNG — va dung la no SAI: `Number('0')` la 0, `isNaN(0)`
+   la false, nen so 0 lot qua va duoc ghi thang xuong CSDL. `COALESCE(0, ...)` tra 0 => phieu tra
+   500 kg giam no DUNG 0 DONG, cong no phai tra phinh len nguyen gia tri lo hang, im lang.
+   Nay goi HAM THAT voi tung gia tri bien. */
+const { chuanDonGiaTra } = require('./tienVaiNhap');
+[['de trong', '', null], ['null', null, null], ['undefined', undefined, null],
+ ['chu', 'abc', null], ['so 0', '0', null], ['so 0 dang number', 0, null],
+ ['so am', '-5', null], ['gia that', '70000', 70000], ['gia that dang number', 70000, 70000]
+].forEach(([ten, vao, ra]) => {
+  kiem(chuanDonGiaTra(vao) === ra, `chuanDonGiaTra(${ten}) -> ${ra === null ? 'NULL (dung gia nhap)' : ra}`,
+    String(chuanDonGiaTra(vao)));
+});
+[['vaiXuatService.js', sDichVu], ['khovai.js (sua phieu)', sKhoVai]].forEach(([ten, s]) => {
+  kiem(/chuanDonGiaTra\(/.test(s), `${ten}: dung ham chuan hoa dung chung`);
+  kiem(!/isNaN\(Number\((roll|line)\.donGiaTra\)\)/.test(s),
+    `${ten}: KHONG con ban chep phep kiem cu (ban cu khong bat duoc so 0)`);
+});
+kiem(/chua chay migration_v879/i.test(sDichVu),
+  'go gia ma CSDL chua co cot thi BAO LOI (khong de gia go roi mat sach)');
+
+console.log('\n=== 8d. Form: doi bo cot theo che do, KHONG lam mat kieuVai ===');
+const sFeKV = doc('../frontend/js/module.khovai.js');
+/* Mat o Kieu thi dong xuat SX gui len thieu kieuVai -> backend mac dinh 'Chinh' -> cay PHOI thanh
+   CHINH -> san luong cat cong du. Dung con bug DH2608064 ma v8.71 vua sua.
+   Form TAO: an bang CSS, o van nam trong DOM. Form SUA: che do co dinh luc mo nen dung thang bo cot
+   dung, nhung o che do tra NCC phai giu input ẩn mang dung gia tri cu — bo han la luu xong KieuVai
+   ve 'Chinh' va SoMet ve NULL du nguoi dung chi sua ngay xuat. */
+kiem(/<select class="x-kieu">/.test(sFeKV), 'form TAO: o Kieu VAN con trong DOM (chi an bang CSS)');
+kiem(/classList\.toggle\('tra-ncc', b\)/.test(sFeKV), 'form TAO: doi bo cot bang class tren bang, khong xoa o');
+kiem(/table\.bang-xuat\.tra-ncc \.c-kieu/.test(sFeKV), 'form TAO: CSS an cot Kieu khi tra NCC');
+kiem(/<input type="hidden" class="xe-kieu"/.test(sFeKV) && /<input type="hidden" class="xe-met"/.test(sFeKV),
+  'form SUA (tra NCC): giu kieuVai + soMet bang input an, khong de mat du lieu');
+/* `display:none` KHONG bo duoc mot <col> khoi bang — trinh duyet van dem du so <col> roi gan lan
+   luot cho cac o con nhin thay, nen bang meo. Be rong phai dat thang len <th>. */
+kiem(!/colgroup .c-dg/.test(sFeKV) && !/display:table-column/.test(sFeKV),
+  'KHONG co gang an/hien <col> bang display (khong hop le, lam lech be rong cot)');
+kiem(/table\.bang-xuat\.tra-ncc \.c-met/.test(sFeKV), 'CSS an cot So met khi tra NCC');
+kiem(/class="x-dg"/.test(sFeKV) && /class="x-tt"/.test(sFeKV), 'co o Don gia va o Thanh tien');
+kiem(/donGiaTra: \(r\.querySelector\('\.x-dg'\) \|\| \{\}\)\.value \|\| null/.test(sFeKV),
+  'form gui donGiaTra len backend');
+// Nhap dang do: truoc v8.91 KHONG luu kieuVai -> khoi phuc nhap la "Phoi" lang le ve "Chinh".
+kiem(/kieuVai: \(r\.querySelector\('\.x-kieu'\) \|\| \{\}\)\.value \|\| 'Chính'/.test(sFeKV),
+  'nhap dang do co luu ca kieuVai (va khoi phuc lai)');
+kiem(/r\.querySelector\('\.x-kieu'\)\.value = d\.kieuVai/.test(sFeKV), 'khoi phuc nhap co set lai o Kieu');
+
+/* ================================================================================================
+   8e. v8.91 — SUA PHIEU KHONG DUOC XOA TRANG DON GIA DA GO
+   ------------------------------------------------------------------------------------------------
+   🔴 DAY LA LOI MAT TIEN, bat duoc khi ra soat cheo. Form Sua phieu khong co o Don gia (ban nhap
+   dau) nen gui len `donGiaTra = undefined`; backend cu ghi thang => NULL => GHI DE len gia da go,
+   cho MOI dong. Chi can mo phieu ra sua NGAY XUAT roi Luu la cong no nhay tu KG×50.000 sang
+   KG×85.000 — 500 kg la lech 17,5 trieu, khong log, khong ai thay.
+   Chot hai dau: form PHAI gui, va backend PHAI bo qua khi ben goi khong gui.
+   ================================================================================================ */
+console.log('\n=== 8e. Sua phieu: khong xoa trang don gia da go ===');
+kiem(/Object\.prototype\.hasOwnProperty\.call\(line, 'donGiaTra'\)/.test(sKhoVai),
+  'backend CHI ghi DonGiaTra khi ben goi co gui khoa do');
+kiem(/const ghiDgTra = coDgTraSua && coGuiDgTra/.test(sKhoVai),
+  'co cot + co gui thi moi dua DonGiaTra vao cau UPDATE/INSERT');
+kiem(/if \(laTraSua\) l\.donGiaTra = oDg \? oDg\.value : ''/.test(sFeKV),
+  'form SUA phieu tra NCC CO gui donGiaTra len');
+kiem(/class="xe-dg"/.test(sFeKV), 'form SUA (tra NCC) co o Don gia');
+
+/* ================================================================================================
+   8f. v8.91 — MOT CONG THUC, KHONG BAN CHEP NAO SOT
+   ------------------------------------------------------------------------------------------------
+   Ban dau chi sua 2 trong 3 ban chep: `utils/chungTu.js` (bam so phieu de XEM CHUNG TU) van doc
+   DonGiaNhap. Hau qua: so chi tiet NCC ghi giam no 50.000×kg, bam vao chinh dong do xem chung tu
+   lai thay 85.000×kg. Quet CA backend thay vi dem >= 2.
+   ================================================================================================ */
+console.log('\n=== 8f. Quet toan backend: khong con ban chep cong thuc ===');
+const sChungTu = doc('utils/chungTu.js');
+kiem(/bieuThucTienTraVai\(pool, 'ct', 'vc'\)/.test(sChungTu),
+  'chungTu.js (xem chung tu PXV) dung ham chung, khong tu nhan DonGiaNhap');
+[['congno.js', sCongNo], ['chungTu.js', sChungTu]].forEach(([ten, s]) => {
+  const khongComment = s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  kiem(!/ISNULL\(ct\.KGXuat\s*,\s*0\)\s*\*\s*ISNULL\(vc\.DonGiaNhap/.test(khongComment),
+    `${ten}: KHONG con ban chep "KGXuat * DonGiaNhap" viet tay`);
+});
+/* Cache ket qua do cot la cach de nhat de hai ben lech nhau: chay migration ma quen pm2 restart thi
+   ben co cache van tuong chua co cot, ben do truc tiep thi thay co => ban in mot gia, cong no mot
+   gia. Doi lai mot cau COL_LENGTH moi lan goi. */
+kiem(!/__coCotDonGiaTra/.test(sTien), 'coCotDonGiaTra KHONG cache (tranh lech sau migration)');
+kiem(!/COL_LENGTH\('PhieuXuatVaiChiTiet'\s*,\s*'DonGiaTra'\)/.test(sKhoVai.replace(/\/\*[\s\S]*?\*\//g, '')),
+  'khovai.js khong tu do cot, goi ham chung');
+kiem(!/COL_LENGTH\('PhieuXuatVaiChiTiet'\s*,\s*'DonGiaTra'\)/.test(sDichVu.replace(/\/\*[\s\S]*?\*\//g, '')),
+  'vaiXuatService.js khong tu do cot, goi ham chung');
 
 console.log('\n=== 7. Bump ?v= ===');
 /* Khong ghim dung mot so: ban sau sua tiep file nay se bump len 7.51, 7.52... — ghim so la test cu

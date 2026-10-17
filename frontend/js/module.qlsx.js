@@ -3553,7 +3553,7 @@ window.ModuleQLSX = (function () {
         /* v8.52: hệ số quy đổi Ri → cái là HeSoQuyDoi CỦA LỆNH, không phải TongSoLop (xem khối
            ghi chú ở soLuongRiLe). TongSoLop vẫn hiện, nhưng với đúng ý nghĩa của nó: SỐ RI cắt được.
            v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
-        const heSo = heSoCuaDong(dai);
+        const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
         const coHeSo = heSo > 0;
         const soRiCat = Number(ct.TongSoLop) || 0;
         const dk = `data-mausac="${ct.MauSacID}" data-dai="${dai ? dai.ID : ''}"`;
@@ -3567,7 +3567,7 @@ window.ModuleQLSX = (function () {
         // v8.34: dòng này chuyển XUỐNG DƯỚI dòng nhập của đúng màu đó (yêu cầu Nguyen), giữ NGUYÊN chữ.
         // v8.52: viết lại cho đúng nghĩa + hiện HỆ SỐ lên (yêu cầu Nguyen "hiển thị luôn cả hệ số").
         const ghiChu = coHeSo
-          ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${dai ? 'của dải ' + escapeHtml(dai.TenDai) : 'quy đổi của lệnh'})`
+          ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${nhanHeSo(dai, ct)})`
             + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
           : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
         return `<div class="row-item" style="grid-template-columns:${cols};">
@@ -3632,8 +3632,55 @@ window.ModuleQLSX = (function () {
       catMauList.forEach(ct => daiList.forEach(dai => ds.push({ ct, dai })));
       return ds;
     }
-    /* Hệ số quy đổi Ri → cái của ĐÚNG dòng đó: của dải nếu đã tách, của lệnh nếu không. */
-    function heSoCuaDong(dai) { return Number(dai ? dai.HeSo : heSoQuyDoiDonHang) || 0; }
+    /* ============================================================================================
+       v8.92 — HỆ SỐ RI → CÁI LẤY THEO SỔ CẮT, KHÔNG THEO LỆNH.
+
+       Nguyen 2026-10-17: *"Ghi tiến độ, công đoạn đóng gói và kho nhập 1 ri = 1 cái (hệ số quy đổi
+       của lệnh) đang bị sai. Ví dụ lệnh DH2609111 ở công đoạn cắt đang hệ số 11 nhưng ra đóng gói và
+       kho nhập là 1."*
+
+       Vì sao: Cắt cho sửa hệ số TỪNG CÂY từ v6.08 (ô `.cat-heso`), SL cái ở Cắt = lớp × hệ số của
+       CÂY. Còn `heSoCuaDong` (v8.52) lại lấy DonHangSanXuat.HeSoQuyDoi — ô ở Ra lệnh SX mặc định 1,
+       ít ai sửa. Lệnh ra với 1, tổ cắt gõ 11: Cắt được 11 cái/lớp, Đóng gói gõ "5 ri" lưu 5 cái thay
+       vì 55. Cùng một lệnh, hai công đoạn đo "ri" bằng hai thước.
+
+       Chốt: "1 ri" sau Cắt = đúng số cái một lớp cắt đã cho ra = hệ số ghi trên cây ở Cắt.
+       Thứ tự ưu tiên của một dòng (màu, dải):
+           1. dải đã tách      → hệ số CỦA DẢI (v8.59, không đổi)
+           2. ct.HeSoCat > 0   → hệ số ở sổ cắt của màu đó (backend getCatMauList, mọi cây cùng một số)
+           3. còn lại          → hệ số của lệnh (Cắt chưa ghi, hoặc các cây lệch nhau — xem nhanHeSo)
+       ============================================================================================ */
+    function heSoCuaDong(dai, ct) {
+      if (dai) return Number(dai.HeSo) || 0;
+      const cat = Number(ct && ct.HeSoCat) || 0;
+      return cat > 0 ? cat : (Number(heSoQuyDoiDonHang) || 0);
+    }
+    /* Nguồn của hệ số, để dòng ghi chú dưới mỗi màu NÓI RÕ đang dùng thước nào — và cảnh báo khi
+       sổ cắt có nhiều hệ số khác nhau cho cùng một màu (lúc đó không tồn tại một cỡ ri duy nhất,
+       hệ thống lùi về hệ số của lệnh và người nhập phải tự biết). */
+    function nhanHeSo(dai, ct) {
+      if (dai) {
+        /* Dải thắng Cắt — nhưng v8.59 ràng "tổng hệ số các dải = HeSoQuyDoi của LỆNH", không ràng
+           với Cắt. Lệnh khai 1, Cắt dùng 11, rồi tách dải theo lệnh: tổng dải = 1 ≠ 11 ⇒ mọi số theo
+           dải (Cắt / Còn lại / cảnh báo vượt) sai đúng tỉ lệ đó. Không tự sửa — bảng dải là thứ
+           người dùng đã cố ý khai — nhưng PHẢI nói ra ngay dưới ô nhập. */
+        const tongDai = (daiList || []).reduce((s, d) => s + (Number(d.HeSo) || 0), 0);
+        const cat = Number(ct && ct.HeSoCat) || 0;
+        const lech = cat > 0 && tongDai > 0 && Math.abs(tongDai - cat) > 1e-9;
+        return 'của dải ' + escapeHtml(dai.TenDai) + (lech
+          ? ` — <span style="color:#c62828;">⚠️ tổng hệ số các dải = ${fmtNumber(tongDai)} nhưng sổ cắt dùng ${fmtNumber(cat)}/lớp; sửa lại bảng dải size cho khớp Cắt</span>` : '');
+      }
+      const cat = Number(ct && ct.HeSoCat) || 0;
+      if (cat > 0) {
+        const lenh = Number(heSoQuyDoiDonHang) || 0;
+        return 'theo sổ cắt' + (lenh > 0 && Math.abs(lenh - cat) > 1e-9
+          ? ` — <span style="color:#b06000;">lệnh khai ${fmtNumber(lenh)}, Cắt dùng ${fmtNumber(cat)}; lấy theo Cắt</span>` : '');
+      }
+      if (ct && Number(ct.HeSoCatLech) === 1) {
+        return `quy đổi của lệnh — <span style="color:#c62828;">⚠️ sổ cắt của màu này có nhiều hệ số khác nhau (${fmtNumber(ct.HeSoCatMin)}–${fmtNumber(ct.HeSoCatMax)}), không có một cỡ ri duy nhất; kiểm lại sổ cắt hoặc nhập thẳng số cái</span>`;
+      }
+      return 'quy đổi của lệnh';
+    }
     /* Nhãn màu kèm dải, dùng ở cột đầu mỗi dòng. */
     function nhanDong(ct, dai) {
       return escapeHtml(ct.TenMau) + (dai ? ` · <span style="color:#0d47a1;">${escapeHtml(dai.TenDai)}</span>` : '');
@@ -3653,7 +3700,7 @@ window.ModuleQLSX = (function () {
     }
 
     function soLuongRiLe(root, pre, ct, dai) {
-      const heSo = heSoCuaDong(dai);
+      const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
       const k = `[data-mausac="${ct.MauSacID}"][data-dai="${dai ? dai.ID : ''}"]`;
       const oRi = root.querySelector(`.${pre}-ri-qty${k}`);
       const oLe = root.querySelector(`.${pre}-le-qty${k}`);
@@ -5391,7 +5438,7 @@ window.ModuleQLSX = (function () {
         const daNhapCai = (ct, dai) => daNhapCuaDong('KN', ct, dai);
         const daNhapRiLe = (ct, dai) => {
           const tong = daNhapCai(ct, dai);
-          const he = heSoCuaDong(dai);
+          const he = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
           if (!(he > 0)) return { ri: 0, cuaRi: 0, le: tong, tong };
           const ri = Math.trunc(tong / he);
           const cuaRi = ri * he;
@@ -5419,7 +5466,7 @@ window.ModuleQLSX = (function () {
             /* v8.52: hệ số Ri → cái là HeSoQuyDoi CỦA LỆNH (xem soLuongRiLe). TongSoLop là SỐ RI
                cắt được, không phải hệ số — trước đây dùng nhầm nó làm hệ số.
                v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
-            const heSo = heSoCuaDong(dai);
+            const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
             const coHeSo = heSo > 0;
             const soRiCat = Number(ct.TongSoLop) || 0;
             const dk = `data-mausac="${ct.MauSacID}" data-dai="${dai ? dai.ID : ''}"`;
@@ -5427,7 +5474,7 @@ window.ModuleQLSX = (function () {
               ? `<input type="number" min="0" step="1" class="kn-ri-qty" ${dk} placeholder="Ri">`
               : '<div class="readonly-fact">—</div>';
             const ghiChu = coHeSo
-              ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${dai ? 'của dải ' + escapeHtml(dai.TenDai) : 'quy đổi của lệnh'})`
+              ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${nhanHeSo(dai, ct)})`
                 + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
               : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
             return `

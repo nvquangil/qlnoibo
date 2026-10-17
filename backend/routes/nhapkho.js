@@ -36,6 +36,9 @@ const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 // v8.07: tu dong nap Gia von hang hoa TU gia nhap NCC moi khi luu/sua/huy/xoa phieu — xem ghi chu
 // chi tiet trong chinh ham nay (giaNhapHangHoa.js). Goi SAU KHI COMMIT, tu boc try/catch rieng.
 const { napGiaVonTuMaHang } = require('../utils/giaNhapHangHoa');
+// v8.90: hang TU SAN XUAT -> nap gia von tu giaThanh1SP cua chinh lenh SX. Song song voi duong NCC
+// o tren, nhung nguon gia khac han nhau nen la ham rieng — xem ghi chu trong giaVonLenhSX.js.
+const { napGiaVonTuLenhSX, loiNhanGiaVon } = require('../utils/giaVonLenhSX');
 
 const router = express.Router();
 
@@ -581,6 +584,17 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
         const kqGv = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
         if (kqGv.capNhat) gvMsg = ` Đã tự cập nhật giá vốn cho ${kqGv.capNhat} mã.`;
       } catch (e) { console.error('[nhapkho POST /phieu] loi nap gia von tu gia nhap NCC (khong anh huong phieu da luu): ', e); }
+    } else if (loai === 'SanXuat') {
+      /* v8.90: lenh SX da co gia thanh -> tu dien vao Gia von hang hoa, khoi phai bam nut.
+         ⚠️ Nap cho MOI ma cua ca lenh, khong chi ma tren phieu nay — mau so cua giaThanh1SP la SL
+         nhap kho cua CA LENH, nen ma nhap o dot truoc cung phai duoc tinh lai. */
+      if (!b.donHangId) {
+        gvMsg = ' ⚠️ Phiếu không chọn lệnh SX nên KHÔNG cập nhật được giá vốn — sửa phiếu và chọn lệnh.';
+      } else {
+        try {
+          gvMsg = loiNhanGiaVon(await napGiaVonTuLenhSX(pool, b.donHangId, null, req.session.user.userId));
+        } catch (e) { console.error('[nhapkho POST /phieu] loi nap gia von tu lenh SX (khong anh huong phieu da luu): ', e); }
+      }
     }
     res.json({
       success: true,
@@ -662,6 +676,18 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
         const kqGv2 = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
         if (kqGv2.capNhat) gvMsg2 = ` Đã tự cập nhật giá vốn cho ${kqGv2.capNhat} mã.`;
       } catch (e) { console.error('[nhapkho PUT /phieu/:id] loi nap gia von tu gia nhap NCC (khong anh huong phieu da sua): ', e); }
+    } else if (loai === 'SanXuat') {
+      /* v8.90: SUA phieu lam doi SL nhap kho -> doi mau so cua giaThanh1SP -> gia von phai tinh lai
+         cho MOI ma cua lenh (ke ca ma vua bi go khoi phieu nay). */
+      if (!b.donHangId) {
+        gvMsg2 = ' ⚠️ Phiếu không chọn lệnh SX nên KHÔNG cập nhật được giá vốn.';
+      } else {
+        try {
+          gvMsg2 = loiNhanGiaVon(await napGiaVonTuLenhSX(pool, b.donHangId, null, req.session.user.userId));
+        } catch (e) { console.error('[nhapkho PUT /phieu/:id] loi nap gia von tu lenh SX (khong anh huong phieu da sua): ', e); }
+      }
+      /* ⚠️ Doi loai phieu SanXuat -> NhaCungCap: nhanh NCC o tren se chay va ghi de gia thanh SX
+         bang BQGQ gia mua. Do la hanh vi cua duong NCC (v8.07), khong sua o day. */
     }
     res.json({
       success: true,
@@ -688,7 +714,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
 router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const h = (await pool.request().input('id', sql.Int, req.params.id)
-    .query('SELECT TrangThai, LoaiNhap FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
+    .query('SELECT TrangThai, LoaiNhap, DonHangID FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
   if (h.TrangThai === 'Đã hủy') return res.status(400).json({ success: false, message: 'Phiếu này đã hủy rồi.' });
   const tran = new sql.Transaction(pool);
@@ -707,6 +733,15 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
         const kqGv3 = await napGiaVonTuMaHang(pool, idsCt, req.session.user.userId);
         if (kqGv3.capNhat) gvMsg3 = ` Đã cập nhật lại giá vốn cho ${kqGv3.capNhat} mã.`;
       } catch (e) { console.error('[nhapkho PUT /phieu/:id/huy] loi nap gia von tu gia nhap NCC (khong anh huong viec huy): ', e); }
+    } else if (h.LoaiNhap === 'SanXuat' && h.DonHangID) {
+      /* v8.90: huy phieu -> SL nhap kho giam -> mau so cua giaThanh1SP giam -> gia thanh TANG.
+         ⚠️ Huy phieu CUOI CUNG cua lenh KHONG lam giaThanh1SP thanh null: tinhGiaThanh() lui ve
+         luy ke cong doan KN roi SL CAT. SL cat thuong LON HON SL nhap kho that => gia von TUT,
+         lai gop PHINH. Vi vay ham chi ghi khi gt.donViSLDungTinh === 'Cái' (mau so den tu phieu
+         nhap kho) — xem DIEU (2) trong giaVonLenhSX.js. */
+      try {
+        gvMsg3 = loiNhanGiaVon(await napGiaVonTuLenhSX(pool, h.DonHangID, null, req.session.user.userId));
+      } catch (e) { console.error('[nhapkho PUT /phieu/:id/huy] loi nap gia von tu lenh SX (khong anh huong viec huy): ', e); }
     }
     res.json({ success: true, message: 'Đã hủy phiếu — tồn kho và công nợ trả về như trước.' + gvMsg3 });
   } catch (err) {
@@ -736,7 +771,7 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
   const pool = await getPool();
   const phieuId = parseInt(req.params.id, 10);
   const h = (await pool.request().input('id', sql.Int, phieuId)
-    .query('SELECT PhieuNKID, SoPhieu, TrangThai, LoaiNhap FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
+    .query('SELECT PhieuNKID, SoPhieu, TrangThai, LoaiNhap, DonHangID FROM PhieuNhapKhoHang WHERE PhieuNKID=@id')).recordset[0];
   if (!h) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
 
   // Cac ma hang co tren phieu nay
@@ -795,6 +830,13 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
         const kqGv4 = await napGiaVonTuMaHang(pool, giuLaiIds, req.session.user.userId);
         if (kqGv4.capNhat) gvMsg4 = ' Đã cập nhật lại giá vốn cho ' + kqGv4.capNhat + ' mã.';
       } catch (e) { console.error('[nhapkho DELETE /phieu/:id] loi nap gia von tu gia nhap NCC (khong anh huong viec xoa): ', e); }
+    } else if (h.LoaiNhap === 'SanXuat' && h.DonHangID) {
+      /* v8.90: ma GIU LAI mat dong gop cua phieu vua xoa vao mau so -> tinh lai. KHONG gate theo
+         giuLaiIds: ham tu lay moi ma CON LAI cua lenh; ma da bi xoa thi GiaVonHangHoa cung mat
+         theo CASCADE roi, khong con gi de ghi. */
+      try {
+        gvMsg4 = loiNhanGiaVon(await napGiaVonTuLenhSX(pool, h.DonHangID, null, req.session.user.userId));
+      } catch (e) { console.error('[nhapkho DELETE /phieu/:id] loi nap gia von tu lenh SX (khong anh huong viec xoa): ', e); }
     }
     let msg = 'Đã xóa phiếu nhập kho ' + h.SoPhieu + '.';
     if (daXoaMa.length) msg += ' Đã xóa luôn ' + daXoaMa.length + ' mã hàng khỏi danh mục: ' + daXoaMa.join(', ') + '.';

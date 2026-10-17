@@ -26,7 +26,8 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { loadGiaCong, loadInThe } = require('../utils/luongGiaCongInThe');
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/khovai.js (tong tien tren
    phieu nhap kho vai). Phieu va so cong no phai ra cung mot con so. */
-const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL } = require('../utils/tienVaiNhap');
+const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL,
+        bieuThucTienTraVai } = require('../utils/tienVaiNhap');   // v8.91: don gia tra NCC
 /* v8.77: phan DOC chi tiet chung tu nam o utils/chungTu.js de Bao cao kinh doanh dung chung.
    Hang CT_LOAI trong file do la noi DUY NHAT khai danh sach loai chung tu doc duoc. */
 const { docChungTu } = require('../utils/chungTu');
@@ -1109,14 +1110,15 @@ async function congNoNCC(pool) {
     SELECT NCC_ID, SUM(SoTien) AS Tien FROM CongNoDieuChinh
     WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL GROUP BY NCC_ID`)).recordset;
   /* v6.66: TRA HANG VE NCC -> GIAM no phai tra.
-     Vai:      don gia lay VaiCay.DonGiaNhap cua chinh cay do -> khong ai phai go, khong the lech
-               voi luc nhap.
+     Vai:      v8.91 — don gia uu tien ct.DonGiaTra (go tay luc lap phieu), de trong thi lay
+               VaiCay.DonGiaNhap cua chinh cay do nhu truoc. Xem bieuThucTienTraVai().
      Phu kien: PhieuPhuKienChiTiet.DonGia (form Xuat mo cot nay khi tich "Tra NCC").
      Co LaTraNCC do migration_v676 them - do cot truoc, chua chay migration thi coi nhu khong co. */
   const coTraVai = await coCot(pool, 'PhieuXuatVai', 'LaTraNCC');
   const coTraPK = await coCot(pool, 'PhieuPhuKien', 'LaTraNCC');
+  const btTraVai = await bieuThucTienTraVai(pool);
   const traVai = (coTraVai && coGiaVai) ? (await pool.request().query(`
-    SELECT px.NCC_ID, SUM(ISNULL(ct.KGXuat,0) * ISNULL(vc.DonGiaNhap,0)) AS Tien,
+    SELECT px.NCC_ID, SUM(${btTraVai}) AS Tien,
            COUNT(DISTINCT px.PhieuXuatID) AS SoPhieu
     FROM PhieuXuatVai px
     JOIN PhieuXuatVaiChiTiet ct ON ct.PhieuXuatID = px.PhieuXuatID
@@ -1227,10 +1229,11 @@ async function soChiTietNCC(pool, id, tuNgay, denNgay) {
      da chi, tron hang tra vao se lam sai bao cao dong tien. Cong thuc phai KHOP congNoNCC() o tren. */
   const coTraVai = await coCot(pool, 'PhieuXuatVai', 'LaTraNCC');
   const coTraPK = await coCot(pool, 'PhieuPhuKien', 'LaTraNCC');
+  const btTraVai2 = await bieuThucTienTraVai(pool);   // v8.91: CUNG mot bieu thuc voi bang tong
   const traVai = (coTraVai && coGiaVai) ? (await rq().query(`
     SELECT px.NgayXuat AS Ngay,
            CONCAT(N'XKV-', RIGHT('00000' + CAST(px.PhieuXuatID AS VARCHAR(10)), 5)) AS SoPhieu,
-           -SUM(ISNULL(ct.KGXuat,0) * ISNULL(vc.DonGiaNhap,0)) AS PhatSinh, 0 AS ThanhToan,
+           -SUM(${btTraVai2}) AS PhatSinh, 0 AS ThanhToan,
            N'Trả vải NCC' AS Loai, px.GhiChu AS DienGiai,
            N'PXV' AS CtLoai, px.PhieuXuatID AS CtID
     FROM PhieuXuatVai px

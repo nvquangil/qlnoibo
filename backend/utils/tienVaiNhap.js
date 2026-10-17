@@ -71,6 +71,61 @@ async function bieuThucTienCay(pool, biDanhCay, biDanhPhieu) {
   return `((${sl}) * ISNULL(${b}.DonGiaNhap, 0))`;
 }
 
+/* ================================================================================================
+   v8.91 — TIỀN CỦA MỘT DÒNG TRẢ VẢI VỀ NCC
+
+   Trước v8.91 công thức này được CHÉP RIÊNG ở hai chỗ trong routes/congno.js: congNoNCC() (bảng
+   tổng) và soChiTietNCC() (sổ chi tiết). Hai bản chép là sớm muộn sửa một quên một, rồi bảng tổng
+   và sổ chi tiết ra hai con số khác nhau cho cùng một nhà cung cấp — chính ghi chú ở congno.js đã
+   cảnh báo điều đó. Nay MỘT biểu thức, hai nơi gọi.
+
+   ⚠️ `DonGiaTra` (migration_v879) là đơn gia GÕ TAY lúc lập phiếu trả. ĐỂ TRỐNG = NULL = dùng
+   `VaiCay.DonGiaNhap` như trước — nhờ vậy mọi phiếu trả đã lập trước v8.91 giữ nguyên số tiền.
+   Chưa chạy migration thì không có cột, biểu thức tự lùi về bản cũ.
+
+   `biDanhCT` = bí danh của PhieuXuatVaiChiTiet (thường 'ct'), `biDanhCay` = của VaiCay (thường 'vc').
+   ================================================================================================ */
+/* ⚠️ CỐ Ý KHÔNG CACHE kết quả dò cột này (khác `coCotDonViTinhGia` ở trên).
+   Bản nháp đầu của v8.91 có cache, và có cache là đẻ ra tình huống này: chạy migration_v879 xong
+   mà QUÊN pm2 restart thì tiến trình đang chạy giữ `false`, trong khi routes/khovai.js dò trực tiếp
+   nên thấy `true`. Kết quả: bản in phiếu ra ĐƠN GIÁ GÕ TAY, còn công nợ NCC lại ghi nợ theo
+   DonGiaNhap — hai con số cho cùng một phiếu, không ai biết bên nào đúng. Đó đúng là thứ mà cả file
+   này sinh ra để chặn.
+   Giá phải trả: thêm một COL_LENGTH mỗi lần dựng câu (một lần cho mỗi lần mở màn công nợ) —
+   không đáng kể so với rủi ro trên. MỌI nơi cần biết có cột hay không phải gọi hàm NÀY. */
+async function coCotDonGiaTra(pool) {
+  try {
+    const r = (await pool.request().query(
+      `SELECT COL_LENGTH('PhieuXuatVaiChiTiet','DonGiaTra') AS a`)).recordset[0] || {};
+    return r.a != null;
+  } catch (e) { return false; }
+}
+
+/* Chuẩn hóa ô "Đơn giá" người dùng gõ trên phiếu trả NCC về giá trị ghi vào CSDL.
+   Trả về `null` = KHÔNG khai giá = công nợ dùng `VaiCay.DonGiaNhap` như trước v8.91.
+
+   ⚠️ SỐ 0 CŨNG TRẢ VỀ null, CÓ CHỦ ĐÍCH. `Number('0')` là 0 và `isNaN(0)` là false, nên phép kiểm
+   "rỗng hoặc không phải số" KHÔNG bắt được số 0 — ghi thẳng 0 xuống là `COALESCE(0, ...)` trả 0, tức
+   phiếu trả 500 kg giảm nợ ĐÚNG 0 ĐỒNG và công nợ phải trả phình lên nguyên giá trị lô hàng, im
+   lặng. Trả hàng cho không thì không lập phiếu trả, nên 0 gần như luôn là gõ nhầm (hoặc xóa chữ số
+   còn trơ lại "0"). Coi như để trống là lựa chọn ÍT GÂY HẠI NHẤT.
+   Giá âm cũng về null vì lý do tương tự — phiếu trả làm TĂNG nợ là vô nghĩa. */
+function chuanDonGiaTra(v) {
+  if (v === '' || v == null) return null;
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+async function bieuThucTienTraVai(pool, biDanhCT, biDanhCay) {
+  const ct = biDanhCT || 'ct';
+  const vc = biDanhCay || 'vc';
+  const gia = (await coCotDonGiaTra(pool))
+    ? `COALESCE(${ct}.DonGiaTra, ${vc}.DonGiaNhap, 0)`
+    : `ISNULL(${vc}.DonGiaNhap, 0)`;
+  return `(ISNULL(${ct}.KGXuat, 0) * ${gia})`;
+}
+
 /* Nhãn đơn vị của số lượng dùng để tính tiền — cho các bảng chứng từ hiện "SL / ĐVT / Đơn giá". */
 async function bieuThucDonViSQL(pool, biDanhPhieu) {
   return (await coCotDonViTinhGia(pool)) && biDanhPhieu
@@ -114,6 +169,7 @@ function chuanDonViTinhGia(v) { return laTinhTheoMet(v) ? MET : KG; }
 
 module.exports = {
   bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL,
+  bieuThucTienTraVai, coCotDonGiaTra, chuanDonGiaTra,   // v8.91
   coCotDonViTinhGia, chuanDonViTinhGia,
   tienCay, tongTien, laTienNghiNgo, laTinhTheoMet, soLuongTinhTien, nhanDonVi,
   MET, KG

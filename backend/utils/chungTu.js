@@ -21,7 +21,8 @@
    ================================================================================================== */
 
 const { sql } = require('../db');
-const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL } = require('./tienVaiNhap');
+const { bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL,
+        bieuThucTienTraVai, coCotDonGiaTra } = require('./tienVaiNhap');   // v8.91
 
 /* MOT NOI DUY NHAT khai cac loai chung tu doc duoc. Khoa = ma CtLoai, gia tri = nhan mac dinh. */
 const CT_LOAI = Object.freeze({
@@ -175,12 +176,22 @@ async function docChungTu(pool, loai, id) {
       WHERE px.PhieuXuatID = @id`)).recordset[0];
     if (!h) return { status: 404, message: 'Không tìm thấy phiếu xuất vải.' };
     const coGia = await coCot(pool, 'VaiCay', 'DonGiaNhap');
-    const cotGia = coGia ? 'vc.DonGiaNhap' : 'CAST(NULL AS DECIMAL(14,2))';
+    /* v8.91: don gia hien o bang chung tu phai la CHINH don gia da ghi no/giam no, khong phai
+       luon luon DonGiaNhap. Phieu tra NCC tu v8.91 co the go don gia rieng (ct.DonGiaTra) — neu
+       cho nay van doc DonGiaNhap thi so cong no NCC ghi 50.000/kg ma bam vao chinh dong do de xem
+       chung tu lai thay 85.000/kg: hai man hinh, hai con so, cung mot phieu.
+       Dong xuat cho san xuat co DonGiaTra = NULL nen COALESCE tu lui ve DonGiaNhap — dung nhu cu. */
+    const cotGia = coGia
+      ? ((await coCotDonGiaTra(pool)) ? 'COALESCE(ct.DonGiaTra, vc.DonGiaNhap)' : 'vc.DonGiaNhap')
+      : 'CAST(NULL AS DECIMAL(14,2))';
+    const cotThanhTien = coGia
+      ? await bieuThucTienTraVai(pool, 'ct', 'vc')
+      : 'CAST(NULL AS DECIMAL(14,2))';
     const dong = (await rq().query(`
       SELECT vc.MaCay,
              LTRIM(RTRIM(ISNULL(lv.TenLoaiVai, ISNULL(dv.MaVai, '')) + ISNULL(N' - ' + ms.TenMau, ''))) AS Ten,
              ct.KGXuat AS SoLuong, N'Kg' AS DonVi, ${cotGia} AS DonGia,
-             (ISNULL(ct.KGXuat,0) * ISNULL(${cotGia}, 0)) AS ThanhTien
+             ${cotThanhTien} AS ThanhTien
       FROM PhieuXuatVaiChiTiet ct
       JOIN VaiCay vc ON vc.CayID = ct.CayID
       LEFT JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID

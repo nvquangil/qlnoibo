@@ -119,6 +119,12 @@ async function napGiaVonTuMaHang(pool, maHangIds, userId) {
   let capNhat = 0, boQua = 0;
   for (const mh of mhRows) {
     if (mh.NguonGia === 'Khai tay') { boQua++; continue; }   // Nguyen chot: khai tay giu nguyen, khong dam
+    /* v8.90: KHONG de len gia von do LENH SX ghi. Tu v8.90 ca hai duong deu TU DONG chay, nen neu
+       khong chan o day thi mot ma vua mua vua tu san xuat se co gia von nhay qua nhay lai giua
+       "gia thanh SX" va "binh quan gia mua" tuy thu tu thao tac — va moi lan nhay la doi lai gop
+       cua ca cac ky da chot. Hang tu san xuat thi gia thanh SX moi la gia dung.
+       Muon ep ve gia mua thi vao Bao cao > Gia von hang hoa khai tay. */
+    if (mh.NguonGia === 'Lệnh SX') { boQua++; continue; }
     const gia = giaTheoDvChinh(gnMap.get(mh.MaHangID), mh, donViChinhLaGop);
     if (!(gia > 0)) continue;   // chua co nguon nao tinh duoc -> bo qua, khong bia gia 0
     await pool.request()
