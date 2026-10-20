@@ -10,6 +10,7 @@ const express = require('express');
 const { sql, getPool } = require('../db');
 const { requireAuth, requirePermission, requireChucNang } = require('../middleware/auth');
 const { maRapCuaDon } = require('../utils/maRapCuaDon');   // v7.67: mã rập gộp 2 nguồn (Sơ đồ + Ghi tiến độ)
+const cayThanhPham = require('../utils/cayThanhPham');     // v8.93: luật sơ đồ Chính/Phối
 
 const router = express.Router();
 const CN = (action) => [requireAuth, requirePermission('QLSX', action), requireChucNang('QLSX', 'bangkebtp')];
@@ -32,6 +33,21 @@ async function getBTPPrefill(pool, donHangId) {
   const cat = await pool.request().query("SELECT StageID FROM CongDoanSanXuat WHERE MaCongDoan = 'CAT'");
   if (!cat.recordset.length) return [];
   const stageId = cat.recordset[0].StageID;
+  /* v8.93: + LUAT SO DO (DonHangChiTietSoDo.Kieu, migration_v880). Ghi chu v6.60.1 ngay duoi da
+     noi dung cai lo: "mot cay co kem dong KieuVai='Chinh' la ca so lop cat cua cay do (gom phan cat
+     cho phoi) bi tinh vao bang BTP". DH2608073 dung vao dung lo nay (cay 2DA-DEN02190926002 xuat
+     hai lan, Chinh + Phoi). Nay: so do khai Phoi => KHONG tinh; so do khai Chinh => tinh; chua khai
+     => luat cu cua file nay (CHI L1 — chat hon qlsx.js, giu nguyen co y). */
+  const coKieuSD = await cayThanhPham.coKieuSoDo(pool);
+  const kieuSD = cayThanhPham.bieuThucKieuSoDo('cc');
+  /* Luat B (ban ghi la lan cat phoi — suy tu phieu xuat) + L1 cu cua file nay. */
+  const dkL1 = `(NOT ${cayThanhPham.bieuThucBanGhiLaPhoi('cc', '@donId')}
+                 AND EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
+                  JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                  WHERE px.CayID = cc.CayID AND px.KieuVai = N'Chính' AND p.DonHangID = @donId))`;
+  const dkCay = coKieuSD
+    ? `AND (${kieuSD} = N'Chính' OR (${kieuSD} IS NULL AND ${dkL1}))`
+    : `AND ${dkL1}`;
   const r = await pool.request().input('donId', sql.Int, donHangId).input('stageId', sql.Int, stageId).query(`
     SELECT ms.MauSacID, ms.TenMau, SUM(cc.SoLuongLop) AS SoLop, COUNT(DISTINCT td.TienDoID) AS SoSoCat
     FROM TienDoCatChiTietCay cc
@@ -40,9 +56,7 @@ async function getBTPPrefill(pool, donHangId) {
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
     WHERE td.DonHangID = @donId AND td.StageID = @stageId
-      AND EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
-                  JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-                  WHERE px.CayID = cc.CayID AND px.KieuVai = N'Chính' AND p.DonHangID = @donId)
+      ${dkCay}
       /* v6.60.1: LOẠI RA màu nào ĐƯỢC KHAI RÕ LÀ PHỐI trong Cấu trúc vải của chính đơn này.
          Điều kiện EXISTS ở trên chỉ xét phiếu XUẤT: lệnh dùng CÙNG MỘT LOẠI VẢI cho cả chính lẫn
          phối thì kho hay xuất chung, một cây có kèm dòng KieuVai='Chính' là cả số lớp cắt của cây

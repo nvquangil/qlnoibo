@@ -9,6 +9,7 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 // v6.23: TỒN KHẢ DỤNG = tồn kho − hàng đang giữ cho đơn khách đặt. Định nghĩa nằm ở routes/banhang.js
 // (nơi giữ luồng bán hàng) để CHỈ CÓ 1 chỗ tính — đừng viết lại công thức này ở file khác.
 const { layHangDangGiu } = require('./banhang');
+const cayThanhPham = require('../utils/cayThanhPham');   // v8.93: luat "cay nao vao thanh pham" dung chung
 /* v7.38: nguon "nhap lai" (hang khach tra) — chi de HIEN THI, khong duoc cong vao ton.
    Doc ghi chu dau utils/nhapLaiHangHoa.js truoc khi sua. */
 const nhapLai = require('../utils/nhapLaiHangHoa');
@@ -119,10 +120,13 @@ async function getSoCatTheoMau(pool, donHangId) {
      Cay khong co dong xuat nao cua don -> van tinh (bao thu, tranh lam mat hang that).
      ================================================================================================ */
   const tienDoId = latest.recordset[0].TienDoID;
-  const coKhaiKieu = (await pool.request().input('id', sql.Int, donHangId).query(`
-    SELECT TOP 1 1 AS c FROM PhieuXuatVaiChiTiet px
-    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-    WHERE p.DonHangID = @id AND px.KieuVai IS NOT NULL`)).recordset.length > 0;
+  /* v8.93: luat "cay nao vao thanh pham" chuyen ve utils/cayThanhPham.js — them luat SO DO
+     (DonHangChiTietSoDo.Kieu). Truoc day chep tay o day mot ban L1/L2/L3 rieng.
+     ⚠️ Van "TOP 1 ban cat moi nhat" nhu cu (xem ghi chu tren). Nhung neu ban moi nhat la so do
+     khai PHOI (DH2608073: ban cuoi 14580 la so do bo) thi goi y nay ra rong — dung hon la ra so
+     cua vai bo. Nguoi dung nhin thay rong thi tu biet phai chon lai; ra so sai thi khong. */
+  const coKhaiKieu = await cayThanhPham.donCoKhaiKieuVai(pool, donHangId);
+  const dkCay = cayThanhPham.dieuKienCayThanhPham('cc', '@id', coKhaiKieu, await cayThanhPham.coKieuSoDo(pool));
   const coGiatCap = (await pool.request()
     .query("SELECT COL_LENGTH('TienDoCatChiTietCay','SoCaiGiatCap') AS c")).recordset[0].c != null;
   const result = await pool.request().input('td', sql.Int, tienDoId).input('id', sql.Int, donHangId)
@@ -133,14 +137,7 @@ async function getSoCatTheoMau(pool, donHangId) {
       JOIN VaiCay vc ON vc.CayID = cc.CayID
       JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
       WHERE cc.TienDoID = @td
-        ${coKhaiKieu ? `AND (
-             EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
-                     JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-                     WHERE px.CayID = cc.CayID AND p.DonHangID = @id AND px.KieuVai = N'Chính')
-             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
-                            JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
-                            WHERE px2.CayID = cc.CayID AND p2.DonHangID = @id)
-           )` : ''}
+        ${dkCay}
       GROUP BY dv.MauSacID`);
   const map = {};
   result.recordset.forEach(r => { map[r.MauSacID] = Math.round(Number(r.SoCai) || 0); });

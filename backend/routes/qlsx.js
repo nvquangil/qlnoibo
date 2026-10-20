@@ -761,6 +761,7 @@ async function getCatMauList(pool, donHangId, stageId) {
      ⚠️ v8.71: câu này PHẢI lọc cây y hệt slCatTheoMauTuCay(). Trước đây nó cộng MỌI cây (kể cả vải
      phối) trong khi SoLuong đã lọc — hai con số khác phạm vi, chia ra hệ số Ri sẽ sai. */
   const coKhaiKieu = await donCoKhaiKieuVai(pool, donHangId);
+  const dkCayLop = await dieuKienCayChinhAsync(pool, 'cc', donHangId, coKhaiKieu);   // v8.93: + luat so do
   /* ================================================================================================
      v8.92 — HỆ SỐ QUY ĐỔI RI → CÁI PHẢI LÀ HỆ SỐ ĐÃ DÙNG THẬT Ở CẮT, không phải của lệnh.
 
@@ -790,7 +791,7 @@ async function getCatMauList(pool, donHangId, stageId) {
     JOIN VaiCay vc ON vc.CayID = cc.CayID
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     WHERE cc.TienDoID IN (${ids.join(',')})
-      ${dieuKienCayChinh('cc', Number(donHangId), coKhaiKieu)}
+      ${dkCayLop}
     GROUP BY dv.MauSacID`);
   const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), r]));
   return maus.map(k => {
@@ -984,33 +985,16 @@ async function getStageActualQty(pool, donHangId, stageId) {
      L3. Don KHONG co bat ky dong xuat nao khai KieuVai (du lieu cu truoc khi co cot nay)
          -> GIU NGUYEN MOI CAY. Cung luoi an toan voi getCatMauList.
    ================================================================================================ */
-async function donCoKhaiKieuVai(pool, donHangId) {
-  const r = await pool.request().input('id', sql.Int, donHangId).query(`
-    SELECT TOP 1 1 AS c FROM PhieuXuatVaiChiTiet px
-    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-    WHERE p.DonHangID = @id AND px.KieuVai IS NOT NULL`);
-  return r.recordset.length > 0;
-}
-
-/* Manh SQL dung CHUNG cho moi cau truy van "chi lay cay tinh vao san luong".
-   Tham so aliasCay = alias cua bang TienDoCatChiTietCay trong cau goi. Tra ve chuoi rong khi don
-   roi vao luat L3 (khong loc gi ca).
-   ⚠️ TRA VE MANH SQL, khong phai dieu kien tham so hoa — chi noi donHangId (so nguyen doc tu CSDL)
-   vao, khong co chuoi nguoi dung nhap, nen khong co duong tiem SQL. Noi them bat ky gia tri nao
-   KHAC vao day thi phai la so, hoac phai doi sang .input(). */
-function dieuKienCayChinh(aliasCay, donHangId, coKhaiKieu) {
-  if (!coKhaiKieu) return '';   // L3
-  return `AND (
-            /* L1: co it nhat mot dong xuat khai 'Chính' */
-            EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
-                    JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-                    WHERE px.CayID = ${aliasCay}.CayID AND p.DonHangID = ${donHangId}
-                      AND px.KieuVai = N'Chính')
-            /* L2: cay khong co dong xuat nao cho don nay -> van tinh (co canh bao rieng) */
-            OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
-                           JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
-                           WHERE px2.CayID = ${aliasCay}.CayID AND p2.DonHangID = ${donHangId})
-          )`;
+/* v8.93: ca hai ham nay CHUYEN SANG utils/cayThanhPham.js — mot luat, nam o mot cho, dung chung
+   cho qlsx.js / khohang.js / bangke.js. Giu ten cu o day de cac cho goi khong phai doi.
+   ⚠️ dieuKienCayChinh() nay da GOM THEM luat SO DO (DonHangChiTietSoDo.Kieu, migration_v880):
+   so do khai 'Phoi' thi KHONG dong nao cua no vao thanh pham, du cay co dong phieu xuat 'Chinh'.
+   Vi sao: DH2608073 — cung mot cay xuat hai lan (Chinh cho than, Phoi cho bo), luat theo CAY khong
+   phan biet duoc hai lan cat. Xem ghi chu dai o dau utils/cayThanhPham.js. */
+const cayThanhPham = require('../utils/cayThanhPham');
+const donCoKhaiKieuVai = cayThanhPham.donCoKhaiKieuVai;
+async function dieuKienCayChinhAsync(pool, aliasCay, donHangId, coKhaiKieu) {
+  return cayThanhPham.dieuKienCayThanhPham(aliasCay, Number(donHangId), coKhaiKieu, await cayThanhPham.coKieuSoDo(pool));
 }
 
 /* ================================================================================================
@@ -1029,13 +1013,14 @@ async function slCatTheoMauTuCay(pool, donHangId, ids) {
   const coKhaiKieu = await donCoKhaiKieuVai(pool, donHangId);
   const coGiatCap = await coCotQLSX(pool, 'TienDoCatChiTietCay', 'SoCaiGiatCap');   // v6.01
   const bieuThucCai = `cc.SoLuongLop * cc.HeSoQuyDoi${coGiatCap ? ' + ISNULL(cc.SoCaiGiatCap, 0)' : ''}`;
+  const dkCay = await dieuKienCayChinhAsync(pool, 'cc', donHangId, coKhaiKieu);   // v8.93: + luat so do
   const r = await pool.request().query(`
     SELECT dv.MauSacID, SUM(${bieuThucCai}) AS SoCai
     FROM TienDoCatChiTietCay cc
     JOIN VaiCay vc ON vc.CayID = cc.CayID
     JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
     WHERE cc.TienDoID IN (${ids.join(',')})
-      ${dieuKienCayChinh('cc', Number(donHangId), coKhaiKieu)}
+      ${dkCay}
     GROUP BY dv.MauSacID`);
   const map = {};
   r.recordset.forEach(x => { map[x.MauSacID] = Math.round(Number(x.SoCai) || 0); });
@@ -1176,6 +1161,8 @@ async function slKhoNhapTheoDon(pool) {
      Gioi han con lai, CO Y: danh sach chi hien MOT con so cho ca lenh, nen lay he so chung cua moi
      mau chinh; lenh ma hai mau chinh dung hai he so khac nhau thi lui ve lenh — form (tinh theo
      tung mau) van dung, chi danh sach la "xap xi" va cung chi la dong chu nho duoi Trang thai. */
+  // v8.93: luat L1/L2/L3 + so do chuyen ve utils/cayThanhPham.js (ban "moi lenh", tuong quan theo t.DonHangID).
+  const dkHeCat = cayThanhPham.dieuKienCayThanhPhamMoiLenh('cc', 't', await cayThanhPham.coKieuSoDo(pool));
   const cteHeCat = catStage
     ? `heCat AS (
          SELECT t.DonHangID,
@@ -1183,17 +1170,7 @@ async function slKhoNhapTheoDon(pool) {
          FROM TienDoSanXuat t
          JOIN TienDoCatChiTietCay cc ON cc.TienDoID = t.TienDoID
          WHERE t.StageID = @cat AND ISNULL(cc.HeSoQuyDoi, 0) > 0
-           AND (
-             EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px
-                     JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
-                     WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID AND px.KieuVai = N'Chính')
-             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px2
-                            JOIN PhieuXuatVai p2 ON p2.PhieuXuatID = px2.PhieuXuatID
-                            WHERE px2.CayID = cc.CayID AND p2.DonHangID = t.DonHangID)
-             OR NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px3
-                            JOIN PhieuXuatVai p3 ON p3.PhieuXuatID = px3.PhieuXuatID
-                            WHERE p3.DonHangID = t.DonHangID AND px3.KieuVai IS NOT NULL)
-           )
+           ${dkHeCat}
          GROUP BY t.DonHangID
        ),`
     : `heCat AS (SELECT CAST(NULL AS INT) AS DonHangID, CAST(NULL AS DECIMAL(10,3)) AS HMin, CAST(NULL AS DECIMAL(10,3)) AS HMax WHERE 1 = 0),`;
@@ -1813,6 +1790,14 @@ router.delete('/orders/:maDH/inthe/:id', requireAuth, requirePermission('QLSX', 
 // voi Giao vai/Phu kien: danh sach rieng cua don hang, them/xoa qua nut "Luu"/"Xoa" luu NGAY (khong
 // doi lan "Gui" chinh cua Ghi tien do). Cong doan Cat doc lai danh sach nay de cho chon "So do nao"
 // dang cat (chi hien o chon khi > 1 dong - xem module.qlsx.js), ghi vao TienDoSanXuat.SoDoID.
+/* v8.93: chuan hoa Kieu cua so do — chi nhan dung hai chuoi, moi thu khac ve NULL (= chua khai,
+   he thong lui ve luat theo cay). Cung tap gia tri voi PhieuXuatVaiChiTiet.KieuVai. */
+function chuanKieuSoDo(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (s === 'Chính' || s === 'Phối') return s;
+  return null;
+}
+
 router.get('/orders/:maDH/sodo', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
   const pool = await getPool();
   const order = await getOrderByMaDH(pool, req.params.maDH);
@@ -1827,15 +1812,22 @@ router.post('/orders/:maDH/sodo', requireAuth, requirePermission('QLSX', 'edit')
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     const { rows } = req.body;
     if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ success: false, message: 'Thiếu dữ liệu sơ đồ.' });
+    /* v8.93: Kieu cua so do (Chinh/Phoi/NULL). Do cot truoc — chua chay migration_v880 thi luu nhu cu
+       va BAO LOI neu nguoi dung da chon Kieu (im lang la ho tuong da khai ma so van cong sai). */
+    const coKieu = await cayThanhPham.coKieuSoDo(pool);
+    if (!coKieu && rows.some(r => chuanKieuSoDo(r.kieu))) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v880 nên chưa lưu được Kiểu (Chính/Phối) của sơ đồ. Để trống Kiểu, hoặc chạy migration rồi pm2 restart.' });
+    }
     for (const r of rows) {
-      await pool.request()
+      const rq = pool.request()
         .input('DonHangID', sql.Int, order.DonHangID)
         .input('MetSoDoDai', sql.Decimal(10, 2), r.metSoDoDai || null)
         .input('KhoVaiSoDo', sql.Decimal(10, 2), r.khoVaiSoDo || null)
         .input('MaRap', sql.NVarChar, r.maRap || null)
-        .input('GhiChu', sql.NVarChar, r.ghiChu || null)
-        .query(`INSERT INTO DonHangChiTietSoDo (DonHangID, MetSoDoDai, KhoVaiSoDo, MaRap, GhiChu)
-                VALUES (@DonHangID, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @GhiChu)`);
+        .input('GhiChu', sql.NVarChar, r.ghiChu || null);
+      if (coKieu) rq.input('Kieu', sql.NVarChar(10), chuanKieuSoDo(r.kieu));
+      await rq.query(`INSERT INTO DonHangChiTietSoDo (DonHangID, MetSoDoDai, KhoVaiSoDo, MaRap, GhiChu${coKieu ? ', Kieu' : ''})
+                      VALUES (@DonHangID, @MetSoDoDai, @KhoVaiSoDo, @MaRap, @GhiChu${coKieu ? ', @Kieu' : ''})`);
     }
     res.json({ success: true });
   } catch (err) {
@@ -1859,17 +1851,28 @@ router.put('/orders/:maDH/sodo/:id', requireAuth, requirePermission('QLSX', 'edi
     const order = await getOrderByMaDH(pool, req.params.maDH);
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     const b = req.body || {};
-    const kq = await pool.request()
+    /* v8.93: Kieu — CHI ghi khi body co khoa 'kieu' (cach 'donHangId' o PUT /xuat cua khovai.js).
+       Noi goi cu khong gui khoa nay thi giu nguyen Kieu dang co, khong ghi de NULL. Chua chay
+       migration_v880 ma gui Kieu khac rong thi bao loi, khong nuot. */
+    const coKieu = await cayThanhPham.coKieuSoDo(pool);
+    const coGuiKieu = Object.prototype.hasOwnProperty.call(b, 'kieu');
+    if (!coKieu && coGuiKieu && chuanKieuSoDo(b.kieu)) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v880 nên chưa lưu được Kiểu (Chính/Phối) của sơ đồ.' });
+    }
+    const ghiKieu = coKieu && coGuiKieu;
+    const rq = pool.request()
       .input('id', sql.Int, req.params.id)
       .input('donHangId', sql.Int, order.DonHangID)
       .input('MetSoDoDai', sql.Decimal(10, 2), b.metSoDoDai === '' || b.metSoDoDai == null ? null : b.metSoDoDai)
       .input('KhoVaiSoDo', sql.Decimal(10, 2), b.khoVaiSoDo === '' || b.khoVaiSoDo == null ? null : b.khoVaiSoDo)
       .input('MaRap', sql.NVarChar, b.maRap || null)
-      .input('GhiChu', sql.NVarChar, b.ghiChu || null)
+      .input('GhiChu', sql.NVarChar, b.ghiChu || null);
+    if (ghiKieu) rq.input('Kieu', sql.NVarChar(10), chuanKieuSoDo(b.kieu));
+    const kq = await rq
       /* KHONG boc ISNULL: form Sua luon gui DU 4 o (dien san gia tri cu), nen bo trong o nao la CO Y
          xoa o do. Boc ISNULL o day la nguoi dung khong bao gio xoa duoc mot o da go sai. */
       .query(`UPDATE DonHangChiTietSoDo
-              SET MetSoDoDai=@MetSoDoDai, KhoVaiSoDo=@KhoVaiSoDo, MaRap=@MaRap, GhiChu=@GhiChu
+              SET MetSoDoDai=@MetSoDoDai, KhoVaiSoDo=@KhoVaiSoDo, MaRap=@MaRap, GhiChu=@GhiChu${ghiKieu ? ', Kieu=@Kieu' : ''}
               WHERE ID=@id AND DonHangID=@donHangId`);
     if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy sơ đồ này trong đơn hàng.' });
     res.json({ success: true });

@@ -538,7 +538,7 @@ window.ModuleQLSX = (function () {
          ("ngắn lại" là nói dải định lượng, không phải bóp hẹp ô này). Nay: chữ 13px (bằng ô nhập
          thường, không còn 11px), rộng 300px để nhãn dài nhất vẫn đọc trọn. */
       const opts = soDoList.map((s, i) => {
-        const nhan = `SĐ ${i + 1}: ${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) + ' m' : '(chưa có mét)'}`
+        const nhan = `SĐ ${i + 1}${s.Kieu === 'Phối' ? ' PHỐI' : (s.Kieu === 'Chính' ? ' THÂN' : '')}: ${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) + ' m' : '(chưa có mét)'}`
           + (s.KhoVaiSoDo != null ? ` · khổ ${fmtNumber(s.KhoVaiSoDo)}` : '')
           + (s.MaRap ? ` · rập ${s.MaRap}` : '');
         return `<option value="${s.ID}"${String(s.ID) === sdChon ? ' selected' : ''}>${escapeHtml(nhan)}</option>`;
@@ -4492,6 +4492,7 @@ window.ModuleQLSX = (function () {
 
       function soDoLabel(s) {
         const parts = [];
+        if (s.Kieu === 'Phối' || s.Kieu === 'Chính') parts.push(s.Kieu === 'Phối' ? 'PHỐI' : 'THÂN');   // v8.93
         if (s.MetSoDoDai != null) parts.push(fmtNumber(s.MetSoDoDai) + 'm');
         if (s.KhoVaiSoDo != null) parts.push('khổ ' + fmtNumber(s.KhoVaiSoDo));
         if (s.MaRap) parts.push('rập ' + s.MaRap);
@@ -4690,8 +4691,31 @@ window.ModuleQLSX = (function () {
     // lai danh sach nay de chon "dang cat so do nao" (xem renderStageFields('CAT') + submit handler,
     // chi hien o chon khi > 1 dong - yeu cau 1.2.2.1).
     let sdAddRowIdx = 0;
+    /* ============================================================================================
+       v8.93 — SƠ ĐỒ KHAI KIỂU: THÂN (Chính) HAY PHỐI.  (migration_v880: DonHangChiTietSoDo.Kieu)
+
+       Nguyen 2026-10-19, DH2608073: sổ cắt giấy ĐEN02 150, QC hiện 250. Cùng một cây
+       2DA-DEN02190926002 được xuất HAI LẦN cho lệnh — PXV-13205 'Chính' (cắt thân, sơ đồ 6251) và
+       PXV-14204 'Phối' (cắt bo, sơ đồ 6252). Luật v8.71 gắn Kiểu cho CÂY nên 20 lớp cắt bo cũng vào
+       thành phẩm. Hôm trước DH2608064 là vải thân / vải bo KHÁC CÂY nhưng cùng MauSacID — v8.71 xử
+       được bằng cách hỏi theo cây; hôm nay là CÙNG CÂY nên phải hỏi theo LẦN CẮT = sơ đồ.
+
+       Để trống = chưa khai = hệ thống dùng luật cũ theo cây (mọi sơ đồ hiện có đều trống → không
+       con số nào đang hiện bị đổi cho tới khi người dùng khai). Phối = không dòng sổ cắt nào của sơ
+       đồ này vào thành phẩm. Chính = vào hết, bất kể Kiểu trên phiếu xuất.
+       ============================================================================================ */
+    const KIEU_SO_DO = [['', '— chưa khai —'], ['Chính', 'Chính (thân)'], ['Phối', 'Phối (bo/phối/Lót)']];
+    function sdKieuSelectHtml(cls, giaTri) {
+      return `<select class="${cls}">${KIEU_SO_DO.map(([v, n]) => `<option value="${v}"${String(giaTri || '') === v ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+    }
+    function sdKieuNhanHtml(s) {
+      if (s.Kieu === 'Phối') return '<span style="color:#b06000;font-weight:600;">Phối</span>';
+      if (s.Kieu === 'Chính') return '<span style="color:#137333;font-weight:600;">Chính</span>';
+      return '<span style="color:#8a8a8a;">chưa khai</span>';
+    }
     function sdExistingRowsHtml() {
       return soDoList.map(s => `<tr data-id="${s.ID}">
+        <td>${sdKieuNhanHtml(s)}</td>
         <td>${s.MetSoDoDai != null ? fmtNumber(s.MetSoDoDai) : ''}</td><td>${s.KhoVaiSoDo != null ? fmtNumber(s.KhoVaiSoDo) : ''}</td>
         <td>${escapeHtml(s.MaRap || '')}</td><td>${escapeHtml(s.GhiChu || '')}</td>
         ${/* v7.53: + nút SỬA. Trước chỉ có Xóa — mà gõ sai xong thì xóa KHÔNG được nếu sơ đồ đã dùng ở
@@ -4699,11 +4723,12 @@ window.ModuleQLSX = (function () {
               sửa-tại-dòng của "Nhà gia công chi tiết" (ngc-edit) ngay dưới, không mở popup riêng. */''}
         <td><button type="button" class="btn small secondary sd-edit" data-id="${s.ID}">Sửa</button>
             <button type="button" class="btn small danger sd-del" data-id="${s.ID}">Xóa</button></td></tr>`).join('')
-        || '<tr><td colspan="5" class="empty-hint">Chưa khai báo sơ đồ nào</td></tr>';
+        || '<tr><td colspan="6" class="empty-hint">Chưa khai báo sơ đồ nào</td></tr>';
     }
     function sdAddRowHtml() {
       const idx = ++sdAddRowIdx;
-      return `<div class="form-grid" style="grid-template-columns:1fr 1fr 1fr 1.5fr auto;gap:8px;align-items:end;margin-bottom:8px;" data-sdaddrow data-idx="${idx}">
+      return `<div class="form-grid" style="grid-template-columns:130px 1fr 1fr 1fr 1.5fr auto;gap:8px;align-items:end;margin-bottom:8px;" data-sdaddrow data-idx="${idx}">
+        <div><label>Kiểu</label>${sdKieuSelectHtml('sd-kieu', '')}</div>
         <div><label>Mét sơ đồ</label><input type="number" step="0.01" min="0" class="sd-met"></div>
         <div><label>Khổ vải sơ đồ</label><input type="number" step="0.01" min="0" class="sd-kho"></div>
         <div><label>Mã rập</label><input class="sd-marap"></div>
@@ -4714,8 +4739,13 @@ window.ModuleQLSX = (function () {
     function renderSoDoBox(box) {
       box.innerHTML = `
         <div class="form-row"><label>Sơ đồ đã khai báo</label>
-          <table><thead><tr><th>Mét sơ đồ</th><th>Khổ vải sơ đồ</th><th>Mã rập</th><th>Ghi chú</th><th></th></tr></thead>
+          <table><thead><tr><th>Kiểu</th><th>Mét sơ đồ</th><th>Khổ vải sơ đồ</th><th>Mã rập</th><th>Ghi chú</th><th></th></tr></thead>
           <tbody id="sdExistingBody">${sdExistingRowsHtml()}</tbody></table>
+          <div class="empty-hint" style="text-align:left;margin-top:4px;">
+            <b>Kiểu</b>: sơ đồ cắt <b>thân</b> (Chính) hay <b>bo/phối</b>. Sổ cắt của sơ đồ <b>Phối</b> không cộng
+            vào SL thành phẩm. Để trống thì hệ thống tự suy từ Kiểu trên <b>phiếu xuất kho vải</b> — chỉ cần khai
+            khi một lần cắt toàn cây dùng chung cho cả thân lẫn bo.
+          </div>
         </div>
         <div class="form-row"><label>Thêm sơ đồ</label>
           <div id="sdAddRows">${sdAddRowHtml()}</div>
@@ -4743,6 +4773,7 @@ window.ModuleQLSX = (function () {
         const tr = btn.closest('tr');
         const so = v => (v == null ? '' : v);
         tr.innerHTML = `
+          <td>${sdKieuSelectHtml('sd-e-kieu', row.Kieu)}</td>
           <td><input class="sd-e-met" type="number" step="0.01" min="0" value="${so(row.MetSoDoDai)}" style="width:90px;"></td>
           <td><input class="sd-e-kho" type="number" step="0.01" min="0" value="${so(row.KhoVaiSoDo)}" style="width:90px;"></td>
           <td><input class="sd-e-marap" value="${escapeHtml(row.MaRap || '')}"></td>
@@ -4752,6 +4783,7 @@ window.ModuleQLSX = (function () {
         tr.querySelector('.sd-e-cancel').addEventListener('click', () => renderSoDoBox(box));
         tr.querySelector('.sd-e-save').addEventListener('click', async () => {
           const body = {
+            kieu: tr.querySelector('.sd-e-kieu').value || null,   // v8.93
             metSoDoDai: tr.querySelector('.sd-e-met').value || null,
             khoVaiSoDo: tr.querySelector('.sd-e-kho').value || null,
             maRap: tr.querySelector('.sd-e-marap').value || null,
@@ -4784,6 +4816,7 @@ window.ModuleQLSX = (function () {
       }));
       box.querySelector('#btnSaveSoDo').addEventListener('click', async () => {
         const rows = Array.from(box.querySelectorAll('#sdAddRows > [data-sdaddrow]')).map(r => ({
+          kieu: r.querySelector('.sd-kieu').value || null,   // v8.93
           metSoDoDai: r.querySelector('.sd-met').value || null,
           khoVaiSoDo: r.querySelector('.sd-kho').value || null,
           maRap: r.querySelector('.sd-marap').value || null,

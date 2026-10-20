@@ -63,10 +63,15 @@ kiem(/\.input\('cat', sql\.Int, catStage \|\| 0\)/.test(sBe), 'tham số @cat đ
 kiem(/\$\{cteHeCat\}\s*\n\s*tongCai AS/.test(sBe), 'CTE heCat chèn ngay trước tongCai');
 /* Danh sách phải LỌC CÂY CHÍNH như form, không thì cây phối (hệ số mặc định 1) làm HMin ≠ HMax
    → lùi về lệnh → danh sách "55 Ri", form "5 Ri". Ba luật L1/L2/L3 phải có đủ. */
-const heCatSql = (sBe.match(/heCat AS \(\s*SELECT t\.DonHangID,[\s\S]*?GROUP BY t\.DonHangID/) || [''])[0];
+/* v8.93: luật chuyển về utils/cayThanhPham.js — kiểm trên CHUỖI SQL hàm đó sinh ra, không dò file. */
+kiem(/dieuKienCayThanhPhamMoiLenh\('cc', 't'/.test(sBe), 'heCat gọi hàm dùng chung (bản mọi lệnh)');
+const ctp = require('./cayThanhPham');
+const heCatSql = ctp.dieuKienCayThanhPhamMoiLenh('cc', 't', true);
 kiem(/px\.KieuVai = N'Chính'/.test(heCatSql), 'heCat L1: cây có dòng xuất khai Chính');
 kiem(/NOT EXISTS \(SELECT 1 FROM PhieuXuatVaiChiTiet px2[\s\S]*?p2\.DonHangID = t\.DonHangID\)/.test(heCatSql), 'heCat L2: cây không có dòng xuất nào của lệnh');
 kiem(/px3\.KieuVai IS NOT NULL/.test(heCatSql), 'heCat L3: lệnh chưa khai Kiểu thì không lọc');
+kiem(/pxb\.KieuVai = N'Phối'/.test(heCatSql) && /pxc\.KieuVai = N'Chính'/.test(heCatSql), 'heCat luật B: bản ghi cắt phối bị loại');
+kiem(/sd\.Kieu/.test(heCatSql), 'heCat luật sơ đồ (khi có cột Kieu)');
 kiem(/heCat AS \([\s\S]*?\),`\s*\n\s*: `heCat AS \(SELECT CAST\(NULL AS INT\)/.test(sBe),
   'cả hai nhánh cteHeCat đều kết thúc bằng dấu phẩy');
 
