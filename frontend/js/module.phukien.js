@@ -436,19 +436,23 @@ window.ModulePhuKien = (function () {
     const body = document.getElementById('pkBody');
     const rows = await apiGet('/api/phukien/phieunhap').then(r => r.data);
     body.innerHTML = `
-      <div class="toolbar">${perm.canCreate ? '<button class="btn" id="btnAddPhieu">+ Tạo phiếu nhập</button>' : ''}</div>
+      ${/* v9.01 (Nguyen 2026-10-24): ô tìm ký tự bất kỳ dùng chung wireTableSearch — lọc trong bảng đã
+           tải, tách từ khớp hết (cùng ô tìm của tab Danh mục phụ kiện). Cột Thao tác gắn data-notim
+           để chữ trên nút không lọt vào chuỗi tìm. */''}
+      <div class="toolbar">${searchBoxHtml('pkNhapTim', '🔍 Gõ để tìm trong bảng (số phiếu, NCC, số HĐ, người tạo, ghi chú...)')}<span id="pkNhapTimInfo" class="empty-hint" style="padding:0;"></span>${perm.canCreate ? '<button class="btn" id="btnAddPhieu" style="margin-left:auto;">+ Tạo phiếu nhập</button>' : ''}</div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Nhà cung cấp</th><th>Số hóa đơn</th><th>Số dòng PK</th><th>Tổng SL</th><th>Người tạo</th><th>Ghi chú</th><th style="width:190px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td>NPK-${String(r.PhieuID).padStart(5, '0')}</td>
         <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.TenNCC)}</td><td>${escapeHtml(r.SoHoaDon)}</td>
         <td>${r.SoDongPhuKien}</td><td>${fmtNumber(r.TongSoLuong)}</td><td>${escapeHtml(r.NguoiTao)}</td><td>${escapeHtml(r.GhiChu)}</td>
-        <td>
+        <td data-notim>
           <button type="button" class="btn small secondary act-view" data-id="${r.PhieuID}">Xem/In</button>
           ${perm.canEdit ? `<button type="button" class="btn small secondary act-edit" data-id="${r.PhieuID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.PhieuID}">Xóa</button>` : ''}
         </td></tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Chưa có phiếu nhập nào</td></tr>'}</tbody></table>`;
 
     if (perm.canCreate) document.getElementById('btnAddPhieu').addEventListener('click', () => openPhieuNhapCreateModal());
+    wireTableSearch(body, 'pkNhapTim', { infoId: 'pkNhapTimInfo' });   // v9.01
     body.querySelectorAll('.act-view').forEach(btn => btn.addEventListener('click', () => openPhieuNhapDetailModal(btn.dataset.id)));
     ganBamDongXemChiTiet(body);   // v6.66.1: bấm cả dòng cũng mở chi tiết
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {
@@ -689,20 +693,22 @@ window.ModulePhuKien = (function () {
     const body = document.getElementById('pkBody');
     const rows = await apiGet('/api/phukien/phieuxuat').then(r => r.data);
     body.innerHTML = `
-      <div class="toolbar">${perm.canCreate ? '<button class="btn" id="btnAddPhieu">+ Tạo phiếu xuất</button>' : ''}</div>
+      ${/* v9.01: ô tìm ký tự bất kỳ (xem ghi chú ở renderPhieuNhap). */''}
+      <div class="toolbar">${searchBoxHtml('pkXuatTim', '🔍 Gõ để tìm trong bảng (số phiếu, đơn hàng, mã rập, người tạo, ghi chú...)')}<span id="pkXuatTimInfo" class="empty-hint" style="padding:0;"></span>${perm.canCreate ? '<button class="btn" id="btnAddPhieu" style="margin-left:auto;">+ Tạo phiếu xuất</button>' : ''}</div>
       ${/* v5.84: thêm cột Mã rập (theo đơn hàng gắn kèm) */''}
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Đơn hàng</th><th>Mã rập</th><th>Số dòng PK</th><th>Tổng SL</th><th>Người tạo</th><th>Ghi chú</th><th style="width:190px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td>XPK-${String(r.PhieuID).padStart(5, '0')}</td>
         <td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.MaDH || r.MaDon || '')}</td><td>${escapeHtml(r.MaRap || '')}</td>
         <td>${r.SoDongPhuKien}</td><td>${fmtNumber(r.TongSoLuong)}</td><td>${escapeHtml(r.NguoiTao)}</td><td>${escapeHtml(r.GhiChu)}</td>
-        <td>
+        <td data-notim>
           <button type="button" class="btn small secondary act-view" data-id="${r.PhieuID}">Xem/In</button>
           ${perm.canEdit ? `<button type="button" class="btn small secondary act-edit" data-id="${r.PhieuID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.PhieuID}">Xóa</button>` : ''}
         </td></tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Chưa có phiếu xuất nào</td></tr>'}</tbody></table>`;
 
     if (perm.canCreate) document.getElementById('btnAddPhieu').addEventListener('click', () => openPhieuXuatCreateModal());
+    wireTableSearch(body, 'pkXuatTim', { infoId: 'pkXuatTimInfo' });   // v9.01
     body.querySelectorAll('.act-view').forEach(btn => btn.addEventListener('click', () => openPhieuXuatDetailModal(btn.dataset.id)));
     ganBamDongXemChiTiet(body);   // v6.66.1: bấm cả dòng cũng mở chi tiết
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {

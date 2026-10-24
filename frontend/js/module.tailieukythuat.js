@@ -91,8 +91,18 @@ window.ModuleTaiLieuKyThuat = (function () {
       body.innerHTML = `<div class="empty-hint">Lỗi tải danh sách: ${escapeHtml(err.message)}</div>`;
       return;
     }
+    /* v8.99 (Nguyen 2026-10-24): 2 tab đơn giá CHỈ liệt kê lệnh đã tick đúng ô ở công đoạn Giao gia
+       công (Giao nhà làm → Đơn giá công đoạn may; Giao gia công → Đơn giá giao gia công; chưa tick →
+       không ở tab nào). Lọc ở backend (getOrdersWithDocStatus); ở đây nói rõ để người dùng không tưởng
+       "mất lệnh" — lệnh đã có đơn giá nhưng chưa tick vẫn hiện, kèm nhãn ⚠ (xem rowHtml). */
+    const ghiChuLoc = activeChild === 'dongiamay'
+      ? 'Chỉ hiện lệnh đã tick <b>Giao nhà làm</b> ở công đoạn <b>Giao gia công</b> (Ghi nhận tiến độ). Lệnh chưa ghi công đoạn đó sẽ không có ở đây.'
+      : activeChild === 'dongiagiacong'
+        ? 'Chỉ hiện lệnh đã tick <b>Giao gia công</b> ở công đoạn <b>Giao gia công</b> (Ghi nhận tiến độ). Lệnh chưa ghi công đoạn đó sẽ không có ở đây.'
+        : '';
     body.innerHTML = `
       <div class="form-row">${searchBoxHtml('tlktSearchBox')}</div>
+      ${ghiChuLoc ? `<div class="empty-hint" style="text-align:left;padding:4px 0 8px;">${ghiChuLoc}</div>` : ''}
       ${/* v5.84: riêng tab Chỉ định NPL có thêm cột trạng thái XUẤT KHO phụ kiện */''}
       ${/* v7.67.1: cột "Mã hàng" đổi thành "Mã rập" và hiện MÃ RẬP (gộp cả mã Kỹ thuật khai lúc Ghi
            tiến độ — xem backend/utils/maRapCuaDon.js). */''}
@@ -120,9 +130,15 @@ window.ModuleTaiLieuKyThuat = (function () {
         ? `<button type="button" class="btn small" data-open="${escapeHtml(o.MaDH)}">+ Tạo</button>`
         : '<span class="empty-hint">—</span>';
     }
+    /* v8.99: lệnh ĐÃ CÓ đơn giá nhưng chưa tick ô tương ứng ở công đoạn Giao gia công — backend vẫn
+       trả (không giấu dữ liệu đã nhập), gắn nhãn để thấy chỗ lệch. Cờ NULL = DB chưa có cột → không nhãn. */
+    const coCua = (co) => co != null && !Number(co);   // mssql trả BIT thành true/false; NULL = không biết
+    let nhanChuaGiao = '';
+    if (o.DaCo && activeChild === 'dongiamay' && coCua(o.DaGiaoNhaLam)) nhanChuaGiao = 'chưa tick Giao nhà làm';
+    if (o.DaCo && activeChild === 'dongiagiacong' && coCua(o.DaGiaoGiaCong)) nhanChuaGiao = 'chưa tick Giao gia công';
     return `<tr>
       <td><a href="#" class="tlkt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem phiếu In lệnh SX">${escapeHtml(o.MaDH)}</a></td><td>${escapeHtml(o.MaRap || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
-      <td>${escapeHtml(o.TenKhachHang || '')}</td><td>${fmtDate(o.NgayGiaoDuKien)}</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan)}</td>
+      <td>${escapeHtml(o.TenKhachHang || '')}</td><td>${fmtDate(o.NgayGiaoDuKien)}</td><td>${statusWithStage(o.TrangThai, o.TenCongDoan)}${nhanChuaGiao ? `<div style="font-size:11px;color:#b45309;" title="Đã có đơn giá nhưng ở công đoạn Giao gia công chưa tick ô này — vào Ghi nhận tiến độ sửa lại cho khớp">⚠ ${nhanChuaGiao}</div>` : ''}</td>
       <td>${o.DaCo ? '<span class="badge ok">Đã có</span>' : '<span class="badge warn">Chưa có</span>'}</td>
       ${activeChild === 'chidinhnpl' ? `<td>${trangThaiXuatPKHtml(o)}</td>` : ''}
       <td>${o.CapNhatLuc ? fmtDateTime(o.CapNhatLuc) : ''}</td>

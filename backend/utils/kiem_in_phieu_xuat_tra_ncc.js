@@ -199,9 +199,9 @@ if (thanBang) {
     + (sau > 0 ? `<td colspan="${sau}"></td>` : '') + '</tr>';
   const veBang = (header, lines) => new Function(
     'header', 'lines', 'laTraNCC', 'nhanPhieuNhapCuaDong', 'dongTongKgMet', 'giaTraCuaDong',
-    'escapeHtml', 'fmtNumber', 'fmtTien', 'fmtDate', thanBang
+    'escapeHtml', 'fmtNumber', 'fmtTien', 'fmtDate', 'anhNho', thanBang
   )(header, lines, laTra, nhan, dongTongKgMet, giaTraCuaDongThat, escapeHtml,
-    v => String(v == null ? '' : v), v => 'T' + String(v), fmtDate);
+    v => String(v == null ? '' : v), v => 'T' + String(v), fmtDate, u => u);   // v8.94: + anhNho
 
   const dongDayDu = {
     MaVai: 'V01', TenLoaiVai: 'Cotton', TenMau: 'Đen', KieuVai: 'Chính', MaCay: 'TK-A01',
@@ -217,11 +217,17 @@ if (thanBang) {
   const bangTra = veBang({ LaTraNCC: 1, TenNCC: 'A' }, [dongDayDu]);
   const bangSX = veBang({ LaTraNCC: 0 }, [dongDayDu]);
   /* v8.91 (Nguyen 2026-10-15: "tra nha cung cap: bo cot Kieu, chi can Ma cay va So kg"):
-     phieu TRA NCC bo them "Kieu" va "So met" => 13 - 2 = 11 cot. Phieu xuat SX GIU NGUYEN 11. */
-  kiem(demTh(bangTra) === 11, 'phieu TRA NCC: 11 cot (bo Kg chi dinh + Kieu + So met, them Don gia/So HD/Ngay HD)', String(demTh(bangTra)));
-  kiem(demTh(bangSX) === 11, 'phieu xuat SX: 11 cot nhu cu (VAN co Kieu, Kg chi dinh, So met)', String(demTh(bangSX)));
-  kiem(demO(bangTra) === 11, 'so O du lieu = so cot (tra NCC) — khong lech cot', String(demO(bangTra)));
-  kiem(demO(bangSX) === 11, 'so O du lieu = so cot (xuat SX)', String(demO(bangSX)));
+     phieu TRA NCC bo them "Kieu" va "So met" => 13 - 2 = 11 cot. Phieu xuat SX GIU NGUYEN 11.
+     v8.94: + cot "Anh" (anh mau vai) sau "Mau" o CA HAI dang => 12 / 12. */
+  kiem(demTh(bangTra) === 12, 'phieu TRA NCC: 12 cot (bo Kg chi dinh + Kieu + So met, them Anh/Don gia/So HD/Ngay HD)', String(demTh(bangTra)));
+  kiem(demTh(bangSX) === 12, 'phieu xuat SX: 12 cot (VAN co Kieu, Kg chi dinh, So met; + Anh)', String(demTh(bangSX)));
+  kiem(demO(bangTra) === 12, 'so O du lieu = so cot (tra NCC) — khong lech cot', String(demO(bangTra)));
+  kiem(demO(bangSX) === 12, 'so O du lieu = so cot (xuat SX)', String(demO(bangSX)));
+  kiem(/<th[\s>][^<]*Ảnh/.test(bangTra) && /<th[\s>][^<]*Ảnh/.test(bangSX), 'v8.94: ca hai dang co cot "Anh"');
+  /* Dong co anh thi in <img> qua anhNho; khong co anh thi o trong (khong in khung vo). */
+  const bangCoAnh = veBang({ LaTraNCC: 0 }, [Object.assign({}, dongDayDu, { AnhMau: '/uploads/den.jpg' })]);
+  kiem(/<img src="\/uploads\/den\.jpg"/.test(bangCoAnh), 'co AnhMau -> in <img>');
+  kiem(!/<img/.test(bangSX), 'khong co AnhMau -> o trong, khong co <img>');
   kiem(!/Kg chỉ định/.test(bangTra), 'tra NCC: KHONG con cot "Kg chi dinh"');
   kiem(/Kg chỉ định/.test(bangSX), 'xuat SX: VAN giu cot "Kg chi dinh"');
   // v8.91 — hai cot vua bo. Kiem CA HAI chieu: bo o phieu tra, nhung PHAI con o phieu xuat SX.
@@ -252,8 +258,9 @@ if (thanBang) {
   // v8.91: tra NCC bo cot "Kieu" => 7 - 1 = 6 cot dau. Xuat SX giu nguyen 8.
   /* `[^>]*` giua colspan va `>`: o TONG CONG co ca `style="text-align:right;"`. Regex cu dinh
      `colspan="6">` nen vua them style vao ham gia la 4 phep kiem bao do oan. */
-  kiem(/colspan="6"[^>]*>TỔNG CỘNG/.test(tongTra), 'tra NCC: TONG CONG chiem 6 cot dau (den "Kho vai", khong con "Kieu")', tongTra);
-  kiem(/colspan="8"[^>]*>TỔNG CỘNG/.test(tongSX), 'xuat SX: TONG CONG chiem 8 cot dau (co Kg chi dinh)', tongSX);
+  // v8.94: + cot Anh => 6->7 va 8->9.
+  kiem(/colspan="7"[^>]*>TỔNG CỘNG/.test(tongTra), 'tra NCC: TONG CONG chiem 7 cot dau (den "Kho vai", khong con "Kieu", + Anh)', tongTra);
+  kiem(/colspan="9"[^>]*>TỔNG CỘNG/.test(tongSX), 'xuat SX: TONG CONG chiem 9 cot dau (co Kg chi dinh, + Anh)', tongSX);
   kiem(/colspan="4"><\/td>/.test(tongTra), 'tra NCC: duoi dong tong chiem 4 cot (Don gia/So HD/Ngay HD/Ghi chu)');
   kiem(/colspan="1"><\/td>/.test(tongSX), 'xuat SX: duoi dong tong chiem 1 cot (Ghi chu)');
   /* 🔴 BAT BIEN THAT SU: colspanTruoc + (so O TONG) + colspanSau === so cot cua tieu de.

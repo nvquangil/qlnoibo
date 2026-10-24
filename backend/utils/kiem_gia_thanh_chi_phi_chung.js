@@ -63,8 +63,13 @@ console.log('\n=== 1. Chay that tinhGiaThanh() ===');
 const than = catKhoi(sQlsx, 'async function tinhGiaThanh(pool, order) {', '{', '}');
 kiem(!!than, 'cat duoc tinhGiaThanh');
 
-/* Pool gia: nhan dien tung cau SQL theo dau hieu roi tra so lieu dung san. */
-function taoPool(sl) {
+/* Pool gia: nhan dien tung cau SQL theo dau hieu roi tra so lieu dung san.
+   v8.95: nhan them tuy chon — `rieng` (dong ChiPhiChungDonHang), `macDinh` (dong ChiPhiChungMacDinh),
+   `thuTuConTro` (ThuTu cua cong doan con tro dang dung). Mac dinh giu dung hanh vi test v7.89. */
+function taoPool(sl, o) {
+  o = o || {};
+  const rieng = o.rieng !== undefined ? o.rieng : [{ ID: 1, TenChiPhi: 'Điện nước', SoTien: 2000, GhiChu: '' }];
+  const macDinh = o.macDinh || [];
   return {
     request: () => ({
       _in: {},
@@ -77,11 +82,14 @@ function taoPool(sl) {
           return { recordset: [{ CayID: 1, MaCay: 'C1', MaVai: 'V1', TenLoaiVai: 'Cotton', TenMau: 'Đỏ',
             DonGiaNhap: 30000, KgMetDaDung: 10, TongLop: 5, KgDaXuatChoDon: 10 }] };
         }
-        if (/ChiPhiChungDonHang/.test(s)) {
-          return { recordset: [{ ID: 1, TenChiPhi: 'Điện nước', SoTien: 2000, GhiChu: '' }] };
+        if (/FROM ChiPhiChungDonHang/.test(s)) return { recordset: rieng };
+        if (/FROM ChiPhiChungMacDinh/.test(s)) return { recordset: macDinh };
+        if (/MaCongDoan IN \('KN','CAT','QC'\)/.test(s)) {
+          return { recordset: [{ StageID: 91, MaCongDoan: 'KN', ThuTu: 90 }, { StageID: 92, MaCongDoan: 'CAT', ThuTu: 20 },
+                               { StageID: 93, MaCongDoan: 'QC', ThuTu: 75 }] };
         }
-        if (/MaCongDoan IN \('KN','CAT'\)/.test(s)) {
-          return { recordset: [{ StageID: 91, MaCongDoan: 'KN' }, { StageID: 92, MaCongDoan: 'CAT' }] };
+        if (/SELECT ThuTu FROM CongDoanSanXuat WHERE StageID = @s/.test(s)) {
+          return { recordset: o.thuTuConTro != null ? [{ ThuTu: o.thuTuConTro }] : [] };
         }
         if (/PhieuNhapKhoHangChiTiet/.test(s)) return { recordset: [{ SL: sl }] };
         return { recordset: [] };
@@ -89,11 +97,15 @@ function taoPool(sl) {
     })
   };
 }
-const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatForOrder',
+/* `getStageActualQty` gia: tra theo StageID — 93 = QC, 91 = KN. */
+const lamF = (qcLuyKe, knLuyKe, coBang) => new Function('sql', 'coCotQLSX', 'coBangQLSX', 'getStageActualQty', 'getTongSLCatForOrder',
   'getMaRapCuaDon', 'getDonViTinhCuaDon',
   `${than}\nreturn tinhGiaThanh;`)(
     { Int: 'Int', NVarChar: (n) => 'NVarChar', Decimal: () => 'Decimal' },
-    async () => true, async () => 0, async () => 0, async () => 'R1', async () => 'Cái');
+    async () => true, async () => coBang !== false,
+    async (p, id, stageId) => (stageId === 93 ? (qcLuyKe || 0) : (stageId === 91 ? (knLuyKe || 0) : 0)),
+    async () => 0, async () => 'R1', async () => 'Cái');
+const F = lamF(0, 0, true);
 
 (async () => {
   const order = { DonHangID: 1, MaDH: 'DH01', TenSanPham: 'Áo', TongSoLuong: 999 };
@@ -124,20 +136,66 @@ const F = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatFor
   bang(d.tong.chiPhiChungCaLenh, undefined, 'khong con truong chiPhiChungCaLenh');
 
   console.log('\n  --- Chi phi chung = 0 thi ket qua y nhu truoc khi doi ---');
-  const F2 = new Function('sql', 'coCotQLSX', 'getStageActualQty', 'getTongSLCatForOrder',
-    'getMaRapCuaDon', 'getDonViTinhCuaDon', `${than}\nreturn tinhGiaThanh;`)(
-      { Int: 'Int', NVarChar: () => 'NVarChar', Decimal: () => 'Decimal' },
-      async () => true, async () => 0, async () => 0, async () => '', async () => 'Cái');
-  const poolKhongCPC = taoPool(100);
-  const goc = poolKhongCPC.request;
-  poolKhongCPC.request = () => {
-    const r = goc();
-    const q0 = r.query.bind(r);
-    r.query = async (s) => (/ChiPhiChungDonHang/.test(String(s)) ? { recordset: [] } : q0(s));
-    return r;
-  };
+  const F2 = lamF(0, 0, true);
+  const poolKhongCPC = taoPool(100, { rieng: [], macDinh: [] });
   const d0 = await F2(poolKhongCPC, order);
   bang(d0.giaThanh1SP, 3000, 'khong khai chi phi chung -> 300.000/100 = 3.000 (y nhu cu)');
+
+  /* ============================================================================================
+     1b. v8.95 — MAU SO QC + CHI PHI CHUNG MAC DINH (chay ham that, khong mo phong)
+     Nguyen 2026-10-22: lay SL QC de tinh gia thanh; chot khi QC xong; chi phi chung cai dat chung.
+     Chot: QC chi lam mau so khi lenh DA ROI QC; rieng thang chung (co rieng > 0 thi bo chung).
+     ============================================================================================ */
+  console.log('\n=== 1b. v8.95: mau so QC, QC chua xong, KN, chi phi chung mac dinh ===');
+  const MD = [{ ID: 1, TenChiPhi: 'Quản lý', SoTien: 500, GhiChu: '' }, { ID: 2, TenChiPhi: 'Điện', SoTien: 300, GhiChu: '' }];
+
+  console.log('\n  --- QC DA XONG (con tro ThuTu 80 > QC 75), QC luy ke 120, phieu NK 100 ---');
+  let dq = await lamF(120, 0, true)(taoPool(100, { thuTuConTro: 80 }), Object.assign({}, order, { CongDoanHienTaiID: 5 }));
+  bang(dq.qcXong, true, 'qcXong = true');
+  bang(dq.slDungTinh, 120, 'mau so = SL QC (120), KHONG phai phieu nhap kho (100)');
+  bang(dq.donViSLDungTinh, 'Cái', 'QC xong -> don vi Cai (giaVonLenhSX duoc ghi)');
+  bang(dq.giaThanh1SP, 4500, '300.000/120 + 2.000 = 4.500');
+
+  console.log('\n  --- QC CHUA XONG (con tro ThuTu 75 = dang o QC), QC luy ke 30, phieu NK 100 ---');
+  dq = await lamF(30, 0, true)(taoPool(100, { thuTuConTro: 75 }), Object.assign({}, order, { CongDoanHienTaiID: 5, TrangThai: 'Đang sản xuất' }));
+  bang(dq.qcXong, false, 'qcXong = false');
+  bang(dq.slDungTinh, 100, 'QC chua xong -> KHONG chia cho 30 (gap 3 lan); lui ve phieu nhap kho 100');
+  bang(dq.donViSLDungTinh, 'Cái', 'phieu nhap kho van la mau so tin duoc (v8.90)');
+  kiem(/QC chưa xong/.test(dq.nguonSL), 'nguonSL noi ro QC chua xong', dq.nguonSL);
+
+  console.log('\n  --- Lenh cu: khong QC, khong phieu NK, chi co luy ke KN 100 ---');
+  dq = await lamF(0, 100, true)(taoPool(0, { thuTuConTro: 90 }), Object.assign({}, order, { CongDoanHienTaiID: 5, TrangThai: 'Đang sản xuất' }));
+  bang(dq.slDungTinh, 100, 'mau so = luy ke KN');
+  bang(dq.donViSLDungTinh, null,
+    '🔴 KN KHONG duoc "Cái" — ban v8.90 do chu "phiếu" trong cau "chua co phieu nhap kho" nen KN lot qua, gia von ghi voi mau so KN');
+
+  console.log('\n  --- Lenh HOAN THANH (con tro NULL), QC luy ke 200 ---');
+  dq = await lamF(200, 0, true)(taoPool(0, {}), Object.assign({}, order, { CongDoanHienTaiID: null, TrangThai: 'Hoàn thành' }));
+  bang(dq.qcXong, true, 'Hoan thanh => qcXong');
+  bang(dq.slDungTinh, 200, 'mau so = QC');
+
+  console.log('\n  --- Chi phi chung: lenh KHONG khai rieng -> dung MAC DINH ---');
+  dq = await lamF(120, 0, true)(taoPool(100, { thuTuConTro: 80, rieng: [], macDinh: MD }), Object.assign({}, order, { CongDoanHienTaiID: 5 }));
+  bang(dq.nguonChiPhiChung, 'chung', 'nguon = chung');
+  bang(dq.tong.chiPhiChung, 800, 'tong chi phi chung = 500 + 300 (mac dinh)');
+  bang(dq.giaThanh1SP, 3300, '300.000/120 + 800 = 3.300');
+  bang((dq.chiPhiChung || []).every(x => x.MacDinh === true), true, 'tung dong duoc danh dau MacDinh');
+
+  console.log('\n  --- Chi phi chung: lenh CO khai rieng -> rieng thang, BO chung (khong cong) ---');
+  dq = await lamF(120, 0, true)(taoPool(100, { thuTuConTro: 80, macDinh: MD }), Object.assign({}, order, { CongDoanHienTaiID: 5 }));
+  bang(dq.nguonChiPhiChung, 'rieng', 'nguon = rieng');
+  bang(dq.tong.chiPhiChung, 2000, 'chi lay rieng 2.000 — KHONG cong them 800 mac dinh');
+
+  console.log('\n  --- Chi phi chung: rieng chi co dong TEN, tien 0 -> coi nhu CHUA khai, dung mac dinh ---');
+  dq = await lamF(120, 0, true)(taoPool(100, { thuTuConTro: 80, rieng: [{ ID: 9, TenChiPhi: 'x', SoTien: 0, GhiChu: '' }], macDinh: MD }),
+    Object.assign({}, order, { CongDoanHienTaiID: 5 }));
+  bang(dq.nguonChiPhiChung, 'chung', '🔴 dong rieng 0 dong khong duoc bo bo chung (ra soat cheo bat duoc)');
+  bang(dq.tong.chiPhiChung, 800, 'van dung 800 mac dinh');
+
+  console.log('\n  --- Chua chay migration_v882 (khong co bang mac dinh) ---');
+  dq = await lamF(120, 0, false)(taoPool(100, { thuTuConTro: 80, rieng: [], macDinh: MD }), Object.assign({}, order, { CongDoanHienTaiID: 5 }));
+  bang(dq.nguonChiPhiChung, 'khong', 'khong co bang -> khong dung mac dinh, khong loi');
+  bang(dq.tong.chiPhiChung, 0, 'chi phi chung = 0');
 
   /* ============================================================================================
      2. NGUON GIA VON van dung ham nay -> gia von tu dong theo cong thuc moi khi bam "Nap tu lenh SX"

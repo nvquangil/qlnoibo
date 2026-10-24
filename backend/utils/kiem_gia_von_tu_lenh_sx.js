@@ -76,11 +76,23 @@ Object.entries(ROUTE).forEach(([ten, than]) => {
     'dang truyen: ' + m[2].trim());
 });
 
-console.log('\n=== 2. 🔴 CHI ghi khi mau so den tu PHIEU NHAP KHO ===');
+console.log('\n=== 2. 🔴 CHI ghi khi mau so la CAI THAT (QC da xong / phieu nhap kho) ===');
 kiem(/gt\.donViSLDungTinh !== 'Cái'/.test(sUtil), 'kiem co donViSLDungTinh === "Cái" truoc khi ghi');
-/* Co do do chinh tinhGiaThanh() gan, va CHI gan khi mau so den tu phieu nhap kho. */
-kiem(/donViSLDungTinh: \(slNhapKho > 0 && nguonNhap\.indexOf\('phiếu'\) >= 0\) \? 'Cái' : null/.test(sQlsx),
-  'qlsx.js that su chi gan "Cái" cho nhanh phieu nhap kho');
+/* v8.95: co do dat bang BIEN CO `mauSoTinCay`, KHONG do chu 'phiếu' trong cau nguon nua. Ban v8.90
+   do chu, ma cau cua nhanh KN la "...chua co phieu nhap kho" ⇒ KN cung thanh 'Cái' ⇒ lenh cu ghi
+   gia von voi mau so luy ke KN (co the chi la lan ghi cuoi) ⇒ gia von gap N. Ra soat cheo bat duoc. */
+kiem(/donViSLDungTinh: \(slNhapKho > 0 && mauSoTinCay\) \? 'Cái' : null/.test(sQlsx),
+  'qlsx.js gan "Cái" bang co mauSoTinCay (khong do chu trong cau nguon)');
+kiem(!/nguonNhap\.indexOf\('phiếu'\)/.test(boGhiChu(sQlsx)), 'KHONG con do chu "phiếu" de suy co (bay nhanh KN)');
+/* Dung hai noi dat co = true: QC xong va phieu nhap kho. Nhanh KN KHONG duoc dat. */
+const choDatCo = (boGhiChu(sQlsx).match(/mauSoTinCay = true/g) || []).length;
+kiem(choDatCo === 2, 'co mauSoTinCay duoc dat dung 2 noi (QC xong, phieu nhap kho)', 'dang ' + choDatCo);
+const nhanhKN = (sQlsx.match(/if \(slNhapKho <= 0 && knStage\) \{[\s\S]*?\n  \}/) || [''])[0];
+kiem(nhanhKN && !/mauSoTinCay/.test(nhanhKN), 'nhanh luy ke KN KHONG dat co (mau so KN khong tin duoc)');
+/* v8.95: QC chi lam mau so khi DA XONG (lenh roi QC) — chua xong ma chia la gia gap N. */
+kiem(/if \(qcXong\) slQC = await getStageActualQty\(pool, donHangId, qcStage\.StageID\)/.test(sQlsx),
+  'SL QC chi doc khi qcXong');
+kiem(/Number\(conTro\.ThuTu\) > Number\(qcStage\.ThuTu\)/.test(sQlsx), 'qcXong = con tro da qua QC (ThuTu lon hon)');
 kiem(/slDungTinh = slNhapKho > 0 \? slNhapKho : slCat/.test(sQlsx),
   'xac nhan tinhGiaThanh() CO lui ve SL cat — ly do phai co co tren');
 kiem(/if \(!\(gia > 0\)\)/.test(sUtil), 'gia <= 0 thi dung lai, khong ghi');

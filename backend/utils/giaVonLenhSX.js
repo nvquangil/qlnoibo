@@ -113,10 +113,12 @@ async function napGiaVonTuLenhSX(pool, donHangId, _khongDung, userId) {
   const gt = await tinhGiaThanh(pool, order);
   const gia = so(gt && gt.giaThanh1SP);
 
-  // ĐIỀU (2) — xem đầu file. Mẫu số không đến từ phiếu nhập kho thì KHÔNG đụng vào giá vốn.
+  /* ĐIỀU (2) — xem đầu file. Mẫu số phải là CÁI thật: v8.95 là SL QC (khi QC đã xong — qlsx.js chỉ
+     dùng QC làm mẫu số sau khi lệnh rời công đoạn QC), hoặc phiếu nhập kho như v8.90. Luỹ kế KN và
+     SL cắt vẫn là null → không đụng giá vốn. */
   if (gt && gt.donViSLDungTinh !== 'Cái') {
     return Object.assign(tron, {
-      lyDo: 'lệnh ' + dh.MaDH + ' chưa có số lượng nhập kho thực tế'
+      lyDo: 'lệnh ' + dh.MaDH + (gt.qcXong === false ? ' chưa xong QC' : ' chưa có số lượng QC / nhập kho thực tế')
         + (so(gt.slCat) > 0 ? ' (hiện mới có SL cắt — chưa dùng để tính giá vốn)' : '')
     });
   }
@@ -125,6 +127,25 @@ async function napGiaVonTuLenhSX(pool, donHangId, _khongDung, userId) {
   if (!(gia > 0)) {
     return Object.assign(tron, { lyDo: 'lệnh ' + dh.MaDH + ' chưa đủ số liệu chi phí' });
   }
+
+  /* ================================================================================================
+     v8.95 — MOC CHOT GIA THANH TREN LENH (DonHangSanXuat.GiaThanhChot*, migration_v882).
+     Ghi O DAY, khong ghi o noi goi. Ly do: ham nay duoc goi tu 4 cho trong routes/nhapkho.js (luu/
+     sua/huy/xoa phieu nhap kho), tu POST /tiendo khi lenh roi QC, va tu nut "Chot gia thanh". Neu
+     moc chi ghi o mot duong thi cac duong kia ghi gia von MA KHONG cap nhat moc ⇒ man gia thanh bao
+     "da chot X" trong khi gia von trong BCKD la Y. Dat o day thi MOC == GIA VON LAN NAP GAN NHAT,
+     khong bao gio lech. (Nut nap hang loat o routes/baocao.js van ghi gia von rieng — con no.)
+     Ghi moc TRUOC khi nap tung ma: moc la thuoc tinh cua LENH, du lenh chua co ma hang nao. */
+  tron.moc = { gia, sl: so(gt.slDungTinh), ghiDuoc: false };
+  try {
+    const coCotChot = (await pool.request().query(`SELECT COL_LENGTH('DonHangSanXuat','GiaThanhChot') AS a`)).recordset[0];
+    if (coCotChot && coCotChot.a != null) {
+      await pool.request()
+        .input('id', sql.Int, donHangId).input('g', sql.Decimal(18, 2), gia).input('sl', sql.Decimal(18, 4), so(gt.slDungTinh))
+        .query(`UPDATE DonHangSanXuat SET GiaThanhChot=@g, GiaThanhChotSL=@sl, GiaThanhChotNgay=SYSDATETIME() WHERE DonHangID=@id`);
+      tron.moc.ghiDuoc = true;
+    }
+  } catch (e) { console.error('[giaVonLenhSX] khong ghi duoc moc chot: ', e.message); }
 
   // ĐIỀU (1) — mọi mã của CẢ LỆNH, không chỉ mã trên phiếu vừa lưu.
   const ids = await maHangCuaLenh(pool, donHangId);

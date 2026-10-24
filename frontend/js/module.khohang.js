@@ -57,6 +57,82 @@ window.ModuleKhoHang = (function () {
     return Math.round(laDonViGop(donVi, mh) ? n * he : n);
   }
 
+  /* v8.97 — Nguyen: "thẻ kho hàng hóa, cột Nguồn hàng nếu là nhà SX điền thêm lệnh SX và có thể click
+     vào xem được lệnh đó".
+     Danh sách lệnh do backend gộp sẵn (r.LenhSX[]: thẻ tạo tay có chọn lệnh + mọi phiếu nhập kho loại
+     SX không hủy có mã này; nhập kho gần nhất trước — cùng công thức với giá vốn, xem
+     layNguonHangTheoMaHang ở routes/khohang.js). Một mã có thể ra từ NHIỀU lệnh (lệnh lặp lại cùng sản
+     phẩm) → hiện tối đa SO_LENH_HIEN, phần còn lại gom vào "+N lệnh" bấm để xổ hết — không để một ô
+     cao 10 dòng. Rê chuột vào mã lệnh: tên SP · trạng thái · nhập gần nhất · số phiếu.
+     Backend cũ (chưa deploy) không có LenhSX ⇒ lùi về MaDH của view như v6.x, vẫn bấm được.
+     Bấm mã lệnh → modal chi tiết lệnh của module QLSX (có nút In). Cần quyền xem QLSX: không có thì
+     backend trả lỗi quyền, toast báo đúng câu của máy chủ.
+     Nguyen 2026-10-23: "cột nguồn hàng thêm số phiếu nhập kho, có thể mở xem luôn" ⇒ dòng thứ hai
+     "Phiếu: NK…" (r.PhieuNhap[], không hủy, mới nhất trước; cả phiếu SX lẫn phiếu NCC — mã Đặt ngoài
+     thì nguồn chính là phiếu NCC). Bấm số phiếu → window.ModuleNhapKho.xemPhieu(id), đúng đường form
+     Sửa thẻ kho đã dùng từ v6.83. Cùng quy tắc gọn: tối đa SO_LENH_HIEN + "+N phiếu nữa". */
+  const SO_LENH_HIEN = 3;
+  function dsLenhSXCuaDong(r) {
+    if (Array.isArray(r.LenhSX)) return r.LenhSX.filter(l => l && l.MaDH);
+    return r.MaDH ? [{ MaDH: r.MaDH }] : [];
+  }
+  function dsPhieuNhapCuaDong(r) {
+    return Array.isArray(r.PhieuNhap) ? r.PhieuNhap.filter(p => p && p.PhieuNKID && p.SoPhieu) : [];
+  }
+  /* Vẽ một danh sách link gọn: `ve(x)` vẽ từng link, quá SO_LENH_HIEN thì phần dư giấu trong
+     .kh-them + nút .act-them "+N <donVi> nữa" — một hàm cho cả lệnh lẫn phiếu để hai dòng cư xử y hệt. */
+  function dsLinkGonHtml(ds, ve, donVi) {
+    if (!ds.length) return '';
+    const dau = ds.slice(0, SO_LENH_HIEN).map(ve).join(', ');
+    const con = ds.slice(SO_LENH_HIEN);
+    if (!con.length) return dau;
+    return `${dau}<span class="kh-them" style="display:none;">, ${con.map(ve).join(', ')}</span> <a href="javascript:void(0)" class="act-them" style="font-size:11px;white-space:nowrap;">+${con.length} ${donVi} nữa</a>`;
+  }
+  function oLenhSXHtml(ds) {
+    const moTa = (l) => [
+      l.TenSanPham, l.TrangThai,
+      l.NgayNhapGanNhat ? 'nhập gần nhất ' + fmtDate(l.NgayNhapGanNhat) : '',
+      Number(l.SoPhieu) ? Number(l.SoPhieu) + ' phiếu nhập' : ''
+    ].filter(Boolean).join(' · ') || 'Lệnh sản xuất';
+    return dsLinkGonHtml(ds, (l) => `<a href="javascript:void(0)" class="act-xem-lenh" data-madh="${escapeHtml(l.MaDH)}"
+      title="${escapeHtml(moTa(l))} — bấm để xem lệnh">${escapeHtml(l.MaDH)}</a>`, 'lệnh');
+  }
+  function oPhieuNhapHtml(ds) {
+    const moTa = (p) => [
+      p.NgayNhap ? fmtDate(p.NgayNhap) : '',
+      p.LoaiNhap === 'SanXuat' ? ('từ sản xuất' + (p.MaDH ? ' · ' + p.MaDH : '')) : ('từ NCC' + (p.TenNCC ? ' ' + p.TenNCC : ''))
+    ].filter(Boolean).join(' · ') || 'Phiếu nhập kho';
+    return dsLinkGonHtml(ds, (p) => `<a href="javascript:void(0)" class="act-xem-phieu" data-id="${escapeHtml(p.PhieuNKID)}"
+      title="${escapeHtml(moTa(p))} — bấm để xem phiếu">${escapeHtml(p.SoPhieu)}</a>`, 'phiếu');
+  }
+  function oNguonHangHtml(r) {
+    const nhan = r.LoaiHang === 'NhaSanXuat' ? '<span class="badge info">Nhà SX</span>' : '<span class="badge warn">Đặt ngoài</span>';
+    const lenh = oLenhSXHtml(dsLenhSXCuaDong(r));
+    const phieu = oPhieuNhapHtml(dsPhieuNhapCuaDong(r));
+    /* Có lệnh thì hiện dù nhãn là gì: mã "Đặt ngoài" mà có phiếu nhập từ lệnh SX là dữ liệu đang
+       mâu thuẫn — hiện ra để người dùng thấy, không giấu đi cho "đẹp". */
+    const dong = (ten, nd) => nd ? `<div style="font-size:12px;margin-top:3px;line-height:1.4;">${ten}: ${nd}</div>` : '';
+    return nhan + dong('Lệnh', lenh) + dong('Phiếu', phieu);
+  }
+  function moPhieuNhap(id) {
+    const m = window.ModuleNhapKho;
+    if (!m || typeof m.xemPhieu !== 'function') { toast('Chưa nạp module.nhapkho.js — bấm Ctrl+F5 tải lại trang.', 'error'); return; }
+    Promise.resolve().then(() => m.xemPhieu(id)).catch(err => toast(err && err.message ? err.message : 'Không mở được phiếu nhập kho.', 'error'));
+  }
+  function moLenhSX(maDH) {
+    const q = window.ModuleQLSX;
+    let fn = q && typeof q.openOrderDetail === 'function' ? q.openOrderDetail : null;
+    if (!fn && q && typeof q.printLenhSanXuat === 'function') {
+      /* module.qlsx.js trên máy chủ còn bản cũ (chưa export openOrderDetail — v8.92 đã từng quên copy
+         đúng file này). Vẫn mở được bản in cho người dùng, nhưng NÓI RÕ là đang chạy tạm — im lặng
+         thì ai cũng tưởng "tính năng là mở cửa sổ in". */
+      toast('module.qlsx.js trên máy chủ chưa cập nhật v8.97 — tạm mở bản in lệnh ' + maDH + '.', 'error', 7000);
+      fn = q.printLenhSanXuat;
+    }
+    if (!fn) { toast('Chưa tải được module Quản lý sản xuất — bấm Ctrl+F5 tải lại trang.', 'error'); return; }
+    Promise.resolve().then(() => fn(maDH)).catch(err => toast(err && err.message ? err.message : 'Không mở được lệnh ' + maDH, 'error'));
+  }
+
   function getTabs() {
     return [
       { key: 'items', label: 'Thẻ kho / Tồn kho' },
@@ -303,7 +379,9 @@ window.ModuleKhoHang = (function () {
 
   async function renderItems(perm) {
     const body = document.getElementById('khBody');
-    const res = await apiGet('/api/khohang/items');
+    // v8.97: ?nguon=1 — chỉ tab này cần danh sách lệnh SX + phiếu nhập theo mã; các màn khác gọi
+    // /items không có cờ để không gánh thêm dữ liệu. Backend cũ bỏ qua cờ ⇒ cột lùi về MaDH của view.
+    const res = await apiGet('/api/khohang/items?nguon=1');
     const { chiTiet } = res.data;
     /* ⚠️ v7.85 — CHỖ DUY NHẤT lọc bỏ mã đã ẩn (migration_v697, cờ TheKhoHangHoa.AnTheKho).
        Nguyen: bỏ tích "Tạo thẻ kho" khi sửa phiếu nhập ⇒ mã đó không nằm trong danh sách Thẻ kho
@@ -323,7 +401,7 @@ window.ModuleKhoHang = (function () {
     const dmList = [...new Set(tongHop.map(r => r.TenTheKho).filter(Boolean))].sort();
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <input type="text" id="khSearch" placeholder="Tìm mã hàng / tên hàng / mã ĐH...">
+        <input type="text" id="khSearch" placeholder="Tìm mã hàng / tên hàng / lệnh SX / số phiếu nhập...">
         <select id="khLoai"><option value="">-- Loại hàng --</option>${loaiList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <select id="khDanhMuc"><option value="">-- Danh mục --</option>${dmList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <a class="btn small secondary" href="/api/khohang/items/export">⬇️ Xuất Excel</a>
@@ -373,7 +451,10 @@ window.ModuleKhoHang = (function () {
         else { const _ri = Math.trunc(tonKho / heRi), _du = tonKho - _ri * heRi; soRiHtml = `${fmtNumber(_ri)} Ri${heRi}${_du ? ` dư ${fmtNumber(_du)} ${escapeHtml(dvChinh)}` : ''}`; }
         const tdDvtCai = `${fmtNumber(soCaiVal)}${tonBadge ? ' ' + tonBadge : ''}`;
         const tdDvtRi = soRiHtml;
-        return `<tr data-loai="${escapeHtml(r.TenNhom || '')}" data-dm="${escapeHtml(r.TenTheKho || '')}" data-search="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + (r.MaDH || '')).toLowerCase())}" ${hetHang ? 'style="background:#fdecea;"' : ''}>
+        // v8.97: ô tìm kiếm khớp MỌI lệnh đã nhập mã này (trước chỉ MaDH của thẻ tạo tay — hầu hết trống)
+        // và MỌI số phiếu nhập kho — gõ "NK2600" là ra các mã của phiếu đó.
+        const chuoiLenh = dsLenhSXCuaDong(r).map(l => l.MaDH).concat(dsPhieuNhapCuaDong(r).map(p => p.SoPhieu)).join(' ');
+        return `<tr data-loai="${escapeHtml(r.TenNhom || '')}" data-dm="${escapeHtml(r.TenTheKho || '')}" data-search="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + chuoiLenh).toLowerCase())}" ${hetHang ? 'style="background:#fdecea;"' : ''}>
         ${/* v8.24: checkbox chuyển danh mục hàng loạt — chỉ hiện khi có quyền Sửa (khớp điều kiện nút
              Chuyển danh mục và điều kiện quyền của backend PUT /items/bulk-danhmuc). */''}
         ${perm.canEdit ? `<td><input type="checkbox" class="kh-chon" data-id="${r.MaHangID}"></td>` : ''}
@@ -391,7 +472,8 @@ window.ModuleKhoHang = (function () {
             : ''
         }</td>
         <td>${escapeHtml(r.TenHang)}</td>
-        <td>${r.LoaiHang === 'NhaSanXuat' ? `<span class="badge info">Nhà SX${r.MaDH ? ' · ' + escapeHtml(r.MaDH) : ''}</span>` : '<span class="badge warn">Đặt ngoài</span>'}</td>
+        ${/* v8.97: nhãn + danh sách lệnh SX bấm được (xem oNguonHangHtml). */''}
+        <td>${oNguonHangHtml(r)}</td>
         <td>${escapeHtml(r.TenNhom || '')}</td>
         <td>${fmtNumber(r.GiaBan)}</td>
         <td><b>${fmtNumber(giaShopSauCK(r.GiaBan))}</b></td>
@@ -543,6 +625,16 @@ window.ModuleKhoHang = (function () {
     }));
     // Bam vao Ma hang cung mo duoc lich su (gop chung voi nut "Lich su" cu cho gon giao dien)
     body.querySelectorAll('.act-open-hist').forEach(a => a.addEventListener('click', () => openHistory(a.dataset.mahang, perm)));
+    // v8.97: cột Nguồn hàng — bấm mã lệnh → modal chi tiết lệnh SX; bấm số phiếu → modal phiếu nhập kho;
+    // "+N lệnh/phiếu nữa" → xổ phần đang giấu của ĐÚNG dòng đó (lệnh và phiếu là hai div riêng).
+    body.querySelectorAll('.act-xem-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); moLenhSX(a.dataset.madh); }));
+    body.querySelectorAll('.act-xem-phieu').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); moPhieuNhap(a.dataset.id); }));
+    body.querySelectorAll('.act-them').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const an = a.parentElement && a.parentElement.querySelector('.kh-them');
+      if (an) an.style.display = '';
+      a.remove();
+    }));
     // v5.4 (muc 1): anh dai dien trong danh sach - bam de phong to. Trang danh sach KHONG phai modal
     // nen dong khong can onClose rieng (dong lightbox se tu quay lai trang danh sach nhu binh thuong).
     body.querySelectorAll('.act-zoom-main').forEach(img => img.addEventListener('click', () => {

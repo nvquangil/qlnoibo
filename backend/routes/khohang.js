@@ -359,6 +359,92 @@ router.put('/cauhinh-ck', requireAuth, requirePermission('KHOHANG', 'edit'), req
     res.status(400).json({ success: false, message: 'Lỗi khi lưu tỷ lệ chiết khấu: ' + err.message });
   }
 });
+/* ================================================================================================
+   v8.97 — LỆNH SẢN XUẤT CỦA TỪNG MÃ HÀNG (Nguyen 2026-10-22: "thẻ kho hàng hóa, cột Nguồn hàng nếu
+   là nhà SX điền thêm lệnh SX và có thể click vào xem được lệnh đó").
+
+   Từ v6.82 thẻ kho KHÔNG gắn lệnh SX nữa: hàng xưởng làm ra vào kho bằng PHIẾU NHẬP KHO loại
+   'SanXuat', và chính PHIẾU mới mang DonHangID. TheKhoHangHoa.DonHangID chỉ còn ở các thẻ tạo tay
+   thời trước — nên vw_TonKhoHangHoa.MaDH trống với hầu hết mã, cột "Nguồn hàng" chỉ ghi "Nhà SX" trơn.
+
+   Lệnh của một mã = HỢP của HAI nguồn — ĐÚNG công thức maHangCuaLenh() ở utils/giaVonLenhSX.js
+   (chiều ngược lại), để màn thẻ kho và giá vốn không nói hai kiểu về "mã này thuộc lệnh nào":
+     1. TheKhoHangHoa.DonHangID                      (thẻ tạo tay có chọn lệnh)
+     2. PhieuNhapKhoHang.DonHangID của phiếu KHÔNG hủy có dòng mã này
+   Một mã có thể ra từ NHIỀU lệnh (lệnh lặp lại cùng sản phẩm) → trả MẢNG, xếp theo NGÀY NHẬP KHO
+   gần nhất trước (lệnh cũ vừa nhập bổ sung tuần trước đứng trên lệnh mới chưa nhập gì), cùng ngày
+   hoặc chưa nhập (chỉ gắn ở thẻ tay, NgayNhap NULL → cuối) thì lệnh mới hơn trước.
+   KHÔNG ghi gì vào TheKhoHangHoa.DonHangID: cột đó đang là khóa loại trừ của ô chọn lệnh khi tạo thẻ
+   tay (GET /orders-for-thekho lọc NOT EXISTS) — điền tự động là lệnh biến mất khỏi ô đó.
+
+   Nguyen 2026-10-23 (cùng v8.97): "cột nguồn hàng thêm số phiếu nhập kho, có thể mở xem luôn" ⇒ trả
+   thêm danh sách PHIẾU NHẬP KHO không hủy của từng mã (cả phiếu SX lẫn phiếu NCC — "nguồn hàng" là
+   hàng từ đâu về, mã Đặt ngoài thì nguồn chính là phiếu NCC), mới nhất trước. Cùng dữ liệu với
+   GET /api/nhapkho/theo-mahang/:id (form Sửa thẻ kho), chỉ khác là lấy MỘT LẦN cho cả bảng và bỏ
+   phiếu đã hủy cho đỡ rối (form kia vẫn liệt kê cả hủy, có badge).
+
+   MỘT lần quét PhieuNhapKhoHangChiTiet cho cả hai danh sách (không quét hai lần): đọc từng cặp
+   (mã, phiếu) kèm lệnh của phiếu, rồi gom lệnh bằng JS; cộng thêm lệnh gắn ở thẻ tay (câu nhỏ).
+
+   Trả { lenh:  Map<MaHangID, [{DonHangID, MaDH, TenSanPham, TrangThai, NgayNhapGanNhat, SoPhieu}]>,
+         phieu: Map<MaHangID, [{PhieuNKID, SoPhieu, NgayNhap, LoaiNhap, MaDH, TenNCC}]> }.
+   Lỗi ⇒ hai Map rỗng + log, KHÔNG ném: /items đang nuôi 8 màn hình (Bán hàng, Đơn khách, Báo giá...),
+   một cột phụ không được phép làm sập cả danh sách.
+   ================================================================================================ */
+async function layNguonHangTheoMaHang(pool) {
+  const lenh = new Map(), phieu = new Map();
+  try {
+    /* Một dòng cho mỗi cặp (mã hàng, phiếu) — DISTINCT vì một phiếu có nhiều dòng màu của cùng mã.
+       Mọi cột ORDER BY đều nằm trong SELECT (bắt buộc khi có DISTINCT). */
+    const dsPhieu = (await pool.request().query(`
+      SELECT DISTINCT ct.MaHangID, p.PhieuNKID, p.SoPhieu, p.NgayNhap, p.LoaiNhap,
+             p.DonHangID, d.MaDH, d.TenSanPham, d.TrangThai AS TrangThaiLenh, ncc.TenNCC
+      FROM PhieuNhapKhoHangChiTiet ct
+      JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
+      LEFT JOIN DonHangSanXuat d ON d.DonHangID = p.DonHangID
+      LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = p.NCC_ID
+      WHERE p.TrangThai <> N'Đã hủy'
+      ORDER BY ct.MaHangID, p.NgayNhap DESC, p.PhieuNKID DESC`)).recordset;
+    const dsTheTay = (await pool.request().query(`
+      SELECT h.MaHangID, d.DonHangID, d.MaDH, d.TenSanPham, d.TrangThai
+      FROM TheKhoHangHoa h
+      JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID`)).recordset;
+
+    const lenhTheoKhoa = new Map();   // "MaHangID|DonHangID" -> bản ghi lệnh đang gom
+    const ghiLenh = (maHangId, l) => {
+      const k = maHangId + '|' + l.DonHangID;
+      if (!lenhTheoKhoa.has(k)) {
+        const moi = { DonHangID: l.DonHangID, MaDH: l.MaDH, TenSanPham: l.TenSanPham, TrangThai: l.TrangThai, NgayNhapGanNhat: null, SoPhieu: 0 };
+        lenhTheoKhoa.set(k, moi);
+        if (!lenh.has(maHangId)) lenh.set(maHangId, []);
+        lenh.get(maHangId).push(moi);
+      }
+      return lenhTheoKhoa.get(k);
+    };
+    dsPhieu.forEach(x => {
+      if (!phieu.has(x.MaHangID)) phieu.set(x.MaHangID, []);
+      phieu.get(x.MaHangID).push({ PhieuNKID: x.PhieuNKID, SoPhieu: x.SoPhieu, NgayNhap: x.NgayNhap, LoaiNhap: x.LoaiNhap, MaDH: x.MaDH || null, TenNCC: x.TenNCC || null });
+      if (x.DonHangID && x.MaDH) {
+        const l = ghiLenh(x.MaHangID, { DonHangID: x.DonHangID, MaDH: x.MaDH, TenSanPham: x.TenSanPham, TrangThai: x.TrangThaiLenh });
+        l.SoPhieu++;
+        // dsPhieu đã xếp NgayNhap DESC nên lần gặp đầu là ngày gần nhất; vẫn so sánh cho chắc.
+        if (x.NgayNhap && (!l.NgayNhapGanNhat || new Date(x.NgayNhap) > new Date(l.NgayNhapGanNhat))) l.NgayNhapGanNhat = x.NgayNhap;
+      }
+    });
+    dsTheTay.forEach(x => ghiLenh(x.MaHangID, x));   // thẻ tay: chỉ thêm nếu chưa có từ phiếu; SoPhieu giữ 0
+    /* Xếp: ngày nhập gần nhất trước (chưa nhập → cuối), cùng ngày thì lệnh mới hơn trước. */
+    lenh.forEach(ds => ds.sort((a, b) => {
+      const ta = a.NgayNhapGanNhat ? new Date(a.NgayNhapGanNhat).getTime() : -Infinity;
+      const tb = b.NgayNhapGanNhat ? new Date(b.NgayNhapGanNhat).getTime() : -Infinity;
+      return (tb - ta) || (b.DonHangID - a.DonHangID);
+    }));
+  } catch (e) {
+    console.error('[khohang] layNguonHangTheoMaHang:', e.message);
+    lenh.clear(); phieu.clear();
+  }
+  return { lenh, phieu };
+}
+
 router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
   const pool = await getPool();
   const coUpdatedAt = await coCotUpdatedAtTheKho(pool);
@@ -401,10 +487,20 @@ router.get('/items', requireAuth, requirePermission('KHOHANG', 'view'), requireC
      v6.23: kèm SL ĐANG GIỮ cho đơn khách đặt (Chờ xác nhận/Chờ xử lý) để bảng hiện thêm cột
      "Khả dụng" = tồn − đang giữ, đúng yêu cầu "ghi chú thẻ kho còn bao nhiêu đã trừ các đơn chờ xử lý". */
   const giu = await layHangDangGiu(pool);
+  /* v8.97: CHỈ KHI ?nguon=1 (tab Thẻ kho gửi) mới gắn LenhSX/PhieuNhap. Endpoint này nuôi ~9 màn
+     (Bán hàng, Đơn khách, Báo giá, Hàng mẫu...) và đã là câu nặng nhất module; danh sách phiếu theo mã
+     là một dòng cho mỗi cặp (mã, phiếu), lớn dần theo năm — không nhét vào mọi lần gọi.
+     Không có cờ ⇒ không có hai trường này (undefined, không phải []): frontend coi undefined là
+     "backend chưa trả" và lùi về MaDH của view; [] mới là "đã hỏi, không có". */
+  const canNguon = String(req.query.nguon || '') === '1';
+  const nguon = canNguon ? await layNguonHangTheoMaHang(pool) : null;
   const tongHopRows = tongHop.recordset.map(r => {
     const dangGiu = giu.theoMaHang.get(r.MaHangID) || 0;
     return {
       ...r, DangGiu: dangGiu,
+      // v8.97: mọi lệnh SX đã sinh ra mã này + mọi phiếu nhập kho (không hủy) có mã này — xem
+      // layNguonHangTheoMaHang. Mảng rỗng khi không có.
+      ...(nguon ? { LenhSX: nguon.lenh.get(r.MaHangID) || [], PhieuNhap: nguon.phieu.get(r.MaHangID) || [] } : {}),
       // Khả dụng của MÀN THẺ KHO — chỉ phần thẻ kho (TongTon đã là số của thẻ kho).
       TonKhaDung: (Number(r.TongTon) || 0) - dangGiu,
       // Khả dụng THỰC (gồm phiếu nhập kho) — dùng cho Bán hàng / Đặt hàng nhanh / catalogue.
@@ -425,6 +521,7 @@ router.get('/items/export', requireAuth, requirePermission('KHOHANG', 'view'), r
     const pool = await getPool();
     const ck = await layTyLeCK(pool);   // v6.21: ty le CK dung chung
     const result = await pool.request().query('SELECT * FROM vw_TonKhoHangHoa ORDER BY MaHang');
+    const nguon = await layNguonHangTheoMaHang(pool);   // v8.97: cột "Mã đơn hàng SX" ghi đủ mọi lệnh + cột phiếu nhập
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Thẻ kho hàng hóa');
     ws.columns = [
@@ -433,6 +530,7 @@ router.get('/items/export', requireAuth, requirePermission('KHOHANG', 'view'), r
       { header: 'Danh mục thẻ kho', key: 'TenTheKho', width: 20 },
       { header: 'Loại hàng', key: 'LoaiHang', width: 14 },
       { header: 'Mã đơn hàng SX', key: 'MaDH', width: 16 },
+      { header: 'Phiếu nhập kho', key: 'PhieuNhap', width: 24 },   // v8.97
       { header: 'Đơn vị cơ bản', key: 'DonViCoBan', width: 12 },
       { header: 'Đơn vị quy đổi', key: 'DonViQuyDoi', width: 12 },
       { header: 'Tổng nhập', key: 'TongNhap', width: 12 },
@@ -446,10 +544,19 @@ router.get('/items/export', requireAuth, requirePermission('KHOHANG', 'view'), r
       { header: 'Mã Barcode', key: 'MaBarcode', width: 16 }
     ];
     ws.getRow(1).font = { bold: true };
-    result.recordset.forEach(r => ws.addRow(Object.assign({}, r, {
-      GiaSauCKShop: giaShopSauCK(r.GiaBan, ck),
-      GiaSauCKNPP: giaNPPSauCK(r.GiaBan, ck)
-    })));
+    result.recordset.forEach(r => {
+      /* v8.97: trước chỉ có MaDH của thẻ tạo tay (hầu hết trống). Nay ghi mọi lệnh đã nhập mã này,
+         nhập gần nhất trước, cách nhau dấu phẩy; không có lệnh nào thì giữ MaDH cũ của view (cùng
+         nguồn, chỉ khác khi backend đọc lỗi). */
+      const lenh = nguon.lenh.get(r.MaHangID) || [];
+      const pn = nguon.phieu.get(r.MaHangID) || [];
+      ws.addRow(Object.assign({}, r, {
+        MaDH: lenh.length ? lenh.map(l => l.MaDH).join(', ') : (r.MaDH || ''),
+        PhieuNhap: pn.map(p => p.SoPhieu).join(', '),
+        GiaSauCKShop: giaShopSauCK(r.GiaBan, ck),
+        GiaSauCKNPP: giaNPPSauCK(r.GiaBan, ck)
+      }));
+    });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="the_kho_hang_hoa.xlsx"');
     await wb.xlsx.write(res);

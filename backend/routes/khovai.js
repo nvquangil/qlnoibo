@@ -10,6 +10,7 @@ const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung }
    phieu nhap PHAI bang dung so ma cong no NCC ghi no cho chinh phieu do. */
 const { bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia,
         coCotDonGiaTra, chuanDonGiaTra } = require('../utils/tienVaiNhap');   // v8.91
+const { coCotAnhMau, coCotAnhCay, bieuThucAnhCay, ganAnhMauTheoVai, ganAnhTheoCay } = require('../utils/anhMau');   // v8.94 / v8.96
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
 
@@ -41,6 +42,24 @@ const router = express.Router();
    moi cho goi. */
 async function capNhatTrangThaiCay(pool, cayId) {
   return capNhatTrangThaiCayDungChung(pool, sql, cayId);
+}
+
+/* v8.96: chuan hoa duong dan anh cay. CHI nhan dang "/uploads/<ten file>" do /api/upload sinh ra —
+   khong nhan URL ngoai, data:, hay duong dan co "..": cot nay duoc in thang vao <img src> o nhieu man,
+   mot chuoi la lot vao la mot anh/script tu noi khac hien tren ban in. Rong/khac dang => NULL. */
+function chuanAnhCay(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return null;
+  if (!/^\/uploads\/[A-Za-z0-9_\-.]+$/.test(s) || s.indexOf('..') !== -1) return null;
+  return s.slice(0, 500);
+}
+/* Dong nao gui anh KHAC rong ma chuanAnhCay tra null => duong dan la — NEM LOI, khong nuot. Nuot la
+   anh upload xong bien mat im lang (ra soat cheo 2026-10-22). Dung cho ca POST va PUT /nhap. */
+function kiemAnhCayHopLe(rolls) {
+  for (const r of (rolls || [])) {
+    const s = String((r && r.anhCay) == null ? '' : r.anhCay).trim();
+    if (s && !chuanAnhCay(s)) throw new Error('Đường dẫn ảnh cây không hợp lệ (phải là ảnh đã tải lên qua hệ thống): ' + s.slice(0, 80));
+  }
 }
 
 async function resolveOrCreateVaiId(pool, loaiVaiId, mauSacId) {
@@ -96,7 +115,7 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOVAI', 'view'), async (
 router.get('/dashboard', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'dashboard'), async (req, res) => {
   const pool = await getPool();
   const tonKho = await pool.request().query('SELECT * FROM vw_TonKhoVai ORDER BY MaVai');
-  const rows = tonKho.recordset;
+  const rows = await ganAnhMauTheoVai(pool, tonKho.recordset);   // v8.94: cot Anh
   const stats = {
     soMaVai: rows.length,
     tongTonKG: rows.reduce((s, r) => s + (Number(r.TonKG) || 0), 0),
@@ -134,7 +153,7 @@ router.get('/rolls', requireAuth, requirePermission('KHOVAI', 'view'), async (re
   const pool = await getPool();
   const onlyAvailable = req.query.available !== 'false';
   const result = await pool.request().query('SELECT * FROM vw_TonCayVai ORDER BY NgayNhap DESC');
-  let rows = result.recordset;
+  let rows = await ganAnhTheoCay(pool, result.recordset);   // v8.96: anh CAY (lui ve anh mau) — ton theo cay + form xuat
   if (onlyAvailable) rows = rows.filter(conHang);   // v7.36: con KG HOAC con MET
   if (req.query.ngayNhap) {
     const target = new Date(req.query.ngayNhap).toDateString();
@@ -182,7 +201,7 @@ router.get('/ncc/:nccId/cay', requireAuth, requirePermission('KHOVAI', 'view'), 
     JOIN PhieuNhapVai pn ON pn.PhieuNhapID = vc.PhieuNhapID
     WHERE pn.NCC_ID = @ncc AND ${conHangSQL('t')}
     ORDER BY t.MaCay`)).recordset;
-  res.json({ success: true, data: rs });
+  res.json({ success: true, data: await ganAnhTheoCay(pool, rs) });   // v8.96
 });
 
 router.get('/phieunhap/:id/cay', requireAuth, requirePermission('KHOVAI', 'view'), requireChucNang('KHOVAI', 'xuat'), async (req, res) => {
@@ -193,7 +212,32 @@ router.get('/phieunhap/:id/cay', requireAuth, requirePermission('KHOVAI', 'view'
     FROM vw_TonCayVai t JOIN VaiCay vc ON vc.CayID = t.CayID
     WHERE vc.PhieuNhapID = @id AND ${conHangSQL('t')}
     ORDER BY t.MaCay`)).recordset;
-  res.json({ success: true, data: rs });
+  res.json({ success: true, data: await ganAnhTheoCay(pool, rs) });   // v8.96
+});
+
+/* ==================================================================================================
+   v8.96 — ẢNH CỦA MỘT CÂY CÓ SẴN  (PUT /api/khovai/cay/:cayId/anh, body { anhCay: '/uploads/..' | '' })
+   Nguyen: "tồn kho cây vải bổ sung hình ảnh cây vải vào mã cây có sẵn". Nút ở tab Tồn theo cây.
+   Rỗng = xóa ảnh (cây lùi về ảnh màu nếu có). Quyền edit KHOVAI như sửa phiếu nhập.
+   ================================================================================================== */
+router.put('/cay/:cayId/anh', requireAuth, requirePermission('KHOVAI', 'edit'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!await coCotAnhCay(pool)) return res.status(400).json({ success: false, message: 'Chưa chạy migration_v883 nên chưa lưu được ảnh cây vải.' });
+    const cayId = parseInt(req.params.cayId, 10);
+    if (!cayId) return res.status(400).json({ success: false, message: 'Thiếu mã cây.' });
+    const anh = chuanAnhCay(req.body && req.body.anhCay);
+    if (req.body && String(req.body.anhCay || '').trim() && !anh) {
+      return res.status(400).json({ success: false, message: 'Đường dẫn ảnh không hợp lệ (phải là ảnh đã tải lên qua hệ thống).' });
+    }
+    const kq = await pool.request().input('id', sql.Int, cayId).input('a', sql.NVarChar(500), anh)
+      .query('UPDATE VaiCay SET AnhCay=@a WHERE CayID=@id');
+    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy cây vải.' });
+    res.json({ success: true, data: { cayId, anhCay: anh } });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi lưu ảnh cây: ' + err.message });
+  }
 });
 
 /* ==================================================================================================
@@ -398,7 +442,9 @@ router.get('/orders/:donHangId/vaichophep', requireAuth, requirePermission('KHOV
          phải hiện trong bảng tham khảo, không thì người lập phiếu không biết còn thiếu bao nhiêu. */''}
     WHERE cd.DonHangID = @id AND (ISNULL(cd.SoKGYeuCau, 0) > 0 OR ISNULL(cd.SoMet, 0) > 0)
     ORDER BY cd.Kieu, lv.TenLoaiVai, ms.TenMau`);
-  res.json({ success: true, data: { cayChoPhep: cayResult.recordset, chiDinhVaiSX: chiDinhResult.recordset[0], chiDinhTheoMau: perMauResult.recordset } });
+  // v8.94: gan AnhMau — day la duong nap cay DUNG NHIEU NHAT cua form xuat (chon don hang); bo sot la
+  // "xuat tu do thi co anh, chon don thi mat" (ra soat cheo bat duoc).
+  res.json({ success: true, data: { cayChoPhep: await ganAnhTheoCay(pool, cayResult.recordset), chiDinhVaiSX: chiDinhResult.recordset[0], chiDinhTheoMau: perMauResult.recordset } });
 });
 
 // ============ NHAP KHO (NHIEU CAY 1 LAN) ============
@@ -457,6 +503,13 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
     }
     const pool = await getPool();
     const coDVTGia = await coCotDonViTinhGia(pool);   // v7.62 (migration_v694)
+    /* v8.96: anh tung cay (VaiCay.AnhCay, migration_v883). Frontend upload truoc, gui URL /uploads/...
+       Chua chay migration ma co dong gui anh thi BAO — im lang la nguoi dung chup anh roi mat sach. */
+    const coAnhCayNhap = await coCotAnhCay(pool);
+    if (!coAnhCayNhap && rolls.some(r => r && String(r.anhCay || '').trim())) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v883 nên chưa lưu được ảnh cây vải. Bỏ ảnh hoặc chạy migration rồi pm2 restart.' });
+    }
+    kiemAnhCayHopLe(rolls);   // nem loi -> catch ben duoi tra 400
 
     // v5.4: them NgayHoaDon (khac Ngay nhap - khop yeu cau mau_phieu.docx "Ngay hoa don: nhap tay").
     const phieuResult = await pool.request()
@@ -517,8 +570,9 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
         .input('ViTriKho', sql.NVarChar, roll.viTriKho || null)
         .input('NgayNhap', sql.Date, ngayNhap)
         .input('DonGiaNhap', sql.Decimal(14, 2), roll.donGiaNhap || null)
-        .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap)
-                VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap)`);
+        .input('AnhCay', sql.NVarChar(500), chuanAnhCay(roll.anhCay))
+        .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCayNhap ? ', AnhCay' : ''})
+                VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCayNhap ? ', @AnhCay' : ''})`);
       created.push({ maCay, maVai, kgNhap: kg, qrUrl });
     }
     res.json({ success: true, data: { phieuNhapId, rolls: created } });
@@ -571,8 +625,13 @@ router.get('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   if (!headResult.recordset.length) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập.' });
   // v5.3 (muc 3): them LoaiVaiID/MauSacID (de dien san dropdown luc Sua) + CoPhatSinh (da xuat kho/
   // giao vai SX/kiem ke chua - de frontend khoa doi loai vai/mau, giong dieu kien backend PUT ap dung).
+  const coAnhCayDoc = await coCotAnhCay(pool);   // v8.96
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT v.CayID, v.MaCay, v.KGNhap, v.SoMet, v.KhoVaiThucTe, ISNULL(v.KhoVaiThucTe, dv.KhoVai) AS KhoVai, v.GSM, v.DonGiaNhap, v.QRCode, v.TrangThai, v.ViTriKho,
+           ${/* v8.96: AnhCay = anh RIENG cua cay (de form Sua dien san o anh); AnhMau = anh HIEN
+                (cay thang, lui ve mau) cho popup xem/ban in — cung ten truong voi moi man khac. */''}
+           ${coAnhCayDoc ? 'v.AnhCay' : 'CAST(NULL AS NVARCHAR(500)) AS AnhCay'},
+           ${await bieuThucAnhCay(pool, 'v', 'ms')} AS AnhMau,
            ${/* v7.61: THANH TIEN tinh o BACKEND bang dung bieu thuc cua cong no — de ban in / man
                 xem / so cong no khong the ra ba con so khac nhau. */''}
            ${await bieuThucTienCay(pool, 'v', 'pnv')} AS ThanhTien,
@@ -607,6 +666,11 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
     const pool = await getPool();
     const id = req.params.id;
     const coDVTGiaSua = await coCotDonViTinhGia(pool);   // v7.62 (migration_v694)
+    const coAnhCaySua = await coCotAnhCay(pool);         // v8.96
+    if (!coAnhCaySua && Array.isArray(lines) && lines.some(l => l && String(l.anhCay || '').trim())) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v883 nên chưa lưu được ảnh cây vải.' });
+    }
+    if (Array.isArray(lines)) kiemAnhCayHopLe(lines);
 
     await pool.request()
       .input('id', sql.Int, id)
@@ -682,6 +746,12 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
           const phanChung = [dat('KhoVaiThucTe', 'khoVaiThucTe'), dat('GSM', 'gsm'),
             'KGNhap=@KGNhap', 'SoMet=@SoMet', dat('ViTriKho', 'viTriKho'), dat('DonGiaNhap', 'donGiaNhap'),
             'NgayNhap=@NgayNhapPhieu'];
+          /* v8.96: anh cay — cung luat `coGui`: khong gui khoa thi giu nguyen (form cu trong cache
+             khong biet cot nay), gui '' la co y xoa. */
+          if (coAnhCaySua) {
+            rqCay.input('AnhCay', sql.NVarChar(500), coGui('anhCay') ? chuanAnhCay(line.anhCay) : null);
+            phanChung.push(dat('AnhCay', 'anhCay'));
+          }
           if (coPhatSinh) {
             await rqCay.query(`UPDATE VaiCay SET ${phanChung.join(', ')} WHERE CayID=@id`);
           } else {
@@ -708,8 +778,9 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
             .input('KGNhap', sql.Decimal(10, 2), Number(line.kgNhap) || 0).input('SoMet', sql.Decimal(10, 2), lineMet).input('QRCode', sql.NVarChar, qrUrl)
             .input('ViTriKho', sql.NVarChar, line.viTriKho || null).input('NgayNhap', sql.Date, ngayNhap)
             .input('DonGiaNhap', sql.Decimal(14, 2), line.donGiaNhap || null)
-            .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap)
-                    VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap)`);
+            .input('AnhCay', sql.NVarChar(500), chuanAnhCay(line.anhCay))   // v8.96
+            .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCaySua ? ', AnhCay' : ''})
+                    VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCaySua ? ', @AnhCay' : ''})`);
         }
       }
     }
@@ -857,9 +928,11 @@ router.get('/xuat/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // v8.91: do cot DonGiaTra qua HAM CHUNG (utils/tienVaiNhap.js) — chua chay migration_v879 thi
   // ban in lui ve DonGiaNhap nhu truoc. Dung ham chung de KHONG the lech voi cau cong no NCC.
   const coDgTraDoc = await coCotDonGiaTra(pool);
+  /* v8.94: cot Anh o popup xem + ban in. v8.96: anh CAY thang, lui ve anh mau (bieuThucAnhCay). */
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT ct.ID, ct.CayID, ct.KGXuat, ct.SoMet, ct.KieuVai, ${coDgTraDoc ? 'ct.DonGiaTra' : 'CAST(NULL AS DECIMAL(18,2)) AS DonGiaTra'},
            v.MaCay, v.KGNhap, v.KhoVaiThucTe, v.ViTriKho, v.NgayNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau,
+           ${await bieuThucAnhCay(pool, 'v', 'ms')} AS AnhMau,
            ${/* v7.49: PHIEU NHAP GOC cua tung cay — ban in phieu TRA NCC phai ghi "tra theo phieu nhap
                 nao, ngay nao". Lay tu PhieuNhapVai chu khong dung `v.NgayNhap`: v.NgayNhap la ngay cua
                 CAY (co the lech khi nhap bu), con doi chieu voi NCC thi phai theo NGAY CUA PHIEU.

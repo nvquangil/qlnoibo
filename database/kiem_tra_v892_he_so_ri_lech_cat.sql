@@ -29,26 +29,48 @@ DECLARE @kn  INT = (SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan =
    khác nhau                -> các cây của lệnh mang hệ số khác nhau; v8.92 LÙI VỀ hệ số lệnh và
                                cảnh báo đỏ trên form — lệnh đó phải xem tay.
    Chỉ liệt kê lệnh LỆCH (Cắt ≠ lệnh). DH2609111 phải có mặt ở đây với HeSoLenh = 1, HeSoCat = 11. */
-WITH heCat AS (
-  SELECT t.DonHangID,
-         MIN(cc.HeSoQuyDoi) AS HeSoCatMin, MAX(cc.HeSoQuyDoi) AS HeSoCatMax,
-         COUNT(*) AS SoCay
+/* 2026-10-20: TÁCH THÂN / PHỐI. Lần chạy đầu ra 60 lệnh, 35 lệnh "⚠️ nhiều hệ số" — nhưng gần hết là
+   cây BO cắt hệ số gấp đôi cây thân (5/10, 6/12). Code (v8.93, utils/cayThanhPham.js) chỉ lấy hệ số
+   của cây THÂN, nên cảnh báo gộp cả bo là cảnh báo giả. Nay chia hai cột: Than_* (cây có dòng phiếu
+   xuất 'Chính' hoặc không có phiếu xuất) và Phoi_* (cây chỉ có dòng 'Phối'). Chỉ Than_Min ≠ Than_Max
+   mới là "nhiều hệ số" thật. (Không áp luật B ở đây cho gọn — câu này chỉ để khoanh vùng.) */
+WITH cay AS (
+  SELECT t.DonHangID, cc.CayID, cc.HeSoQuyDoi,
+         CASE WHEN EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                           WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID AND px.KieuVai = N'Chính') THEN 1
+              WHEN NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                               WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID) THEN 1
+              ELSE 0 END AS LaThan
   FROM TienDoSanXuat t
   JOIN TienDoCatChiTietCay cc ON cc.TienDoID = t.TienDoID
   WHERE t.StageID = @cat AND ISNULL(cc.HeSoQuyDoi, 0) > 0
-  GROUP BY t.DonHangID
+),
+heCat AS (
+  SELECT DonHangID,
+         MIN(CASE WHEN LaThan = 1 THEN HeSoQuyDoi END) AS Than_Min,
+         MAX(CASE WHEN LaThan = 1 THEN HeSoQuyDoi END) AS Than_Max,
+         SUM(CASE WHEN LaThan = 1 THEN 1 ELSE 0 END)   AS Than_SoCay,
+         MIN(CASE WHEN LaThan = 0 THEN HeSoQuyDoi END) AS Phoi_Min,
+         MAX(CASE WHEN LaThan = 0 THEN HeSoQuyDoi END) AS Phoi_Max,
+         SUM(CASE WHEN LaThan = 0 THEN 1 ELSE 0 END)   AS Phoi_SoCay
+  FROM cay GROUP BY DonHangID
 )
 SELECT d.MaDH, d.TrangThai,
        cd.TenCongDoan AS CongDoanHienTai,
        d.HeSoQuyDoi   AS HeSoLenh,
-       h.HeSoCatMin, h.HeSoCatMax, h.SoCay,
-       CASE WHEN h.HeSoCatMin <> h.HeSoCatMax THEN N'⚠️ Cắt nhiều hệ số' ELSE N'' END AS GhiChu
+       h.Than_Min, h.Than_Max, h.Than_SoCay,
+       h.Phoi_Min, h.Phoi_Max, h.Phoi_SoCay,
+       CASE WHEN h.Than_Min <> h.Than_Max THEN N'🔴 THÂN nhiều hệ số — mở sổ cắt xem'
+            WHEN h.Than_Min IS NULL THEN N'⚠️ không có cây thân (chưa khai Kiểu phiếu xuất?)'
+            WHEN ABS(ISNULL(d.HeSoQuyDoi, 0) - h.Than_Max) > 0.0005 THEN N'lệnh ≠ Cắt — v8.92 đã lấy theo Cắt'
+            ELSE N'' END AS GhiChu
 FROM heCat h
 JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
 LEFT JOIN CongDoanSanXuat cd ON cd.StageID = d.CongDoanHienTaiID
-WHERE ABS(ISNULL(d.HeSoQuyDoi, 0) - h.HeSoCatMax) > 0.0005
-   OR h.HeSoCatMin <> h.HeSoCatMax
-ORDER BY d.DonHangID DESC;
+WHERE ABS(ISNULL(d.HeSoQuyDoi, 0) - ISNULL(h.Than_Max, 0)) > 0.0005
+   OR h.Than_Min <> h.Than_Max
+   OR h.Than_Min IS NULL
+ORDER BY CASE WHEN h.Than_Min <> h.Than_Max THEN 0 WHEN h.Than_Min IS NULL THEN 1 ELSE 2 END, d.DonHangID DESC;
 
 /* ---------- TRUY VẤN 2: trong số lệnh lệch, lệnh nào ĐÃ GHI Đóng gói / Kho nhập ----------
    Đây là số đã lưu SAI (nếu người nhập gõ theo ri). Cột `NeuTheoCat` = số sẽ là bao nhiêu nếu phần
@@ -56,42 +78,52 @@ ORDER BY d.DonHangID DESC;
    thì không tách lại được từ tổng cái, phải hỏi người đã nhập.
    So `DaGhi` với `Cat_Cai`: nếu DaGhi nhỏ hơn Cat_Cai đúng ~ (HeSoCat / HeSoLenh) lần thì gần như
    chắc chắn là gõ theo ri với hệ số sai. */
-WITH heCat AS (
-  SELECT t.DonHangID, MAX(cc.HeSoQuyDoi) AS HeSoCat, MIN(cc.HeSoQuyDoi) AS HeSoCatMin
+/* 2026-10-20: chỉ xét cây THÂN (cùng cách tách như truy vấn 1), và CHỈ các đợt ghi từ 26/09/2026 —
+   trước ngày đó form ĐG/KN nhập thẳng CÁI (chưa có ô Ri, v8.49), số ghi không đi qua hệ số nào. */
+DECLARE @tuNgayNhapRi DATE = '2026-09-26';
+WITH cay AS (
+  SELECT t.DonHangID, cc.SoLuongLop, cc.HeSoQuyDoi,
+         CASE WHEN EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                           WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID AND px.KieuVai = N'Chính') THEN 1
+              WHEN NOT EXISTS (SELECT 1 FROM PhieuXuatVaiChiTiet px JOIN PhieuXuatVai p ON p.PhieuXuatID = px.PhieuXuatID
+                               WHERE px.CayID = cc.CayID AND p.DonHangID = t.DonHangID) THEN 1
+              ELSE 0 END AS LaThan
   FROM TienDoSanXuat t
   JOIN TienDoCatChiTietCay cc ON cc.TienDoID = t.TienDoID
   WHERE t.StageID = @cat AND ISNULL(cc.HeSoQuyDoi, 0) > 0
-  GROUP BY t.DonHangID
 ),
-catCai AS (
-  SELECT t.DonHangID, SUM(cc.SoLuongLop * cc.HeSoQuyDoi) AS Cat_Cai
-  FROM TienDoSanXuat t
-  JOIN TienDoCatChiTietCay cc ON cc.TienDoID = t.TienDoID
-  WHERE t.StageID = @cat
-  GROUP BY t.DonHangID
+heCat AS (
+  SELECT DonHangID,
+         MAX(HeSoQuyDoi) AS HeSoCat, MIN(HeSoQuyDoi) AS HeSoCatMin,
+         SUM(SoLuongLop * HeSoQuyDoi) AS Cat_Cai_Than
+  FROM cay WHERE LaThan = 1
+  GROUP BY DonHangID
 ),
 daGhi AS (
-  SELECT t.DonHangID, t.StageID, SUM(ct.SoLuongLuyKe) AS DaGhi, COUNT(DISTINCT t.TienDoID) AS SoDot
+  SELECT t.DonHangID, t.StageID,
+         SUM(ct.SoLuongLuyKe) AS DaGhi, COUNT(DISTINCT t.TienDoID) AS SoDot,
+         MIN(t.NgayGhiNhan) AS DotDau, MAX(t.NgayGhiNhan) AS DotCuoi
   FROM TienDoSanXuat t
   JOIN TienDoChiTietMau ct ON ct.TienDoID = t.TienDoID
-  WHERE t.StageID IN (@dg, @kn)
+  WHERE t.StageID IN (@dg, @kn) AND t.NgayGhiNhan >= @tuNgayNhapRi
   GROUP BY t.DonHangID, t.StageID
 )
-SELECT d.MaDH,
+SELECT d.MaDH, d.TrangThai,
        CASE g.StageID WHEN @dg THEN N'Đóng gói' WHEN @kn THEN N'Kho nhập' END AS CongDoan,
        d.HeSoQuyDoi AS HeSoLenh, h.HeSoCat,
-       c.Cat_Cai,
-       g.DaGhi, g.SoDot,
+       h.Cat_Cai_Than,
+       g.DaGhi, g.SoDot, g.DotDau, g.DotCuoi,
        CASE WHEN ISNULL(d.HeSoQuyDoi, 0) > 0
             THEN g.DaGhi / d.HeSoQuyDoi * h.HeSoCat END AS NeuTheoCat,
-       CASE WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 AND g.DaGhi % d.HeSoQuyDoi <> 0
-            THEN N'có lẻ — không tự suy ngược được' ELSE N'' END AS GhiChu
+       CASE WHEN h.HeSoCat <> h.HeSoCatMin THEN N'thân nhiều hệ số — xem tay'
+            WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 AND g.DaGhi % d.HeSoQuyDoi <> 0
+            THEN N'có lẻ — không tự suy ngược được'
+            WHEN g.DaGhi > h.Cat_Cai_Than THEN N'đã ghi > Cắt?? (nhập cái, không phải ri)'
+            ELSE N'' END AS GhiChu
 FROM daGhi g
 JOIN DonHangSanXuat d ON d.DonHangID = g.DonHangID
 JOIN heCat h ON h.DonHangID = g.DonHangID
-LEFT JOIN catCai c ON c.DonHangID = g.DonHangID
 WHERE ABS(ISNULL(d.HeSoQuyDoi, 0) - h.HeSoCat) > 0.0005
-  AND h.HeSoCat = h.HeSoCatMin
 ORDER BY d.DonHangID DESC, g.StageID;
 
 /* ---------- TRUY VẤN 3: riêng DH2609111, từng dòng đã ghi ở Đóng gói / Kho nhập ----------

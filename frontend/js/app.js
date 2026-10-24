@@ -39,8 +39,14 @@ async function init() {
     return;
   }
 
+  /* v8.98: ghi PHIÊN BẢN ĐANG CHẠY (số ?v= lớn nhất trong index.html) dưới tên người dùng — mở điện
+     thoại ra nhìn là biết máy đó đang chạy bản nào, khỏi đoán "đã cập nhật chưa". */
+  const phienBanDangChay = (DAU_VAN_HIEN_TAI.match(/\?v=([\d.]+)/g) || []).map(s => s.slice(3))
+    .filter(v => !isNaN(Number(v)))   // css?v=6.71.2 không phải số — bỏ, chỉ so các bản x.yy
+    .sort((a, b) => Number(b) - Number(a))[0] || '';
   document.getElementById('userInfo').innerHTML =
-    `<strong>${escapeHtml(currentUser.hoTen)}</strong><br><span style="opacity:.7">${escapeHtml(currentUser.groups.join(', ') || currentUser.boPhan || '')}</span>`;
+    `<strong>${escapeHtml(currentUser.hoTen)}</strong><br><span style="opacity:.7">${escapeHtml(currentUser.groups.join(', ') || currentUser.boPhan || '')}</span>` +
+    (phienBanDangChay ? `<br><span style="opacity:.45;font-size:11px;" title="Phiên bản đang chạy trên máy này">v${escapeHtml(phienBanDangChay)}</span>` : '');
 
   document.getElementById('btnLogout').addEventListener('click', async () => {
     await apiPost('/api/auth/logout', {});
@@ -209,4 +215,92 @@ function registerServiceWorker() {
   }
 }
 
+/* ================================================================================================
+   v8.98 — TỰ PHÁT HIỆN BẢN MỚI VÀ TẢI LẠI (Nguyen 2026-10-23: "2 thay đổi 8.96 và 8.97 ở bản mobile
+   chưa thể hiện").
+
+   Vì sao điện thoại "không thấy gì đổi": trên máy tính mỗi lần deploy có Ctrl+F5. Trên điện thoại
+   app được ghim ra màn hình chính (PWA) hoặc để nguyên tab Safari/Chrome nhiều ngày — mở lại là
+   TIẾP TỤC trang cũ đang nằm trong bộ nhớ, không tải lại index.html, nên vẫn chạy bộ JS của phiên
+   bản cũ dù máy chủ đã có bản mới. Không có phím F5 nào để bảo người dùng bấm.
+
+   Cách chữa: khi người dùng quay lại app (tab hiện lại / app mở lại từ nền / quay lại bằng nút Back)
+   và định kỳ 10 phút, tải index.html bằng cache:'no-store', so dấu vân phiên bản (tập các ?v= của
+   script + css) với dấu của trang đang chạy. Khác ⇒ có bản mới:
+     - Không có modal nào mở và không đang gõ vào ô nào  ⇒ báo ngắn rồi location.reload().
+     - Đang mở modal / đang gõ                           ⇒ KHÔNG tự tải lại (mất dữ liệu đang nhập),
+       hiện thanh vàng cố định phía trên với nút "Tải lại" để người dùng chọn lúc.
+   Không đụng sw.js: service worker đang network-first, không phải thủ phạm; đổi nó là thêm một tầng
+   cache phải nghĩ. Không cần backend.
+   ================================================================================================ */
+function dauVanPhienBan(goc) {
+  const ds = [];
+  goc.querySelectorAll('script[src], link[rel="stylesheet"][href]').forEach(el => {
+    const u = el.getAttribute('src') || el.getAttribute('href') || '';
+    /* CHỈ file của mình dưới /js/ và /css/ có ?v=. Script/CSS chèn lúc chạy (leaflet của DMS, qrcode)
+       không tính — nếu tính, trang đang chạy luôn "khác" index.html trên máy chủ ⇒ tải lại vô tận. */
+    if (/^\/(js|css)\/[^?]+\?v=/.test(u)) ds.push(u);
+  });
+  return ds.sort().join('|');
+}
+const DAU_VAN_HIEN_TAI = dauVanPhienBan(document);
+let lanKiemBanMoiCuoi = 0;
+
+function anToanDeTaiLai() {
+  if (document.querySelector('.modal-backdrop')) return false;
+  const a = document.activeElement;
+  if (a && (/^(INPUT|TEXTAREA|SELECT)$/i.test(a.tagName) || a.isContentEditable)) return false;
+  return true;
+}
+
+function hienThanhBanMoi() {
+  if (document.getElementById('__banMoi')) return;
+  const el = document.createElement('div');
+  el.id = '__banMoi';
+  el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#fff3cd;color:#664d03;border-bottom:1px solid #ffe69c;' +
+    'padding:8px 12px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;box-shadow:0 2px 8px rgba(0,0,0,.12);';
+  el.innerHTML = '<span>Phần mềm có <b>bản cập nhật mới</b>. Lưu việc đang làm rồi bấm tải lại.</span>' +
+    '<button type="button" class="btn small" id="__banMoiTai">🔄 Tải lại ngay</button>' +
+    '<button type="button" class="btn small secondary" id="__banMoiDong" title="Ẩn — sẽ nhắc lại lần sau">Để sau</button>';
+  document.body.appendChild(el);
+  el.querySelector('#__banMoiTai').addEventListener('click', () => location.reload());
+  el.querySelector('#__banMoiDong').addEventListener('click', () => el.remove());
+}
+
+async function kiemBanMoi(tuDongTaiLai) {
+  const bayGio = Date.now();
+  if (bayGio - lanKiemBanMoiCuoi < 60 * 1000) return;   // không hỏi máy chủ dồn dập khi người dùng bật/tắt liên tục
+  lanKiemBanMoiCuoi = bayGio;
+  let html = '';
+  try {
+    const r = await fetch('/index.html?_=' + bayGio, { cache: 'no-store', credentials: 'same-origin' });
+    if (!r.ok) return;
+    html = await r.text();
+  } catch (e) { return; }   // mất mạng: thôi, lần sau kiểm tiếp
+  let dauMoi = '';
+  try { dauMoi = dauVanPhienBan(new DOMParser().parseFromString(html, 'text/html')); } catch (e) { return; }
+  if (!dauMoi || !DAU_VAN_HIEN_TAI || dauMoi === DAU_VAN_HIEN_TAI) return;
+  /* Khóa chống lặp: vừa tự tải lại chưa đầy 2 phút mà vẫn "khác" (vd có proxy đệm index.html, hoặc
+     máy chủ đang copy dở) thì KHÔNG tự tải lại nữa — hiện thanh để người dùng tự quyết. */
+  let vuaTaiLai = false;
+  try { vuaTaiLai = bayGio - Number(sessionStorage.getItem('__banMoiTaiLuc') || 0) < 2 * 60 * 1000; } catch (e) { /* sessionStorage bị chặn: coi như chưa */ }
+  if (tuDongTaiLai && !vuaTaiLai && anToanDeTaiLai()) {
+    try { sessionStorage.setItem('__banMoiTaiLuc', String(bayGio)); } catch (e) { /* bỏ qua */ }
+    toast('Có bản cập nhật mới — đang tải lại…', 'success', 2500);
+    setTimeout(() => location.reload(), 700);
+    return;
+  }
+  hienThanhBanMoi();
+}
+
+function theoDoiBanMoi() {
+  // Quay lại app: tab hiện lại / app PWA mở lại từ nền. Đây là lúc an toàn nhất để tải lại.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kiemBanMoi(true); });
+  // Quay lại bằng nút Back (bfcache trả nguyên trang cũ, không chạy lại script).
+  window.addEventListener('pageshow', (e) => { if (e.persisted) kiemBanMoi(true); });
+  // Đang mở suốt (máy tính để bảng tồn kho cả ngày): kiểm định kỳ, nhưng KHÔNG tự tải lại.
+  setInterval(() => { if (document.visibilityState === 'visible') kiemBanMoi(false); }, 10 * 60 * 1000);
+}
+
 init();
+theoDoiBanMoi();

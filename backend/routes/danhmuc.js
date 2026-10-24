@@ -35,7 +35,11 @@ router.use('/mausac', buildCrudRouter({
   table: 'MauSac', idCol: 'MauSacID', moduleCode: 'DANHMUC',
   columns: [
     { name: 'MaMau', sqlType: sql.NVarChar, required: true, duyNhat: true },
-    { name: 'TenMau', sqlType: sql.NVarChar, required: true, duyNhat: true }
+    { name: 'TenMau', sqlType: sql.NVarChar, required: true, duyNhat: true },
+    /* v8.94: anh mau vai (migration_v881). `tuyChon`: CSDL chua chay migration thi bo qua cot nay
+       luc ghi — khong lam hong nut Luu cua ca danh muc. Gia tri la duong dan /uploads/<file>
+       (frontend upload truoc qua /api/upload roi gui URL), hoac null = xoa anh. */
+    { name: 'AnhMau', sqlType: sql.NVarChar(500), tuyChon: true, khongGuiThiGiu: true }
   ]
 }));
 

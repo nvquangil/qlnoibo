@@ -848,6 +848,14 @@ async function coCotQLSX(pool, bang, cot) {
   __cotQLSX.set(key, r.c != null);
   return r.c != null;
 }
+/* v8.95: dò BẢNG (ChiPhiChungMacDinh, migration_v882). KHÔNG cache — chạy migration mà quên restart
+   thì cache `false` giữ mãi, bảng chung khai rồi mà giá thành không thấy (bài học v8.91/v8.94). */
+async function coBangQLSX(pool, bang) {
+  try {
+    const r = (await pool.request().query(`SELECT OBJECT_ID('${bang}', 'U') AS c`)).recordset[0] || {};
+    return r.c != null;
+  } catch (e) { return false; }
+}
 /* v6.01: GIẬT CẤP — số CÁI cắt giật cấp của từng cây. KHÔNG cộng vào số lớp, chỉ cộng vào TỔNG SL cái
    của bàn cắt (xem soCaiGiatCapCua() + 3 chỗ tính TienDoChiTietMau bên dưới). Cột SoLuongCai tính sẵn
    (= lớp × hệ số) GIỮ NGUYÊN — phần giật cấp được cộng ở tầng code, không sửa cột tính sẵn. */
@@ -3251,9 +3259,29 @@ async function tinhGiaThanh(pool, order) {
     }));
 
   // ---- 5. CHI PHÍ CHUNG (nhập tay) ----
-  const chiPhiChung = (await pool.request().input('id', sql.Int, donHangId).query(`
+  /* v8.95: HAI NGUỒN, RIÊNG THẮNG CHUNG (Nguyen chốt 2026-10-22).
+       · ChiPhiChungDonHang   — khai riêng cho lệnh này (có từ v6.15)
+       · ChiPhiChungMacDinh   — cài đặt chung cho MỌI lệnh (migration_v882), tab "Chi phí chung" ở
+                                màn Giá thành
+     Lệnh CÓ ít nhất một dòng riêng → dùng riêng, BỎ HẲN bảng chung. Lệnh chưa khai gì → dùng chung.
+     Không cộng hai nguồn: lệnh cũ đã khai "điện nước" riêng mà bảng chung cũng có "điện nước" là
+     tính hai lần. Đổi lại, lệnh muốn THÊM một khoản riêng thì phải chép đủ bộ — cái giá đã chấp nhận.
+     `nguonChiPhiChung` trả về để màn hình nói rõ đang dùng nguồn nào. Cả hai đều là đ/1 SP. */
+  const chiPhiChungRieng = (await pool.request().input('id', sql.Int, donHangId).query(`
     SELECT ID, TenChiPhi, SoTien, GhiChu FROM ChiPhiChungDonHang WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, ID), ID`)).recordset
     .map(r => ({ ID: r.ID, TenChiPhi: r.TenChiPhi, SoTien: Number(r.SoTien) || 0, GhiChu: r.GhiChu || '' }));
+  /* "CÓ riêng" = có ít nhất một dòng riêng SỐ TIỀN > 0. Dòng chỉ có tên, tiền 0 (PUT riêng vẫn lưu
+     dòng như vậy) mà cũng tính là "có riêng" thì bộ chung bị bỏ ⇒ chi phí chung = 0 ⇒ giá vốn thiếu
+     nguyên khoản chung, lãi gộp phình — rà soát chéo bắt được. */
+  const coRiengThat = chiPhiChungRieng.some(r => r.SoTien > 0);
+  let chiPhiChungMacDinh = [];
+  if (!coRiengThat && await coBangQLSX(pool, 'ChiPhiChungMacDinh')) {
+    chiPhiChungMacDinh = (await pool.request().query(`
+      SELECT ID, TenChiPhi, SoTien, GhiChu FROM ChiPhiChungMacDinh ORDER BY ISNULL(ThuTu, ID), ID`)).recordset
+      .map(r => ({ ID: r.ID, TenChiPhi: r.TenChiPhi, SoTien: Number(r.SoTien) || 0, GhiChu: r.GhiChu || '', MacDinh: true }));
+  }
+  const chiPhiChung = coRiengThat ? chiPhiChungRieng : chiPhiChungMacDinh;
+  const nguonChiPhiChung = coRiengThat ? 'rieng' : (chiPhiChungMacDinh.length ? 'chung' : 'khong');
 
   const tong = (ds, k) => lam2(ds.reduce((s, x) => s + (Number(x[k]) || 0), 0));
   const tongVai = tong(vai, 'ThanhTien');
@@ -3296,11 +3324,39 @@ async function tinhGiaThanh(pool, order) {
      kho ra hai con số khác nhau cho cùng một lệnh — không ai đối chiếu được.
      Quy về CÁI (× hệ số khi đơn vị chính của mã hàng là đơn vị GỘP) để giaThanh1SP luôn là GIÁ 1 CÁI,
      cùng đơn vị với GiaBan và GiaVonHangHoa.GiaVon. */
-  const stages = (await pool.request().query("SELECT StageID, MaCongDoan FROM CongDoanSanXuat WHERE MaCongDoan IN ('KN','CAT')")).recordset;
+  const stages = (await pool.request().query("SELECT StageID, MaCongDoan, ThuTu FROM CongDoanSanXuat WHERE MaCongDoan IN ('KN','CAT','QC')")).recordset;
   const knStage = stages.find(s => s.MaCongDoan === 'KN');
   const catStage = stages.find(s => s.MaCongDoan === 'CAT');
+  const qcStage = stages.find(s => s.MaCongDoan === 'QC');
   let slNhapKho = 0, nguonNhap = '';
-  try {
+
+  /* ================================================================================================
+     v8.95 — MẪU SỐ ƯU TIÊN SỐ LƯỢNG QC  (Nguyen 2026-10-22: "sau khi cập nhật công đoạn QC lấy số
+     lượng của QC để tính giá thành").
+
+     QC đếm CÁI đạt, ghi nhiều đợt (v8.74). Chỉ dùng QC làm mẫu số khi QC ĐÃ XONG — tức lệnh đã rời
+     công đoạn QC (con trỏ đứng ở công đoạn có ThuTu LỚN HƠN QC, hoặc lệnh Hoàn thành). Lý do: đợt 1
+     QC 100/1.000 cái mà đã chia là giá gấp 10 lần, và v8.90 sẽ nạp đúng con số đó vào giá vốn.
+     QC chưa xong → lùi về chuỗi cũ (phiếu nhập kho → luỹ kế KN → SL cắt) và `nguonSL` nói rõ.
+     Đơn vị: QC là CÁI (cùng đơn vị Cắt/May), nên donViSLDungTinh = 'Cái' — cờ mà giaVonLenhSX.js
+     dùng để quyết định có được ghi giá vốn hay không. */
+  let slQC = 0, qcXong = false;
+  if (qcStage) {
+    const conTro = order.CongDoanHienTaiID
+      ? (await pool.request().input('s', sql.Int, order.CongDoanHienTaiID)
+          .query('SELECT ThuTu FROM CongDoanSanXuat WHERE StageID = @s')).recordset[0]
+      : null;
+    const daHoanThanh = !order.CongDoanHienTaiID || String(order.TrangThai || '') === 'Hoàn thành';
+    qcXong = daHoanThanh || (!!conTro && Number(conTro.ThuTu) > Number(qcStage.ThuTu));
+    if (qcXong) slQC = await getStageActualQty(pool, donHangId, qcStage.StageID);
+  }
+  /* `mauSoTinCay`: mẫu số là CÁI THẬT (QC đã xong, hoặc phiếu nhập kho) — cờ này quyết định có được
+     ghi giá vốn hay không. Bản v8.90 suy cờ bằng cách TÌM CHỮ 'phiếu' trong câu nguonNhap, mà câu của
+     nhánh KN lại là "…chưa có phiếu nhập kho" ⇒ KN cũng thành 'Cái' ⇒ lệnh cũ ghi giá vốn với mẫu số
+     luỹ kế KN (trước v7.56 chỉ là lần ghi cuối) ⇒ giá vốn gấp N lần. Rà soát chéo 2026-10-22 bắt được. */
+  let mauSoTinCay = false;
+  if (slQC > 0) { slNhapKho = slQC; nguonNhap = 'SL QC đạt (công đoạn QC đã xong)'; mauSoTinCay = true; }
+  if (slNhapKho <= 0) try {   // chưa có QC xong → chuỗi cũ: phiếu nhập kho → KN → cắt
     const r = (await pool.request().input('id', sql.Int, donHangId).query(`
       IF OBJECT_ID('PhieuNhapKhoHangChiTiet', 'U') IS NULL SELECT CAST(0 AS DECIMAL(18,4)) AS SL
       ELSE
@@ -3314,7 +3370,7 @@ async function tinhGiaThanh(pool, order) {
         JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
         WHERE p.DonHangID = @id AND p.TrangThai <> N'Đã hủy'`)).recordset[0];
     slNhapKho = Number(r && r.SL) || 0;
-    if (slNhapKho > 0) nguonNhap = 'SL nhập kho thực tế (phiếu nhập kho)';
+    if (slNhapKho > 0) { nguonNhap = 'SL nhập kho thực tế (phiếu nhập kho)'; mauSoTinCay = true; }
   } catch (e) { slNhapKho = 0; }
   /* Lệnh CŨ chưa có phiếu nhập kho thì lui về luỹ kế công đoạn KN — không thì mọi lệnh trước v6.89
      đột nhiên mất giá thành. */
@@ -3324,7 +3380,10 @@ async function tinhGiaThanh(pool, order) {
   }
   const slCat = catStage ? await getTongSLCatForOrder(pool, donHangId) : 0;
   const slDungTinh = slNhapKho > 0 ? slNhapKho : slCat;
-  const nguonSL = slNhapKho > 0 ? nguonNhap : (slCat > 0 ? 'SL cắt (chưa nhập kho)' : 'chưa có số liệu');
+  /* v8.95: QC chưa xong thì nói thẳng ở nguonSL — người đọc biết con số đang là tạm. */
+  const nguonSL = slNhapKho > 0
+    ? nguonNhap + (qcStage && !qcXong ? ' — QC chưa xong, giá thành sẽ chốt lại khi QC xong' : '')
+    : (slCat > 0 ? 'SL cắt (chưa nhập kho' + (qcStage && !qcXong ? ', QC chưa xong' : '') + ')' : 'chưa có số liệu');
   /* v7.89: giá thành 1 SP = chia PHẦN SẢN XUẤT rồi mới CỘNG chi phí chung (chi phí chung đã là số
      của 1 SP). v7.89.1: tính ra đây để `tongCong` dựng TỪ nó. */
   const giaThanh1SP = slDungTinh > 0 ? lam2(tongSanXuat / slDungTinh + tongChung) : null;
@@ -3350,10 +3409,61 @@ async function tinhGiaThanh(pool, order) {
     },
     slNhapKho, slCat, slDungTinh, nguonSL,
     /* v6.91.1: SL nhập kho từ phiếu ĐÃ quy về CÁI, nên nhãn đơn vị phải là "Cái" chứ không phải ĐVT
-       của lệnh SX — để trống chỗ này là người đọc tưởng giá thành tính trên Ri. */
-    donViSLDungTinh: (slNhapKho > 0 && nguonNhap.indexOf('phiếu') >= 0) ? 'Cái' : null,
+       của lệnh SX — để trống chỗ này là người đọc tưởng giá thành tính trên Ri.
+       v8.95: SL QC cũng là CÁI. Cờ này là thứ giaVonLenhSX.js dựa vào để cho phép ghi giá vốn.
+       Chỉ hai nguồn được 'Cái': QC đã xong, phiếu nhập kho. Luỹ kế KN và SL cắt là null (xem
+       `mauSoTinCay` — đặt bằng cờ, KHÔNG dò chữ trong câu nguồn). */
+    donViSLDungTinh: (slNhapKho > 0 && mauSoTinCay) ? 'Cái' : null,
+    /* v8.95: cho giaVonLenhSX.js + màn giá thành biết QC đã xong chưa, và mốc đã chốt (nếu có). */
+    qcXong, slQC, nguonChiPhiChung,
+    giaThanhChot: order.GiaThanhChot != null ? Number(order.GiaThanhChot) : null,
+    giaThanhChotSL: order.GiaThanhChotSL != null ? Number(order.GiaThanhChotSL) : null,
+    giaThanhChotNgay: order.GiaThanhChotNgay || null,
     giaThanh1SP
   };
+}
+
+/* ================================================================================================
+   v8.95 — CHỐT GIÁ THÀNH + NẠP GIÁ VỐN. MỘT hàm cho hai đường gọi:
+     (a) tự động, ngay sau khi lệnh RỜI công đoạn QC (POST /tiendo, khối `advanced`)
+     (b) nút "Chốt giá thành" trên màn giá thành (POST /giathanh/:maDH/chot, epChot = true)
+
+   Làm gì:
+     1. tinhGiaThanh() — mẫu số là SL QC (xem ghi chú ở đó).
+     2. Chưa đủ điều kiện (QC chưa xong khi không ép / không có SL / chưa có chi phí) → trả lý do,
+        KHÔNG ghi gì. Ghi 0 là lãi gộp bằng doanh thu, rất đẹp và rất sai (bài học v8.90).
+     3. napGiaVonTuLenhSX() của v8.90 — nó ghi MỐC DonHangSanXuat.GiaThanhChot* RỒI nạp giá vốn
+        (luật "chỉ ghi đè khi cùng lệnh SX" giữ nguyên). Mốc ghi trong đó chứ không ở đây, vì hàm đó
+        còn được gọi từ 4 chỗ của routes/nhapkho.js — ghi mốc ở một đường là các đường kia làm mốc lệch
+        với giá vốn thật. ⇒ "Mốc chốt" = GIÁ VỐN LẦN NẠP GẦN NHẤT, theo chi phí tại thời điểm đó.
+        Chi phí phát sinh sau QC (bao bì ở Đóng gói…) sẽ vào giá vốn ở lần nạp kế: phiếu nhập kho,
+        hoặc bấm "Chốt giá thành".
+
+   KHÔNG BAO GIỜ throw: hàm này chạy SAU khi tiến độ đã ghi; ném lỗi ra là người dùng thấy "Gửi thất
+   bại" trong khi QC đã lưu, bấm lại là hai đợt. Mọi lỗi gói vào kết quả trả về.
+   ================================================================================================ */
+async function chotGiaThanhVaNapGiaVon(pool, order, userId, opts) {
+  const ep = !!(opts && opts.epChot);
+  const kq = { daChot: false, giaThanh1SP: null, slDungTinh: 0, nguonSL: '', lyDo: '', giaVon: null };
+  try {
+    const gt = await tinhGiaThanh(pool, order);
+    kq.giaThanh1SP = gt.giaThanh1SP; kq.slDungTinh = gt.slDungTinh; kq.nguonSL = gt.nguonSL;
+    if (!ep && !gt.qcXong) { kq.lyDo = 'QC chưa xong'; return kq; }
+    if (!(gt.giaThanh1SP > 0)) { kq.lyDo = 'chưa đủ số liệu (SL hoặc chi phí = 0)'; return kq; }
+    if (gt.donViSLDungTinh !== 'Cái') {
+      kq.lyDo = 'mẫu số đang là ' + gt.nguonSL + ' — không phải SL QC / phiếu nhập kho, không chốt';
+      return kq;
+    }
+    const { napGiaVonTuLenhSX, loiNhanGiaVon } = require('../utils/giaVonLenhSX');
+    const gv = await napGiaVonTuLenhSX(pool, order.DonHangID, null, userId);
+    kq.giaVon = gv; kq.loiNhanGiaVon = loiNhanGiaVon(gv);
+    kq.daChot = !!(gv && gv.moc && gv.moc.ghiDuoc);
+    if (!kq.daChot && !kq.lyDo) kq.lyDo = (gv && gv.lyDo) || 'chưa chạy migration_v882 (không có cột GiaThanhChot)';
+  } catch (e) {
+    console.error('[chotGiaThanh] ' + (order && order.MaDH) + ': ', e);
+    kq.lyDo = 'lỗi: ' + e.message;
+  }
+  return kq;
 }
 // Danh sách lệnh SX để chọn (kèm tổng chi phí nhanh — chỉ để nhìn, chi tiết mở từng lệnh).
 router.get('/giathanh', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
@@ -3364,7 +3474,7 @@ router.get('/giathanh', requireAuth, requirePermission('QLSX', 'view'), requireC
        được nói hai kiểu về cùng một lệnh. Cách JOIN chép nguyên của GET /orders. */
     SELECT d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham, d.TongSoLuong, d.TrangThai,
            c.TenCongDoan, c.MaCongDoan, ncc1.TenNha AS TenNhaGiaCong,
-           (SELECT COUNT(*) FROM ChiPhiChungDonHang cp WHERE cp.DonHangID = d.DonHangID) AS SoChiPhiChung
+           (SELECT COUNT(*) FROM ChiPhiChungDonHang cp WHERE cp.DonHangID = d.DonHangID AND ISNULL(cp.SoTien, 0) > 0) AS SoChiPhiChung
     FROM DonHangSanXuat d
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
     LEFT JOIN NhaGiaCong ncc1 ON ncc1.NhaGiaCongID = d.NhaGiaCongID
@@ -3385,7 +3495,19 @@ router.get('/giathanh', requireAuth, requirePermission('QLSX', 'view'), requireC
       catch (e) { r.TongSLCatChinh = null; }   // lỗi 1 lệnh không được làm hỏng cả danh sách
     }));
   }
-  res.json({ success: true, data: rows });
+  /* v8.95: số dòng chi phí chung MẶC ĐỊNH (một số cho cả danh sách) — cột "Chi phí chung" phải nói
+     "mặc định (N dòng)" cho lệnh chưa khai riêng, thay vì "Chưa khai" (dụ người dùng vào khai riêng và
+     vô tình tách lệnh khỏi bộ chung). Kèm cờ đã chốt nếu đã chạy migration_v882. */
+  let soMacDinh = 0;
+  if (await coBangQLSX(pool, 'ChiPhiChungMacDinh')) {
+    soMacDinh = Number((await pool.request().query('SELECT COUNT(*) AS c FROM ChiPhiChungMacDinh WHERE ISNULL(SoTien,0) > 0')).recordset[0].c) || 0;
+  }
+  if (await coCotQLSX(pool, 'DonHangSanXuat', 'GiaThanhChot')) {
+    const chot = (await pool.request().query('SELECT DonHangID, GiaThanhChot, GiaThanhChotNgay FROM DonHangSanXuat WHERE GiaThanhChot IS NOT NULL')).recordset;
+    const m = new Map(chot.map(x => [x.DonHangID, x]));
+    rows.forEach(r => { const c = m.get(r.DonHangID); r.GiaThanhChot = c ? Number(c.GiaThanhChot) : null; r.GiaThanhChotNgay = c ? c.GiaThanhChotNgay : null; });
+  }
+  res.json({ success: true, data: rows, soChiPhiChungMacDinh: soMacDinh });
 });
 router.get('/giathanh/:maDH', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
   try {
@@ -3423,6 +3545,78 @@ router.put('/giathanh/:maDH/chiphichung', requireAuth, requirePermission('QLSX',
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi lưu chi phí chung: ' + err.message });
+  }
+});
+
+/* ================================================================================================
+   v8.95 — CHI PHÍ CHUNG MẶC ĐỊNH CHO MỌI LỆNH (ChiPhiChungMacDinh, migration_v882)
+   Hai route literal này PHẢI đứng TRƯỚC `/giathanh/:maDH` theo thứ tự khai báo? Không — Express khớp
+   theo thứ tự đăng ký, và `/giathanh/:maDH` đã đăng ký ở trên nên `/giathanh/chiphichung-macdinh`
+   sẽ bị `:maDH` nuốt (maDH = 'chiphichung-macdinh') → 404 "Không tìm thấy đơn hàng" (bài học v5.59:
+   route literal trước route :param). Vì vậy đặt dưới tiền tố KHÁC: `/caidat-giathanh/...`.
+   ================================================================================================ */
+router.get('/caidat-giathanh/chiphichung', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!await coBangQLSX(pool, 'ChiPhiChungMacDinh')) {
+      return res.json({ success: true, data: [], chuaMigration: true });
+    }
+    const rows = (await pool.request().query(`
+      SELECT ID, TenChiPhi, SoTien, GhiChu FROM ChiPhiChungMacDinh ORDER BY ISNULL(ThuTu, ID), ID`)).recordset;
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi tải chi phí chung mặc định: ' + err.message });
+  }
+});
+// Ghi đè toàn bộ (xóa hết rồi chèn lại) — cùng cách với PUT /giathanh/:maDH/chiphichung ở trên.
+router.put('/caidat-giathanh/chiphichung', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!await coBangQLSX(pool, 'ChiPhiChungMacDinh')) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v882 nên chưa có bảng chi phí chung mặc định.' });
+    }
+    const items = (Array.isArray(req.body.items) ? req.body.items : [])
+      .filter(it => String(it.tenChiPhi || '').trim() || Number(it.soTien) > 0);
+    /* TRANSACTION: bang nay ap cho MOI lenh. DELETE roi INSERT tung dong ma gay giua chung la bang
+       rong/thieu ⇒ moi lenh dang dung mac dinh mat chi phi chung im lang. Mot giao dich, loi la rollback. */
+    const tran = new sql.Transaction(pool);
+    await tran.begin();
+    try {
+      await new sql.Request(tran).query('DELETE FROM ChiPhiChungMacDinh');
+      let i = 0;
+      for (const it of items) {
+        i++;
+        await new sql.Request(tran)
+          .input('TenChiPhi', sql.NVarChar(200), String(it.tenChiPhi || 'Chi phí chung').trim().slice(0, 200))
+          .input('SoTien', sql.Decimal(18, 2), Number(it.soTien) || 0)
+          .input('GhiChu', sql.NVarChar(500), it.ghiChu || null)
+          .input('ThuTu', sql.Int, i)
+          .query(`INSERT INTO ChiPhiChungMacDinh (TenChiPhi, SoTien, GhiChu, ThuTu)
+                  VALUES (@TenChiPhi, @SoTien, @GhiChu, @ThuTu)`);
+      }
+      await tran.commit();
+    } catch (e) { try { await tran.rollback(); } catch (_) { } throw e; }
+    res.json({ success: true, data: { soDong: items.length } });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi lưu chi phí chung mặc định: ' + err.message });
+  }
+});
+
+/* v8.95 — CHỐT GIÁ THÀNH BẰNG TAY (nút trên màn giá thành). Cùng một hàm với lúc QC xong tự chốt
+   (chotGiaThanhVaNapGiaVon) để hai đường không bao giờ ra hai số. Dùng cho lệnh đã qua QC TRƯỚC khi
+   có bản này, hoặc khi thêm chi phí sau QC và muốn chốt lại. */
+router.post('/giathanh/:maDH/chot', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'giathanh'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const order = await getOrderByMaDH(pool, req.params.maDH);
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
+    const kq = await chotGiaThanhVaNapGiaVon(pool, order, req.session && req.session.user && req.session.user.userId, { epChot: true });
+    res.json({ success: true, data: kq });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi chốt giá thành: ' + err.message });
   }
 });
 
@@ -4545,6 +4739,24 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
           daNhap: knDaNhap, soCat: knSoCat, chuaDu: knChuaDu, giuLai: giuLaiOCongDoan, ketThuc: !!ketThucKhoNhap }
       : null;
 
+    /* ================================================================================================
+       v8.95 — LỆNH VỪA RỜI CÔNG ĐOẠN QC → TỰ CHỐT GIÁ THÀNH + NẠP GIÁ VỐN.
+       Nguyen 2026-10-22: "Khi công đoạn QC cập nhật tiến độ xong sẽ tự ra giá thành lệnh sản xuất đó."
+       Chốt với Nguyen: chỉ khi QC XONG (đủ số cắt hoặc tích "Đã hoàn thành" ⇒ `advanced`), KHÔNG
+       phải sau mỗi đợt — đợt 1 QC 100/1.000 cái mà chia là giá gấp 10 lần vào thẳng giá vốn.
+       Con trỏ đã được UPDATE ở trên nên tinhGiaThanh() đọc lại lệnh sẽ thấy "đã qua QC" (qcXong).
+       Hàm không throw; kết quả trả về `giaThanhQC` để frontend hiện số ngay trong thông báo. */
+    let giaThanhQC = null;
+    if (advanced && stage.MaCongDoan === 'QC') {
+      try {
+        const orderMoi = await getOrderByMaDH(pool, order.MaDH);   // đọc lại: con trỏ đã đổi
+        giaThanhQC = await chotGiaThanhVaNapGiaVon(pool, orderMoi || order, user.userId, { epChot: false });
+      } catch (e) {
+        console.error('[tiendo QC -> gia thanh] ', e);
+        giaThanhQC = { daChot: false, lyDo: 'lỗi: ' + e.message };
+      }
+    }
+
     // Bao cho cac user phu trach cong doan KE TIEP biet de cap nhat tien do (CHI khi thuc su tien toi cong doan moi).
     // Boc try/catch rieng - loi gui thong bao khong duoc lam hong ket qua ghi nhan tien do chinh.
     if (advanced && nextStageId) {
@@ -4571,7 +4783,7 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
        cao ton kho. Tu nay NhapCai chi con thay doi khi nguoi dung tu go o man The kho.
        ================================================================================================ */
 
-    res.json({ success: true, data: { khoNhap: ketQuaKhoNhap } });
+    res.json({ success: true, data: { khoNhap: ketQuaKhoNhap, giaThanhQC } });   // v8.95: + giaThanhQC
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi ghi nhận tiến độ: ' + err.message });

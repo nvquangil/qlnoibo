@@ -100,7 +100,13 @@
     dsPhieu = (await apiGet('/api/nhapkho/phieu?' + thamSo().toString())).data || [];
     if (!dsPhieu.length) { hop.innerHTML = '<div class="empty-hint">Chưa có phiếu nhập kho nào.</div>'; return; }
     const con = dsPhieu.filter(r => r.TrangThai !== 'Đã hủy');
+    /* v9.01 (Nguyen 2026-10-24: "phiếu nhập thêm tìm kiếm ký tự bất kỳ"): ô tìm dùng chung
+       wireTableSearch (common.js) — lọc ẩn/hiện dòng trong bảng ĐÃ tải, tách từ khớp hết, không gọi
+       lại API. Khác bộ lọc Từ ngày/Đến ngày/Loại/Số phiếu phía trên (gọi API). Cột Thao tác gắn
+       data-notim để chữ trên nút ("Xem", "Sửa") không lọt vào chuỗi tìm. Dòng TỔNG ở tfoot nên
+       không bị ẩn (và không cộng lại theo lọc — là tổng của cả danh sách đã tải). */
     hop.innerHTML = `
+      <div class="toolbar" style="margin-bottom:6px;">${searchBoxHtml('nkTim', '🔍 Gõ để tìm trong bảng (số phiếu, NCC/lệnh, số HĐ, trạng thái...)')}<span id="nkTimInfo" class="empty-hint" style="padding:0;"></span></div>
       <div class="table-wrap">
       <table class="data-table"><thead><tr>
         <th style="width:50px;">STT</th><th>Số phiếu</th><th>Ngày</th><th>Loại nhập</th>
@@ -120,7 +126,7 @@
             <td class="num">${fmtNumber(r.TongSLCai)}</td>
             <td class="num">${r.LoaiNhap === 'SanXuat' ? '' : fmtTien(r.TongTien)}</td>
             <td>${r.TrangThai === 'Đã hủy' ? '<span class="badge red">Đã hủy</span>' : '<span class="badge green">Hoàn thành</span>'}</td>
-            <td>
+            <td data-notim>
               <button class="btn small secondary act-view" data-id="${r.PhieuNKID}">Xem</button>
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary nk-sua" data-id="${r.PhieuNKID}">Sửa</button>` : ''}
               ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small warn nk-huy" data-id="${r.PhieuNKID}">Hủy</button>` : ''}
@@ -139,6 +145,7 @@
         <td colspan="2"></td>
       </tr></tfoot></table></div>`;
 
+    wireTableSearch(hop, 'nkTim', { infoId: 'nkTimInfo' });   // v9.01
     hop.querySelectorAll('.act-view').forEach(b => b.onclick = (e) => { e.preventDefault(); xemPhieu(b.dataset.id); });
     hop.querySelectorAll('.nk-sua').forEach(b => b.onclick = () => openForm(b.dataset.id));
     hop.querySelectorAll('.nk-huy').forEach(b => b.onclick = async () => {

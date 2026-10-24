@@ -228,13 +228,34 @@ async function getOrdersWithDocStatus(pool, loai) {
      Dò cột CoInTheu để DB cũ chưa có cột vẫn chạy (khi đó hiện hết như trước). */
   const locInTheu = (loai === 'hinhanhinthue' || loai === 'dongiainthe') && await coCot(pool, 'DonHangSanXuat', 'CoInTheu')
     ? 'WHERE ISNULL(d.CoInTheu, 0) = 1' : '';
+  /* v8.99 (Nguyen 2026-10-24): "khi công đoạn Giao gia công chọn Giao nhà làm thì đưa lệnh vào Đơn giá
+     công đoạn may, chọn Giao gia công thì đưa vào Đơn giá gia công. Hiện tại đang thể hiện cả 2. Khi
+     chưa giao gia công thì chưa đưa vào đơn giá nào cả."
+     Nguồn cờ: DonHangSanXuat.DaGiaoNhaLam / DaGiaoGiaCong — 2 checkbox ĐỘC LẬP ghi ở công đoạn GC
+     (POST /orders/:maDH/tiendo, qlsx.js v5.24). Tick cả hai (một phần làm trong, một phần thuê ngoài)
+     ⇒ hiện ở cả hai danh sách — đúng nghĩa, không phải lỗi.
+     NGOẠI LỆ CÓ CHỦ ĐÍCH: lệnh ĐÃ CÓ đơn giá (DaCo=1) vẫn hiện dù chưa tick — đó là dữ liệu đã nhập
+     (lương khoán may đọc DonHangDonGiaCongDoanMay, công nợ gia công đọc DonHangHangMucGiaCong); giấu
+     đi là không ai sửa/xoá được nữa mà số vẫn chạy. Frontend gắn nhãn "chưa giao" cho dòng đó để thấy
+     ngay chỗ lệch. Muốn chặt hơn (giấu luôn) thì bỏ vế OR EXISTS.
+     Dò cột như CoInTheu: DB chưa có cột thì không lọc, và trả NULL để frontend không gắn nhãn bừa. */
+  const coCoGiao = await coCot(pool, 'DonHangSanXuat', 'DaGiaoNhaLam') && await coCot(pool, 'DonHangSanXuat', 'DaGiaoGiaCong');
+  const cotGiao = coCoGiao
+    ? ', ISNULL(d.DaGiaoNhaLam, 0) AS DaGiaoNhaLam, ISNULL(d.DaGiaoGiaCong, 0) AS DaGiaoGiaCong'
+    : ', CAST(NULL AS BIT) AS DaGiaoNhaLam, CAST(NULL AS BIT) AS DaGiaoGiaCong';
+  let locGiao = '';
+  if (coCoGiao && loai === 'dongiamay') {
+    locGiao = 'WHERE (ISNULL(d.DaGiaoNhaLam, 0) = 1 OR EXISTS (SELECT 1 FROM DonHangDonGiaCongDoanMay g2 WHERE g2.DonHangID = d.DonHangID))';
+  } else if (coCoGiao && loai === 'dongiagiacong') {
+    locGiao = 'WHERE (ISNULL(d.DaGiaoGiaCong, 0) = 1 OR EXISTS (SELECT 1 FROM DonHangHangMucGiaCong g2 WHERE g2.DonHangID = d.DonHangID))';
+  }
   const result = await pool.request().query(`
-    SELECT d.DonHangID, d.MaDH, d.MaSanPham, d.TenSanPham, d.AnhSanPham, kh.TenKhachHang, d.NgayGiaoDuKien, d.TrangThai, c.TenCongDoan, ${daCoExpr}
+    SELECT d.DonHangID, d.MaDH, d.MaSanPham, d.TenSanPham, d.AnhSanPham, kh.TenKhachHang, d.NgayGiaoDuKien, d.TrangThai, c.TenCongDoan, ${daCoExpr}${cotGiao}
     FROM DonHangSanXuat d
     LEFT JOIN KhachHang kh ON kh.KhachHangID = d.KhachHangID
     LEFT JOIN CongDoanSanXuat c ON c.StageID = d.CongDoanHienTaiID
     ${joinSql}
-    ${locInTheu}
+    ${locInTheu}${locGiao}
     ORDER BY d.CreatedAt DESC`);
   const rows = result.recordset;
   /* v5.53: gộp Mã Rập theo đơn (hiển thị ở danh sách + modal NPL + header các form).

@@ -5,8 +5,11 @@ window.ModuleDanhMuc = (function () {
       fields: [{ name: 'TenBoPhan', label: 'Tên bộ phận', required: true }, { name: 'GhiChu', label: 'Ghi chú' }] },
     { key: 'loaivai', label: 'Loại vải', api: '/api/danhmuc/loaivai', idCol: 'LoaiVaiID',
       fields: [{ name: 'TenLoaiVai', label: 'Tên loại vải', required: true }, { name: 'MaLoai', label: 'Mã loại' }] },
+    /* v8.94: + ảnh màu (MauSac.AnhMau, migration_v881). Kiểu ô 'image' — xem fieldHtml/openForm:
+       chọn file → upload qua /api/upload → gửi URL. Bảng hiện ảnh thu nhỏ 48px (qua /anh/80/…). */
     { key: 'mausac', label: 'Màu sắc', api: '/api/danhmuc/mausac', idCol: 'MauSacID',
-      fields: [{ name: 'MaMau', label: 'Mã màu', required: true }, { name: 'TenMau', label: 'Tên màu', required: true }] },
+      fields: [{ name: 'MaMau', label: 'Mã màu', required: true }, { name: 'TenMau', label: 'Tên màu', required: true },
+               { name: 'AnhMau', label: 'Ảnh màu vải', type: 'image', render: v => anhMauThuNhoHtml(v, 48) }] },
     { key: 'vai', label: 'Danh mục vải (mã vải)', api: '/api/danhmuc/vai', idCol: 'VaiID', custom: 'vai' },
     { key: 'phulieu', label: 'Phụ liệu', api: '/api/danhmuc/phulieu', idCol: 'PhuLieuID', custom: 'phulieu' },
     { key: 'nhagiacong', label: 'Nhà gia công / In thêu', api: '/api/danhmuc/nhagiacong', idCol: 'NhaGiaCongID', custom: 'nhagiacong' },
@@ -419,14 +422,23 @@ window.ModuleDanhMuc = (function () {
       </form>`;
     const modal = openModal(html);
     modal.querySelector('#btnCancel').addEventListener('click', closeModal);
+    wireOAnh(modal);   // v8.94: ô ảnh (xem trước + nút Bỏ ảnh)
     modal.querySelector('#dmForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const body = {};
       const fdChung = new FormData(e.target);
+      try {
+        /* v8.94: upload ảnh TRƯỚC khi dựng body — cần await nên không nằm trong forEach. */
+        await uploadOAnh(e.target, tab.fields);
+      } catch (err) { toast('Tải ảnh lên thất bại: ' + err.message, 'error'); return; }
+      const fdSauAnh = new FormData(e.target);
       tab.fields.forEach(f => {
         // v6.31: checkbox không tick thì FormData KHÔNG có khoá đó -> phải tự gửi 0, kẻo cột BIT
         // giữ nguyên giá trị cũ và người dùng tưởng đã bỏ tick.
         if (f.type === 'checkbox') { body[f.name] = fdChung.get(f.name) ? 1 : 0; return; }
+        // v8.94: ảnh — gửi URL (chuỗi rỗng => null = xóa ảnh). Luôn gửi khóa này: backend chỉ giữ ảnh
+        // cũ khi KHÔNG có khóa; form thì có ý định rõ ràng nên phải nói ra.
+        if (f.type === 'image') { const u = String(fdSauAnh.get(f.name) || '').trim(); body[f.name] = u || null; return; }
         const v = fdChung.get(f.name);
         body[f.name] = (f.type === 'number') ? (String(v || '').trim() === '' ? null : Number(v)) : v;
       });
@@ -474,6 +486,44 @@ window.ModuleDanhMuc = (function () {
   // server khi submit vi FormData van doc duoc input readonly, khac voi disabled se KHONG gui gi ca) kem
   // 1 dong chu thich nho giai thich ly do. Day chi la lop UX - chan THAT SU nam o backend (xem
   // backend/routes/danhmuc.js PUT /congdoan/:id).
+  /* ============================================================================================
+     v8.94 — Ô ẢNH trong form danh mục (kiểu 'image', xem fieldHtml).
+     wireOAnh(modal):  chọn file -> xem trước ngay (blob URL, chưa upload); bấm "Bỏ ảnh" -> xóa ô ẩn,
+                       xóa xem trước, xóa cả file đang chọn.
+     uploadOAnh(form, fields): gọi lúc Lưu — ô file nào có file thì upload qua /api/upload (common.js
+                       uploadFile) rồi ghi URL vào ô ẩn cùng tên. Upload hỏng thì ném lỗi, form KHÔNG
+                       lưu nửa chừng (không để tên màu lưu rồi mà ảnh mất).
+     ============================================================================================ */
+  function wireOAnh(modal) {
+    modal.querySelectorAll('input[type=file][data-anh-cho]').forEach(oFile => {
+      const ten = oFile.dataset.anhCho;
+      const oXem = modal.querySelector(`[data-anh-xem="${ten}"]`);
+      const oBo = modal.querySelector(`[data-anh-bo="${ten}"]`);
+      oFile.addEventListener('change', () => {
+        const f = oFile.files && oFile.files[0];
+        if (!f) return;
+        if (oXem) oXem.innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid #dce3ea;">`;
+        if (oBo) oBo.style.display = '';
+      });
+      if (oBo) oBo.addEventListener('click', () => {
+        const oAn = modal.querySelector(`input[type=hidden][name="${ten}"]`);
+        if (oAn) oAn.value = '';
+        oFile.value = '';
+        if (oXem) oXem.innerHTML = '';
+        oBo.style.display = 'none';
+      });
+    });
+  }
+  async function uploadOAnh(form, fields) {
+    for (const f of (fields || []).filter(x => x.type === 'image')) {
+      const oFile = form.querySelector(`input[type=file][data-anh-cho="${f.name}"]`);
+      const oAn = form.querySelector(`input[type=hidden][name="${f.name}"]`);
+      const file = oFile && oFile.files && oFile.files[0];
+      if (!file || !oAn) continue;
+      oAn.value = await uploadFile(file, 'mau');
+    }
+  }
+
   function fieldHtml(f, row) {
     const val = row ? row[f.name] : '';
     if (f.options) {
@@ -487,6 +537,21 @@ window.ModuleDanhMuc = (function () {
     if (f.type === 'checkbox') {
       return `<div class="form-row"><label>${f.label}</label>
         <label style="font-weight:400;"><input type="checkbox" name="${f.name}" value="1" ${(val === true || val === 1 || val === '1') ? 'checked' : ''} ${isReadonly ? 'disabled' : ''}> Có</label></div>`;
+    }
+    /* v8.94: kiểu 'image' — ảnh hiện tại (nếu có) + ô chọn file + nút bỏ ảnh.
+       Giá trị thật nằm ở <input type="hidden" name=f.name> (URL /uploads/…). Ô file KHÔNG có name
+       nên FormData không gửi nó; openForm() tự upload rồi ghi URL vào ô ẩn trước khi gửi.
+       `data-anh-cho` nối ô file với ô ẩn — đừng đổi tên thuộc tính này mà không sửa openForm. */
+    if (f.type === 'image') {
+      const url = val == null ? '' : String(val);
+      return `<div class="form-row"><label>${f.label}</label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span class="anh-xem" data-anh-xem="${f.name}">${anhMauThuNhoHtml(url, 64)}</span>
+          <input type="hidden" name="${f.name}" value="${escapeHtml(url)}">
+          <input type="file" accept="image/*" data-anh-cho="${f.name}" style="font-size:12px;max-width:240px;">
+          <button type="button" class="btn small secondary" data-anh-bo="${f.name}" ${url ? '' : 'style="display:none;"'}>Bỏ ảnh</button>
+        </div>
+        <div class="empty-hint" style="margin-top:2px;">Chọn ảnh mới để thay; "Bỏ ảnh" để xóa ảnh đang có.</div></div>`;
     }
     const inputVal = f.type === 'date' && val ? String(val).slice(0, 10) : (val == null ? '' : val);
     return `<div class="form-row"><label>${f.label}${f.required ? ' *' : ''}${isReadonly ? ' 🔒' : ''}</label>

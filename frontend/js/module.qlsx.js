@@ -2273,22 +2273,31 @@ window.ModuleQLSX = (function () {
      ================================================================================================ */
   async function renderGiaThanh(perm) {
     const body = document.getElementById('qBody');
-    const orders = (await apiGet('/api/qlsx/giathanh')).data || [];
+    const resGT = await apiGet('/api/qlsx/giathanh');
+    const orders = resGT.data || [];
+    const soMacDinh = Number(resGT.soChiPhiChungMacDinh) || 0;   // v8.95
     body.innerHTML = `
       <h3 style="margin-top:0;">Giá thành sản phẩm</h3>
       ${/* v7.89: giá thành 1 SP = (chi phí sản xuất ÷ SL) + chi phí chung. Chi phí chung nay là số
            của MỘT sản phẩm, không chia nữa — nói rõ ngay đây để không ai khai nhầm tổng cả lệnh. */''}
       <p class="empty-hint">Chọn 1 lệnh sản xuất để bóc tách chi phí: <b>vải đã cắt × đơn giá từng cây</b> · <b>phụ kiện × đơn giá</b>
         · <b>gia công ngoài / may nhà làm</b> · <b>in thêu</b> · <b>chi phí chung</b> (nhập tay).<br>
-        <b>Giá thành 1 SP = (chi phí sản xuất ÷ SL hoàn thành) + chi phí chung.</b>
+        <b>Giá thành 1 SP = (chi phí sản xuất ÷ SL QC đạt) + chi phí chung.</b>
         Chi phí chung khai theo <b>1 sản phẩm</b>, không phải tổng cả lệnh.</p>
+      ${/* v8.95: cài đặt chi phí chung MỘT LẦN cho mọi lệnh (ChiPhiChungMacDinh). Lệnh nào khai riêng
+           thì dùng riêng, bỏ chung — nói rõ ngay ở nút để không ai tưởng là cộng dồn. */''}
+      <div class="toolbar" style="margin-bottom:8px;">
+        <button type="button" class="btn small secondary" id="btnCaiDatCPC">⚙️ Chi phí chung mặc định (áp cho mọi lệnh)</button>
+        <span class="empty-hint" style="padding:0;">Lệnh <b>chưa khai</b> chi phí chung riêng sẽ dùng bộ này. Lệnh đã khai riêng thì dùng riêng, <b>không cộng</b> thêm.
+        Giá thành <b>tự chốt</b> và nạp vào Giá vốn hàng hóa khi lệnh <b>rời công đoạn QC</b>.</span>
+      </div>
       ${/* v7.89: cột "Mã hàng" đổi thành "Mã rập"; "Tổng SL" lấy SỔ CẮT theo vải chính, không lấy
            TongSoLuong khai ở Ra lệnh SX (số khai chỉ là kế hoạch, giá thành phải soi số cắt thật). */''}
       ${/* v7.93: cột TRẠNG THÁI của lệnh SX. Danh sách này liệt kê MỌI lệnh (kể cả Đã hủy, kể cả
            lệnh mới ra chưa cắt), mà giá thành chỉ có nghĩa khi lệnh đã chạy xong — không nhìn thấy
            trạng thái thì phải mở từng lệnh ra mới biết con số đang tính là của lệnh còn dở.
            Dùng ĐÚNG statusWithStage của Danh sách lệnh SX để hai màn cùng một màu, một cách gọi. */''}
-      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã rập</th><th>Trạng thái</th><th>Tổng SL (sổ cắt — vải chính)</th><th>Chi phí chung</th><th style="width:210px">Thao tác</th></tr></thead>
+      <table><thead><tr><th>Mã ĐH</th><th>Tên sản phẩm</th><th>Mã rập</th><th>Trạng thái</th><th>Tổng SL (sổ cắt — vải chính)</th><th>Chi phí chung</th><th>Giá thành đã chốt</th><th style="width:210px">Thao tác</th></tr></thead>
       <tbody>${orders.map(o => `<tr>
         <td><a href="#" class="act-gt-lenh" data-madh="${escapeHtml(o.MaDH)}" title="Xem/in Lệnh sản xuất">${escapeHtml(o.MaDH)}</a></td>
         <td>${escapeHtml(o.TenSanPham || '')}</td><td>${escapeHtml(o.MaRap || '')}</td>
@@ -2298,45 +2307,152 @@ window.ModuleQLSX = (function () {
         <td style="text-align:right;">${Number(o.TongSLCatChinh) > 0
           ? fmtNumber(o.TongSLCatChinh)
           : '<span class="empty-hint" style="padding:0;">chưa ghi sổ cắt</span>'}</td>
-        <td>${Number(o.SoChiPhiChung) > 0 ? `<span class="badge green">${o.SoChiPhiChung} dòng</span>` : '<span class="badge">Chưa khai</span>'}</td>
+        ${/* v8.95: riêng thắng chung — chưa khai riêng thì nói "mặc định", không nói "Chưa khai". */''}
+        <td>${Number(o.SoChiPhiChung) > 0 ? `<span class="badge green">riêng: ${o.SoChiPhiChung} dòng</span>`
+            : (soMacDinh > 0 ? `<span class="badge" style="background:#e3f2fd;color:#0d47a1;">mặc định (${soMacDinh} dòng)</span>` : '<span class="badge">Chưa khai</span>')}</td>
+        <td style="text-align:right;">${o.GiaThanhChot != null
+            ? `<b>${fmtNumber(o.GiaThanhChot)}</b><div style="font-size:11px;color:#5f6368;">${o.GiaThanhChotNgay ? fmtDate(o.GiaThanhChotNgay) : ''}</div>`
+            : '<span class="empty-hint" style="padding:0;">—</span>'}</td>
         <td><button class="btn small secondary act-gt" data-madh="${escapeHtml(o.MaDH)}">💰 Tính giá thành</button></td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
     body.querySelectorAll('.act-gt').forEach(b => b.addEventListener('click', () => openGiaThanhModal(b.dataset.madh, perm)));
     body.querySelectorAll('.act-gt-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(a.dataset.madh); }));
+    const bCD = body.querySelector('#btnCaiDatCPC');
+    if (bCD) bCD.addEventListener('click', () => openCaiDatChiPhiChungModal(perm));
   }
 
   let __cpcIdx = 0;
+  /* Một dòng nhập chi phí chung — dùng chung cho form RIÊNG từng lệnh và form MẶC ĐỊNH (v8.95). */
+  function dongChiPhiChungHtml(p) {
+    const i = ++__cpcIdx;
+    p = p || {};
+    return `<tr data-cpcrow data-idx="${i}">
+      <td><input class="cpc-ten" value="${escapeHtml(p.TenChiPhi || '')}" placeholder="VD: Điện nước, vận chuyển, khấu hao..."></td>
+      <td class="col-so"><input class="cpc-tien" type="number" min="0" step="0.01" value="${p.SoTien != null ? p.SoTien : ''}"></td>
+      <td><input class="cpc-ghichu" value="${escapeHtml(p.GhiChu || '')}"></td>
+      <td class="col-nut"><button type="button" class="btn small danger cpc-xoa" title="Xóa dòng">X</button></td></tr>`;
+  }
+  function docChiPhiChungTuForm(root) {
+    return Array.from(root.querySelectorAll('[data-cpcrow]')).map(r => ({
+      tenChiPhi: r.querySelector('.cpc-ten').value || '',
+      soTien: r.querySelector('.cpc-tien').value || 0,
+      ghiChu: r.querySelector('.cpc-ghichu').value || null
+    })).filter(x => String(x.tenChiPhi).trim() || Number(x.soTien) > 0);
+  }
+
+  /* ============================================================================================
+     v8.95 — CÀI ĐẶT CHI PHÍ CHUNG MẶC ĐỊNH (ChiPhiChungMacDinh, migration_v882).
+     Nguyen 2026-10-22: "bên tính giá thành sẽ có cài đặt phần chi phí chung chung tất cả lệnh SX".
+     Số tiền là đ / 1 SẢN PHẨM — cùng nghĩa với chi phí chung riêng từng lệnh (v7.89).
+     Luật kết hợp (Nguyen chốt): lệnh CÓ khai riêng → dùng riêng, bỏ chung. Không cộng hai nguồn.
+     ============================================================================================ */
+  async function openCaiDatChiPhiChungModal(perm) {
+    let ds = [], chuaMigration = false;
+    try {
+      const r = await apiGet('/api/qlsx/caidat-giathanh/chiphichung');
+      ds = r.data || []; chuaMigration = !!r.chuaMigration;
+    } catch (err) { toast('Không tải được chi phí chung mặc định: ' + err.message, 'error'); return; }
+    const suaDuoc = !perm || perm.canEdit;
+    const modal = openModal(`
+      <h3>Chi phí chung mặc định — áp cho MỌI lệnh sản xuất</h3>
+      <p class="empty-hint" style="text-align:left;">Số tiền tính cho <b>1 sản phẩm</b>. Lệnh nào <b>chưa khai</b> chi phí chung riêng sẽ cộng bộ này vào giá thành.
+        Lệnh <b>đã khai riêng</b> thì dùng phần riêng, <b>không</b> cộng bộ này. Sửa ở đây là mọi lệnh đang dùng bộ mặc định đổi theo ngay
+        (giá vốn đã chốt trong Báo cáo kinh doanh thì <b>không</b> tự đổi — bấm "Chốt giá thành" ở từng lệnh nếu muốn cập nhật).</p>
+      ${chuaMigration ? '<div class="empty-hint" style="color:#c62828;text-align:left;">⚠️ Chưa chạy <b>migration_v882.sql</b> — chưa lưu được.</div>' : ''}
+      <div class="lap-wrap"><table class="lap-table">
+        <colgroup><col style="width:38%"><col style="width:20%"><col><col style="width:42px"></colgroup>
+        <thead><tr><th>Tên chi phí</th><th>Số tiền / 1 SP</th><th>Ghi chú</th><th></th></tr></thead>
+        <tbody id="cpcMdRows">${ds.length ? ds.map(dongChiPhiChungHtml).join('') : dongChiPhiChungHtml(null)}</tbody></table></div>
+      <div class="toolbar" style="margin-top:6px;">
+        <button type="button" class="btn small secondary" id="cpcMdThem">+ Thêm dòng</button>
+        <span class="empty-hint" style="padding:0;">Tổng / 1 SP: <b id="cpcMdTong">0</b></span>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="cpcMdDong">Đóng</button>
+        ${suaDuoc && !chuaMigration ? '<button type="button" class="btn" id="cpcMdLuu">💾 Lưu</button>' : ''}
+      </div>`);
+    const tinhTong = () => {
+      let t = 0;
+      modal.querySelectorAll('#cpcMdRows [data-cpcrow]').forEach(r => { t += Number(r.querySelector('.cpc-tien').value) || 0; });
+      modal.querySelector('#cpcMdTong').textContent = fmtNumber(t);
+    };
+    const wire = (r) => {
+      if (!r) return;
+      r.querySelector('.cpc-tien').addEventListener('input', tinhTong);
+      r.querySelector('.cpc-xoa').addEventListener('click', () => {
+        if (modal.querySelectorAll('#cpcMdRows [data-cpcrow]').length > 1) r.remove();
+        else r.querySelectorAll('input').forEach(i => { i.value = ''; });
+        tinhTong();
+      });
+    };
+    modal.querySelectorAll('#cpcMdRows [data-cpcrow]').forEach(wire);
+    tinhTong();
+    modal.querySelector('#cpcMdDong').addEventListener('click', closeModal);
+    modal.querySelector('#cpcMdThem').addEventListener('click', () => {
+      modal.querySelector('#cpcMdRows').insertAdjacentHTML('beforeend', dongChiPhiChungHtml(null));
+      wire(modal.querySelector('#cpcMdRows [data-cpcrow]:last-child'));
+    });
+    const bLuu = modal.querySelector('#cpcMdLuu');
+    if (bLuu) bLuu.addEventListener('click', async () => {
+      const items = docChiPhiChungTuForm(modal.querySelector('#cpcMdRows'));
+      try {
+        await apiPut('/api/qlsx/caidat-giathanh/chiphichung', { items });
+        toast(`Đã lưu ${items.length} dòng chi phí chung mặc định.`, 'success');
+        closeModal();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
   async function openGiaThanhModal(maDH, perm) {
     let d;
     try { d = (await apiGet('/api/qlsx/giathanh/' + encodeURIComponent(maDH))).data; }
     catch (err) { toast('Không tính được giá thành: ' + err.message, 'error'); return; }
     const suaDuoc = !perm || perm.canEdit;
-    const dongCPC = (p) => {
-      const i = ++__cpcIdx;
-      p = p || {};
-      return `<tr data-cpcrow data-idx="${i}">
-        <td><input class="cpc-ten" value="${escapeHtml(p.TenChiPhi || '')}" placeholder="VD: Điện nước, vận chuyển, khấu hao..."></td>
-        <td class="col-so"><input class="cpc-tien" type="number" min="0" step="0.01" value="${p.SoTien != null ? p.SoTien : ''}"></td>
-        <td><input class="cpc-ghichu" value="${escapeHtml(p.GhiChu || '')}"></td>
-        <td class="col-nut"><button type="button" class="btn small danger cpc-xoa" title="Xóa dòng">X</button></td></tr>`;
-    };
+    const dongCPC = dongChiPhiChungHtml;
+    /* v8.95: `d.chiPhiChung` có thể là BỘ MẶC ĐỊNH (nguonChiPhiChung = 'chung'). KHÔNG đổ bộ đó vào ô
+       nhập riêng — người dùng bấm Lưu không sửa gì là bộ mặc định bị chép thành "riêng" của lệnh, từ
+       đó lệnh này không còn đổi theo cài đặt chung nữa mà không ai biết. Ô riêng để TRỐNG, kèm nút
+       "Chép từ mặc định" cho ai cố ý muốn tách ra sửa. */
+    const dangDungChung = d.nguonChiPhiChung === 'chung';
+    const cpcRieng = dangDungChung ? [] : (d.chiPhiChung || []);
     const modal = openModal(`
       <h3>Giá thành sản phẩm — ${escapeHtml(maDH)}</h3>
       <div id="gtXem">${buildGiaThanhBody(d)}</div>
-      ${suaDuoc ? `<h4 style="margin:14px 0 4px;">Chi phí chung (nhập tự do)</h4>
+      ${suaDuoc ? `<h4 style="margin:14px 0 4px;">Chi phí chung RIÊNG của lệnh này (đ / 1 SP)</h4>
+      ${dangDungChung ? `<div class="empty-hint" style="text-align:left;color:#0d47a1;">Lệnh này đang dùng <b>bộ chi phí chung mặc định</b> (${(d.chiPhiChung || []).length} dòng, ${fmtNumber(d.tong && d.tong.chiPhiChung)} đ/SP).
+        Khai ở đây là <b>thay thế hẳn</b> bộ mặc định cho riêng lệnh này. <button type="button" class="btn small secondary" id="cpcChepMacDinh">Chép bộ mặc định xuống để sửa</button></div>` : ''}
       <div class="lap-wrap"><table class="lap-table">
         <colgroup><col style="width:38%"><col style="width:20%"><col><col style="width:42px"></colgroup>
-        <thead><tr><th>Tên chi phí</th><th>Số tiền</th><th>Ghi chú</th><th></th></tr></thead>
-        <tbody id="cpcRows">${(d.chiPhiChung || []).length ? d.chiPhiChung.map(dongCPC).join('') : dongCPC(null)}</tbody></table></div>
+        <thead><tr><th>Tên chi phí</th><th>Số tiền / 1 SP</th><th>Ghi chú</th><th></th></tr></thead>
+        <tbody id="cpcRows">${cpcRieng.length ? cpcRieng.map(dongCPC).join('') : dongCPC(null)}</tbody></table></div>
       <div class="toolbar" style="margin-top:6px;">
         <button type="button" class="btn small secondary" id="cpcThem">+ Thêm dòng chi phí</button>
         <button type="button" class="btn small" id="cpcLuu">💾 Lưu chi phí chung &amp; tính lại</button>
-        <span class="empty-hint" style="padding:0;">Tổng chi phí chung: <b id="cpcTong">0</b></span>
+        <span class="empty-hint" style="padding:0;">Tổng riêng / 1 SP: <b id="cpcTong">0</b></span>
       </div>` : ''}
       <div class="modal-actions">
+        ${suaDuoc ? '<button type="button" class="btn secondary" id="gtChot" title="Ghi mốc giá thành lên lệnh và nạp vào Giá vốn hàng hóa (luật: chỉ ghi đè giá vốn cùng lệnh SX)">📌 Chốt giá thành &amp; nạp giá vốn</button>' : ''}
         <button type="button" class="btn secondary" id="gtIn">🖨️ In bảng giá thành</button>
         <button type="button" class="btn" id="gtDong">Đóng</button>
       </div>`);
+    const bChep = modal.querySelector('#cpcChepMacDinh');
+    if (bChep) bChep.addEventListener('click', () => {
+      const tb = modal.querySelector('#cpcRows');
+      tb.innerHTML = (d.chiPhiChung || []).map(dongCPC).join('') || dongCPC(null);
+      modal.querySelectorAll('#cpcRows [data-cpcrow]').forEach(wireCPC);
+      tinhTongCPC();
+      bChep.disabled = true;
+    });
+    const bChot = modal.querySelector('#gtChot');
+    if (bChot) bChot.addEventListener('click', async () => {
+      if (!confirm('Chốt giá thành của lệnh ' + maDH + ' theo số đang hiện và nạp vào Giá vốn hàng hóa?\n\n'
+        + 'Giá vốn chỉ bị ghi đè cho mã hàng thuộc CHÍNH lệnh này (hoặc chưa có giá vốn). Mã đang khai tay / thuộc lệnh khác giữ nguyên.')) return;
+      try {
+        const kq = (await apiPost(`/api/qlsx/giathanh/${encodeURIComponent(maDH)}/chot`, {})).data || {};
+        if (kq.daChot) toast(`Đã chốt ${fmtNumber(kq.giaThanh1SP)} đ/cái (SL ${fmtNumber(kq.slDungTinh)}).` + (kq.loiNhanGiaVon || ''), 'success');
+        else toast('Chưa chốt được: ' + (kq.lyDo || 'không rõ') + (kq.loiNhanGiaVon || ''), 'error');
+        closeModal(); openGiaThanhModal(maDH, perm);
+      } catch (err) { toast(err.message, 'error'); }
+    });
     const tinhTongCPC = () => {
       let t = 0;
       modal.querySelectorAll('[data-cpcrow]').forEach(r => { t += Number(r.querySelector('.cpc-tien').value) || 0; });
@@ -2376,6 +2492,23 @@ window.ModuleQLSX = (function () {
       } catch (err) { toast(err.message, 'error'); }
     });
   }
+  /* v8.95: khối MỐC — "giá vốn đã nạp lần gần nhất là X; tính lại bây giờ là Y".
+     Mốc được ghi ở MỌI lần nạp giá vốn (rời QC, mỗi phiếu nhập kho của lệnh, nút Chốt) nên mốc luôn
+     bằng giá vốn đang nằm trong Báo cáo kinh doanh. Hai số khác nhau = có chi phí thêm/sửa sau lần nạp
+     (bao bì ở Đóng gói, chi phí chung đổi…) — bấm "Chốt" để cập nhật, hoặc chờ phiếu nhập kho kế. */
+  function khoiChotHtml(d) {
+    if (d.giaThanhChot == null) {
+      return d.qcXong
+        ? '<br><span style="color:#b06000;">⚠️ Lệnh đã qua QC nhưng <b>chưa nạp giá vốn</b> (qua QC trước khi có tính năng này) — bấm "Chốt giá thành &amp; nạp giá vốn".</span>'
+        : (d.qcXong === false ? '<br><span style="color:#5f6368;">Giá thành sẽ <b>tự chốt</b> và nạp vào Giá vốn hàng hóa khi lệnh rời công đoạn QC; sau đó mỗi phiếu nhập kho của lệnh sẽ nạp lại theo chi phí mới nhất.</span>' : '');
+    }
+    const lech = d.giaThanh1SP != null && Math.abs(Number(d.giaThanh1SP) - Number(d.giaThanhChot)) >= 0.5;
+    const ngay = d.giaThanhChotNgay ? new Date(d.giaThanhChotNgay).toLocaleString('vi-VN') : '';
+    return `<br>📌 Giá vốn đã nạp lần gần nhất: <b>${fmtNumber(d.giaThanhChot)} đ/cái</b> (SL ${fmtNumber(d.giaThanhChotSL)}${ngay ? ', ' + escapeHtml(ngay) : ''})`
+      + (lech ? ` — <span style="color:#c62828;">tính lại bây giờ ra <b>${fmtNumber(d.giaThanh1SP)}</b>: chi phí đã đổi sau lần nạp. Bấm "Chốt giá thành &amp; nạp giá vốn" để cập nhật.</span>`
+        : ' <span style="color:#137333;">— khớp số đang tính.</span>');
+  }
+
   // Bảng bóc tách giá thành — dùng CHUNG cho màn hình và bản in (choIn = thêm đầu phiếu).
   function buildGiaThanhBody(d, choIn) {
     const o = d.order || {};
@@ -2437,7 +2570,8 @@ window.ModuleQLSX = (function () {
       <div class="empty-hint" style="padding:0 0 6px;">
         ${escapeHtml(o.TenSanPham || '')}${o.MaSanPham ? ' · Mã hàng ' + escapeHtml(o.MaSanPham) : ''}${o.MaRap ? ' · Mã rập ' + escapeHtml(o.MaRap) : ''}<br>
         SL dùng để tính: <b>${fmtNumber(d.slDungTinh)} ${escapeHtml(d.donViSLDungTinh || o.DonViTinhLenh || 'Cái')}</b> (${escapeHtml(d.nguonSL || '')})
-        ${Number(d.slNhapKho) > 0 ? '' : ' — <span style="color:#b06000;">chưa nhập kho nên đang lấy SL cắt</span>'}
+        ${Number(d.slNhapKho) > 0 ? '' : ' — <span style="color:#b06000;">chưa có SL QC / nhập kho nên đang lấy SL cắt</span>'}
+        ${khoiChotHtml(d)}
       </div>`;
 
     return `${dauPhieu}
@@ -2455,7 +2589,11 @@ window.ModuleQLSX = (function () {
                chi phí sản xuất -> GIÁ THÀNH 1 SP -> TỔNG CẢ LỆNH = giá thành × SL
              Không còn chỗ nào hiện chi phí chung hai lần. */''}
         <tr style="font-weight:700;background:#eef3f8;"><td>CHI PHÍ SẢN XUẤT (1+…+6)</td><td style="text-align:right;">${tien(t.sanXuat)}</td></tr>
-        <tr><td style="background:#f5f6f8;"><b>7. Chi phí chung</b> <span style="font-weight:400;font-size:12px;color:#5f6368;">— khai cho <b>1 sản phẩm</b></span></td>
+        ${/* v8.95: nói rõ nguồn — riêng lệnh này hay bộ mặc định (riêng thắng chung, không cộng). */''}
+        <tr><td style="background:#f5f6f8;"><b>7. Chi phí chung</b> <span style="font-weight:400;font-size:12px;color:#5f6368;">— khai cho <b>1 sản phẩm</b>${
+            d.nguonChiPhiChung === 'chung' ? ' · <span style="color:#0d47a1;">đang dùng <b>bộ mặc định</b> (áp cho mọi lệnh)</span>'
+            : d.nguonChiPhiChung === 'rieng' ? ' · khai <b>riêng</b> cho lệnh này (bỏ bộ mặc định)'
+            : ' · <span style="color:#b06000;">chưa khai, bộ mặc định cũng trống</span>'}</span></td>
           <td style="text-align:right;">${tien(t.chiPhiChung)}</td></tr>
         <tr style="font-weight:700;background:#fff8e1;"><td>GIÁ THÀNH 1 SẢN PHẨM${d.slDungTinh > 0
             ? ` <span style="font-weight:400;font-size:12px;">= ${tien(t.sanXuat)} ÷ ${fmtNumber(d.slDungTinh)} + ${tien(t.chiPhiChung)}</span>` : ''}</td>
@@ -5589,27 +5727,82 @@ window.ModuleQLSX = (function () {
         // v5.30: "Nhan gia cong" - hien cac nha DA GIAO (nhaGiaCongChiTietList, gan o cong doan 'GC') kem
         // hang muc + SL giao, nhap SL NHAN tung nha. Luu NGAY qua nut "💾 Lưu số lượng nhận" (PUT .../:id/nhan),
         // KHONG qua "Gửi" chinh (bam Gửi chi de chuyen cong doan).
-        box.innerHTML = `<div class="form-row"><label>Nhận hàng gia công về (nhập SL nhận cho từng nhà đã giao ở công đoạn "Giao gia công")</label>
-          <table><thead><tr><th style="width:38px;">STT</th><th>Hạng mục</th><th>Nhà gia công</th><th>SL giao</th><th>SL nhận</th></tr></thead>
-          <tbody>${nhaGiaCongChiTietList.map((n, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
-            <td>${escapeHtml(n.TenHangMuc || '')}</td><td>${escapeHtml(n.TenNha || '')}</td>
-            <td style="text-align:right;">${n.SoLuong != null ? fmtNumber(n.SoLuong) : ''}</td>
-            <td><input type="number" min="0" class="ngc-nhan" data-id="${n.ID}" value="${n.SoLuongNhan != null ? n.SoLuongNhan : ''}" style="width:90px;"></td></tr>`).join('')
-            || '<tr><td colspan="4" class="empty-hint">Chưa giao gia công cho nhà nào (làm ở công đoạn "Giao gia công").</td></tr>'}</tbody></table>
-          ${nhaGiaCongChiTietList.length ? '<div style="margin-top:8px;"><button type="button" class="btn small" id="btnSaveNhan">💾 Lưu số lượng nhận</button></div>' : ''}
-        </div>`;
-        const btnSaveNhan = box.querySelector('#btnSaveNhan');
-        if (btnSaveNhan) btnSaveNhan.addEventListener('click', async () => {
-          const inputs = Array.from(box.querySelectorAll('.ngc-nhan'));
-          try {
-            for (const i of inputs) {
-              await apiPut(`/api/qlsx/orders/${maDH}/nhagiacongchitiet/${i.dataset.id}/nhan`, { soLuongNhan: i.value || null });
-            }
-            const fresh = await apiGet(`/api/qlsx/orders/${maDH}/nhagiacongchitiet`);
-            nhaGiaCongChiTietList = fresh.data || [];
-            toast('Đã lưu số lượng nhận.', 'success');
-          } catch (err) { toast(err.message, 'error'); }
-        });
+        /* v9.00 (Nguyen 2026-10-24: "ghi tiến độ: ở user admin có thể sửa, xóa ở các công đoạn" → chốt
+           qua hỏi lại: thiếu ở NHẬN GIA CÔNG, áp theo quyền Sửa/Xóa chức năng Ghi tiến độ).
+           Trước: ở đây chỉ gõ được SL nhận; muốn đổi nhà / SL giao / ghi chú hay bỏ một dòng giao nhầm
+           phải quay về công đoạn Giao gia công. Nay mỗi dòng có Sửa (nhà, SL giao, ghi chú — dùng lại
+           PUT /nhagiacongchitiet/:id của GC, KHÔNG đụng SL nhận) và Xóa (DELETE dòng — mất cả SL nhận
+           đã ghi, hộp xác nhận nói rõ vì công nợ nhà gia công đọc SL nhận × đơn giá).
+           Gate giao diện theo coQuyenSuaTienDo()/coQuyenXoaTienDo() (ChucNang 'tiendo', admin luôn có);
+           backend hai route đó vẫn gate QLSX edit như từ v5.16 — chung với nút Sửa/Xóa ở công đoạn GC. */
+        const ngcNhanCoDai = !!coTachDai;
+        function renderNgcNhanBox() {
+          const coSua = coQuyenSuaTienDo(), coXoa = coQuyenXoaTienDo();
+          const soCot = 5 + (ngcNhanCoDai ? 1 : 0) + ((coSua || coXoa) ? 1 : 0);
+          box.innerHTML = `<div class="form-row"><label>Nhận hàng gia công về (nhập SL nhận cho từng nhà đã giao ở công đoạn "Giao gia công")</label>
+            <table><thead><tr><th style="width:38px;">STT</th><th>Hạng mục</th><th>Nhà gia công</th>${ngcNhanCoDai ? '<th>Dải size</th>' : ''}<th>SL giao</th><th>SL nhận</th>${(coSua || coXoa) ? '<th style="width:120px;"></th>' : ''}</tr></thead>
+            <tbody>${nhaGiaCongChiTietList.map((n, __i) => `<tr data-id="${n.ID}"><td style="text-align:center;">${__i + 1}</td>
+              <td>${escapeHtml(n.TenHangMuc || '')}</td><td>${escapeHtml(n.TenNha || '')}</td>
+              ${ngcNhanCoDai ? `<td>${n.TenDai ? escapeHtml(n.TenDai) : '<span class="badge warn">chưa gắn dải</span>'}</td>` : ''}
+              <td style="text-align:right;">${n.SoLuong != null ? fmtNumber(n.SoLuong) : ''}</td>
+              <td><input type="number" min="0" class="ngc-nhan" data-id="${n.ID}" value="${n.SoLuongNhan != null ? n.SoLuongNhan : ''}" style="width:90px;"></td>
+              ${(coSua || coXoa) ? `<td>${coSua ? `<button type="button" class="btn small secondary ngcn-edit" data-id="${n.ID}" title="Đổi nhà gia công / SL giao / ghi chú của dòng này">Sửa</button> ` : ''}${coXoa ? `<button type="button" class="btn small danger ngcn-del" data-id="${n.ID}" title="Bỏ dòng giao này">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
+              || `<tr><td colspan="${soCot}" class="empty-hint">Chưa giao gia công cho nhà nào (làm ở công đoạn "Giao gia công").</td></tr>`}</tbody></table>
+            ${nhaGiaCongChiTietList.length ? '<div style="margin-top:8px;"><button type="button" class="btn small" id="btnSaveNhan">💾 Lưu số lượng nhận</button></div>' : ''}
+          </div>`;
+          const btnSaveNhan = box.querySelector('#btnSaveNhan');
+          if (btnSaveNhan) btnSaveNhan.addEventListener('click', async () => {
+            const inputs = Array.from(box.querySelectorAll('.ngc-nhan'));
+            try {
+              for (const i of inputs) {
+                await apiPut(`/api/qlsx/orders/${maDH}/nhagiacongchitiet/${i.dataset.id}/nhan`, { soLuongNhan: i.value || null });
+              }
+              const fresh = await apiGet(`/api/qlsx/orders/${maDH}/nhagiacongchitiet`);
+              nhaGiaCongChiTietList = fresh.data || [];
+              toast('Đã lưu số lượng nhận.', 'success');
+            } catch (err) { toast(err.message, 'error'); }
+          });
+          // v9.00: Xóa một dòng giao (kèm SL nhận đã ghi của dòng đó).
+          box.querySelectorAll('.ngcn-del').forEach(btn => btn.addEventListener('click', async () => {
+            const row = nhaGiaCongChiTietList.find(n => String(n.ID) === String(btn.dataset.id));
+            if (!row) return;
+            const slNhan = row.SoLuongNhan != null ? fmtNumber(row.SoLuongNhan) : '—';
+            if (!confirm(`Xóa dòng giao "${row.TenHangMuc || ''}" — ${row.TenNha || ''} (SL giao ${row.SoLuong != null ? fmtNumber(row.SoLuong) : '—'}, SL nhận ${slNhan})?\n\n`
+              + 'Mất cả số lượng nhận đã ghi của dòng này. Công nợ / lương gia công của nhà đó sẽ giảm đúng phần này. Không hoàn tác được.')) return;
+            try {
+              await apiDelete(`/api/qlsx/orders/${maDH}/nhagiacongchitiet/${row.ID}`);
+              nhaGiaCongChiTietList = nhaGiaCongChiTietList.filter(n => String(n.ID) !== String(row.ID));
+              toast('Đã xóa dòng giao.', 'success'); renderNgcNhanBox();
+            } catch (err) { toast(err.message, 'error'); }
+          }));
+          // v9.00: Sửa tại chỗ nhà gia công / SL giao / ghi chú (cùng khuôn với ngc-edit ở công đoạn GC).
+          box.querySelectorAll('.ngcn-edit').forEach(btn => btn.addEventListener('click', () => {
+            const row = nhaGiaCongChiTietList.find(n => String(n.ID) === String(btn.dataset.id));
+            if (!row) return;
+            const tr = btn.closest('tr');
+            tr.innerHTML = `<td></td><td>${escapeHtml(row.TenHangMuc || '')}</td>
+              <td>${searchableSelectHtml('ngcnEdit_' + row.ID, dm.nhaGiaCong, 'NhaGiaCongID', n => n.TenNha, row.NhaGiaCongID)}</td>
+              ${ngcNhanCoDai ? `<td>${row.TenDai ? escapeHtml(row.TenDai) : ''}</td>` : ''}
+              <td><input class="ngcn-edit-soluong" type="number" min="0" value="${row.SoLuong != null ? row.SoLuong : ''}" style="width:80px;"></td>
+              <td style="color:#5f6368;font-size:12px;">${row.SoLuongNhan != null ? fmtNumber(row.SoLuongNhan) : ''}<br><input class="ngcn-edit-ghichu" placeholder="Ghi chú" value="${escapeHtml(row.GhiChu || '')}" style="width:120px;"></td>
+              <td><button type="button" class="btn small ngcn-save">Lưu</button> <button type="button" class="btn small secondary ngcn-cancel">Hủy</button></td>`;
+            wireSearchableSelect('ngcnEdit_' + row.ID, dm.nhaGiaCong, 'NhaGiaCongID', n => n.TenNha);
+            tr.querySelector('.ngcn-cancel').addEventListener('click', renderNgcNhanBox);
+            tr.querySelector('.ngcn-save').addEventListener('click', async () => {
+              const nhaGiaCongId = getSearchableValue('ngcnEdit_' + row.ID);
+              const soLuong = tr.querySelector('.ngcn-edit-soluong').value || null;
+              const ghiChu = tr.querySelector('.ngcn-edit-ghichu').value || null;
+              if (!nhaGiaCongId) { toast('Vui lòng chọn nhà gia công.', 'error'); return; }
+              try {
+                await apiPut(`/api/qlsx/orders/${maDH}/nhagiacongchitiet/${row.ID}`, { nhaGiaCongId, hangMucGiaCongId: row.HangMucGiaCongID, soLuong, ghiChu });
+                const fresh = await apiGet(`/api/qlsx/orders/${maDH}/nhagiacongchitiet`);
+                nhaGiaCongChiTietList = fresh.data || [];
+                toast('Đã cập nhật dòng giao.', 'success'); renderNgcNhanBox();
+              } catch (err) { toast(err.message, 'error'); }
+            });
+          }));
+        }
+        renderNgcNhanBox();
       } else if (stageCode === 'DG') {
         /* v8.31: Đóng gói - nhập SL theo RI thay vì CÁI trực tiếp, tự quy đổi ra cái để lưu (giống
            mọi công đoạn khác, TienDoChiTietMau.SoLuongLuyKe vẫn luôn lưu CÁI). Hệ số quy đổi 1 Ri =
@@ -5842,15 +6035,32 @@ window.ModuleQLSX = (function () {
            bản JS đang nằm trong cache trình duyệt mất hẳn thông báo này. */
         const kn = kq && kq.data && kq.data.khoNhap;
         const tenCD = (kn && kn.tenCongDoan) || 'Kho nhập';
+        let msg, loai = 'success';
         if (kn && kn.giuLai) {
-          toast(`Đã ghi một đợt ${tenCD}. Lũy kế ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} — CÒN `
-            + `${fmtNumber(Math.max(0, (kn.soCat || 0) - (kn.daNhap || 0)))}, lệnh VẪN Ở công đoạn ${tenCD} để ghi tiếp.`, 'success');
+          msg = `Đã ghi một đợt ${tenCD}. Lũy kế ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} — CÒN `
+            + `${fmtNumber(Math.max(0, (kn.soCat || 0) - (kn.daNhap || 0)))}, lệnh VẪN Ở công đoạn ${tenCD} để ghi tiếp.`;
         } else if (kn && kn.ketThuc && kn.chuaDu) {
-          toast(`Đã đóng công đoạn ${tenCD} với ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} (chưa đủ sổ cắt) — `
-            + 'lệnh chuyển sang công đoạn tiếp theo.', 'success');
+          msg = `Đã đóng công đoạn ${tenCD} với ${fmtNumber(kn.daNhap)}/${fmtNumber(kn.soCat)} (chưa đủ sổ cắt) — `
+            + 'lệnh chuyển sang công đoạn tiếp theo.';
         } else {
-          toast('Đã ghi nhận tiến độ.', 'success');
+          msg = 'Đã ghi nhận tiến độ.';
         }
+        /* v8.95: lệnh vừa RỜI QC → backend đã tự chốt giá thành + nạp giá vốn, báo ngay con số.
+           Không chốt được (thiếu chi phí, mẫu số không phải QC...) cũng phải nói — im lặng là người
+           dùng tưởng giá vốn đã có. GỘP vào cùng một toast (toast là một phần tử, gọi hai lần là cái
+           sau đè cái trước) và cho hiện lâu hơn vì đây là tiền. */
+        const gtq = kq && kq.data && kq.data.giaThanhQC;
+        let ms = 3200;
+        if (gtq) {
+          ms = 9000;
+          if (gtq.daChot) {
+            msg += ` 💰 Giá thành lệnh ${maDH}: ${fmtNumber(gtq.giaThanh1SP)} đ/cái (SL QC ${fmtNumber(gtq.slDungTinh)}).` + (gtq.loiNhanGiaVon || '');
+          } else {
+            loai = 'error';
+            msg += ` ⚠️ Giá thành lệnh ${maDH} CHƯA chốt: ${gtq.lyDo || 'không rõ'}.` + (gtq.loiNhanGiaVon || '') + ' Xem lại ở tab Giá thành sản phẩm.';
+          }
+        }
+        toast(msg, loai, ms);
         render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
     });
@@ -6180,5 +6390,8 @@ window.ModuleQLSX = (function () {
       }).join('') || '<tr><td colspan="5">Chưa có lịch sử cập nhật</td></tr>'}</tbody></table>`);
   }
 
-  return { render, getTabs, printLenhSanXuat };   // v5.53: export printLenhSanXuat để module khác (tài liệu, BTP) mở phiếu In lệnh SX
+  // v5.53: export printLenhSanXuat để module khác (tài liệu, BTP) mở phiếu In lệnh SX.
+  // v8.97: export openOrderDetail — Thẻ kho hàng hóa bấm mã lệnh ở cột Nguồn hàng mở modal chi tiết
+  //        lệnh ngay trong app (modal có sẵn nút In), không nhảy thẳng sang cửa sổ in.
+  return { render, getTabs, printLenhSanXuat, openOrderDetail };
 })();

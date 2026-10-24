@@ -29,9 +29,11 @@ const SQL_KHOA_TEN = c => `REPLACE(LOWER(LTRIM(RTRIM(ISNULL(${c}, N'')))), N' ',
  * config:
  *   table:      ten bang trong SQL Server
  *   idCol:      ten cot khoa chinh
- *   columns:    [{ name, sqlType, required, trim, duyNhat }]
+ *   columns:    [{ name, sqlType, required, trim, duyNhat, tuyChon, khongGuiThiGiu }]
  *                 trim    = chuan hoa khoang trang truoc khi ghi
  *                 duyNhat = chan trung theo ten DA CHUAN HOA (tu bat trim)
+ *                 tuyChon = chi ghi khi CSDL da co cot (v7.81)
+ *                 khongGuiThiGiu = PUT khong co khoa nay trong body thi giu nguyen gia tri cu (v8.94)
  *   moduleCode: ma module de kiem tra quyen (vd 'DANHMUC')
  *   orderBy:    cot de sap xep khi liet ke (mac dinh idCol)
  */
@@ -46,19 +48,16 @@ function buildCrudRouter(config) {
      mọi thứ khác không liên quan. Các route khác trong hệ thống đều dò cột bằng COL_LENGTH trước khi
      dùng; crudFactory trước đây chưa có nên khai cột mới ở đây là một cái bẫy.
      `GET` không cần lo: nó dùng `SELECT *`.
-     Nhớ kết quả dò theo (bảng, cột) — cấu trúc CSDL không đổi giữa chừng lúc chạy.
+     v8.94: BỎ CACHE. Trước đây nhớ kết quả theo (bảng, cột) "vì cấu trúc CSDL không đổi giữa chừng" —
+     nhưng nó ĐỔI đúng lúc chạy migration. pm2 restart xong rồi mới chạy migration (thứ tự ngược) là
+     lần Lưu đầu tiên cache `false`, từ đó ảnh màu upload xong báo "Đã lưu" mà không ghi, cho tới lần
+     restart kế. Một COL_LENGTH mỗi lần Lưu danh mục là không đáng kể (bài học v8.91).
      ================================================================================================ */
-  const __demCot = new Map();
   async function coCot(pool, ten) {
-    const khoa = table + '.' + ten;
-    if (__demCot.has(khoa)) return __demCot.get(khoa);
-    let co = false;
     try {
       const r = (await pool.request().query(`SELECT COL_LENGTH('${table}', '${ten}') AS c`)).recordset[0];
-      co = !!(r && r.c != null);
-    } catch (e) { co = false; }
-    __demCot.set(khoa, co);
-    return co;
+      return !!(r && r.c != null);
+    } catch (e) { return false; }
   }
   /* Danh sách cột dùng được cho lần ghi này (bỏ các cột `tuyChon` mà CSDL chưa có). */
   async function cotDungDuoc(pool) {
@@ -141,6 +140,12 @@ function buildCrudRouter(config) {
       const request = pool.request().input('__id', sql.Int, req.params.id);
       const sets = [];
       (await cotDungDuoc(pool)).forEach(c => {   // v7.81: bỏ cột tuỳ chọn mà CSDL chưa có
+        /* v8.94: cột `khongGuiThiGiu` — body KHÔNG có khóa đó thì giữ nguyên giá trị đang có, không
+           ghi đè NULL. Dùng cho cột ảnh (MauSac.AnhMau): một form cũ còn trong cache trình duyệt,
+           hay một nơi gọi PUT khác không biết tới cột này, mà cứ `val === undefined ? null` là ảnh
+           đã tải lên bị xóa im lặng mỗi lần ai đó sửa tên màu. Cùng bài học với PUT /xuat (v8.91).
+           Gửi `AnhMau: null` tường minh thì vẫn xóa được — ý định rõ ràng, không phải vô tình. */
+        if (c.khongGuiThiGiu && !Object.prototype.hasOwnProperty.call(req.body, c.name)) return;
         const val = layGiaTri(c, req.body);   // v7.36: chuan hoa khoang trang truoc khi ghi
         request.input(c.name, c.sqlType, val === undefined ? null : val);
         sets.push(`${c.name} = @${c.name}`);

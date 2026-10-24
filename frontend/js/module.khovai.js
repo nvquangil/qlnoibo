@@ -162,13 +162,15 @@ window.ModuleKhoVai = (function () {
         <div class="stat-box purple"><div class="num">${stats.tongCayConTon}</div><div class="label">Số cây còn tồn</div></div>
       </div>
       <div class="toolbar"><a class="btn small secondary" href="/api/khovai/dashboard/export">⬇️ Xuất Excel</a></div>
-      <table><thead><tr><th>STT</th><th>Mã vải</th><th>Mã PM</th><th>Mã loại</th><th>Loại vải</th><th>Màu</th><th>Tồn (KG)</th><th>Tồn tối thiểu</th><th>Cây còn tồn</th><th>Trạng thái</th><th>Vị trí kho</th></tr></thead>
+      ${/* v8.94: + cột Ảnh (MauSac.AnhMau, gắn theo VaiID ở backend). Không có ảnh -> ô trống. */''}
+      <table><thead><tr><th>STT</th><th>Mã vải</th><th>Mã PM</th><th>Mã loại</th><th>Loại vải</th><th>Màu</th><th>Ảnh</th><th>Tồn (KG)</th><th>Tồn tối thiểu</th><th>Cây còn tồn</th><th>Trạng thái</th><th>Vị trí kho</th></tr></thead>
       <tbody>${tonKho.map((r, idx) => `<tr>
         <td>${idx + 1}</td>
         <td class="act-drill-vai" data-mavai="${escapeHtml(r.MaVai)}" style="cursor:pointer;text-decoration:underline;" title="Xem các cây vải thuộc mã này">${escapeHtml(r.MaVai)}</td>
         <td>${escapeHtml(r.MaPM)}</td><td>${escapeHtml(r.MaLoai)}</td>
         <td class="act-drill-vai" data-mavai="${escapeHtml(r.MaVai)}" style="cursor:pointer;" title="Xem các cây vải thuộc mã này">${escapeHtml(r.TenLoaiVai)}</td>
         <td class="act-drill-vai" data-mavai="${escapeHtml(r.MaVai)}" style="cursor:pointer;" title="Xem các cây vải thuộc mã này">${escapeHtml(r.TenMau)}</td>
+        <td>${anhMauThuNhoHtml(r.AnhMau, 40)}</td>
         <td>${fmtNumber(Number(r.TonKG).toFixed(2))} ${r.TonToiThieuKG != null && Number(r.TonKG) < Number(r.TonToiThieuKG) ? '<span class="badge danger">Thấp</span>' : ''}</td>
         <td>${fmtNumber(r.TonToiThieuKG)}</td><td>${r.CayConTon}</td>
         <td>${['Nguyên cây', 'Cây lẻ', 'Hết'].map(st => {
@@ -177,7 +179,7 @@ window.ModuleKhoVai = (function () {
           return `<span class="act-drill-status-agg" data-mavai="${escapeHtml(r.MaVai)}" data-status="${st}" style="cursor:pointer;text-decoration:underline;margin-right:8px;${st === 'Hết' ? 'color:#c0392b;' : ''}" title="Xem các cây ${st}">${st}: ${n}</span>`;
         }).join('') || '<span class="empty-hint">-</span>'}</td>
         <td>${escapeHtml(r.ViTriKho)}</td>
-      </tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có dữ liệu tồn kho</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || '<tr><td colspan="12" class="empty-hint">Chưa có dữ liệu tồn kho</td></tr>'}</tbody></table>`;
 
     body.querySelectorAll('.act-drill-vai').forEach(td => td.addEventListener('click', async () => {
       const maVai = td.dataset.mavai;
@@ -202,14 +204,14 @@ window.ModuleKhoVai = (function () {
     rollsAllCache = rows; // cache lai cho tab "In tem" dung ham tim theo ma cay (GIU DU ca cay het)
     // v5.36: "tồn cây" chỉ hiện cây CÒN TỒN, tự ẩn cây Hết. (rollsAllCache van du cho In tem.)
     const shownRows = rows.filter(conHangVai);
-    const colCount = perm.canEdit ? 18 : 17;   // v5.53: +Khổ vải/Số mét đã xuất/Số mét còn
+    const colCount = perm.canEdit ? 19 : 18;   // v5.53: +Khổ vải/Số mét đã xuất/Số mét còn · v8.94: +Ảnh
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input type="text" id="fSearch" placeholder="Tìm theo mã cây / mã vải...">
         <button type="button" class="btn small secondary" id="btnQrRolls">📷 Quét QR tìm cây</button>
         <a class="btn small secondary" href="/api/khovai/rolls/export">⬇️ Xuất Excel</a>
       </div>
-      <table id="rollsTable"><thead><tr><th>STT</th><th>Mã cây</th><th>Mã vải</th><th>Mã PM</th><th>Mã loại</th><th>Loại vải</th><th>Màu</th><th>KG nhập</th><th>KG đã xuất</th><th>KG còn</th><th>Khổ vải</th><th>Số mét</th><th>Số mét đã xuất</th><th>Số mét còn</th><th>Trạng thái</th><th>Ngày nhập</th><th>QR</th>${perm.canEdit ? '<th>Thao tác</th>' : ''}</tr></thead>
+      <table id="rollsTable"><thead><tr><th>STT</th><th>Mã cây</th><th>Mã vải</th><th>Mã PM</th><th>Mã loại</th><th>Loại vải</th><th>Màu</th><th>Ảnh</th><th>KG nhập</th><th>KG đã xuất</th><th>KG còn</th><th>Khổ vải</th><th>Số mét</th><th>Số mét đã xuất</th><th>Số mét còn</th><th>Trạng thái</th><th>Ngày nhập</th><th>QR</th>${perm.canEdit ? '<th>Thao tác</th>' : ''}</tr></thead>
       <tbody>${shownRows.map((r, i) => rowHtml(r, i)).join('') || `<tr><td colspan="${colCount}" class="empty-hint">Chưa có cây vải nào còn tồn</td></tr>`}</tbody></table>`;
     // v5.4 (muc 2): them STT (danh lai theo thu tu dang hien thi, ke ca sau khi loc) + bam Trang thai
     // (xem cac cay CUNG trang thai) hoac Ma vai/Loai vai/Mau (xem cac cay CUNG ma vai) de mo popup -
@@ -220,6 +222,10 @@ window.ModuleKhoVai = (function () {
         <td>${escapeHtml(r.MaPM)}</td><td>${escapeHtml(r.MaLoai)}</td>
         <td class="act-drill-vai" data-mavai="${escapeHtml(r.MaVai)}" style="cursor:pointer;" title="Xem các cây vải cùng mã">${escapeHtml(r.TenLoaiVai)}</td>
         <td class="act-drill-vai" data-mavai="${escapeHtml(r.MaVai)}" style="cursor:pointer;" title="Xem các cây vải cùng mã">${escapeHtml(r.TenMau)}</td>
+        ${/* v8.96: ảnh CÂY (lùi về ảnh màu) + nút 📷 bổ sung ảnh cho cây có sẵn (quyền edit).
+             Chọn file là upload ngay rồi PUT /cay/:id/anh — một thao tác, không cần nút Lưu. */''}
+        <td style="white-space:nowrap;">${anhMauThuNhoHtml(r.AnhMau, 40)}${perm.canEdit
+          ? ` <label class="btn small secondary" style="padding:2px 6px;cursor:pointer;" title="Chụp / tải ảnh cho cây ${escapeHtml(r.MaCay)}">📷<input type="file" accept="image/*" class="act-anh-cay" data-cayid="${r.CayID}" style="display:none;"></label>` : ''}</td>
         <td>${fmtNumber(r.KGNhap)}</td><td>${fmtNumber(r.KGDaXuat)}</td><td>${fmtNumber(r.KGCon)}</td><td>${r.KhoVai != null ? fmtNumber(r.KhoVai) : ''}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${r.MetDaXuat != null ? fmtNumber(r.MetDaXuat) : ''}</td><td>${r.MetCon != null ? fmtNumber(r.MetCon) : ''}</td>
         <td class="act-drill-status" data-status="${escapeHtml(r.TrangThai)}" style="cursor:pointer;" title="Xem các cây vải cùng trạng thái">${statusBadge(r.TrangThai)}</td><td>${fmtDate(r.NgayNhap)}</td>
         <td>${r.QRCode ? `<a href="${r.QRCode}" target="_blank">Xem QR</a>` : ''}</td>
@@ -238,13 +244,31 @@ window.ModuleKhoVai = (function () {
         showCayListPopup(shownRows.filter(r => r.TrangThai === td.dataset.status), 'Trạng thái: ' + td.dataset.status);
       }));
       wireMaCayLink(body);   // v6.13: bấm Mã cây -> lịch sử nhập/xuất của cây
+      /* v8.96: bổ sung ảnh cho cây có sẵn — upload rồi PUT ngay; xong thì cập nhật `rows` tại chỗ
+         (cả rowsAllCache nếu có) và vẽ lại ô, không tải lại cả trang. */
+      body.querySelectorAll('.act-anh-cay').forEach(inp => inp.addEventListener('change', async () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return;
+        const cayId = inp.dataset.cayid;
+        try {
+          const url = await uploadFile(f, 'cay');
+          await apiPut('/api/khovai/cay/' + cayId + '/anh', { anhCay: url });
+          const r = rows.find(x => String(x.CayID) === String(cayId));
+          if (r) r.AnhMau = url;
+          const td = inp.closest('td');
+          if (td) { const a = td.querySelector('a'); if (a) a.remove(); td.insertAdjacentHTML('afterbegin', anhMauThuNhoHtml(url, 40)); }
+          toast('Đã lưu ảnh cây.', 'success');
+        } catch (err) { toast('Không lưu được ảnh: ' + err.message, 'error'); }
+        inp.value = '';
+      }));
     }
     wireRowActions();
     // Go bat ky ky tu nao de loc - quet TOAN BO cac cot dang co trong du lieu (khong chi Ma cay/Ma vai
     // nhu truoc), vd go ten mau, ten loai vai, vi tri kho, trang thai... deu loc duoc.
     document.getElementById('fSearch').addEventListener('input', (e) => {
       const q = e.target.value.trim().toLowerCase();
-      const filtered = shownRows.filter(r => Object.values(r).join(' ').toLowerCase().includes(q));
+      // v8.94: bỏ AnhMau (đường dẫn /uploads/mau_….jpg) khỏi chuỗi tìm — không thì gõ "mau"/"jpg" khớp mọi cây có ảnh.
+      const filtered = shownRows.filter(r => Object.keys(r).filter(k => k !== 'AnhMau' && k !== 'QRCode').map(k => r[k]).join(' ').toLowerCase().includes(q));
       document.querySelector('#rollsTable tbody').innerHTML = filtered.map((r, i) => rowHtml(r, i)).join('') || `<tr><td colspan="${colCount}" class="empty-hint">Không tìm thấy</td></tr>`;
       wireRowActions();
     });
@@ -277,7 +301,10 @@ window.ModuleKhoVai = (function () {
     const body = document.getElementById('kvBody');
     const rows = await apiGet('/api/khovai/nhap').then(r => r.data);
     body.innerHTML = `
-      <div class="toolbar">${perm.canCreate ? '<button class="btn" id="btnAddNhap">+ Tạo phiếu nhập kho</button>' : ''}</div>
+      ${/* v9.01 (Nguyen 2026-10-24): ô tìm ký tự bất kỳ dùng chung wireTableSearch — lọc trong bảng đã
+           tải, tách từ khớp hết. Cột Thao tác gắn data-notim để chữ trên nút không lọt vào chuỗi tìm.
+           Dòng TỔNG ở tfoot: không bị ẩn, vẫn là tổng của cả danh sách. */''}
+      <div class="toolbar">${searchBoxHtml('kvNhapTim', '🔍 Gõ để tìm trong bảng (số phiếu, NCC, số HĐ, người tạo, ghi chú...)')}<span id="kvNhapTimInfo" class="empty-hint" style="padding:0;"></span>${perm.canCreate ? '<button class="btn" id="btnAddNhap" style="margin-left:auto;">+ Tạo phiếu nhập kho</button>' : ''}</div>
       ${/* v7.61: + cột TỔNG TIỀN. Số này = ĐÚNG số mà công nợ nhà cung cấp ghi nợ cho phiếu đó
            (cùng biểu thức, backend/utils/tienVaiNhap.js) — mở sổ công nợ đối chiếu phải khớp. */''}
       <table><thead><tr><th>Số phiếu</th><th>Ngày nhập</th><th>Nhà cung cấp</th><th>Số hóa đơn</th><th>Số cây</th><th>Tổng KG</th><th>Tổng mét</th><th>Tổng tiền</th><th>Người tạo</th><th>Ghi chú</th><th style="width:190px">Thao tác</th></tr></thead>
@@ -292,7 +319,7 @@ window.ModuleKhoVai = (function () {
           ${Number(r.SoCayThieuSoLuong)
             ? `<div style="font-size:11px;color:#c62828;" title="Cây đã khai đơn giá nhưng số lượng dùng để tính tiền = 0, trong khi đơn vị kia lại có số — nhiều khả năng phiếu chọn nhầm 'Đơn giá tính theo'. Công nợ NCC cũng đang ghi theo con số này.">⚠️ ${fmtNumber(r.SoCayThieuSoLuong)} cây có giá nhưng ${laTinhTheoMet(r.DonViTinhGia) ? 'số mét' : 'KG'} = 0</div>` : ''}</td>
         <td>${escapeHtml(r.NguoiTao)}</td><td>${escapeHtml(r.GhiChu)}</td>
-        <td>
+        <td data-notim>
           <button type="button" class="btn small secondary act-view" data-id="${r.PhieuNhapID}">Xem/In</button>
           ${perm.canEdit ? `<button type="button" class="btn small secondary act-edit" data-id="${r.PhieuNhapID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.PhieuNhapID}">Xóa</button>` : ''}
@@ -307,6 +334,7 @@ window.ModuleKhoVai = (function () {
       </table>`;
 
     if (perm.canCreate) document.getElementById('btnAddNhap').addEventListener('click', () => openNhapCreateModal());
+    wireTableSearch(body, 'kvNhapTim', { infoId: 'kvNhapTimInfo' });   // v9.01
     body.querySelectorAll('.act-view').forEach(btn => btn.addEventListener('click', () => openNhapDetailModal(btn.dataset.id)));
     ganBamDongXemChiTiet(body);   // v6.66.1: bấm cả dòng cũng mở chi tiết
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {
@@ -353,15 +381,18 @@ window.ModuleKhoVai = (function () {
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
       ${/* v7.61: + cột Thành tiền + dòng TỔNG TIỀN. Thành tiền do BACKEND tính (cùng biểu thức với
            công nợ NCC) nên phiếu, bản in và sổ công nợ không thể ra ba con số khác nhau. */''}
-      <table><thead><tr><th style="width:38px;">STT</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG nhập</th><th>Số mét</th><th>Khổ TT</th><th>GSM</th><th>Đơn giá</th><th>Thành tiền</th><th>Trạng thái</th></tr></thead>
+      ${/* v8.96: + cột Ảnh (ảnh cây, lùi về ảnh màu) sau Màu ⇒ 12 cột. Dòng tổng: 5 + 2 + 5 = 12;
+            tổng tiền: 10 + 1 + 1 = 12. */''}
+      <table><thead><tr><th style="width:38px;">STT</th><th>Mã cây</th><th>Loại vải</th><th>Màu</th><th style="width:44px;">Ảnh</th><th>KG nhập</th><th>Số mét</th><th>Khổ TT</th><th>GSM</th><th>Đơn giá</th><th>Thành tiền</th><th>Trạng thái</th></tr></thead>
       ${/* v6.13: Mã cây bấm được -> xem lịch sử nhập/xuất của chính cây đó (modal xếp chồng). */''}
       <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
+        <td style="text-align:center;">${anhMauThuNhoHtml(r.AnhMau, 36)}</td>
         <td>${fmtNumber(r.KGNhap)}</td><td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td><td>${fmtNumber(r.KhoVaiThucTe)}</td><td>${fmtNumber(r.GSM)}</td><td style="text-align:right;">${fmtNumber(r.DonGiaNhap)}<span style="font-size:11px;color:#5f6368;">/${escapeHtml(nhanDonViGia(header.DonViTinhGia))}</span></td>
         <td style="text-align:right;">${fmtTien(tienCuaCay(r, header.DonViTinhGia))}${laTienNghiNgoVai(r, header.DonViTinhGia)
           ? `<div style="font-size:11px;color:#c62828;" title="Phiếu này tính tiền theo ${laTinhTheoMet(header.DonViTinhGia) ? 'MÉT' : 'KG'} — cây này bỏ trống ô đó nên ra 0.">⚠️ ${laTinhTheoMet(header.DonViTinhGia) ? 'số mét' : 'KG'} = 0</div>` : ''}</td>
         <td>${statusBadge(r.TrangThai)}</td></tr>`).join('')}
-        ${dongTongKgMet(lines, 'KGNhap', 'SoMet', 4, 5)}
-        ${khoiTongTienHtml(lines, 9, 1, header.DonViTinhGia)}</tbody></table>
+        ${dongTongKgMet(lines, 'KGNhap', 'SoMet', 5, 5)}
+        ${khoiTongTienHtml(lines, 10, 1, header.DonViTinhGia)}</tbody></table>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnCloseNhapView">Đóng</button>
         ${/* v6.13: sửa được NGAY trong cửa sổ xem — mở từ lịch sử cây vải không phải quay ra tab Nhập kho. */''}
@@ -389,6 +420,55 @@ window.ModuleKhoVai = (function () {
     modal.querySelector('#btnPrintTemNhapMang').addEventListener('click', () => printTemMang(lines));
   }
 
+  /* ============================================================================================
+     v8.96 — Ô ẢNH TỪNG CÂY trên form nhập (tạo + sửa) và nút ảnh ở Tồn theo cây.
+     Nguyen 2026-10-22: "phiếu nhập kho vải thêm cột tải ảnh lên thay vì ảnh ở danh mục màu sắc".
+     Một ô = xem trước + <input type=file accept=image/*> (KHÔNG đặt capture="environment": iOS/Android
+     gặp capture là mở thẳng camera, mất lựa chọn Thư viện — kho chụp sẵn rồi nhập sau sẽ không chọn
+     được; bỏ capture thì điện thoại hiện cả Camera lẫn Thư viện)
+     + ô ẩn `.r-anh` giữ URL /uploads/… Chọn file chỉ xem trước; upload thật lúc bấm Lưu
+     (uploadAnhCayRows) — upload hỏng thì form KHÔNG lưu, không để phiếu lưu rồi mà ảnh mất.
+     Nháp (localStorage) chỉ giữ được URL đã upload, không giữ được file đang chọn.
+     ============================================================================================ */
+  function oAnhCayHtml(url) {
+    const u = String(url == null ? '' : url).trim();
+    return `<td class="col-anh" style="text-align:center;white-space:nowrap;">
+      <span class="r-anh-xem">${anhMauThuNhoHtml(u, 32)}</span>
+      <input type="hidden" class="r-anh" value="${escapeHtml(u)}">
+      <label class="btn small secondary" style="padding:2px 6px;cursor:pointer;" title="Chụp / chọn ảnh cây này">📷<input type="file" accept="image/*" class="r-anh-file" style="display:none;"></label>
+      <button type="button" class="btn small secondary r-anh-bo" style="padding:2px 6px;${u ? '' : 'display:none;'}" title="Bỏ ảnh">✕</button>
+    </td>`;
+  }
+  function wireAnhCayRows(root) {
+    root.querySelectorAll('[data-row]').forEach(tr => {
+      if (tr.dataset.anhWired) return;
+      tr.dataset.anhWired = '1';
+      const oFile = tr.querySelector('.r-anh-file'), oXem = tr.querySelector('.r-anh-xem');
+      const oAn = tr.querySelector('.r-anh'), oBo = tr.querySelector('.r-anh-bo');
+      if (!oFile || !oAn) return;
+      oFile.addEventListener('change', () => {
+        const f = oFile.files && oFile.files[0];
+        if (!f) return;
+        if (oXem) oXem.innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" style="width:32px;height:32px;object-fit:cover;border-radius:4px;border:1px solid #dce3ea;vertical-align:middle;">`;
+        if (oBo) oBo.style.display = '';
+      });
+      if (oBo) oBo.addEventListener('click', () => {
+        oAn.value = ''; oFile.value = '';
+        if (oXem) oXem.innerHTML = '';
+        oBo.style.display = 'none';
+      });
+    });
+  }
+  async function uploadAnhCayRows(root) {
+    for (const tr of root.querySelectorAll('[data-row]')) {
+      const oFile = tr.querySelector('.r-anh-file'), oAn = tr.querySelector('.r-anh');
+      const f = oFile && oFile.files && oFile.files[0];
+      if (!f || !oAn) continue;
+      oAn.value = await uploadFile(f, 'cay');
+      oFile.value = '';   // đã upload — không upload lại nếu người dùng bấm Lưu lần nữa sau lỗi khác
+    }
+  }
+
   // v5.3 (muc 3): sua DAY DU phieu nhap - dong da phat sinh giao dich khac (CoPhatSinh) chi cho sua
   // KG nhap (khong duoc thap hon DaXuat)/kho TT/GSM/vi tri/don gia, khoa doi Loai vai/Mau; dong CHUA
   // phat sinh gi thi sua het; co the them dong moi hoac xoa dong (dong xoa cung phai chua phat sinh gi).
@@ -397,12 +477,13 @@ window.ModuleKhoVai = (function () {
     const { lines } = detail.data;
     let rowCount = 0;
     // v5.80: bảng thật, cùng bố cục với form Tạo phiếu nhập + thêm cột Mã cây (chỉ xem).
+    // v8.96: + cột Ảnh (10 cột).
     const COLS_SUA = `<colgroup>
-      <col style="width:17%"><col style="width:23%"><col style="width:23%"><col style="width:8%"><col style="width:7%">
-      <col style="width:9%"><col style="width:8%"><col style="width:9%"><col style="width:42px">
+      <col style="width:15%"><col style="width:21%"><col style="width:21%"><col style="width:96px"><col style="width:7%"><col style="width:6%">
+      <col style="width:8%"><col style="width:7%"><col style="width:8%"><col style="width:42px">
     </colgroup>`;
     const HEAD_SUA = `<thead><tr>
-      <th>Mã cây</th><th>Loại vải *</th><th>Màu *</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
+      <th>Mã cây</th><th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
     </tr></thead>`;
     function rowTemplate(line) {
       rowCount++;
@@ -419,6 +500,7 @@ window.ModuleKhoVai = (function () {
              để tự chọn lại. */''}
         <td><select class="r-loai" ${locked ? 'disabled' : ''} required><option value="">-- chọn loại vải --</option>${opt(dm.loaiVai, 'LoaiVaiID', 'TenLoaiVai', line ? line.LoaiVaiID : '')}</select></td>
         <td><select class="r-mau" ${locked ? 'disabled' : ''} required><option value="">-- chọn màu --</option>${opt(dm.mauSac, 'MauSacID', 'TenMau', line ? line.MauSacID : '')}</select></td>
+        ${oAnhCayHtml(line ? line.AnhCay : '')}
         <td class="col-so"><input class="r-kho" type="number" step="0.01" value="${line && line.KhoVaiThucTe != null ? line.KhoVaiThucTe : ''}"></td>
         <td class="col-so"><input class="r-gsm" type="number" step="0.01" value="${line && line.GSM != null ? line.GSM : ''}"></td>
         ${/* v5.89: KG KHÔNG bắt buộc nữa — nhập theo KG hoặc theo MÉT hoặc cả hai (kiểm tra khi Lưu). */''}
@@ -454,6 +536,7 @@ window.ModuleKhoVai = (function () {
         if (modal.querySelectorAll('#rollRows > [data-row]').length > 1) btn.closest('[data-row]').remove();
         else toast('Phiếu phải còn ít nhất 1 dòng.', 'error');
       });
+      wireAnhCayRows(modal.querySelector('#rollRows'));   // v8.96
     }
     wireRemove();
     modal.querySelector('#btnCancel').addEventListener('click', closeModal);
@@ -465,11 +548,15 @@ window.ModuleKhoVai = (function () {
     modal.querySelector('#nEditForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      /* v8.96: upload ảnh TRƯỚC khi gom dòng — hỏng thì dừng, phiếu chưa bị đụng. */
+      try { await uploadAnhCayRows(modal.querySelector('#rollRows')); }
+      catch (err) { toast('Tải ảnh lên thất bại: ' + err.message, 'error'); return; }
       const editLines = Array.from(modal.querySelectorAll('#rollRows > [data-row]')).map(r => ({
         cayId: r.dataset.cayid || null, maCay: r.dataset.macay || null,
         loaiVaiId: r.querySelector('.r-loai').value, mauSacId: r.querySelector('.r-mau').value,
         khoVaiThucTe: r.querySelector('.r-kho').value || null, gsm: r.querySelector('.r-gsm').value || null,
-        kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value || null, donGiaNhap: r.querySelector('.r-gia').value || null
+        kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value || null, donGiaNhap: r.querySelector('.r-gia').value || null,
+        anhCay: (r.querySelector('.r-anh') || {}).value || ''   // v8.96: '' = cố ý xóa ảnh (backend: không gửi khóa thì mới giữ)
       }));
       if (canhBaoThieuSoLuong(editLines, 'kgNhap', 'soMet', 'KG nhập')) return;   // v5.89
       try {
@@ -493,12 +580,13 @@ window.ModuleKhoVai = (function () {
     let rowCount = 0;
     /* v5.80: BẢNG THẬT — 1 hàng tiêu đề + các dòng chỉ có ô nhập. Bề rộng cột do <colgroup> quyết
        định: Loại vải + Màu rộng nhất (tên dài), các cột SỐ hẹp. */
+    // v8.96: + cột Ảnh (9 cột).
     const COLS_NHAP = `<colgroup>
-      <col style="width:27%"><col style="width:27%"><col style="width:9%"><col style="width:8%">
-      <col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:42px">
+      <col style="width:24%"><col style="width:24%"><col style="width:96px"><col style="width:8%"><col style="width:7%">
+      <col style="width:9%"><col style="width:8%"><col style="width:9%"><col style="width:42px">
     </colgroup>`;
     const HEAD_NHAP = `<thead><tr>
-      <th>Loại vải *</th><th>Màu *</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
+      <th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
     </tr></thead>`;
     function rowTemplate() {
       rowCount++;
@@ -507,6 +595,7 @@ window.ModuleKhoVai = (function () {
       return `<tr data-row data-idx="${idx}">
         <td><select class="r-loai" required>${opt(dm.loaiVai, 'LoaiVaiID', 'TenLoaiVai')}</select></td>
         <td><select class="r-mau" required>${opt(dm.mauSac, 'MauSacID', 'TenMau')}</select></td>
+        ${oAnhCayHtml('')}
         <td class="col-so"><input class="r-kho" type="number" step="0.01"></td>
         <td class="col-so"><input class="r-gsm" type="number" step="0.01"></td>
         ${/* v5.89: KG KHÔNG bắt buộc — có thể nhập theo KG, theo MÉT, hoặc cả hai (kiểm tra khi Lưu). */''}
@@ -541,6 +630,7 @@ window.ModuleKhoVai = (function () {
       modal.querySelectorAll('.r-remove').forEach(btn => btn.onclick = () => {
         if (modal.querySelectorAll('#rollRows > [data-row]').length > 1) btn.closest('[data-row]').remove();
       });
+      wireAnhCayRows(modal.querySelector('#rollRows'));   // v8.96
     }
     wireRemove();
 
@@ -558,7 +648,8 @@ window.ModuleKhoVai = (function () {
       const rolls = Array.from(modal.querySelectorAll('#rollRows > [data-row]')).map(r => ({
         loaiVaiId: r.querySelector('.r-loai').value, mauSacId: r.querySelector('.r-mau').value,
         khoVaiThucTe: r.querySelector('.r-kho').value, gsm: r.querySelector('.r-gsm').value,
-        kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value, donGiaNhap: r.querySelector('.r-gia').value
+        kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value, donGiaNhap: r.querySelector('.r-gia').value,
+        anhCay: (r.querySelector('.r-anh') || {}).value || ''   // v8.96: chỉ URL đã upload; file đang chọn không lưu nháp được
       }));
       return { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId'), soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon'), ghiChu: fd.get('ghiChu'),
         donViTinhGia: fd.get('donViTinhGia') || 'Kg', rolls };
@@ -585,6 +676,11 @@ window.ModuleKhoVai = (function () {
         r.querySelector('.r-kg').value = d.kgNhap || '';
         r.querySelector('.r-met').value = d.soMet || '';
         r.querySelector('.r-gia').value = d.donGiaNhap || '';
+        if (d.anhCay) {   // v8.96
+          r.querySelector('.r-anh').value = d.anhCay;
+          r.querySelector('.r-anh-xem').innerHTML = anhMauThuNhoHtml(d.anhCay, 32);
+          r.querySelector('.r-anh-bo').style.display = '';
+        }
       });
       wireRemove();
       toast('Đã khôi phục dữ liệu nhập kho đang dở từ lần trước (chưa lưu).', 'success');
@@ -604,13 +700,17 @@ window.ModuleKhoVai = (function () {
       // v5.82 FIX: từ v5.80 mỗi cây vải là 1 <tr data-row>, KHÔNG còn <div>. Chỗ này còn sót
       // '#rollRows > div' nên gom được 0 dòng -> gửi rolls=[] -> backend trả
       // "Thiếu ngày nhập hoặc danh sách cây vải." dù form đã điền đủ.
+      /* v8.96: upload ảnh TRƯỚC — hỏng thì dừng, chưa tạo phiếu. */
+      try { await uploadAnhCayRows(modal.querySelector('#rollRows')); }
+      catch (err) { toast('Tải ảnh lên thất bại: ' + err.message, 'error'); return; }
       const rolls = Array.from(modal.querySelectorAll('#rollRows > [data-row]')).map(r => ({
         // v5.78: không gửi maCay nữa -> backend tự sinh mã như trước v5.70.
         loaiVaiId: r.querySelector('.r-loai').value, mauSacId: r.querySelector('.r-mau').value,
         khoVaiThucTe: r.querySelector('.r-kho').value || null,
         gsm: r.querySelector('.r-gsm').value || null, kgNhap: r.querySelector('.r-kg').value,
         soMet: r.querySelector('.r-met').value || null,
-        donGiaNhap: r.querySelector('.r-gia').value || null
+        donGiaNhap: r.querySelector('.r-gia').value || null,
+        anhCay: (r.querySelector('.r-anh') || {}).value || null   // v8.96
       }));
       if (canhBaoThieuSoLuong(rolls, 'kgNhap', 'soMet', 'KG nhập')) return;   // v5.89
       try {
@@ -632,20 +732,22 @@ window.ModuleKhoVai = (function () {
     const body = document.getElementById('kvBody');
     const rows = await apiGet('/api/khovai/xuat').then(r => r.data);
     body.innerHTML = `
-      <div class="toolbar">${perm.canEdit ? '<button class="btn" id="btnAddXuat">+ Tạo phiếu xuất kho</button>' : ''}</div>
+      ${/* v9.01: ô tìm ký tự bất kỳ (xem ghi chú ở renderNhap). */''}
+      <div class="toolbar">${searchBoxHtml('kvXuatTim', '🔍 Gõ để tìm trong bảng (số phiếu, mã đơn/lệnh, người nhận, người tạo...)')}<span id="kvXuatTimInfo" class="empty-hint" style="padding:0;"></span>${perm.canEdit ? '<button class="btn" id="btnAddXuat" style="margin-left:auto;">+ Tạo phiếu xuất kho</button>' : ''}</div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày xuất</th><th>Mã đơn</th><th>Người nhận</th><th>Số cây</th><th>Tổng KG</th><th>Tổng mét</th><th>Người tạo</th><th style="width:190px">Thao tác</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         ${/* v6.57: XK- -> XKV- (Xuất Kho Vải). */''}
         <td>XKV-${String(r.PhieuXuatID).padStart(5, '0')}</td>
         <td>${fmtDate(r.NgayXuat)}</td><td>${escapeHtml(r.MaDH || r.MaDon)}</td><td>${escapeHtml(r.NguoiNhan)}</td>
         <td>${r.SoLuongCay}</td><td>${fmtNumber(r.TongKGXuat)}</td><td>${fmtNumber(r.TongMet)}</td><td>${escapeHtml(r.NguoiTao)}</td>
-        <td>
+        <td data-notim>
           <button type="button" class="btn small secondary act-view" data-id="${r.PhieuXuatID}">Xem/In</button>
           ${perm.canEdit ? `<button type="button" class="btn small secondary act-edit" data-id="${r.PhieuXuatID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.PhieuXuatID}">Xóa</button>` : ''}
         </td></tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Chưa có phiếu xuất kho nào</td></tr>'}</tbody></table>`;
 
     if (perm.canEdit) document.getElementById('btnAddXuat').addEventListener('click', () => openXuatCreateModal());
+    wireTableSearch(body, 'kvXuatTim', { infoId: 'kvXuatTimInfo' });   // v9.01
     body.querySelectorAll('.act-view').forEach(btn => btn.addEventListener('click', () => openXuatDetailModal(btn.dataset.id)));
     ganBamDongXemChiTiet(body);   // v6.66.1: bấm cả dòng cũng mở chi tiết
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {
@@ -760,14 +862,14 @@ window.ModuleKhoVai = (function () {
            bỏ cột Kiểu, chỉ cần cột Mã cây và Số kg"*. Bản in xuất cho sản xuất GIỮ NGUYÊN cả hai.
            ⚠️ Đổi số cột thì phải đổi cả `dauTT`/`soCotSau` — hai số đó định vị dòng TỔNG CỘNG; lệch
            là dòng tổng rơi nhầm cột, số vẫn ra nên không ai thấy ngay (bài học v8.12). */
-        /* Đếm lại cho rõ, đừng sửa bằng cảm tính:
-           TRẢ NCC   : STT · Mã vải · Loại vải · Mầu · Mã cây · Khổ vải || SL xuất || Đơn giá · Số HĐ · Ngày HĐ · Ghi chú
-                       => trước = 6, ô tổng = 1 (không có Số mét), sau = 4  ⇒ tổng 11 cột
-           XUẤT SX   : STT · Mã vải · Loại vải · Mầu · Kiểu · Mã cây · Khổ vải · Kg chỉ định || SL xuất · Số mét || Ghi chú
-                       => trước = 8, ô tổng = 2, sau = 1                     ⇒ tổng 11 cột */
-        const soCotTruoc = laTra ? 6 : 8;
+        /* Đếm lại cho rõ, đừng sửa bằng cảm tính (v8.94: + cột Ảnh ngay sau Mầu, cả hai dạng):
+           TRẢ NCC   : STT · Mã vải · Loại vải · Mầu · Ảnh · Mã cây · Khổ vải || SL xuất || Đơn giá · Số HĐ · Ngày HĐ · Ghi chú
+                       => trước = 7, ô tổng = 1 (không có Số mét), sau = 4  ⇒ tổng 12 cột
+           XUẤT SX   : STT · Mã vải · Loại vải · Mầu · Ảnh · Kiểu · Mã cây · Khổ vải · Kg chỉ định || SL xuất · Số mét || Ghi chú
+                       => trước = 9, ô tổng = 2, sau = 1                     ⇒ tổng 12 cột */
+        const soCotTruoc = laTra ? 7 : 9;
         const soCotSau = laTra ? 4 : 1;
-        const tieuDe = ['STT', 'Mã vải', 'Loại vải', 'Mầu']
+        const tieuDe = ['STT', 'Mã vải', 'Loại vải', 'Mầu', 'Ảnh']
           .concat(laTra ? [] : ['Kiểu'])
           .concat(['Mã cây', 'Khổ vải'])
           .concat(laTra ? [] : ['Kg chỉ định'])
@@ -781,6 +883,8 @@ window.ModuleKhoVai = (function () {
         const oDong = (r, i) => `<tr>
           <td style="text-align:center;">${i + 1}</td>
           <td>${escapeHtml(r.MaVai)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td>
+          ${/* v8.94: ảnh màu in 32px — đủ nhận màu, không phá bố cục A4 ngang 12 cột. */''}
+          <td style="text-align:center;">${r.AnhMau ? `<img src="${escapeHtml(anhNho(r.AnhMau, 80))}" alt="" style="width:32px;height:32px;object-fit:cover;">` : ''}</td>
           ${laTra ? '' : `<td>${escapeHtml(r.KieuVai || 'Chính')}</td>`}
           <td>${escapeHtml(r.MaCay)}</td>
           <td>${fmtNumber(r.KhoVaiThucTe)}</td>
@@ -814,21 +918,22 @@ window.ModuleKhoVai = (function () {
       ${header.GhiChu ? `<p class="p-meta"><b>Ghi chú:</b> ${escapeHtml(header.GhiChu)}</p>` : ''}
       ${/* v8.91: popup xem phải cùng bộ cột với BẢN IN. Để lệch thì người dùng mở phiếu trả ra xem
             không thấy Đơn giá đâu (phải bấm In mới thấy) — mà đơn giá mới là thứ quyết định số
-            giảm công nợ. Đếm cột: trả NCC 4+1+2 = 7, xuất SX 5+2+0 = 7. */''}
-      <table><thead><tr><th style="width:38px;">STT</th>${laTraNCC(header) ? '' : '<th>Kiểu</th>'}<th>Mã cây</th><th>Loại vải</th><th>Màu</th><th>KG xuất</th>${laTraNCC(header) ? '<th>Đơn giá</th><th>Thành tiền</th>' : '<th>Số mét</th>'}</tr></thead>
+            giảm công nợ. Đếm cột: trả NCC 4+1+2 = 7, xuất SX 5+2+0 = 7.
+            v8.94: + cột Ảnh sau Màu ⇒ trả NCC 5+1+2 = 8, xuất SX 6+2+0 = 8. */''}
+      <table><thead><tr><th style="width:38px;">STT</th>${laTraNCC(header) ? '' : '<th>Kiểu</th>'}<th>Mã cây</th><th>Loại vải</th><th>Màu</th><th style="width:44px;">Ảnh</th><th>KG xuất</th>${laTraNCC(header) ? '<th>Đơn giá</th><th>Thành tiền</th>' : '<th>Số mét</th>'}</tr></thead>
       ${/* v6.13: Mã cây bấm được -> xem lịch sử nhập/xuất của chính cây đó (modal xếp chồng). */''}
-      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>${laTraNCC(header) ? '' : `<td>${escapeHtml(r.KieuVai || 'Chính')}</td>`}<td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td>${fmtNumber(r.KGXuat)}</td>${laTraNCC(header) ? `<td style="text-align:right;">${giaTraCuaDong(r) ? fmtNumber(giaTraCuaDong(r)) : ''}</td><td style="text-align:right;">${tienTraCuaDong(r) ? fmtNumber(Math.round(tienTraCuaDong(r))) : ''}</td>` : `<td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>`}</tr>`).join('')}
+      <tbody>${lines.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>${laTraNCC(header) ? '' : `<td>${escapeHtml(r.KieuVai || 'Chính')}</td>`}<td>${maCayLinkHtml(r)}</td><td>${escapeHtml(r.TenLoaiVai)}</td><td>${escapeHtml(r.TenMau)}</td><td style="text-align:center;">${anhMauThuNhoHtml(r.AnhMau, 36)}</td><td>${fmtNumber(r.KGXuat)}</td>${laTraNCC(header) ? `<td style="text-align:right;">${giaTraCuaDong(r) ? fmtNumber(giaTraCuaDong(r)) : ''}</td><td style="text-align:right;">${tienTraCuaDong(r) ? fmtNumber(Math.round(tienTraCuaDong(r))) : ''}</td>` : `<td>${r.SoMet != null ? fmtNumber(r.SoMet) : ''}</td>`}</tr>`).join('')}
         ${/* v8.91: phiếu trả NCC cộng thêm ô TỔNG TIỀN — đây chính là con số mà sổ công nợ NCC ghi
               giảm nợ, có nó ở đây thì mở phiếu ra là đối chiếu được ngay, không phải tính tay.
-              Đếm cột dòng tổng: 4 (STT→Mầu) + 1 (KG) + 1 (Đơn giá để trống) + 1 (Tổng tiền) = 7,
-              bằng đúng 7 cột tiêu đề. */''}
+              Đếm cột dòng tổng (v8.94): 5 (STT→Ảnh) + 1 (KG) + 1 (Đơn giá để trống) + 1 (Tổng tiền)
+              = 8, bằng đúng 8 cột tiêu đề. */''}
         ${laTraNCC(header)
           ? `<tr data-tong style="font-weight:700;background:#f1f3f4;">
-               <td colspan="4" style="text-align:right;">TỔNG CỘNG</td>
+               <td colspan="5" style="text-align:right;">TỔNG CỘNG</td>
                <td style="text-align:right;">${fmtNumber(Math.round(lines.reduce((t, r) => t + (Number(r.KGXuat) || 0), 0) * 100) / 100)}</td>
                <td></td>
                <td style="text-align:right;">${fmtNumber(Math.round(lines.reduce((t, r) => t + tienTraCuaDong(r), 0)))}</td></tr>`
-          : dongTongKgMet(lines, 'KGXuat', 'SoMet', 5, 0)}</tbody></table>
+          : dongTongKgMet(lines, 'KGXuat', 'SoMet', 6, 0)}</tbody></table>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnCloseXuatView">Đóng</button>
         ${coQuyenSuaKhoVai() ? '<button type="button" class="btn secondary" id="btnSuaXuatView">✏️ Sửa phiếu</button>' : ''}
@@ -1107,7 +1212,9 @@ window.ModuleKhoVai = (function () {
        mất hẳn khỏi dòng) nhưng bảng méo. Đặt bề rộng thẳng lên <th> thì tự đúng ở cả hai chế độ. */
     const COLS_XUAT = '';
     const HEAD_XUAT = `<thead><tr>
-      <th class="c-kieu" style="width:11%">Kiểu</th><th style="width:40%">Mã cây</th>
+      <th class="c-kieu" style="width:11%">Kiểu</th><th style="width:36%">Mã cây</th>
+      ${/* v8.94: ảnh màu của cây vừa chọn (MauSac.AnhMau qua /rolls). Chỉ để nhìn, không gửi gì. */''}
+      <th style="width:48px">Ảnh</th>
       <th style="width:11%">KG xuất</th><th class="c-met" style="width:11%">Số mét</th>
       <th class="c-dg" style="width:12%">Đơn giá</th><th class="c-tt" style="width:12%">Thành tiền</th>
       <th style="width:90px"></th><th style="width:42px"></th>
@@ -1126,6 +1233,7 @@ window.ModuleKhoVai = (function () {
       return `<tr data-row data-idx="${idx}">
         <td class="c-kieu"><select class="x-kieu"><option value="Chính">Chính</option><option value="Phối">Phối</option></select></td>
         <td>${searchableSelectHtml('xcay_' + idx, currentRolls, 'CayID', labelForRoll, preselect)}</td>
+        <td class="x-anh" style="text-align:center;">${anhMauThuNhoHtml((currentRolls.find(r => String(r.CayID) === String(preselect)) || {}).AnhMau, 36)}</td>
         ${/* v5.89: KG KHÔNG bắt buộc — xuất theo KG hoặc theo MÉT hoặc cả hai (kiểm tra khi Lưu). */''}
         <td class="col-so"><input class="x-kg" type="number" step="0.01" min="0"></td>
         <td class="col-so c-met"><input class="x-met" type="number" step="0.01" min="0"></td>
@@ -1213,12 +1321,16 @@ window.ModuleKhoVai = (function () {
        phải lùi về giá nhập, không thì để trống lại hiện 0 đồng và người dùng tưởng mất tiền.
        Làm tròn ở đây là của RIÊNG phần hiển thị (SQL không làm tròn) — lệch tối đa 0,5đ/dòng. */
     function veThanhTienCuaDong(rowEl, idx) {
+      const cay = currentRolls.find(r => String(r.CayID) === String(getSearchableValue('xcay_' + idx)));
+      /* v8.94: ô Ảnh đi cùng mọi lần "cây của dòng đổi" — chọn tay, quét QR, khôi phục nháp đều đã gọi
+         hàm này, nên đặt ở đây là một chỗ, không phải rải ba nơi. */
+      const oAnh = rowEl.querySelector('.x-anh');
+      if (oAnh) oAnh.innerHTML = anhMauThuNhoHtml(cay && cay.AnhMau, 36);
       const oTt = rowEl.querySelector('.x-tt');
       if (!oTt) return;
       const oDg = rowEl.querySelector('.x-dg');
       const oKg = rowEl.querySelector('.x-kg');
       const kg = Number(oKg && oKg.value) || 0;
-      const cay = currentRolls.find(r => String(r.CayID) === String(getSearchableValue('xcay_' + idx)));
       const giaGo = (oDg && oDg.value !== '') ? Number(oDg.value) : 0;
       const gia = giaGo > 0 ? giaGo : (Number(cay && cay.DonGiaNhap) || 0);
       oTt.textContent = (kg > 0 && gia > 0) ? fmtNumber(Math.round(kg * gia)) : '';

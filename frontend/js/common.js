@@ -78,7 +78,20 @@ function anhNho(url, canh) {
   return `/anh/${c}/${ten}`;
 }
 
-function toast(message, type) {
+/* v8.94 — Ô ẢNH THU NHỎ dùng chung (ảnh màu vải ở danh mục, tồn kho vải, phiếu xuất...).
+   Bấm vào mở ảnh gốc ở tab mới. Không có ảnh -> chuỗi rỗng (ô trống, không hiện khung vỡ). */
+function anhMauThuNhoHtml(url, canh) {
+  const s = String(url == null ? '' : url).trim();
+  if (!s) return '';
+  const c = Number(canh) || 48;
+  return `<a href="${escapeHtml(s)}" target="_blank" title="Xem ảnh gốc"><img src="${escapeHtml(anhNho(s, c * 2))}" alt="" `
+    + `style="width:${c}px;height:${c}px;object-fit:cover;border-radius:4px;border:1px solid #dce3ea;vertical-align:middle;"></a>`;
+}
+
+/* v8.95: + tham số `ms` (thời gian hiện). Mặc định 3.200 ms như cũ; thông báo dài về TIỀN (giá thành
+   vừa chốt + kết quả nạp giá vốn) cần lâu hơn. Toast là MỘT phần tử dùng chung — gọi hai lần liên
+   tiếp là cái sau đè cái trước, nên nơi gọi phải GỘP nội dung chứ không gọi hai lần. */
+function toast(message, type, ms) {
   let el = document.getElementById('__toast');
   if (!el) {
     el = document.createElement('div');
@@ -89,7 +102,7 @@ function toast(message, type) {
   el.textContent = message;
   el.className = 'toast show' + (type ? ' ' + type : '');
   clearTimeout(el.__timer);
-  el.__timer = setTimeout(() => { el.className = 'toast'; }, 3200);
+  el.__timer = setTimeout(() => { el.className = 'toast'; }, Number(ms) > 0 ? Number(ms) : 3200);
 }
 
 function fmtDate(d) {
