@@ -5072,3 +5072,7 @@ module.exports = router;
    thuộc tính bình thường), không đổi kiểu export nên server.js giữ nguyên. */
 module.exports.tinhGiaThanh = tinhGiaThanh;
 module.exports.getOrderByMaDH = getOrderByMaDH;
+/* v9.09: nhapkho.js GET /danhmuc can luy ke cong doan Kho nhap (CAI) cua MOI lenh de biet lenh nao
+   da lap phieu du. Dung lai dung ham nay thay vi viet lai CTE knTd/heCat o nhapkho.js — tap ban ghi
+   "hieu luc" cua KN (CongDonKN) va he so tach Ri da sai 3 lan trong qua khu, chep lai la sai lan 4. */
+module.exports.slKhoNhapTheoDon = slKhoNhapTheoDon;

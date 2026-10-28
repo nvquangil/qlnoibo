@@ -253,6 +253,12 @@ window.ModulePayroll = (function () {
       <div style="overflow:auto;max-height:50vh;"><table style="font-size:13px;"><thead><tr><th>Ngày</th><th>Mã NV</th><th>Họ tên / Mã máy</th><th>Giờ vào</th><th>Giờ ra</th><th>Số lần</th></tr></thead>
       <tbody>${ccDetail.map(r => `<tr><td>${fmtDate(r.Ngay)}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen || ('(mã ' + (r.MaChamMay || '') + ' — chưa gán)'))}</td><td style="text-align:center;">${escapeHtml(r.GioVao || '')}</td><td style="text-align:center;">${escapeHtml(r.GioRa || '')}</td><td style="text-align:right;">${num(r.SoLan)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Chưa có dữ liệu kéo về trong tháng này.</td></tr>`}</tbody></table></div>`;
     wirePeriod(container, renderChamCong);
+    /* v9.05: ô tìm ký tự bất kỳ cho Máy chấm công + Chi tiết đã kéo về.
+       Bảng công tháng ĐÃ có ô tìm riêng (#ccTim, v8.00) — đánh dấu bảng đó lại để khỏi sinh ô
+       thứ hai chồng lên. Nhận ra nó bằng chính dấu hiệu ô tìm cũ dùng: dòng có data-tim. */
+    const bangCC = container.querySelector('tbody tr[data-tim]');
+    if (bangCC && bangCC.closest('table')) bangCC.closest('table').dataset.coOTim = '1';
+    themOTimTuDong(container);
     const bAdd = container.querySelector('#btnAddMay'); if (bAdd) bAdd.addEventListener('click', () => openMayForm(null));
     // v5.60: cài đặt giờ vào/ra + tăng ca, xem chi tiết từng lần quẹt, xóa bảng công tháng.
     const bCfg = container.querySelector('#btnCauHinhCC'); if (bCfg) bCfg.addEventListener('click', () => openCauHinhChamCong());
@@ -790,6 +796,7 @@ window.ModulePayroll = (function () {
       </table></div>
       <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lương công nhật lấy Lương CB + phụ cấp từ hợp đồng đang hiệu lực của nhân viên, và tổng công từ Chấm công tháng. Thưởng doanh thu chưa gộp (nhập ở phiên bản sau).</p>`;
     wirePeriod(container, renderLuong);
+    themOTimTuDong(container);   // v9.05: ô tìm Mã NV / Họ tên trên bảng lương công nhật
     const bTinh = container.querySelector('#btnTinh'); if (bTinh) bTinh.addEventListener('click', tinhLuong);
     const bChot = container.querySelector('#btnChot'); if (bChot) bChot.addEventListener('click', () => chotLuong(d.header.BangLuongID));
     const bEx = container.querySelector('#btnExcel'); if (bEx) bEx.addEventListener('click', () => downloadFile(`/api/payroll/bangluong/excel?nam=${selNam}&thang=${selThang}`, `BangLuong_T${selThang}_${selNam}.xlsx`));
@@ -885,6 +892,7 @@ window.ModulePayroll = (function () {
       <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenCongDoan || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">—</td></tr>`}</tbody></table></div>
       <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lấy số lượng từng nhân viên hoàn thành ở Ghi nhận tiến độ công đoạn May × đơn giá khoán công đoạn may của đơn hàng (ưu tiên đơn giá theo đơn, fallback đơn giá hệ thống). Lọc theo tháng ghi nhận tiến độ.</p>`;
     wirePeriod(container, renderLuongMay);
+    themOTimTuDong(container);   // v9.05: ô tìm cho CẢ bảng tổng hợp NV lẫn bảng chi tiết theo đơn
     const b = container.querySelector('#btnExMay'); if (b) b.addEventListener('click', () => downloadFile(`/api/payroll/luongmay/excel?nam=${selNam}&thang=${selThang}`, `LuongKhoanMay_T${selThang}_${selNam}.xlsx`));
     const bIn = container.querySelector('#btnInTongMay'); if (bIn) bIn.addEventListener('click', () => printHtml(`Tổng hợp lương khoán may T${selThang}/${selNam}`, buildLuongMayTongHopBody(d, tongAll)));
     container.querySelectorAll('.lm-nv').forEach(tr => tr.addEventListener('click', () => openLuongMayNVDetail(tr.dataset.nvid, d)));
@@ -981,6 +989,7 @@ window.ModulePayroll = (function () {
       <tbody>${(d.inThe.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${oHangMucInThe(r)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Không có dữ liệu in thêu tháng này.</td></tr>`}</tbody></table></div>
       <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lọc theo tháng tạo dòng giao (CreatedAt). Gia công = SL nhận × đơn giá hạng mục. In thêu: dòng giao ĐÃ chọn hạng mục thì = SL nhận × đơn giá CỦA hạng mục đó; dòng để trống (dữ liệu cũ) thì = SL nhận × TỔNG đơn giá in thêu của đơn (khai ở Tài liệu kỹ thuật → Đơn giá in thêu). Chọn hạng mục ở công đoạn Giao in thêu (GIT); SL nhận nhập ở Nhận gia công (NGC) / Nhận in thêu (NIT).</p>`;
     wirePeriod(container, renderLuongGcInThe);
+    themOTimTuDong(container);   // v9.05: ô tìm cho 4 bảng (tổng hợp + chi tiết, gia công + in thêu)
     const bIn = container.querySelector('#btnInGcIt'); if (bIn) bIn.addEventListener('click', () => printHtml(`Tổng hợp lương gia công / in thêu T${selThang}/${selNam}`, buildGcItTongHopBody(d, gcTong, itTong)));
     container.querySelectorAll('.gcit-nha').forEach(tr => tr.addEventListener('click', () => openGcItNhaDetail(tr.dataset.nhaid, tr.dataset.kind, d)));
   }
@@ -988,9 +997,10 @@ window.ModulePayroll = (function () {
   // v5.38: Lương là (LA) + đóng gói (DG) = SL giao × đơn giá là/đóng gói. Tổng hợp theo NV + chi tiết + In.
   function buildLaDgBody(d, tongAll) {
     return `<h2 style="text-align:center;">LƯƠNG LÀ / ĐÓNG GÓI — Tháng ${selThang}/${selNam}</h2>
-      <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="10" style="text-align:center;">—</td></tr>'}
-      <tr data-tong style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
+      ${/* v9.02: + cột Ngày QC — kỳ lương = tháng muộn hơn giữa Ngày ghi và Ngày QC. 12 cột. */''}
+      <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>Ngày QC</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td>${fmtDate(r.NgayQC)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="12" style="text-align:center;">—</td></tr>'}
+      <tr data-tong style="font-weight:bold;"><td></td><td colspan="10" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tbody></table>`;
   }
   async function renderLuongLaDongGoi() {
     container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
@@ -1001,13 +1011,16 @@ window.ModulePayroll = (function () {
       <h4 style="margin:4px 0;">Tổng hợp theo nhân viên (là + đóng gói) <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm 1 nhân viên để xem / in phiếu lương)</span></h4>
       <table><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Tổng SL</th><th>Thành tiền</th></tr></thead>
       ${/* v5.91: dòng nhân viên BẤM ĐƯỢC để xem/in phiếu lương riêng (trước chỉ in được cả bảng) */''}
-      <tbody>${(d.tongHop || []).map((r, __i) => `<tr class="ldg-nv" data-nvid="${r.NhanVienID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="4" class="empty-hint">Chưa có dữ liệu là/đóng gói tháng này.</td></tr>`}</tbody>
+      <tbody>${(d.tongHop || []).map((r, __i) => `<tr class="ldg-nv" data-nvid="${r.NhanVienID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="5" class="empty-hint">Chưa có dữ liệu là/đóng gói tháng này (lệnh chưa ghi QC thì chưa tính).</td></tr>`}</tbody>
       ${(d.tongHop || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongAll)}</td></tr></tfoot>` : ''}</table>
       <h4 style="margin:16px 0 4px;">Chi tiết theo công đoạn / đơn / màu</h4>
-      <div style="overflow:auto;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="10" class="empty-hint">—</td></tr>`}</tbody></table></div>
-      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lương là/đóng gói = SL giao ở công đoạn Là (LA) / Đóng gói (DG) × đơn giá là/đóng gói của đơn (khai ở "Tài liệu may/Đóng gói"). Lọc theo tháng ghi nhận tiến độ.</p>`;
+      ${/* v9.02: + cột Ngày QC. Lệnh chưa ghi QC không có trong bảng; kỳ = tháng muộn hơn giữa Ngày và Ngày QC. */''}
+      <div style="overflow:auto;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>Ngày QC</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td>${fmtDate(r.NgayQC)}</td><td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="12" class="empty-hint">—</td></tr>`}</tbody></table></div>
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lương là/đóng gói = SL giao ở công đoạn Là (LA) / Đóng gói (DG) × đơn giá là/đóng gói của đơn (khai ở "Tài liệu may/Đóng gói").
+        <b>Chỉ tính lệnh đã ghi tiến độ QC</b>; kỳ lương = tháng <b>muộn hơn</b> giữa ngày ghi đóng gói và ngày QC đầu tiên của lệnh (v9.02) — lệnh chưa QC sẽ tự xuất hiện ở tháng QC.</p>`;
     wirePeriod(container, renderLuongLaDongGoi);
+    themOTimTuDong(container);   // v9.05: ô tìm Mã NV / Họ tên / Công đoạn / Mã ĐH / Tên SP / Màu
     const bIn = container.querySelector('#btnInLaDg'); if (bIn) bIn.addEventListener('click', () => printHtml(`Lương là/đóng gói T${selThang}/${selNam}`, buildLaDgBody(d, tongAll)));
     container.querySelectorAll('.ldg-nv').forEach(tr => tr.addEventListener('click', () => openLaDgNVDetail(tr.dataset.nvid, d)));   // v5.91
   }
@@ -1018,13 +1031,14 @@ window.ModulePayroll = (function () {
     const tong = rows.reduce((s, r) => s + num(r.ThanhTien), 0);
     return `<h2 style="text-align:center;">PHIẾU LƯƠNG LÀ / ĐÓNG GÓI — Tháng ${selThang}/${selNam}</h2>
       <p><b>Nhân viên:</b> ${escapeHtml(nv.HoTen || '')} (${escapeHtml(nv.MaNhanVien || '')})</p>
+      ${/* v9.02: + cột Ngày QC — 10 cột. */''}
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th>
-        <th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th>
+        <th>Công đoạn</th><th>Mã ĐH</th><th>Tên SP</th><th>Màu</th><th>Ngày</th><th>Ngày QC</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th>
       </tr></thead><tbody>${rows.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${r.Loai === 'LA' ? 'Là' : 'Đóng gói'}</td><td>${escapeHtml(r.MaDH || '')}</td>
-        <td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td>
+        <td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenMau || '')}</td><td>${fmtDate(r.NgayGhiNhan)}</td><td>${fmtDate(r.NgayQC)}</td>
         <td style="text-align:right;">${num(r.SoLuong)}</td><td style="text-align:right;">${money(r.DonGia)}</td>
-        <td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="8" style="text-align:center;">—</td></tr>'}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="7" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+        <td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="10" style="text-align:center;">—</td></tr>'}
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="8" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
   }
   function openLaDgNVDetail(nvid, d) {
     const rows = (d.rows || []).filter(r => String(r.NhanVienID) === String(nvid));
@@ -1068,19 +1082,23 @@ window.ModulePayroll = (function () {
       const chiTiet = soDoCuaDon.map((s, i) => `<tr><td style="text-align:center;">${i + 1}</td>
           <td style="text-align:center;">${i + 1}/${soDoCuaDon.length}</td>
           <td>${fmtDate(s.NgayGhiNhan)}</td>
+          <td>${fmtDate(s.NgayQC)}</td>
           <td style="text-align:center;">${escapeHtml(s.SttSoCat != null ? String(s.SttSoCat) : '')}</td>
           <td style="text-align:right;">${num(s.MetSoDoDai)}</td>
           <td style="text-align:right;">${num(s.KhoVaiSoDo)}</td>
           <td style="text-align:right;">${num(s.TongLop)}</td>
           <td style="text-align:right;">${money(s.ThanhTien)}</td></tr>`).join('');
-      return `<tr style="background:#f1f3f4;font-weight:600;"><td></td><td colspan="6">Lệnh SX ${escapeHtml(o.MaDH || '')}${o.TenSanPham ? ' — ' + escapeHtml(o.TenSanPham) : ''} · ${o.SoSoDo} sơ đồ · tổng ${num(o.TongLop)} lớp</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>${chiTiet}`;
+      // v9.02: data-tong — dòng tiêu đề lệnh KHÔNG phải dòng dữ liệu; thiếu nó thì danhLaiStt (common.js)
+      // coi là dòng thường, đánh số vào ô trống đầu và ghi đè STT của các dòng sơ đồ. Lỗi có từ trước.
+      return `<tr data-tong style="background:#f1f3f4;font-weight:600;"><td></td><td colspan="7">Lệnh SX ${escapeHtml(o.MaDH || '')}${o.TenSanPham ? ' — ' + escapeHtml(o.TenSanPham) : ''} · ${o.SoSoDo} sơ đồ · tổng ${num(o.TongLop)} lớp</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>${chiTiet}`;
     }).join('');
+    // v9.02: + cột Ngày QC — 9 cột. Kỳ = tháng muộn hơn giữa Ngày cắt và Ngày QC.
     return `<h2 style="text-align:center;">QUỸ LƯƠNG TRẢI VẢI CẮT — Tháng ${selThang}/${selNam}</h2>
-      <p style="text-align:center;font-size:13px;">Công thức 1 sơ đồ: mét sơ đồ × tổng số lớp × khổ vải × ${money(d.donGia)}</p>
+      <p style="text-align:center;font-size:13px;">Công thức 1 sơ đồ: mét sơ đồ × tổng số lớp × khổ vải × ${money(d.donGia)} · chỉ lệnh đã ghi QC; kỳ = tháng muộn hơn giữa ngày cắt và ngày QC đầu</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="5"><thead><tr><th style="width:38px;">STT</th>
-        <th>Sơ đồ</th><th>Ngày cắt</th><th>STT sổ cắt</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Thành tiền</th>
-      </tr></thead><tbody>${donRows || '<tr><td colspan="7" style="text-align:center;">Chưa có sổ cắt nào trong tháng.</td></tr>'}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="5" style="text-align:right;">TỔNG BÀN CẮT: ${(d.soDo || []).length} sơ đồ / ${(d.theoDon || []).length} lệnh SX</td>
+        <th>Sơ đồ</th><th>Ngày cắt</th><th>Ngày QC</th><th>STT sổ cắt</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Thành tiền</th>
+      </tr></thead><tbody>${donRows || '<tr><td colspan="9" style="text-align:center;">Chưa có sổ cắt nào thuộc kỳ này.</td></tr>'}
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG BÀN CẮT: ${(d.soDo || []).length} sơ đồ / ${(d.theoDon || []).length} lệnh SX</td>
             <td style="text-align:right;">${num((d.soDo || []).reduce((s, x) => s + num(x.TongLop), 0))}</td>
             <td style="text-align:right;">${money(d.quy)}</td></tr>
       </tbody></table>`;
@@ -1119,16 +1137,16 @@ window.ModulePayroll = (function () {
     const body = `<h2 style="text-align:center;">CHI TIẾT BÀN CẮT — ${escapeHtml(o.MaDH || '')}</h2>
       <p><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')} &nbsp; <b>Số sơ đồ:</b> ${o.SoSoDo}</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="5"><thead><tr><th style="width:38px;">STT</th>
-        <th>Sơ đồ</th><th>Ngày cắt</th><th>STT sổ cắt</th><th>Mã rập</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Người trải vải</th><th>Người cắt</th><th>Thành tiền</th>
+        <th>Sơ đồ</th><th>Ngày cắt</th><th>Ngày QC</th><th>STT sổ cắt</th><th>Mã rập</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Người trải vải</th><th>Người cắt</th><th>Thành tiền</th>
       </tr></thead><tbody>${list.map((s, i) => `<tr><td style="text-align:center;">${i + 1}</td>
-        <td style="text-align:center;">${i + 1}/${list.length}</td><td>${fmtDate(s.NgayGhiNhan)}</td>
+        <td style="text-align:center;">${i + 1}/${list.length}</td><td>${fmtDate(s.NgayGhiNhan)}</td><td>${fmtDate(s.NgayQC)}</td>
         <td style="text-align:center;">${escapeHtml(s.SttSoCat != null ? String(s.SttSoCat) : '')}</td>
         <td>${escapeHtml(s.MaRap || '')}</td>
         <td style="text-align:right;">${num(s.MetSoDoDai)}</td><td style="text-align:right;">${num(s.KhoVaiSoDo)}</td>
         <td style="text-align:right;">${num(s.TongLop)}</td>
         <td>${escapeHtml(s.NhanVienTraiVai || '')}</td><td>${escapeHtml(s.NhanVienCat || '')}</td>
         <td style="text-align:right;">${money(s.ThanhTien)}</td></tr>`).join('')}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="9" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="10" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>
       </tbody></table>`;
     const modal = openModal(`<h3>Bàn cắt của lệnh ${escapeHtml(o.MaDH || '')}</h3>
       <div style="max-height:60vh;overflow:auto;">${body}</div>
@@ -1179,19 +1197,23 @@ window.ModulePayroll = (function () {
         <td style="text-align:right;">${num(r.TongGioLam)}</td><td style="text-align:right;">${num(r.HeSoLuong)}</td>
         <td style="text-align:right;">${money(d.donGiaGio)}</td>
         <td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('')
-        || '<tr><td colspan="6" class="empty-hint">Chưa có nhân viên bộ phận Cắt, hoặc chưa có chấm công tháng này.</td></tr>'}</tbody>
+        || '<tr><td colspan="7" class="empty-hint">Chưa có nhân viên bộ phận Cắt, hoặc chưa có chấm công tháng này.</td></tr>'}</tbody>
       ${(d.nhanVien || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${num(d.tongGio)}</td><td></td><td></td><td style="text-align:right;">${money(d.tongLuong)}</td></tr></tfoot>` : ''}</table>
 
       <h4 style="margin:16px 0 4px;">Bàn cắt theo lệnh sản xuất <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm 1 lệnh để xem / in chi tiết từng sơ đồ)</span></h4>
-      <table><thead><tr><th style="width:38px;">STT</th><th>Mã ĐH</th><th>Mã hàng</th><th>Tên sản phẩm</th><th>Số sơ đồ</th><th>Tổng lớp</th><th>Thành tiền</th></tr></thead>
+      ${/* v9.02: + cột Ngày QC — quỹ tháng gồm lệnh có kỳ (= tháng muộn hơn giữa ngày cắt và ngày QC đầu) rơi vào tháng này. */''}
+      <table><thead><tr><th style="width:38px;">STT</th><th>Mã ĐH</th><th>Mã hàng</th><th>Tên sản phẩm</th><th>Ngày QC</th><th>Số sơ đồ</th><th>Tổng lớp</th><th>Thành tiền</th></tr></thead>
       <tbody>${(d.theoDon || []).map((o, __i) => `<tr class="lc-don" data-donid="${o.DonHangID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td>
         <td>${escapeHtml(o.MaDH || '')}</td><td>${escapeHtml(o.MaSanPham || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
+        <td>${fmtDate(o.NgayQC)}</td>
         <td style="text-align:center;">${o.SoSoDo}</td><td style="text-align:right;">${num(o.TongLop)}</td>
         <td style="text-align:right;font-weight:600;">${money(o.ThanhTien)}</td></tr>`).join('')
-        || '<tr><td colspan="6" class="empty-hint">Chưa có sổ cắt nào trong tháng này.</td></tr>'}</tbody>
-      ${(d.theoDon || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG BÀN CẮT</td><td style="text-align:center;">${(d.soDo || []).length}</td><td></td><td style="text-align:right;">${money(d.quy)}</td></tr></tfoot>` : ''}</table>
-      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Số liệu lấy từ TẤT CẢ sổ cắt đã ghi trong tháng (công đoạn Cắt). Mét sơ đồ / khổ vải lấy từ sơ đồ của lệnh SX. Giờ công lấy từ Chấm công (cột Số giờ làm) của nhân viên bộ phận "Cắt".</p>`;
+        || '<tr><td colspan="8" class="empty-hint">Chưa có sổ cắt nào thuộc kỳ này (lệnh chưa ghi QC thì chưa vào quỹ).</td></tr>'}</tbody>
+      ${(d.theoDon || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="4" style="text-align:right;">TỔNG BÀN CẮT</td><td style="text-align:center;">${(d.soDo || []).length}</td><td></td><td style="text-align:right;">${money(d.quy)}</td></tr></tfoot>` : ''}</table>
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Mét sơ đồ / khổ vải lấy từ sơ đồ của lệnh SX. Giờ công lấy từ Chấm công (cột Số giờ làm) của nhân viên bộ phận "Cắt" trong tháng.
+        <b>Chỉ tính sổ cắt của lệnh đã ghi tiến độ QC</b>; sổ cắt thuộc kỳ = tháng <b>muộn hơn</b> giữa ngày cắt và ngày QC đầu tiên của lệnh (v9.02) — tức sổ cắt tháng trước của lệnh QC tháng này nằm trong quỹ tháng này.</p>`;
     wirePeriod(container, renderLuongTraiVaiCat);
+    themOTimTuDong(container);   // v9.05: ô tìm cho bảng lương NV Cắt + bảng bàn cắt theo lệnh SX
     const bc = container.querySelector('#btnCfgCat'); if (bc) bc.addEventListener('click', () => openCauHinhLuongCat(d));
     container.querySelector('#btnInQuyCat').addEventListener('click', () => printHtml(`Quy luong cat T${selThang}/${selNam}`, buildLuongCatQuyBody(d)));
     container.querySelector('#btnInBangCat').addEventListener('click', () => printHtml(`Bang luong trai vai cat T${selThang}/${selNam}`, buildLuongCatBangBody(d)));
@@ -1206,7 +1228,7 @@ window.ModulePayroll = (function () {
       </tr></thead><tbody>${(d.nhanVien || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
         <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
         <td style="text-align:right;">${num(r.TongGioLam)}</td><td style="text-align:right;">${num(r.HeSoLuong)}</td>
-        <td style="text-align:right;">${money(d.donGiaGio)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center;">—</td></tr>'}
+        <td style="text-align:right;">${money(d.donGiaGio)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="7" style="text-align:center;">—</td></tr>'}
         <tr data-tong style="font-weight:bold;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${num(d.tongGio)}</td><td></td><td></td><td style="text-align:right;">${money(d.tongLuong)}</td></tr>
       </tbody></table>
       <p style="font-size:13px;">Quỹ lương cắt tháng: <b>${money(d.quy)}</b> · Lương 1 giờ: <b>${money(d.donGiaGio)}</b> · Chênh lệch tổng lương so với quỹ: <b>${money(d.chenhLech)}</b></p>

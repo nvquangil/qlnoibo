@@ -58,7 +58,9 @@
   function ganSuKienLoc() {
     const n = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = fn; };
     n('nlLoc', taiBang);
-    n('nlThem', () => openForm());
+    /* v9.06: openForm là hàm async gọi 2 API ngay dòng đầu — không .catch thì API lỗi là bấm
+       "+ Lập phiếu" không có gì xảy ra (đúng lớp lỗi nút Lưu câm vừa sửa bên dưới). */
+    n('nlThem', () => openForm().catch(err => toast(err.message, 'error')));
     n('nlExcel', () => {
       const p = thamSoLoc();
       taiFile('/api/nhaplai/phieu/export?' + p.toString(), 'PhieuNhapLai_DanhSach.xlsx');
@@ -68,7 +70,11 @@
   /* Tai file theo ten SERVER dat (Content-Disposition) - dung 1 kieu voi phieu ban hang v6.64.
      Tu dat a.download o client se de bay ten server da tinh cong tinh dat. */
   async function taiFile(url, tenDuPhong) {
-    const r = await fetch(url, { credentials: 'include' });
+    /* v9.06: fetch reject (mất mạng) trước đây rơi ra ngoài không ai bắt — "bấm Excel không có
+       gì xảy ra". Đỡ ngay tại đây cho cả 3 nơi gọi. */
+    let r;
+    try { r = await fetch(url, { credentials: 'include' }); }
+    catch (err) { toast('Không tải được file: ' + err.message, 'error'); return; }
     if (!r.ok) { toast('Không tải được file: ' + r.status, 'error'); return; }
     const cd = r.headers.get('content-disposition') || '';
     const khop = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
@@ -84,7 +90,15 @@
     const hop = document.getElementById('nlBang');
     if (!hop) return;
     hop.innerHTML = '<div class="empty-hint">Đang tải...</div>';
-    const kq = await apiGet('/api/nhaplai/phieu?' + thamSoLoc().toString());
+    /* v9.06: tự đỡ lỗi NGAY TRONG taiBang — mọi nơi gọi (nút Lọc, sau lưu/hủy/xóa) đều hưởng,
+       và taiBang không bao giờ reject nên nơi gọi được phép bắn-rồi-quên. Không đỡ thì API lỗi
+       là bảng đông cứng ở "Đang tải..." vĩnh viễn, không một chữ. */
+    let kq;
+    try { kq = await apiGet('/api/nhaplai/phieu?' + thamSoLoc().toString()); }
+    catch (err) {
+      hop.innerHTML = `<div class="empty-hint">Không tải được danh sách phiếu nhập lại: <b>${escapeHtml(err.message)}</b></div>`;
+      return;
+    }
     dsPhieu = kq.data || [];
     if (!dsPhieu.length) {
       hop.innerHTML = '<div class="empty-hint">Chưa có phiếu nhập lại nào.</div>';
@@ -127,19 +141,32 @@
           <td colspan="2"></td>
         </tr></tfoot>
       </table></div>`;
-    hop.querySelectorAll('.nl-xem').forEach(b => b.onclick = (e) => { e.preventDefault(); xemPhieu(b.dataset.id); });
+    /* v9.05: ô tìm ký tự bất kỳ ngay trên bảng. Khác hai ô lọc #nlKhach/#nlSoPhieu ở trên (lọc
+       PHÍA SERVER, phải bấm nút "Lọc"), ô này lọc tại chỗ theo mọi cột, gõ tới đâu thấy tới đó. */
+    themOTimTuDong(hop);
+    hop.querySelectorAll('.nl-xem').forEach(b => b.onclick = (e) => {
+      e.preventDefault();
+      // v9.06: xemPhieu là hàm async — không .catch thì 403/404 là "bấm Xem không có gì xảy ra".
+      xemPhieu(b.dataset.id).catch(err => toast(err.message, 'error'));
+    });
     hop.querySelectorAll('.nl-xls').forEach(b => b.onclick = () => taiFile(`/api/nhaplai/phieu/${b.dataset.id}/export`, 'PhieuNhapLai.xlsx'));
+    /* v9.06: bọc try/catch — apiPut/apiDelete THROW khi backend từ chối (vd phiếu đã hủy rồi),
+       không bắt là nút Hủy/Xóa câm. Nhánh `kq.success ? ...` cũ là mã chết: ném trước khi trả về. */
     hop.querySelectorAll('.nl-huy').forEach(b => b.onclick = async () => {
       if (!confirm('Hủy phiếu nhập lại này? Tồn kho và công nợ sẽ trả về như trước khi lập phiếu.')) return;
-      const kq = await apiPut(`/api/nhaplai/phieu/${b.dataset.id}/huy`, {});
-      toast(kq.message || 'Đã hủy phiếu.', kq.success ? 'success' : 'error');
-      if (kq.success) taiBang();
+      try {
+        const kq = await apiPut(`/api/nhaplai/phieu/${b.dataset.id}/huy`, {});
+        toast(kq.message || 'Đã hủy phiếu.', 'success');
+        taiBang();
+      } catch (err) { toast(err.message, 'error'); }
     });
     hop.querySelectorAll('.nl-xoa').forEach(b => b.onclick = async () => {
       if (!confirm('XÓA HẲN phiếu nhập lại này? Không khôi phục được.')) return;
-      const kq = await apiDelete(`/api/nhaplai/phieu/${b.dataset.id}`);
-      toast(kq.message || 'Đã xóa phiếu.', kq.success ? 'success' : 'error');
-      if (kq.success) taiBang();
+      try {
+        const kq = await apiDelete(`/api/nhaplai/phieu/${b.dataset.id}`);
+        toast(kq.message || 'Đã xóa phiếu.', 'success');
+        taiBang();
+      } catch (err) { toast(err.message, 'error'); }
     });
   }
 
@@ -239,9 +266,19 @@
       if (!ten) { sel.innerHTML = '<option value="">-- Chọn khách trước --</option>'; return; }
       const kh = dsKhach.find(k => k.TenKhach === ten) || {};
       sel.dataset.sdt = kh.SDT || ''; sel.dataset.diachi = kh.DiaChi || '';
-      const ds = (await apiGet('/api/nhaplai/phieuxuat?tenKhach=' + encodeURIComponent(ten))).data || [];
+      // v9.06: bắt lỗi — apiGet ném là ô chọn phiếu đứng trống không lý do (cùng lớp lỗi nút Lưu câm).
+      let ds = [];
+      try { ds = (await apiGet('/api/nhaplai/phieuxuat?tenKhach=' + encodeURIComponent(ten))).data || []; }
+      catch (err) {
+        /* Ghi lý do vào CHÍNH ô chọn (toast 3 giây là bay mất) — ô trống trơn thì không phân biệt
+           được với "khách này chưa mua gì" (luật v9.04: trạng thái phải nói ra lý do). */
+        sel.innerHTML = '<option value="">-- Lỗi tải danh sách phiếu xuất --</option>';
+        toast('Không tải được danh sách phiếu xuất của khách: ' + err.message, 'error');
+        return;
+      }
+      // v9.08: ghi rõ phiếu GỬI MẪU ngay trong ô chọn — chế độ một phiếu không có cột "Phiếu xuất".
       sel.innerHTML = '<option value="">-- Chọn phiếu xuất --</option>' + ds.map(p =>
-        `<option value="${p.PhieuBHID}">${escapeHtml(p.SoPhieu)} — ${fmtDate(p.NgayBan)} — ${fmtTien(p.TongThanhToan)} đ</option>`).join('');
+        `<option value="${p.PhieuBHID}">${escapeHtml(p.SoPhieu)}${Number(p.LaHangMau) === 1 ? ' [GỬI MẪU]' : ''} — ${fmtDate(p.NgayBan)} — ${fmtTien(p.TongThanhToan)} đ</option>`).join('');
       if ($('nlfMoiPhieu').checked) taiDong();
     };
     /* Đổi phiếu / bật-tắt "mọi phiếu" = ĐỔI PHẠM VI dòng -> KHÔNG giữ SL đã nhập (xem ghi chú ở daNhap). */
@@ -282,11 +319,19 @@
       const q = $('nlfTim').value.trim();
       $('nlfBang').innerHTML = '<div class="empty-hint">Đang tải...</div>';
       /* v7.99: chế độ "mọi phiếu" gửi `q` lên server (backend đã nhận sẵn tham số này từ trước,
-         chỉ là frontend chưa bao giờ gửi — nên trước đây gõ tìm không với tới được dòng bị chặt). */
-      const kq = moiPhieu
-        ? await apiGet('/api/nhaplai/timmahang?tenKhach=' + encodeURIComponent(ten)
-            + (q ? '&q=' + encodeURIComponent(q) : ''))
-        : await apiGet(`/api/nhaplai/phieuxuat/${pid}/dong`);
+         chỉ là frontend chưa bao giờ gửi — nên trước đây gõ tìm không với tới được dòng bị chặt).
+         v9.06: bắt lỗi — không thì apiGet ném là bảng đứng im ở "Đang tải..." mãi mãi, không ai
+         biết vì sao (cùng lớp lỗi với nút Lưu câm). */
+      let kq;
+      try {
+        kq = moiPhieu
+          ? await apiGet('/api/nhaplai/timmahang?tenKhach=' + encodeURIComponent(ten)
+              + (q ? '&q=' + encodeURIComponent(q) : ''))
+          : await apiGet(`/api/nhaplai/phieuxuat/${pid}/dong`);
+      } catch (err) {
+        $('nlfBang').innerHTML = `<div class="empty-hint">Không tải được danh sách mã hàng: <b>${escapeHtml(err.message)}</b></div>`;
+        return;
+      }
       const ds = (kq.data || []).filter(r => Number(r.ConTraCai) > 0);
       if (!ds.length) {
         $('nlfBang').innerHTML = `<div class="empty-hint">${q && moiPhieu
@@ -302,7 +347,10 @@
             <th style="width:40px;"></th><th style="width:50px;">STT</th>
             ${moiPhieu ? '<th>Phiếu xuất</th>' : ''}
             <th>Mã hàng</th><th>Tên hàng</th><th>Màu</th>
-            <th class="num">Đã bán</th><th class="num">Đã trả</th><th class="num">Còn trả được</th>
+            ${/* v9.08: + cột "Khách mua luôn". Không có cột này thì dòng đã chốt 3/5 hiện
+                 "Đã bán 5 · Đã trả 0 · Còn trả được 2" — phép trừ không ra, người dùng tưởng
+                 phần mềm sai. Dữ liệu có sẵn trên dòng (layDongDaBan trả MauDaChotCai). */''}
+            <th class="num">Đã bán</th><th class="num">Đã trả</th><th class="num">Khách mua luôn</th><th class="num">Còn trả được</th>
             <th class="num">Giá bán</th><th style="width:110px;">SL trả (Cái)</th>
           </tr></thead>
           <tbody>
@@ -311,19 +359,30 @@
                   data-tim="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + (r.TenMau || '')).toLowerCase())}">
                 <td><input type="checkbox" class="nl-tick"></td>
                 <td>${i + 1}</td>
-                ${moiPhieu ? `<td>${escapeHtml(r.SoPhieu || '')}</td>` : ''}
+                ${/* v9.08: dòng thuộc PHIẾU GỬI MẪU thì ghi rõ ngay dưới số phiếu — người lập phiếu
+                     nhập lại phải phân biệt được "khách trả hàng đã mua" với "khách trả lại mẫu
+                     mượn", vì hai thứ đó trông y hệt nhau trên bảng này. Nhãn dùng đúng chữ và
+                     đúng màu với badge "Gửi mẫu" ở danh sách Phiếu bán hàng (v7.59). */''}
+                ${moiPhieu ? `<td>${escapeHtml(r.SoPhieu || '')}${Number(r.LaHangMau) === 1
+                  ? '<div><span class="badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591;">Gửi mẫu</span></div>' : ''}</td>` : ''}
                 <td><b>${escapeHtml(r.MaHang || '')}</b></td>
                 <td>${escapeHtml(r.TenHang || '')}</td>
                 <td>${escapeHtml(r.TenMau || '')}</td>
                 <td class="num">${fmtNumber(soCai(r))}</td>
                 <td class="num">${fmtNumber(r.DaTraCai)}</td>
+                <td class="num">${Number(r.MauDaChotCai) ? `<b style="color:#137333;" title="Khách mua luôn — đã chốt ở sổ Hàng mẫu, không trả lại được nữa">${fmtNumber(r.MauDaChotCai)}</b>` : ''}</td>
                 <td class="num"><b>${fmtNumber(r.ConTraCai)}</b></td>
                 <td class="num">${fmtTien(r.GiaBan)}</td>
                 ${/* v7.99: dien lai SL tu daNhap - bang ve lai (do loc o server) khong duoc lam mat
                      so nguoi dung da nhap.
                      KHONG dat dau ` trong comment nay: no nam BEN TRONG template literal, mot dau `
                      la dong som template -> SyntaxError, ca man hinh dung im. */''}
-                <td><input type="number" class="nl-sl" min="0" step="1" max="${r.ConTraCai}" value="${(daNhap.get(Number(r.PhieuBHChiTietID)) || {}).sl || ''}" style="width:95px;"></td>
+                ${/* v9.06: mã quản kho theo Ri thì step = hệ số và ghi rõ "bội số N" ngay dưới ô —
+                     backend vẫn là người chặn cuối (nhaplai.js chuanBiPhieu), đây chỉ là nói
+                     TRƯỚC cho người dùng khỏi gõ 14 vào hàng Ri5 rồi mới biết. Dữ liệu LoaiRi,
+                     DonViCoBan, DonViQuyDoi có sẵn trên dòng từ layDongDaBan. KHÔNG lồng backtick:
+                     chỉ ternary + nối chuỗi. */''}
+                <td><input type="number" class="nl-sl" min="0" step="${(donViChinhLaGop(r) && Number(r.LoaiRi) > 1) ? Number(r.LoaiRi) : 1}" max="${r.ConTraCai}" title="${(donViChinhLaGop(r) && Number(r.LoaiRi) > 1) ? 'Mã quản kho theo Ri — chỉ nhập lại được bội số của ' + Number(r.LoaiRi) + ' Cái' : 'Số lượng trả (Cái)'}" value="${(daNhap.get(Number(r.PhieuBHChiTietID)) || {}).sl || ''}" style="width:95px;">${(donViChinhLaGop(r) && Number(r.LoaiRi) > 1) ? '<div style="font-size:10px;color:#5f6368;">bội số ' + Number(r.LoaiRi) + '</div>' : ''}</td>
               </tr>`).join('')}
           </tbody>
         </table>`;
@@ -376,12 +435,24 @@
       capNhatGoiY();   // v7.99: cập nhật ngay "Đang chọn N mã" (không chờ 350ms tính tiền)
       clearTimeout(hen);
       hen = setTimeout(async () => {
+        /* Hẹn 250ms có thể nổ SAU khi modal đã đóng (gõ số rồi bấm Hủy ngay) — lúc đó #nlfTong
+           không còn trong DOM, đụng vào là TypeError. Bắt phần tử một lần, không có thì thôi. */
+        const oTong = $('nlfTong');
+        if (!oTong) return;
         const dong = layDong();
-        if (!dong.length) { $('nlfTong').innerHTML = ''; return; }
-        const kq = await apiPost('/api/nhaplai/tinhthu', { tenKhach: $('nlfKhach').value, dong });
-        if (!kq.success) { $('nlfTong').innerHTML = `<span style="color:#c62828;">${escapeHtml(kq.message || 'Lỗi')}</span>`; return; }
+        if (!dong.length) { oTong.innerHTML = ''; return; }
+        /* v9.06: apiPost THROW khi 400 nên nhánh if (!kq.success) cũ là MÃ CHẾT — lỗi nghiệp vụ
+           (trả quá số còn lại, không phải bội Ri...) làm hứa async chết im lặng và Ô TỔNG ĐỨNG IM
+           Ở SỐ CŨ: người dùng nhìn tổng cũ tưởng số mình vừa gõ hợp lệ. Giờ vẽ thẳng câu từ chối
+           của backend vào chỗ tổng tiền — thấy NGAY khi gõ, trước cả khi bấm Lưu. */
+        let kq;
+        try { kq = await apiPost('/api/nhaplai/tinhthu', { tenKhach: $('nlfKhach').value, dong }); }
+        catch (err) {
+          oTong.innerHTML = `<span style="color:#c62828;font-weight:400;">⚠️ ${escapeHtml(err.message)}</span>`;
+          return;
+        }
         const t = kq.data.tong;
-        $('nlfTong').innerHTML = `
+        oTong.innerHTML = `
           Tổng tiền hàng: ${fmtTien(t.tongTienHang)} &nbsp;|&nbsp;
           CK NPP (${t.ckNPP}%): ${fmtTien(t.tienCKNPP)} &nbsp;|&nbsp;
           VAT (${t.vat}%): ${fmtTien(t.tienVAT)} <br>
@@ -400,28 +471,53 @@
         .filter(d => d.soLuongCai > 0);
     }
 
+    /* ================================================================================================
+       v9.06 — NÚT LƯU CÂM KHI BACKEND TỪ CHỐI (Nguyen báo 2026-10-27).
+
+       Triệu chứng: "nhập đủ SL theo phiếu bán thì lưu được, ít hơn thì bấm Lưu không hoạt động".
+       Nguyên nhân KHÔNG nằm ở backend — backend từ chối với câu RẤT rõ (vượt số còn trả, mã quản
+       kho theo Ri phải trả bội số Ri, các dòng khác %CK NPP...). Nguyên nhân là apiPost THROW khi
+       máy chủ trả 400 (apiFetch gắn status vào Error rồi ném — v7.27), mà handler này không có
+       try/catch: lời hứa async chết im lặng, toast không bao giờ hiện, và TỆ NHẤT là dòng
+       "disabled = false" nằm SAU await nên KHÔNG BAO GIỜ chạy — nút Lưu bị khóa vĩnh viễn, từ đó
+       bấm thêm bao nhiêu lần cũng không có gì xảy ra. Đúng bài học "bấm nút không có gì xảy ra"
+       (v6.23) — chính màn này sót.
+       Nhánh if (!kq.success) cũ là MÃ CHẾT: apiPost không bao giờ trả về khi success=false. */
     $('nlfLuu').onclick = async () => {
       const dong = layDong();
       if (!$('nlfKhach').value) return toast('Chưa chọn khách hàng.', 'error');
       if (!dong.length) return toast('Chưa tích mã hàng nào hoặc chưa nhập số lượng trả.', 'error');
       const sel = $('nlfPhieu');
-      $('nlfLuu').disabled = true;
-      const kq = await apiPost('/api/nhaplai/phieu', {
-        ngayNhap: $('nlfNgay').value,
-        tenKhach: $('nlfKhach').value,
-        sdt: sel.dataset.sdt || null,
-        diaChi: sel.dataset.diachi || null,
-        phieuBHID: sel.value || null,
-        lyDo: $('nlfLyDo').value || null,
-        ghiChu: $('nlfGhiChu').value || null,
-        dong
-      });
-      $('nlfLuu').disabled = false;
-      if (!kq.success) return toast(kq.message || 'Lỗi khi lưu phiếu.', 'error');
-      toast('Đã lưu phiếu ' + kq.data.soPhieu + ' — trừ công nợ ' + fmtTien(kq.data.tongThanhToan) + ' đ', 'success');
-      closeModal();
-      await taiBang();
-      xemPhieu(kq.data.phieuNLID);
+      /* Bắt phần tử MỘT LẦN trước khi lưu: lưu xong closeModal() GỠ modal khỏi DOM, lúc đó
+         $('nlfLuu') là null — finally mà tra lại theo id là TypeError ở mọi lần lưu THÀNH CÔNG
+         (rà chéo v9.06 bắt được). Đặt disabled trên biến đã bắt thì node rời cây vẫn vô hại. */
+      const nut = $('nlfLuu');
+      nut.disabled = true;
+      try {
+        const kq = await apiPost('/api/nhaplai/phieu', {
+          ngayNhap: $('nlfNgay').value,
+          tenKhach: $('nlfKhach').value,
+          sdt: sel.dataset.sdt || null,
+          diaChi: sel.dataset.diachi || null,
+          phieuBHID: sel.value || null,
+          lyDo: $('nlfLyDo').value || null,
+          ghiChu: $('nlfGhiChu').value || null,
+          dong
+        });
+        toast('Đã lưu phiếu ' + kq.data.soPhieu + ' — trừ công nợ ' + fmtTien(kq.data.tongThanhToan) + ' đ', 'success');
+        closeModal();
+        taiBang();   // tự đỡ lỗi bên trong, không bao giờ reject (v9.06)
+        /* xemPhieu không await: phiếu ĐÃ lưu, mở bản xem lỗi thì chỉ báo riêng việc mở,
+           tuyệt đối không để nó rơi vào catch bên dưới như thể LƯU thất bại. */
+        xemPhieu(kq.data.phieuNLID).catch(err =>
+          toast('Phiếu đã lưu — nhưng không mở được bản xem: ' + err.message, 'error'));
+      } catch (err) {
+        /* Câu thông báo của backend nói rõ dòng nào, vì sao (vd "mã quản kho theo Ri (1 Ri = 5 Cái)
+           nên chỉ nhập lại được bội số của 5") — hiện 8 giây cho người dùng kịp đọc hết. */
+        toast(err.message, 'error', 8000);
+      } finally {
+        nut.disabled = false;
+      }
     };
   }
 
@@ -545,8 +641,9 @@
   }
 
   async function xemPhieu(id) {
+    /* v9.06: bỏ nhánh if(!kq.success) — mã chết (apiGet ném trước khi trả về). Lỗi để NGƯỢC lên
+       nơi gọi: mọi nơi gọi xemPhieu đều đã .catch + toast. */
     const kq = await apiGet('/api/nhaplai/phieu/' + id);
-    if (!kq.success) return toast(kq.message || 'Không mở được phiếu.', 'error');
     const h = kq.data.header, ct = kq.data.chiTiet || [];
     openModal(`
       <div class="modal-head"><h3>Phiếu nhập lại ${escapeHtml(h.SoPhieu)}

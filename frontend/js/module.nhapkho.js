@@ -210,7 +210,12 @@
       // v6.98: điền sẵn thông tin cấp mã hàng để dòng khai sửa được ngay khi Sửa phiếu
       giaBan: r.GiaBan, nhomSanPhamId: r.NhomSanPhamID,
       theKhoDanhMucId: r.TheKhoDanhMucID, maBarcode: r.MaBarcode,
-      tenHoaDon: r.TenHoaDon || ''   // v7.46
+      tenHoaDon: r.TenHoaDon || '',   // v7.46
+      /* v9.03: ẢNH ĐANG LƯU trong thẻ kho (backend trả AnhMauDangLuu / AnhDaiDienDangLuu).
+         Trước đây mở Sửa phiếu là ô ảnh LUÔN trống dù thẻ kho đã có ảnh — người dùng tưởng mất ảnh,
+         tải lên lại, file cũ thành mồ côi. Điền sẵn ở đây nên nhìn là biết đã có hay chưa; không
+         đụng vào thì gửi lên nguyên giá trị cũ (backend ISNULL giữ nguyên, không ghi đè gì). */
+      anhMau: r.AnhMauDangLuu || null, anhDaiDien: r.AnhDaiDienDangLuu || null
     })) : [{ idx: 0 }];
 
     const modal = openModal(`
@@ -300,21 +305,34 @@
         : 'Nhà cung cấp <span class="bat-buoc">*</span>';
       /* Dựng lại ô nguồn theo loại. Giữ lại lựa chọn cũ nếu người dùng đổi loại rồi đổi về:
          `nhoNcc`/`nhoDon` nhớ giá trị trước đó. */
-      /* v7.87: NHẬP BỔ SUNG. Danh sách lệnh SX mặc định BỎ lệnh đã nhập kho (v6.89 — để lại là mở
-         đường nhập trùng cả lệnh). Nhưng có lệnh nhập kho làm nhiều đợt, và trước đây không có
-         đường nào chọn lại. Nay có ô tích: tích vào là nạp lại danh sách kèm CẢ lệnh đã nhập, mỗi
-         lệnh ghi rõ đã có mấy phiếu và số phiếu gần nhất — chọn nhầm thì nhìn là thấy. */
+      /* v9.09: lệnh SX Ở LẠI trong ô chọn cho tới khi NHẬP XONG (lệnh Hoàn thành + đã lập phiếu đủ
+         số luỹ kế công đoạn Kho nhập), thay vì biến mất ngay sau phiếu đầu tiên như v6.89–v9.08.
+         Nhập theo nhiều đợt giờ không phải tích gì cả. Ô tích "Nhập bổ sung" đổi nghĩa: nay chỉ để
+         lôi lại những lệnh ĐÃ NHẬP XONG (sửa/xem lại), không còn là đường sống của việc nhập đợt 2. */
+      const nhan = (d2) => {
+        const can = Number(d2.CanNhapCai) || 0, da = Number(d2.DaNhapCai) || 0;
+        const thieu = Number(d2.ConThieuCai) || 0;
+        if (Number(d2.NhapXong)) return '  ✓ đã nhập xong' + (d2.SoPhieuGanNhat ? ' (' + d2.SoPhieuGanNhat + ')' : '');
+        if (!Number(d2.SoPhieuDaNhap)) return '';
+        /* Đã có phiếu mà vẫn hiện ⇒ PHẢI nói ra vì sao, không thì người dùng tưởng lệnh nhập trùng.
+           Lệnh cũ không có luỹ kế KN (can = 0) thì không bịa ra con số "còn thiếu". */
+        return '  ⚠️ đã nhập ' + d2.SoPhieuDaNhap + ' phiếu'
+             + (can > 0 ? ' · ' + da + '/' + can + ' cái' + (thieu > 0 ? ' · còn thiếu ' + thieu : '') : '')
+             + (d2.SoPhieuGanNhat ? ' (' + d2.SoPhieuGanNhat + ')' : '');
+      };
       $('#nkfONguon').innerHTML = sx
         /* v8.47: điều kiện hiện lệnh đã NỚI ra — lệnh chỉ cần ghi nhận ít nhất 1 lần ở công đoạn
            Kho nhập là chọn được, không phải đợi trạng thái "Hoàn thành". Nhãn dưới đây sửa theo,
            nếu không người dùng nhìn thấy lệnh đang sản xuất trong ô "đã hoàn thành" rồi tưởng lỗi. */
         ? `<select id="nkfDon" style="width:100%;"><option value="">-- Chọn lệnh SX đã ghi nhận Kho nhập --</option>
-             ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}${Number(d2.SoPhieuDaNhap) > 0 ? `  ⚠️ đã nhập ${d2.SoPhieuDaNhap} phiếu${d2.SoPhieuGanNhat ? ' (' + escapeHtml(d2.SoPhieuGanNhat) + ')' : ''}` : ''}</option>`).join('')}
+             ${(dm.donHang || []).map(d2 => `<option value="${d2.DonHangID}">${escapeHtml(d2.MaDH)}${d2.TenSanPham ? ' — ' + escapeHtml(d2.TenSanPham) : ''}${escapeHtml(nhan(d2))}</option>`).join('')}
            </select>
            <label style="display:flex;gap:5px;align-items:center;font-size:12px;margin-top:4px;white-space:nowrap;">
-             <input type="checkbox" id="nkfKeDaNhap" ${keDaNhap ? 'checked' : ''}> Nhập bổ sung — hiện cả lệnh SX đã nhập kho
+             <input type="checkbox" id="nkfKeDaNhap" ${keDaNhap ? 'checked' : ''}> Hiện cả lệnh SX đã nhập xong
            </label>
-           ${(dm.donHang || []).length ? '' : `<div class="empty-hint" style="margin-top:2px;">${keDaNhap ? 'Chưa có lệnh SX nào ghi nhận công đoạn Kho nhập.' : 'Không còn lệnh SX nào chưa nhập kho — tích "Nhập bổ sung" để chọn lệnh đã nhập.'}</div>`}`
+           <div class="empty-hint" style="margin-top:2px;">${(dm.donHang || []).length
+               ? 'Lệnh nhập nhiều đợt vẫn ở lại danh sách cho tới khi lệnh Hoàn thành và nhập đủ số.'
+               : (keDaNhap ? 'Chưa có lệnh SX nào ghi nhận công đoạn Kho nhập.' : 'Mọi lệnh SX đều đã nhập xong — tích ô trên để chọn lại lệnh đã nhập xong.')}</div>`
         : `<select id="nkfNcc" style="width:100%;"><option value="">-- Chọn nhà cung cấp --</option>
              ${opt(dm.ncc, 'NCC_ID', 'TenNCC', '')}</select>`;
       const oN = $('#nkfNcc'), oD = $('#nkfDon');
@@ -435,6 +453,34 @@
         d.tenHoaDon = g.tenHoaDon;   // v7.46: tên viết hóa đơn là của MÃ HÀNG, không phải của màu
       });
     }
+
+    /* ================================================================================================
+       v9.03 — ĐANG TẢI ẢNH THÌ CHƯA ĐƯỢC LƯU.
+
+       Nguyen 2026-10-25: ảnh có trong thư mục /uploads của máy chủ nhưng thẻ kho / catalogue không
+       hiện. Một trong ba nguyên nhân: `onchange` của ô ảnh là **async** — chọn ảnh xong bấm Lưu ngay
+       (hoặc mạng chậm, ảnh điện thoại 20 MB nén mất vài giây) là phiếu được gửi đi khi `d.anhMau` còn
+       `undefined`. File vẫn lên tới máy chủ (nên thấy trong /uploads) nhưng đường dẫn KHÔNG kịp vào
+       payload ⇒ `TheKhoChiTietMau.LinkAnh` rỗng. Không có một dấu hiệu nào trên màn hình.
+
+       Nay: đếm số ảnh đang tải; còn > 0 thì nút Lưu khóa lại và đổi chữ. Đây là cách DUY NHẤT chặn
+       được — không thể "đợi" trong handler Lưu vì file có thể còn chưa bắt đầu đọc.
+       ================================================================================================ */
+    let soAnhDangTai = 0;
+    function capNhatNutLuuTheoAnh() {
+      const b = $('#nkfLuu');
+      if (!b) return;
+      if (soAnhDangTai > 0) {
+        b.disabled = true;
+        b.dataset.chuGoc = b.dataset.chuGoc || b.textContent;
+        b.textContent = `⏳ Đang tải ${soAnhDangTai} ảnh...`;
+      } else {
+        b.disabled = false;
+        if (b.dataset.chuGoc) b.textContent = b.dataset.chuGoc;
+      }
+    }
+    function batDauTaiAnh() { soAnhDangTai++; capNhatNutLuuTheoAnh(); }
+    function xongTaiAnh() { soAnhDangTai = Math.max(0, soAnhDangTai - 1); capNhatNutLuuTheoAnh(); }
 
     function veDong() {
       /* v7.86: mã mới GÕ SAU khi đã chọn danh mục chung cũng phải được áp — chạy trước dongBoMaMoi()
@@ -669,8 +715,10 @@
         const oAdd = tr.querySelector('.nk-anhdd');
         if (oAdd) oAdd.onchange = async () => {
           const f = oAdd.files[0]; if (!f || !f.size) return;
+          batDauTaiAnh();
           try { d.anhDaiDien = await uploadFile(f, (d.maHang || 'mahang') + '_dd'); veDong(); }
           catch (err) { toast('Không tải được ảnh đại diện: ' + err.message, 'error'); }
+          finally { xongTaiAnh(); }
         };
       });
 
@@ -716,8 +764,14 @@
              gửi theo TÊN, backend tự tạo. So khớp bỏ hoa/thường + bỏ khoảng trắng thừa. */
           const c = (x) => String(x == null ? '' : x).trim().toLowerCase();
           const co = (dm.mauSac || []).find(m => c(m.TenMau) === c(ten));
+          /* 🔴 v9.03: ĐỔI MÀU THÌ BỎ ẢNH MÀU ĐANG GIỮ. Từ v9.03 form Sửa phiếu điền sẵn `anhMau` =
+             ảnh ĐANG LƯU của (mã, màu CŨ). Không xóa ở đây thì đổi màu xong bấm Lưu là ảnh của màu cũ
+             bị chép sang màu mới — sai ảnh, im lặng. Đổi về đúng màu cũ thì tải lại ảnh, hoặc ảnh cũ
+             vẫn còn nguyên trong thẻ kho (backend ISNULL giữ nguyên khi gửi null). */
+          const truoc = String(d.mauSacId || d.tenMau || '');
           d.mauSacId = co ? co.MauSacID : null;
           d.tenMau = co ? null : (ten || null);
+          if (String(d.mauSacId || d.tenMau || '') !== truoc) d.anhMau = null;
           veDong();   // vẽ lại để bật/tắt dòng cảnh báo "không phân màu"
         };
         tr.querySelector('.nk-sl').oninput = (e) => { d.soLuong = e.target.value; capNhatDong(tr, d, sx); };
@@ -727,10 +781,12 @@
         const oAnhMau = tr.querySelector('.nk-anhmau');
         if (oAnhMau) oAnhMau.onchange = async () => {
           const f = oAnhMau.files[0]; if (!f || !f.size) return;
+          batDauTaiAnh();
           try {
             d.anhMau = await uploadFile(f, (d.maHang || 'mahang') + '_mau' + (d.mauSacId || d.tenMau || ''));
             veDong();
           } catch (err) { toast('Không tải được ảnh màu: ' + err.message, 'error'); }
+          finally { xongTaiAnh(); }
         };
         const oGia = tr.querySelector('.nk-gia');
         if (oGia) oGia.oninput = (e) => { d.donGia = e.target.value; capNhatDong(tr, d, sx); };
@@ -766,6 +822,11 @@
     apLoai();
 
     $('#nkfLuu').onclick = async () => {
+      /* v9.03: lưới thứ hai cho cái bẫy "ảnh chưa tải xong đã Lưu" — nút đã bị khóa ở
+         capNhatNutLuuTheoAnh(), nhưng Enter trong ô nhập / script khác vẫn có thể kích onclick. */
+      if (soAnhDangTai > 0) {
+        return toast(`Còn ${soAnhDangTai} ảnh đang tải lên — đợi nút Lưu sáng lại rồi bấm, không thì ảnh sẽ KHÔNG vào thẻ kho.`, 'error');
+      }
       const sx = $('#nkfLoai').value === 'SanXuat';
       /* v6.97: đồng bộ lại TRƯỚC KHI GỬI. Người dùng có thể sửa ô ở dòng khai rồi bấm Lưu ngay mà
          chưa có lần vẽ lại nào — không gọi ở đây thì các dòng sau vẫn mang giá trị cũ, và mã hàng sẽ
@@ -847,8 +908,8 @@
       } catch (err) {
         toast(err.message || 'Lỗi khi lưu phiếu.', 'error');
       } finally {
-        const b2 = $('#nkfLuu');
-        if (b2) b2.disabled = false;     // modal có thể đã đóng -> phải kiểm tra trước khi gán
+        // v9.03: mở khóa QUA capNhatNutLuuTheoAnh — nếu đang có ảnh tải dở thì vẫn phải khóa tiếp.
+        capNhatNutLuuTheoAnh();
       }
     };
   }

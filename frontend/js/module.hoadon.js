@@ -328,6 +328,11 @@ window.ModuleHoaDon = (function () {
     if (oChonHet) oChonHet.addEventListener('change', () => {
       el.querySelectorAll('.hd-chon').forEach(o => { o.checked = oChonHet.checked; });
     });
+    /* v9.05: ô tìm Ký hiệu / Số HĐ / MST / Tên người bán-mua / Trạng thái.
+       ⚠️ Ô tích chọn dòng (.hd-chon) KHÔNG vào chuỗi tìm — chuoiTimCuaDong đã bỏ mọi <input>.
+       Nhưng lưu ý nghiệp vụ: lọc chỉ ẩn dòng, KHÔNG bỏ tích. Dòng đang tích mà bị ẩn thì vẫn
+       nằm trong danh sách chọn — đúng như ý người dùng tích xong rồi gõ tìm tiếp. */
+    themOTimTuDong(el);
   }
 
   /* v8.40: đăng nhập TCT chuyển từ MÀN HÌNH RIÊNG sang HỘP THOẠI bật lên đúng lúc bấm tải.

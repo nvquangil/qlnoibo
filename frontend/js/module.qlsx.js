@@ -813,6 +813,9 @@ window.ModuleQLSX = (function () {
     });
     // v5.2: click 1 dong trong bang "Dang san xuat" de xem chi tiet don hang (yeu cau v5.2 muc 1).
     body.querySelectorAll('tr.clickable-row').forEach(tr => tr.addEventListener('click', () => openOrderDetail(tr.dataset.madh)));
+    /* v9.05: ô tìm cho 3 bảng của Dashboard (Đơn hàng đang SX, Nhà gia công, Nhà in thêu).
+       Lọc bằng ẩn/hiện dòng nên sự kiện click mở chi tiết vừa gắn ở trên vẫn còn nguyên. */
+    themOTimTuDong(body);
     // v5.5: click 1 the trang thai -> loc allOrders (khong goi API moi) roi hien popup danh sach (yeu
     // cau v5.5: "Click vao trang thai chi hien thi cac lenh san xuat dang o trang thai do"). The "Tong
     // don hang" (data-status rong) hien TOAN BO, khong loc gi.
@@ -2315,6 +2318,7 @@ window.ModuleQLSX = (function () {
             : '<span class="empty-hint" style="padding:0;">—</span>'}</td>
         <td><button class="btn small secondary act-gt" data-madh="${escapeHtml(o.MaDH)}">💰 Tính giá thành</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
+    themOTimTuDong(body);   // v9.05: ô tìm Mã ĐH / Tên SP / Mã rập / Trạng thái
     body.querySelectorAll('.act-gt').forEach(b => b.addEventListener('click', () => openGiaThanhModal(b.dataset.madh, perm)));
     body.querySelectorAll('.act-gt-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(a.dataset.madh); }));
     const bCD = body.querySelector('#btnCaiDatCPC');
@@ -3052,6 +3056,7 @@ window.ModuleQLSX = (function () {
         <td><button class="btn small secondary act-dm" data-madh="${escapeHtml(o.MaDH)}">📐 Định mức / hao hụt</button>
           <button class="btn small secondary act-dm-in" data-madh="${escapeHtml(o.MaDH)}" title="In báo cáo định mức &amp; hao hụt">🖨️ In báo cáo</button></td>
       </tr>`).join('') || '<tr><td colspan="7" class="empty-hint">Chưa có lệnh sản xuất nào</td></tr>'}</tbody></table>`;
+    themOTimTuDong(body);   // v9.05: ô tìm Mã ĐH / Tên sản phẩm / Mã rập
     body.querySelectorAll('.act-dm').forEach(b => b.addEventListener('click', () => openDinhMucModal(b.dataset.madh, perm)));
     body.querySelectorAll('.act-dm-lenh').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); printLenhSanXuat(a.dataset.madh); }));
     body.querySelectorAll('.act-dm-in').forEach(b => b.addEventListener('click', () => inBaoCaoDinhMuc(b.dataset.madh)));
@@ -3368,6 +3373,7 @@ window.ModuleQLSX = (function () {
       <table><thead><tr><th>Mã ĐH</th><th>Tên SP</th><th>Mã Rập</th><th>Công đoạn hiện tại</th><th>Số sơ đồ</th><th style="width:170px">Thao tác</th></tr></thead>
       <tbody>${rows.map(o => `<tr><td>${escapeHtml(o.MaDH)}</td><td>${escapeHtml(o.TenSanPham || '')}</td><td>${escapeHtml(o.MaRap || '')}</td><td>${escapeHtml(o.TenCongDoan || '')}</td><td style="text-align:center;">${o.SoSoDo != null ? o.SoSoDo : ''}</td>
         <td><button class="btn small secondary act-bssd" data-madh="${escapeHtml(o.MaDH)}">Bổ sung sơ đồ</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có lệnh nào qua công đoạn Kỹ thuật</td></tr>'}</tbody></table>`;
+    themOTimTuDong(body);   // v9.05: ô tìm Mã ĐH / Tên SP / Mã rập / Công đoạn hiện tại
     body.querySelectorAll('.act-bssd').forEach(b => b.addEventListener('click', () => openProgressForm(b.dataset.madh, perm, 'KT')));
   }
   async function openProgressForm(maDH, perm, jumpStageCode) {

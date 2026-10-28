@@ -227,6 +227,7 @@ window.ModuleKhoHang = (function () {
     // v8.07: openTaiKhoanKhachForm nay là async (phải tải Danh mục khách hàng trước khi mở modal)
     // -> .catch() để lỗi tải danh mục hiện toast thay vì rơi thành unhandled rejection im lặng.
     if (bAdd) bAdd.addEventListener('click', () => openTaiKhoanKhachForm(null, perm).catch(err => toast(err.message, 'error')));
+    themOTimTuDong(body);   // v9.05: ô tìm Tên đăng nhập / Tên khách / SĐT / Khách hàng / Trạng thái
     body.querySelectorAll('.act-tkk-edit').forEach(b => b.addEventListener('click', () =>
       openTaiKhoanKhachForm(rows.find(x => String(x.TaiKhoanKhachID) === String(b.dataset.id)), perm).catch(err => toast(err.message, 'error'))));
     body.querySelectorAll('.act-tkk-del').forEach(b => b.addEventListener('click', async () => {
@@ -2283,6 +2284,16 @@ window.ModuleKhoHang = (function () {
       capNhatDem();
     }
     // v6.21: mở/đóng danh sách đơn con của 1 nhóm.
+    /* v9.05 — CỐ Ý KHÔNG GẮN Ô TÌM CHUNG Ở MÀN NÀY, dù nó nằm trong danh sách "chưa có tìm kiếm".
+       Rà chéo chỉ ra ba thứ đánh nhau nếu gắn:
+         1. applyOrderFilters() của chính màn cũng ghi tr.style.display theo 5 ô chọn — hai bộ lọc
+            tranh nhau cùng một thuộc tính, gõ một chữ là MỞ LẠI các dòng dropdown đang ẩn;
+         2. dòng đơn con tr[data-sub] mặc định ẩn, chỉ mở khi bấm "▾ N đơn" — bộ lọc chung coi
+            chúng là dòng thường nên gõ tìm là chúng tự bung ra;
+         3. #ordDemDong và dòng TỔNG CỘNG do capNhatDem()/capNhatTong() tính, không được gọi lại
+            ⇒ số đang hiện và số tổng nói dối.
+       Muốn có ô tìm ở đây phải nhập nó VÀO applyOrderFilters (một bộ lọc duy nhất), không phải
+       chồng thêm bộ thứ hai. Việc riêng, chưa làm. */
     body.querySelectorAll('.act-mo-nhom').forEach(btn => btn.addEventListener('click', () => {
       const con = body.querySelectorAll(`tr[data-sub="${btn.dataset.key}"]`);
       const dangMo = con.length && con[0].style.display !== 'none';
@@ -2984,6 +2995,7 @@ window.ModuleKhoHang = (function () {
 
     const bThem = body.querySelector('#btnThemKM');
     if (bThem) bThem.addEventListener('click', () => openKhuyenMaiForm(null, perm));
+    themOTimTuDong(body);   // v9.05: ô tìm Tên chương trình / Hiệu lực / Ghi chú
     body.querySelectorAll('.km-sua').forEach(b => b.addEventListener('click', () => openKhuyenMaiForm(b.dataset.id, perm)));
     body.querySelectorAll('.km-xoa').forEach(b => b.addEventListener('click', async () => {
       if (!confirm('Xóa chương trình khuyến mãi này?')) return;
@@ -3206,6 +3218,7 @@ window.ModuleKhoHang = (function () {
     // "Xem/In" da co san o module.khovai.js/module.phukien.js (Phieu nhap/xuat kho vai/phu kien) - 1 nut
     // mo modal xem chi tiet TREN MAN HINH, ben trong modal co them nut "In phieu" rieng (printHtml() dung
     // chung, khong phai xuat Excel) - xem openBaoGiaDetailModal()/printBaoGiaFromData() o duoi.
+    themOTimTuDong(body);   // v9.05: ô tìm Tên báo giá / Tên NCC / Người tạo
     body.querySelectorAll('.act-view-baogia').forEach(btn => btn.addEventListener('click', () => openBaoGiaDetailModal(btn.dataset.id)));
 
     // v5.19 (muc 2.1, yeu cau "Tạo báo giá Aloha: thêm chức năng sửa"): lay CA chi tiet bao gia hien co
@@ -3507,15 +3520,17 @@ window.ModuleKhoHang = (function () {
       body.innerHTML = `<div class="empty-hint">Không tải được: ${escapeHtml(e.message)}</div>`;
       return;
     }
-    // Lọc mã hàng làm ở trình duyệt: gõ tới đâu lọc tới đó, khỏi gọi lại API.
-    const loMa = String(hmLoc.maHang || '').trim().toLowerCase();
-    const ds = loMa
-      ? rows.filter(r => (String(r.MaHang || '') + ' ' + String(r.TenHang || '')).toLowerCase().indexOf(loMa) >= 0)
-      : rows;
+    /* v9.05 — BỎ TIỀN LỌC Ở ĐÂY. Việc lọc nay do wireTableSearch(body, 'hmMa') lo trọn (bỏ dấu,
+       tách từ, mọi cột). Giữ lại tiền lọc là HAI LUẬT KHÁC NHAU trên cùng một ô: lọc trước thì
+       có dấu, chỉ 2 cột, so nguyên chuỗi. Gõ "ao thun" rồi đổi ô Khách là vẽ lại qua tiền lọc và
+       ra "không có hàng mẫu nào" dù có dòng khớp — và dòng TỔNG cũng cộng trên tập đã bị cắt. */
+    const ds = rows;
     const dsKhach = [...new Set(rows.map(r => String(r.TenKhach || '').trim()).filter(Boolean))].sort();
     const tong = ds.reduce((a, r) => ({
-      gui: a.gui + Number(r.SoLuongCai || 0), tra: a.tra + Number(r.DaTraCai || 0), con: a.con + Number(r.ConOKhachCai || 0)
-    }), { gui: 0, tra: 0, con: 0 });
+      gui: a.gui + Number(r.SoLuongCai || 0), tra: a.tra + Number(r.DaTraCai || 0),
+      chot: a.chot + Number(r.MauDaChotCai || 0),   // v9.08
+      con: a.con + Number(r.ConOKhachCai || 0)
+    }), { gui: 0, tra: 0, chot: 0, con: 0 });
 
     body.innerHTML = `
       ${!coCot ? '<div class="empty-hint" style="text-align:left;color:#a8071a;">Chưa chạy <b>migration_v693</b> — chưa có cột đánh dấu hàng mẫu nên bảng này còn trống. Chạy migration rồi Ctrl+F5.</div>' : ''}
@@ -3523,17 +3538,23 @@ window.ModuleKhoHang = (function () {
       <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
         <label>Khách: <select id="hmKhach"><option value="">— tất cả —</option>${dsKhach.map(k => `<option value="${escapeHtml(k)}" ${k === hmLoc.tenKhach ? 'selected' : ''}>${escapeHtml(k)}</option>`).join('')}</select></label>
         <label>Mã hàng: <input id="hmMa" value="${escapeHtml(hmLoc.maHang)}" placeholder="gõ mã hoặc tên hàng" style="width:170px;"></label>
-        <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="hmTatCa" ${hmLoc.tatCa ? 'checked' : ''} style="width:auto;margin:0;"> Hiện cả mẫu đã trả xong</label>
+        <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="hmTatCa" ${hmLoc.tatCa ? 'checked' : ''} style="width:auto;margin:0;"> Hiện cả mẫu đã trả xong / đã chốt bán</label>
         <button class="btn small secondary" id="hmXuat">⬇️ Xuất Excel</button>
-        <span class="empty-hint" style="padding:0;margin-left:auto;">Còn ở khách: <b style="color:#c0392b;">${fmtNumber(tong.con)}</b> · đã gửi ${fmtNumber(tong.gui)} · đã trả ${fmtNumber(tong.tra)}</span>
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Còn ở khách: <b style="color:#c0392b;">${fmtNumber(tong.con)}</b> · đã gửi ${fmtNumber(tong.gui)} · đã trả ${fmtNumber(tong.tra)} · khách mua luôn ${fmtNumber(tong.chot)}</span>
       </div>
+      ${/* v9.08: + cột "Khách mua luôn" và cột Thao tác. Cột Thao tác gắn data-notim — chữ trên nút
+           giống hệt mọi dòng, để lọt vào chuỗi tìm là gõ "mua" ra nguyên bảng (luật v9.05). */''}
       <table><thead><tr>
         <th>Ngày gửi</th><th>Số phiếu</th><th>Khách hàng</th><th>Mã hàng</th><th>Tên hàng</th><th>Màu</th>
-        <th>SL gửi</th><th>Đã trả</th><th>Còn ở khách</th><th>ĐVT</th><th>Số ngày mượn</th>
+        <th>SL gửi</th><th>Đã trả</th><th>Khách mua luôn</th><th>Còn ở khách</th><th>ĐVT</th><th>Số ngày mượn</th>
+        ${perm.canEdit ? '<th style="width:130px">Thao tác</th>' : ''}
       </tr></thead><tbody>
         ${ds.map(r => {
           const con = Number(r.ConOKhachCai || 0);
           const ngay = Number(r.SoNgayMuon || 0);
+          const chot = Number(r.MauDaChotCai || 0);
+          const daTra = Number(r.DaTraCai || 0);
+          const toiDa = Math.max(0, Number(r.SoLuongCai || 0) - daTra);   // chốt + đã trả <= đã gửi
           return `<tr ${con <= 0 ? 'style="background:#f6ffed;color:#5f6368;"' : ''}>
             <td>${fmtDate(r.NgayBan)}</td>
             <td><a href="javascript:void(0)" class="hm-xem" data-id="${r.PhieuBHID}"><b>${escapeHtml(r.SoPhieu || '')}</b></a></td>
@@ -3542,36 +3563,77 @@ window.ModuleKhoHang = (function () {
             <td>${escapeHtml(r.TenHang || '')}</td>
             <td>${escapeHtml(r.TenMau || '')}</td>
             <td style="text-align:right;">${fmtNumber(r.SoLuongCai)}</td>
-            <td style="text-align:right;">${fmtNumber(r.DaTraCai)}</td>
+            <td style="text-align:right;">${fmtNumber(daTra)}</td>
+            <td style="text-align:right;">${chot > 0
+              ? `<b style="color:#137333;">${fmtNumber(chot)}</b>${r.MauChotNgay ? `<div style="font-size:11px;color:#5f6368;">${fmtDate(r.MauChotNgay)}</div>` : ''}${r.MauChotGhiChu ? `<div style="font-size:11px;color:#5f6368;" title="${escapeHtml(r.MauChotGhiChu)}">${escapeHtml(String(r.MauChotGhiChu).slice(0, 24))}</div>` : ''}`
+              : ''}</td>
             <td style="text-align:right;"><b ${con > 0 ? 'style="color:#c0392b;"' : ''}>${fmtNumber(con)}</b></td>
             <td>${escapeHtml(r.DonViCoBan || 'Cái')}</td>
-            <td style="text-align:right;">${con > 0 ? fmtNumber(ngay) : '<span class="badge success">đã trả đủ</span>'}</td>
+            <td style="text-align:right;">${con > 0 ? fmtNumber(ngay)
+              : (chot > 0 ? '<span class="badge" style="background:#e6f4ea;color:#137333;border:1px solid #ceead6;">khách mua luôn</span>'
+                          : '<span class="badge success">đã trả đủ</span>')}</td>
+            ${perm.canEdit ? `<td data-notim>${toiDa > 0
+              ? `<button type="button" class="btn small secondary hm-chot" data-id="${r.PhieuBHChiTietID}" data-chot="${chot}" data-toida="${toiDa}" data-gc="${escapeHtml(r.MauChotGhiChu || '')}" data-ma="${escapeHtml((r.MaHang || '') + (r.TenMau ? ' - ' + r.TenMau : ''))}" title="Khách giữ luôn, không trả về — ghi nhận để dòng này rời sổ. Tiền và tồn KHÔNG đổi.">🛒 Khách mua luôn</button>`
+              : '<span class="empty-hint" style="padding:0;">—</span>'}</td>` : ''}
           </tr>`;
-        }).join('') || `<tr><td colspan="11" class="empty-hint">${coCot ? 'Không có hàng mẫu nào đang ở khách.' : 'Chưa chạy migration_v693.'}</td></tr>`}
+        }).join('') || `<tr><td colspan="${perm.canEdit ? 13 : 12}" class="empty-hint">${coCot ? 'Không có hàng mẫu nào đang ở khách.' : 'Chưa chạy migration_v693.'}</td></tr>`}
       </tbody>
       ${ds.length ? `<tfoot><tr data-tong style="font-weight:bold;">
         <td colspan="6" style="text-align:right;">TỔNG CỘNG</td>
         <td style="text-align:right;">${fmtNumber(tong.gui)}</td>
         <td style="text-align:right;">${fmtNumber(tong.tra)}</td>
+        <td style="text-align:right;color:#137333;">${fmtNumber(tong.chot)}</td>
         <td style="text-align:right;color:#c0392b;">${fmtNumber(tong.con)}</td>
-        <td colspan="2"></td></tr></tfoot>` : ''}
+        <td colspan="${perm.canEdit ? 3 : 2}"></td></tr></tfoot>` : ''}
       </table>`;
-    wireTableSearch(body);
-    const veLai = () => renderHangMau(perm);
+    /* v9.05 — SỬA LỖI CŨ: ở đây vốn gọi wireTableSearch(body) KHÔNG tham số, tức đi tìm ô
+       dmSearchBox — màn này không có ô đó, nên lời gọi CHẾT TỪ ĐẦU, không ai biết. Ô tìm thật
+       của màn là hmMa, trước lọc bằng tay theo textContent: phân biệt dấu, không tách từ, và
+       tính cả chữ trên nút vào chuỗi tìm. Nay trỏ wireTableSearch vào đúng ô đó để dùng chung
+       một luật với toàn hệ thống. */
+    wireTableSearch(body, 'hmMa');
+    /* v9.08: bảng vẽ lại (đổi khách / bấm chốt) thì ô tìm GIỮ NGUYÊN chữ đang gõ nhưng
+       wireTableSearch chỉ gắn listener, không lọc lần đầu ⇒ chữ còn đó mà bảng hiện đủ dòng,
+       người dùng tưởng ô tìm hỏng. Bắn một sự kiện input để nó lọc lại ngay. */
+    if (hmLoc.maHang) { const o0 = body.querySelector('#hmMa'); if (o0) o0.dispatchEvent(new Event('input')); }
+    const veLai = () => renderHangMau(perm).catch(err => toast(err.message, 'error'));
     body.querySelector('#hmKhach').addEventListener('change', (e) => { hmLoc.tenKhach = e.target.value; veLai(); });
     body.querySelector('#hmTatCa').addEventListener('change', (e) => { hmLoc.tatCa = e.target.checked; veLai(); });
-    // Ô mã hàng lọc tại chỗ: KHÔNG vẽ lại cả bảng mỗi phím gõ (mất con trỏ), chỉ ẩn/hiện dòng.
+    /* Chỉ GHI LẠI giá trị để lần vẽ lại còn giữ chữ đang gõ — việc ẩn/hiện dòng đã do
+       wireTableSearch ở trên lo. Đừng lọc thêm lần nữa ở đây, hai bộ lọc tranh nhau cùng một
+       thuộc tính style.display là màn hình nhấp nháy và sai kết quả. */
     const oMa = body.querySelector('#hmMa');
-    oMa.addEventListener('input', () => {
-      hmLoc.maHang = oMa.value;
-      const q = oMa.value.trim().toLowerCase();
-      body.querySelectorAll('tbody tr').forEach(tr => {
-        const t = tr.textContent.toLowerCase();
-        tr.style.display = (!q || t.indexOf(q) >= 0) ? '' : 'none';
-      });
-    });
+    oMa.addEventListener('input', () => { hmLoc.maHang = oMa.value; });
     body.querySelectorAll('.hm-xem').forEach(a =>
       a.addEventListener('click', () => xemPhieuBanHang(a.dataset.id, perm).catch(err => toast(err.message, 'error'))));
+    /* ================================================================================================
+       v9.08 — 🛒 KHÁCH MUA LUÔN. Chỉ ghi một con số trạng thái để dòng rời sổ; KHÔNG lập phiếu,
+       KHÔNG đụng tiền/tồn (phiếu gửi mẫu vốn đã trừ tồn + ghi công nợ đủ giá ngay lúc lập).
+       Gửi SỐ TUYỆT ĐỐI nên sửa lại được, gõ 0 là bỏ đánh dấu. */
+    body.querySelectorAll('.hm-chot').forEach(b => b.addEventListener('click', async () => {
+      const dangChot = Number(b.dataset.chot) || 0;
+      const toiDa = Number(b.dataset.toida) || 0;
+      const g = prompt(
+        `KHÁCH MUA LUÔN — ${b.dataset.ma}\n\n`
+        + `Nhập số lượng khách giữ luôn, theo ĐVT ở cột ĐVT (tối đa ${toiDa}; gõ 0 để bỏ đánh dấu).\n\n`
+        + `Lưu ý: tiền và tồn kho KHÔNG đổi — phiếu gửi mẫu vốn đã trừ tồn và ghi công nợ đủ giá.\n`
+        + `Việc này chỉ cho dòng rời khỏi sổ "đang ở khách", và dòng đã chốt sẽ KHÔNG trả lại được nữa.`,
+        String(dangChot > 0 ? dangChot : toiDa));
+      if (g === null) return;                      // bấm Hủy
+      const soCai = Math.round(Number(String(g).trim().replace(',', '.')) || 0);
+      if (!isFinite(soCai) || soCai < 0) return toast('Số lượng không hợp lệ.', 'error');
+      if (soCai > toiDa) return toast(`Tối đa chốt được ${toiDa} (phần còn lại đã được khách trả về).`, 'error');
+      /* Mồi sẵn ghi chú ĐANG CÓ — không thì sửa số lượng (5→3) là bấm OK một cái xóa trắng ghi chú
+         cũ, im lặng (rà chéo v9.08 bắt được). */
+      const ghiChu = soCai > 0 ? (prompt('Ghi chú (tùy chọn) — ví dụ: khách chốt qua Zalo 27/10, NV Hà:', b.dataset.gc || '') || '') : '';
+      b.disabled = true;
+      try {
+        const kq = await apiPut('/api/banhang/hangmau/chot/' + b.dataset.id, { soCai, ghiChu });
+        toast(kq.message || 'Đã ghi nhận.', 'success', 8000);
+        veLai();
+      } catch (err) { toast(err.message, 'error', 8000); }
+      finally { b.disabled = false; }
+    }));
     const bx = body.querySelector('#hmXuat');
     bx.addEventListener('click', async () => {
       const p = new URLSearchParams();
@@ -3585,6 +3647,28 @@ window.ModuleKhoHang = (function () {
       bx.textContent = nhanCu;
     });
   }
+
+  /* ================================================================================================
+     v9.04 — "CÓ QUYỀN SỬA MÀ KHÔNG SỬA ĐƯỢC" (Nguyen báo 2026-10-26, ví dụ PX26609)
+
+     Backend chặn CẢ Sửa LẪN Hủy khi phiếu đã có PHIẾU THU gắn vào (banhang.js: PUT /phieu/:id và
+     PUT /phieu/:id/huy, cùng một câu thông báo rõ ràng). Nhưng màn danh sách trước đây chỉ ẩn LUÔN
+     nút Sửa, còn nút Hủy vẫn hiện — nên người dùng thấy mình có quyền, có nút Hủy, mà nút Sửa biến
+     mất KHÔNG MỘT LỜI GIẢI THÍCH. Đúng loại lỗi "bấm nút không có gì xảy ra" của dự án, chỉ tệ hơn:
+     còn chẳng có nút để bấm.
+
+     Từ v9.04: nút vẫn hiện, ở trạng thái KHÓA, bấm vào thì nói rõ lý do + liệt kê phiếu thu nào đang
+     chặn + chỉ đường xử lý.
+
+     ⚠️ Điều kiện phải là "lớn hơn 0" cho KHỚP ĐÚNG backend (so(daThu) > 0). Bản cũ viết
+     !Number(r.DaThu) nên còn khóa oan phiếu có tổng thu ÂM (phiếu thu điều chỉnh, hoàn tiền) —
+     backend lại cho sửa. KHÔNG dùng dấu nháy ngược trong comment: file này đầy template literal,
+     đặt nhầm chỗ là đóng chuỗi sớm và sập máy chạy thật (đã trả giá ở v7.98 và v8.73). */
+  const bhBiKhoa = (r) => Number(r.DaThu) > 0;
+  const btnKhoaHtml = (r, viec) => `<button class="btn small secondary act-khoa" data-id="${r.PhieuBHID}"
+      data-viec="${escapeHtml(viec)}" data-dathu="${Number(r.DaThu) || 0}"
+      style="opacity:.55;border-style:dashed;"
+      title="Phiếu đã có phiếu thu ${fmtTien(r.DaThu)} đ nên không ${escapeHtml(viec)} được — bấm để xem phiếu thu nào đang chặn">🔒 ${escapeHtml(viec === 'sửa' ? 'Sửa' : 'Hủy')}</button>`;
 
   async function renderBanHang(perm) {
     const body = document.getElementById('khBody');
@@ -3636,13 +3720,20 @@ window.ModuleKhoHang = (function () {
         ${/* Ghi chú dài thì cắt bớt cho khỏi kéo giãn bảng, rê chuột xem đủ (title). */''}
         <td title="${escapeHtml(r.GhiChu || '')}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.GhiChu || '')}</td>
         ${/* v6.47: xuất riêng 1 phiếu ra Excel (bố cục giống bản in). */''}
-        <td><button class="btn small secondary act-in" data-id="${r.PhieuBHID}">🖨️ In</button>
+        ${/* v9.04: data-notim — chữ trên nút KHÔNG được vào chuỗi tìm kiếm. Trước đây cột này thiếu
+             nên gõ "sua" đã lọc nhầm; từ v9.04 MỌI phiếu chưa hủy đều có chữ "Sửa"/"Hủy" (nút khóa
+             cũng mang chữ đó) nên gõ "sua"/"huy" sẽ ra nguyên bảng nếu không gắn. */''}
+        <td data-notim><button class="btn small secondary act-in" data-id="${r.PhieuBHID}">🖨️ In</button>
           <button class="btn small secondary act-xls" data-id="${r.PhieuBHID}" data-sp="${escapeHtml(r.SoPhieu || '')}" title="Xuất phiếu này ra Excel">⬇️ Excel</button>
           ${/* v7.43: xuất file hóa đơn GTGT để nạp vào VietInvoice. Giá trên phiếu là giá ĐÃ gồm
                thuế nên backend bóc 1.08 ra giá trước thuế. Phiếu đã hủy thì không cho xuất. */''}
           ${String(r.TrangThai || '') !== 'Đã hủy' ? `<button class="btn small secondary act-hoadon" data-id="${r.PhieuBHID}" data-sp="${escapeHtml(r.SoPhieu || '')}" title="Xuất file hóa đơn GTGT (nạp vào VietInvoice) — giá trước thuế 8%">🧾 Hóa đơn</button>` : ''}
-          ${perm.canEdit && r.TrangThai !== 'Đã hủy' && !Number(r.DaThu) ? `<button class="btn small secondary act-sua" data-id="${r.PhieuBHID}" title="Sửa phiếu (hoàn tồn cũ, trừ lại theo số mới)">Sửa</button>` : ''}
-          ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small secondary act-huy" data-id="${r.PhieuBHID}" title="Hủy phiếu và HOÀN TỒN KHO">Hủy</button>` : ''}
+          ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? (bhBiKhoa(r)
+              ? btnKhoaHtml(r, 'sửa')
+              : `<button class="btn small secondary act-sua" data-id="${r.PhieuBHID}" title="Sửa phiếu (hoàn tồn cũ, trừ lại theo số mới)">Sửa</button>`) : ''}
+          ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? (bhBiKhoa(r)
+              ? btnKhoaHtml(r, 'hủy')
+              : `<button class="btn small secondary act-huy" data-id="${r.PhieuBHID}" title="Hủy phiếu và HOÀN TỒN KHO">Hủy</button>`) : ''}
           ${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuBHID}">Xóa</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="13" class="empty-hint">Chưa có phiếu bán hàng nào</td></tr>'}</tbody></table>`;
     wireTableSearch(body);
@@ -3705,6 +3796,9 @@ window.ModuleKhoHang = (function () {
     body.querySelectorAll('.act-sua').forEach(b => b.addEventListener('click', async () => {
       try {
         const d = (await apiGet('/api/banhang/phieu/' + b.dataset.id)).data;
+        /* v9.08: chặn NGAY tại đây, không để người dùng điền xong cả form rồi mới ăn 400 lúc Lưu.
+           Lý do do backend tính (GET /phieu/:id trả LyDoKhongSua) nên hai đầu không thể lệch. */
+        if (d.header && d.header.LyDoKhongSua) return toast(d.header.LyDoKhongSua, 'error', 10000);
         await openPhieuBanHangForm(perm, [], d);
       } catch (err) { toast(err.message, 'error'); }
     }));
@@ -3712,6 +3806,65 @@ window.ModuleKhoHang = (function () {
       if (!confirm('HỦY phiếu bán hàng này?\n\n• Tồn kho sẽ được HOÀN LẠI đúng số đã xuất.\n• Các đơn khách đặt gắn với phiếu trở về "Chờ xử lý".\n• Công nợ khách hàng giảm tương ứng.')) return;
       try { await apiPut('/api/banhang/phieu/' + b.dataset.id + '/huy', {}); toast('Đã hủy phiếu và hoàn tồn kho.', 'success'); renderBanHang(perm); }
       catch (err) { toast(err.message, 'error'); }
+    }));
+    /* v9.04: nút KHÓA — nói rõ vì sao không sửa/hủy được và phiếu thu nào đang chặn.
+       Gọi route của CHÍNH màn bán hàng (/api/banhang/phieu/:id/phieuthu), không gọi /api/congno/...
+       vì người bán hàng thường không có quyền Công nợ => 403 => lại thành nút câm. */
+    body.querySelectorAll('.act-khoa').forEach(b => b.addEventListener('click', async () => {
+      /* Bọc CẢ THÂN hàm, không chỉ lời gọi API: handler async mà ném ra ngoài thì trình duyệt nuốt
+         im lặng, lại đúng thành "bấm nút không có gì xảy ra" — cái mà v9.04 sinh ra để chữa. */
+      try {
+        const viec = b.dataset.viec || 'sửa';
+        /* data-dathu là ẢNH CHỤP lúc vẽ bảng. tongDaThu của API mới là số TƯƠI — bắt buộc phải
+           dùng số tươi để phân biệt hai tình huống khác hẳn nhau khi danh sách rỗng:
+             • kế toán vừa xóa phiếu thu xong (tươi = 0)  -> chỉ cần tải lại danh sách;
+             • số liệu thật sự lệch (tươi khác 0)         -> mới báo người quản trị.
+           Lẫn hai cái này là vu oan cho CSDL đúng lúc người dùng vừa làm đúng. */
+        const daThuCu = Number(b.dataset.dathu) || 0;
+        let ds, daThu;
+        try {
+          const kq = await apiGet('/api/banhang/phieu/' + b.dataset.id + '/phieuthu');
+          ds = kq.data || [];
+          daThu = Number(kq.tongDaThu) || 0;
+        } catch (err) {
+          toast(`Phiếu đã có phiếu thu ${fmtTien(daThuCu)} đ nên không ${viec} được. `
+            + `Vào Công nợ → Phiếu thu để xóa phiếu thu trước. (Không đọc được danh sách: ${err.message})`, 'error');
+          return;
+        }
+        if (!ds.length && daThu === 0) {
+          toast(`Phiếu thu đã được xóa rồi — phiếu này ${viec} được bình thường. Đang tải lại danh sách...`, 'success');
+          renderBanHang(perm);
+          return;
+        }
+        const bang = ds.length
+          ? `<table><thead><tr><th>Số phiếu thu</th><th>Ngày thu</th><th>Số tiền</th><th>Hình thức</th><th>Diễn giải</th></tr></thead>
+             <tbody>${ds.map(t => `<tr>
+               <td><b>${escapeHtml(t.SoPhieu || '')}</b></td>
+               <td>${fmtDate(t.NgayThu)}</td>
+               <td style="text-align:right;">${fmtTien(t.SoTien)}</td>
+               <td>${escapeHtml(t.HinhThuc || '')}</td>
+               <td>${escapeHtml(t.DienGiai || '')}</td></tr>`).join('')}</tbody></table>`
+          : `<div class="empty-hint">Không đọc thấy phiếu thu nào gắn vào phiếu này, nhưng tổng đã thu đang là
+               <b>${fmtTien(daThu)}</b> đ. Số liệu không khớp — báo người quản trị kiểm tra bảng PhieuThu.</div>`;
+        const m = openModal(`
+          <h3>Không ${escapeHtml(viec)} được phiếu bán hàng này</h3>
+          <p style="margin:6px 0;">Phiếu đã có <b>phiếu thu ${fmtTien(daThu)} đ</b> gắn vào. Sửa hoặc hủy phiếu bán hàng
+             sẽ làm số tiền đã thu lệch với công nợ khách, nên hệ thống chặn —
+             <b>đây không phải vấn đề quyền</b>, tài khoản của anh/chị vẫn có quyền sửa.</p>
+          <p style="margin:6px 0;"><b>Muốn ${escapeHtml(viec)} phiếu thì làm theo thứ tự:</b></p>
+          <ol style="margin:4px 0 10px 18px;padding:0;">
+            <li>Vào <b>Công nợ → Phiếu thu</b>, xóa các phiếu thu dưới đây.</li>
+            <li>Quay lại đây, bấm <b>Tải lại danh sách</b> rồi ${escapeHtml(viec)} phiếu bán hàng.</li>
+            <li>Lập lại phiếu thu theo số tiền mới.</li>
+          </ol>
+          <div style="max-height:40vh;overflow:auto;">${bang}</div>
+          <div class="modal-actions">
+            <button type="button" class="btn secondary" id="bhKhoaDong">Đóng</button>
+            <button type="button" class="btn" id="bhKhoaTaiLai">🔄 Tải lại danh sách</button>
+          </div>`);
+        m.querySelector('#bhKhoaDong').addEventListener('click', closeModal);
+        m.querySelector('#bhKhoaTaiLai').addEventListener('click', () => { closeModal(); renderBanHang(perm); });
+      } catch (err) { toast('Lỗi: ' + err.message, 'error'); }
     }));
     body.querySelectorAll('.act-xoa').forEach(b => b.addEventListener('click', async () => {
       if (!confirm('XÓA HẲN phiếu bán hàng này? Tồn kho được hoàn lại (nếu phiếu còn hiệu lực). Không hoàn lại được.')) return;

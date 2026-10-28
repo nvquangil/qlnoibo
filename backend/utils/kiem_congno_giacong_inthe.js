@@ -68,8 +68,9 @@ kiem(/apiPut\(`\/api\/qlsx\/orders\/\$\{maDH\}\/sodo\/\$\{row\.ID\}`/.test(sFeQl
 
 /* ================================ (B) CONG NO GIA CONG ================================ */
 console.log('\n=== B1. MOT ban cong thuc luong (khong hai ban) ===');
-kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha \}/.test(sUtil),
-  'utils/luongGiaCongInThe.js export 3 ham');
+// v9.02: util export them APPLY_NGAY_QC + bieuThucNgayKy (khoi QC dung chung) — van la MOT ban cong thuc.
+kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha(, APPLY_NGAY_QC, bieuThucNgayKy)? \}/.test(sUtil),
+  'utils/luongGiaCongInThe.js export 3 ham tinh tien (+ 2 khoi SQL dung chung tu v9.02)');
 kiem(/require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sPayroll), 'payroll.js NHAP tu util');
 kiem(/require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sCongNo), 'congno.js NHAP tu util');
 /* Cau SQL tinh tien chi duoc xuat hien o DUNG MOT file. */
@@ -84,7 +85,7 @@ kiem(/SoLuongNhan/.test(sUtil) && !/SoLuongGiao\s*\*/.test(sUtil),
   'MOC = SL NHAN (khong tinh tien phan da giao chua nhan)');
 
 console.log('\n=== B2. Ky loc: co ky thi loc, KHONG ky thi lay tat ca (cong no luy ke) ===');
-kiem(/function dieuKienKy\(cot, ky\)/.test(sUtil), 'co ham dung dieu kien ky');
+kiem(/function dieuKienKy\(\w+, ky\)/.test(sUtil), 'co ham dung dieu kien ky');   // v8.61 doi tham so dau thanh _cotCu
 kiem(/if \(!nam \|\| !thang\) return '';/.test(sUtil), 'khong truyen ky -> KHONG loc (lay tat ca)');
 kiem(/__loadGiaCong\(pool, sql, \{ nam, thang \}\)/.test(sPayroll),
   'payroll VAN loc theo nam/thang (hanh vi bang luong khong doi)');

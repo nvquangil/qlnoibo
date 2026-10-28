@@ -25,7 +25,7 @@ const { congNoTruocChungTu } = require('../utils/congNoTruocChungTu');
 const { so, lam2, tien, laDonViGop, donViChinhLaGop, slSangCai, slSangDonViChinh,
         sinhSoPhieu, ghiXuatKho } = require('../utils/banHangCommon');
 /* v7.59: MOT ban cong thuc "dong da ban -> da tra bao nhieu, con lai bao nhieu" (xem file do). */
-const { layDongDaBan: __layDongDaBan } = require('../utils/dongDaBanChoKhach');
+const { layDongDaBan: __layDongDaBan, coCotHangMau } = require('../utils/dongDaBanChoKhach');
 
 const router = express.Router();
 
@@ -67,9 +67,14 @@ router.get('/khach', requireAuth, requirePermission('KHOHANG', 'view'), requireC
 /* ---------- phieu xuat DA XUAT cho khach do (de chon) ---------- */
 router.get('/phieuxuat', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
+  /* v9.08: + LaHangMau — ô chọn phiếu ghi rõ phiếu nào là GỬI MẪU. Ở chế độ chọn MỘT phiếu, bảng
+     bên dưới không có cột "Phiếu xuất" nên nếu không ghi ở đây thì người lập không có chỗ nào
+     biết mình đang nhận lại hàng mẫu. Dò cột để CSDL chưa chạy migration_v693 vẫn chạy như cũ. */
+  const coMauNL = await coCotHangMau(pool);
   const rs = (await pool.request().input('ten', sql.NVarChar, String(req.query.tenKhach || '').trim()).query(`
     SELECT p.PhieuBHID, p.SoPhieu, p.NgayBan, p.TongSLCai, p.TongThanhToan,
-           p.PhanTramCKNPP, p.PhanTramVAT
+           p.PhanTramCKNPP, p.PhanTramVAT,
+           ${coMauNL ? 'ISNULL(p.LaHangMau, 0)' : 'CAST(0 AS BIT)'} AS LaHangMau
     FROM PhieuBanHang p
     WHERE p.TrangThai <> N'Đã hủy' AND LTRIM(RTRIM(p.TenKhach)) = @ten
     ORDER BY p.NgayBan DESC, p.PhieuBHID DESC`)).recordset;
@@ -344,7 +349,12 @@ async function chuanBiPhieu(pool, b) {
     if (soCai <= 0) return { loi: `Dòng ${g.MaHang}: số lượng nhập lại phải lớn hơn 0.` };
     const daGop = gopTheoDong.get(g.PhieuBHChiTietID) || 0;
     if (soCai + daGop > g.ConTraCai) {
-      return { loi: `Dòng ${g.MaHang}${g.TenMau ? ' - ' + g.TenMau : ''} (phiếu ${g.SoPhieu}): đã bán ${so(g.SoLuongCai)} Cái, đã trả ${so(g.DaTraCai)} Cái, chỉ còn trả được ${g.ConTraCai} Cái — bạn đang nhập lại ${soCai + daGop} Cái.` };
+      /* v9.08: câu từ chối phải nói CẢ phần "khách mua luôn" — không thì người dùng thấy "đã bán 5,
+         đã trả 0, chỉ còn trả được 2" mà không hiểu 3 cái kia đi đâu. */
+      const daChot = so(g.MauDaChotCai);
+      return { loi: `Dòng ${g.MaHang}${g.TenMau ? ' - ' + g.TenMau : ''} (phiếu ${g.SoPhieu}): đã bán ${so(g.SoLuongCai)} Cái, đã trả ${so(g.DaTraCai)} Cái`
+        + (daChot ? `, khách MUA LUÔN ${daChot} Cái (đã chốt ở sổ Hàng mẫu — muốn trả lại thì vào đó bỏ đánh dấu trước)` : '')
+        + `, chỉ còn trả được ${g.ConTraCai} Cái — bạn đang nhập lại ${soCai + daGop} Cái.` };
     }
     gopTheoDong.set(g.PhieuBHChiTietID, daGop + soCai);
 

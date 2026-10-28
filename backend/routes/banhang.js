@@ -30,7 +30,7 @@ const { taoWorkbookHoaDon } = require('../utils/hoaDonVietInvoice');
 const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 /* v7.59: MOT ban cong thuc "da tra / con o khach" — dung chung voi routes/nhaplai.js va 4 man hinh
    hang mau. Xem ghi chu dai trong chinh file do. */
-const { hangMauDangOKhach, gomTheoKhachMa, coCotHangMau } = require('../utils/dongDaBanChoKhach');
+const { hangMauDangOKhach, gomTheoKhachMa, coCotHangMau, coCotMauChot } = require('../utils/dongDaBanChoKhach');
 /* v8.70: MOT ban cong thuc "%CK cua ma X vao ngay Y" — dung chung voi man don khach dat hang. */
 const { layKhuyenMaiTheoNgay } = require('../utils/khuyenMai');
 
@@ -628,6 +628,81 @@ router.get('/hangmau/nhac', requireAuth, requirePermission('KHOHANG', 'view'), a
   res.json({ success: true, data: await docHangMau(pool, q) });
 });
 
+/* ================================================================================================
+   v9.08 — "KHACH MUA LUON" (chot ban hang mau) — DANH DAU O CAP DONG, THEO SO LUONG
+
+   Nguyen 2026-10-27: "nhung mau khach mua luon thi xu ly nhu the nao de theo doi".
+
+   🔴 KHONG DUNG TOI TIEN VA TON — va day la diem de hieu nham nhat cua ca tinh nang:
+   phieu "Gui mau" von LA phieu ban hang (co LaHangMau), DA tru ton va DA ghi cong no du gia ngay
+   luc lap. Khach mua luon nghia la khong con gi phai lam ve so lieu. Route nay CHI ghi mot con so
+   TRANG THAI de dong do roi so "Hang mau o khach" — tuyet doi khong lap phieu, khong sua tien,
+   khong dung vao TheKhoChiTietMau.
+
+   Nhan SO TUYET DOI (khong cong don): `soCai` = tong so cai khach mua luon cua dong nay. Nho vay
+   sua sai duoc (go nham 5 thi gui lai 2), va go 0 la BO chot. Cong don thi khong bao gio lui lai
+   duoc neu bam nham — bai hoc "mot nghiep vu mot luong".
+
+   GATE: KHOHANG/edit + chuc nang 'hangmau' (dung tab so hang mau — nguoi duoc giao so moi duoc chot).
+   ================================================================================================ */
+router.put('/hangmau/chot/:ctId', requireAuth, requirePermission('KHOHANG', 'edit'),
+  requireChucNang('KHOHANG', 'hangmau'), async (req, res) => {
+    const pool = await getPool();
+    if (!(await coCotMauChot(pool))) {
+      return res.status(400).json({ success: false, message: 'Chưa chạy migration_v884 nên chưa dùng được chức năng "Khách mua luôn". Chạy database/migration_v884.sql rồi pm2 restart.' });
+    }
+    const ctId = Number(req.params.ctId);
+    const soCai = Math.round(so((req.body || {}).soCai));
+    const ghiChu = String((req.body || {}).ghiChu || '').trim().slice(0, 200) || null;
+    if (!ctId) return res.status(400).json({ success: false, message: 'Thiếu dòng phiếu bán hàng.' });
+    if (soCai < 0) return res.status(400).json({ success: false, message: 'Số lượng chốt bán không được âm.' });
+
+    /* Doc lai dong TU CSDL — khong tin con so client gui kem. Lay ca so da tra ve de chan
+       "chot + da tra > da gui" (hai duong tru cung mot dong, xem utils/dongDaBanChoKhach.js). */
+    const d = (await pool.request().input('id', sql.Int, ctId).query(`
+      SELECT ct.ID, ct.SoLuongCai, ct.MaHangID, h.MaHang, ms.TenMau,
+             p.SoPhieu, p.TrangThai, ${await coCotHangMau(pool) ? 'ISNULL(p.LaHangMau, 0)' : 'CAST(0 AS BIT)'} AS LaHangMau,
+             ISNULL((SELECT SUM(nl.SoLuongCai) FROM PhieuNhapLaiChiTiet nl
+                     JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
+                     WHERE nl.PhieuBHChiTietID = ct.ID AND np.TrangThai <> N'Đã hủy'), 0) AS DaTraCai
+      FROM PhieuBanHangChiTiet ct
+      JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+      JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+      LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+      WHERE ct.ID = @id`)).recordset[0];
+    if (!d) return res.status(404).json({ success: false, message: 'Không tìm thấy dòng hàng mẫu này (có thể phiếu đã bị sửa/xóa). Tải lại sổ.' });
+    if (d.TrangThai === 'Đã hủy') {
+      return res.status(400).json({ success: false, message: `Phiếu ${d.SoPhieu} đã hủy — không chốt bán được.` });
+    }
+    if (!Number(d.LaHangMau)) {
+      return res.status(400).json({ success: false, message: `Phiếu ${d.SoPhieu} không phải phiếu GỬI MẪU — hàng bán thường thì không cần chốt, nó vốn đã là bán đứt.` });
+    }
+    const daTra = so(d.DaTraCai), daGui = so(d.SoLuongCai);
+    if (soCai + daTra > daGui) {
+      return res.status(400).json({
+        success: false,
+        message: `${d.MaHang}${d.TenMau ? ' - ' + d.TenMau : ''} (phiếu ${d.SoPhieu}): đã gửi ${daGui}, khách đã trả về ${daTra} — chỉ chốt bán được tối đa ${daGui - daTra}. Bạn đang chốt ${soCai}.`
+      });
+    }
+
+    await pool.request()
+      .input('id', sql.Int, ctId)
+      .input('sl', sql.Int, soCai)
+      .input('gc', sql.NVarChar, ghiChu)
+      .query(`UPDATE PhieuBanHangChiTiet
+                 SET MauDaChotCai = NULLIF(@sl, 0),
+                     MauChotNgay  = CASE WHEN @sl > 0 THEN ISNULL(MauChotNgay, CAST(GETDATE() AS DATE)) ELSE NULL END,
+                     MauChotGhiChu = CASE WHEN @sl > 0 THEN @gc ELSE NULL END
+               WHERE ID = @id`);
+    res.json({
+      success: true,
+      message: soCai > 0
+        ? `Đã ghi nhận khách MUA LUÔN ${soCai} ${d.MaHang}${d.TenMau ? ' - ' + d.TenMau : ''}. Tiền và tồn kho không đổi (phiếu gửi mẫu vốn đã trừ tồn + ghi công nợ đủ giá).`
+        : `Đã BỎ đánh dấu chốt bán — dòng này quay lại sổ "đang ở khách".`,
+      data: { conOKhach: daGui - daTra - soCai }
+    });
+  });
+
 router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
   requireChucNang('KHOHANG', 'hangmau'), async (req, res) => {
     const pool = await getPool();
@@ -646,6 +721,7 @@ router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
       { header: 'Màu', key: 'TenMau', width: 14 },
       { header: 'SL gửi', key: 'SLGui', width: 10 },
       { header: 'Đã trả', key: 'DaTra', width: 10 },
+      { header: 'Khách mua luôn', key: 'DaChot', width: 14 },   // v9.08
       { header: 'Còn ở khách', key: 'ConLai', width: 12 },
       { header: 'Đơn vị', key: 'DonVi', width: 9 },
       { header: 'Số ngày mượn', key: 'SoNgay', width: 13 },
@@ -655,7 +731,7 @@ router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
     ds.forEach(r => ws.addRow({
       Ngay: ngayVN(r.NgayBan), SoPhieu: r.SoPhieu, TenKhach: r.TenKhach,
       MaHang: r.MaHang, TenHang: r.TenHang, TenMau: r.TenMau || '',
-      SLGui: so(r.SoLuongCai), DaTra: so(r.DaTraCai), ConLai: so(r.ConOKhachCai),
+      SLGui: so(r.SoLuongCai), DaTra: so(r.DaTraCai), DaChot: so(r.MauDaChotCai), ConLai: so(r.ConOKhachCai),
       DonVi: r.DonViCoBan || 'Cái', SoNgay: r.SoNgayMuon == null ? '' : r.SoNgayMuon,
       GhiChu: r.GhiChu || ''
     }));
@@ -663,11 +739,11 @@ router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
       const cuoi = ws.rowCount;
       const cot = k => ws.getColumn(k).letter;
       const tong = k => ({ formula: `SUM(${cot(k)}2:${cot(k)}${cuoi})` });
-      const r = ws.addRow({ TenHang: 'TỔNG', SLGui: tong('SLGui'), DaTra: tong('DaTra'), ConLai: tong('ConLai') });
+      const r = ws.addRow({ TenHang: 'TỔNG', SLGui: tong('SLGui'), DaTra: tong('DaTra'), DaChot: tong('DaChot'), ConLai: tong('ConLai') });
       r.font = { bold: true };
     }
     /* Chuan bat buoc cho moi file xuat: dinh dang so + ke bang (khong de bang tran khong duong ke). */
-    ['SLGui', 'DaTra', 'ConLai', 'SoNgay'].forEach(k => { ws.getColumn(k).numFmt = '#,##0'; ws.getColumn(k).alignment = { horizontal: 'right' }; });
+    ['SLGui', 'DaTra', 'DaChot', 'ConLai', 'SoNgay'].forEach(k => { ws.getColumn(k).numFmt = '#,##0'; ws.getColumn(k).alignment = { horizontal: 'right' }; });
     for (let i = 1; i <= ws.rowCount; i++) {
       ws.getRow(i).eachCell(c => { c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }; });
     }
@@ -734,7 +810,47 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
   header.CongNoTruoc = congNoTruoc;
   header.TongCongNo = tien(congNoTruoc + so(header.TongThanhToan));
 
+  /* v9.08 — LÝ DO KHÔNG SỬA ĐƯỢC, tính SẴN ở đây để màn danh sách chặn NGAY lúc bấm Sửa thay vì
+     để người dùng điền xong cả form rồi mới ăn 400 lúc Lưu. Cùng bộ điều kiện với PUT /phieu/:id
+     (phiếu thu / đã chốt bán mẫu / đã có dòng trả lại) — sửa một bên phải sửa bên kia. */
+  const coChotMauXem = await coCotMauChot(pool);
+  const vuongXem = (await pool.request().input('id', sql.Int, req.params.id).query(`
+    SELECT ${coChotMauXem ? 'ISNULL((SELECT SUM(ISNULL(c3.MauDaChotCai,0)) FROM PhieuBanHangChiTiet c3 WHERE c3.PhieuBHID = @id), 0)' : '0'} AS ChotMau,
+           ISNULL((SELECT COUNT(*) FROM PhieuNhapLaiChiTiet nl
+                     JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
+                     JOIN PhieuBanHangChiTiet c2 ON c2.ID = nl.PhieuBHChiTietID
+                    WHERE c2.PhieuBHID = @id AND np.TrangThai <> N'Đã hủy'), 0) AS SoDongDaTra`)).recordset[0];
+  const veXem = [];
+  if (so(header.DaThu) > 0) veXem.push(`đã có phiếu thu ${Number(header.DaThu).toLocaleString('vi-VN')} đ`);
+  if (so(vuongXem.ChotMau) > 0) veXem.push(`${so(vuongXem.ChotMau)} đã đánh dấu "khách mua luôn"`);
+  if (so(vuongXem.SoDongDaTra) > 0) veXem.push(`${so(vuongXem.SoDongDaTra)} dòng khách đã trả lại`);
+  header.LyDoKhongSua = header.TrangThai === 'Đã hủy'
+    ? 'Phiếu đã hủy — không sửa được. Hãy lập phiếu mới.'
+    : (veXem.length
+      ? `Phiếu này ${veXem.join(', ')} — sửa phiếu sẽ ghi lại toàn bộ dòng hàng và làm mất các liên kết đó. `
+        + `Hãy gỡ những thứ trên trước (xóa phiếu thu / bỏ đánh dấu ở sổ Hàng mẫu / hủy phiếu nhập lại), hoặc lập phiếu mới.`
+      : null);
+
   res.json({ success: true, data: { header, chiTiet } });
+});
+
+/* ---------- v9.04: PHIEU THU DANG CHAN phieu ban hang ----------
+   PUT /phieu/:id va PUT /phieu/:id/huy deu chan khi phieu da co PHIEU THU gan vao (sua/huy se lam so
+   tien da thu lech voi cong no). Man danh sach TRUOC DAY an luon nut "Sua" khi DaThu > 0 va KHONG noi
+   ly do => nguoi dung co quyen sua ma nut bien mat (Nguyen bao 2026-10-26, vi du PX26609).
+   Route nay de man ban hang NOI RA phieu thu nao dang chan.
+   GATE: dung DUNG quyen cua chinh man ban hang (KHOHANG/view + chuc nang CN). TUYET DOI khong dung
+   CONGNO/view — nguoi ban hang thuong khong co quyen Cong no, se bi 403 va lai thanh "bam nut khong
+   co gi xay ra" (bai hoc cu cua du an). */
+router.get('/phieu/:id/phieuthu', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
+  const pool = await getPool();
+  const rows = (await pool.request().input('id', sql.Int, req.params.id).query(`
+    SELECT PhieuThuID, SoPhieu, NgayThu, SoTien, HinhThuc,
+           LEFT(ISNULL(DienGiai, N''), 120) AS DienGiai
+    FROM PhieuThu WHERE PhieuBHID = @id
+    ORDER BY NgayThu, PhieuThuID`)).recordset;
+  const tong = rows.reduce((s, r) => s + so(r.SoTien), 0);
+  res.json({ success: true, data: rows, tongDaThu: tien(tong) });
 });
 
 // So phieu xem truoc (chi de hien tren form - luc luu backend sinh lai de tranh trung)
@@ -1322,6 +1438,41 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     .query('SELECT ISNULL(SUM(SoTien),0) AS S FROM PhieuThu WHERE PhieuBHID=@id')).recordset[0].S;
   if (so(daThu) > 0) {
     return res.status(400).json({ success: false, message: `Phiếu này đã có phiếu thu ${Number(daThu).toLocaleString('vi-VN')} đ — xóa phiếu thu đó trước khi sửa phiếu bán hàng.` });
+  }
+  /* ================================================================================================
+     🔴 v9.08 — CHAN SUA KHI DONG HANG DA CO "DOI SAU" BAM VAO ID CUA NO
+
+     Sua phieu = XOA SACH PhieuBanHangChiTiet roi GHI LAI (goChiTietPhieu + ghiChiTietPhieu ben
+     duoi). Dong moi mang ID MOI. Ma co HAI thu bam theo chinh cai ID do:
+       1. PhieuNhapLaiChiTiet.PhieuBHChiTietID  -> nguon cua `DaTraCai`
+       2. PhieuBanHangChiTiet.MauDaChotCai      -> "khach mua luon" (v9.08, nam ngay tren dong bi xoa)
+     Khong co khoa ngoai nao chan (cot 1 la INT NULL, khong FK toi bang chi tiet) nen truoc day
+     sua phieu lam CA HAI ve bien mat KHONG MOT LOI BAO:
+       · DaTraCai ve 0  -> hang khach DA TRA van tra lai duoc LAN NUA  (lo nay co tu v7.59)
+       · MauDaChotCai mat -> hang khach DA MUA DUT van tra lai duoc    (lo moi cua v9.08)
+     Ca hai deu lam TON KHO TANG KHONG ma tien khong doi. Day la loi TIEN, khong phai giao dien.
+
+     Nen: con bat ky "doi sau" nao thi KHONG cho sua — bao ro phai go cai gi truoc. Cung tinh than
+     voi guard phieu thu o tren: chan co ly do, noi ra duoc, nguoi dung tu go duoc.
+     ================================================================================================ */
+  const coChotMau = await coCotMauChot(pool);
+  const vuong = (await pool.request().input('id', sql.Int, req.params.id).query(`
+    SELECT ${coChotMau ? 'ISNULL((SELECT SUM(ISNULL(c3.MauDaChotCai,0)) FROM PhieuBanHangChiTiet c3 WHERE c3.PhieuBHID = @id), 0)' : '0'} AS ChotMau,
+           ISNULL((SELECT COUNT(*) FROM PhieuNhapLaiChiTiet nl
+                     JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
+                     JOIN PhieuBanHangChiTiet c2 ON c2.ID = nl.PhieuBHChiTietID
+                    WHERE c2.PhieuBHID = @id AND np.TrangThai <> N'Đã hủy'), 0) AS SoDongDaTra`)).recordset[0];
+  if (so(vuong.ChotMau) > 0 || so(vuong.SoDongDaTra) > 0) {
+    const ve = [];
+    if (so(vuong.ChotMau) > 0) ve.push(`${so(vuong.ChotMau)} đã đánh dấu "khách mua luôn" (ở sổ Hàng mẫu)`);
+    if (so(vuong.SoDongDaTra) > 0) ve.push(`${so(vuong.SoDongDaTra)} dòng khách đã trả lại qua Phiếu nhập lại`);
+    return res.status(400).json({
+      success: false,
+      message: `Phiếu này có ${ve.join(' và ')} — sửa phiếu sẽ ghi lại toàn bộ dòng hàng và LÀM MẤT các liên kết đó `
+        + `(hệ quả: hàng đã trả/đã mua đứt lại trả lại được lần nữa, tồn kho tăng khống). `
+        + `Muốn sửa: vào sổ Hàng mẫu bỏ đánh dấu "khách mua luôn" và/hoặc hủy phiếu nhập lại liên quan trước. `
+        + `Chỉ sửa ghi chú/địa chỉ thì nên lập phiếu mới thay vì sửa phiếu này.`
+    });
   }
 
   const coDonIDs = await coCotDonIDs(pool);

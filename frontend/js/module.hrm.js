@@ -81,7 +81,7 @@ window.ModuleHRM = (function () {
       <div class="hrm-toolbar" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
         ${perm.canCreate ? `<button class="btn" id="btnAddNV">➕ Thêm nhân viên</button>` : ''}
         ${perm.canCreate ? `<a class="btn secondary" href="/api/hrm/nhanvien/template">⬇️ File mẫu</a><button class="btn secondary" id="btnImportNV">⬆️ Tải lên (file có sẵn)</button><input type="file" id="fileNV" accept=".xlsx,.xls" style="display:none;">` : ''}
-        <input type="text" id="nvSearch" placeholder="🔍 Tìm theo mã / tên / SĐT..." style="flex:1;min-width:220px;">
+        <input type="text" id="nvSearch" placeholder="🔍 Tìm mã / tên / bộ phận / chức vụ / SĐT..." style="flex:1;min-width:220px;">
         <span class="hrm-count" style="color:#5f6368;font-size:13px;">Tổng: ${nhanVienCache.length}</span>
       </div>
       <div id="nvTableWrap"></div>`;
@@ -102,17 +102,26 @@ window.ModuleHRM = (function () {
       });
     }
     const search = body.querySelector('#nvSearch');
-    search.addEventListener('input', () => drawNvTable(search.value.trim().toLowerCase()));
+    search.addEventListener('input', () => drawNvTable(search.value));
     drawNvTable('');
   }
 
   function drawNvTable(q) {
     const wrap = document.getElementById('nvTableWrap');
     if (!wrap) return;
-    const rows = !q ? nhanVienCache : nhanVienCache.filter(nv =>
-      (nv.MaNhanVien || '').toLowerCase().includes(q) ||
-      (nv.HoTen || '').toLowerCase().includes(q) ||
-      (nv.SDT || '').toLowerCase().includes(q));
+    /* v9.05 — ô tìm Hồ sơ nhân sự trước đây CHỈ tìm 3 trường (Mã NV / Họ tên / SĐT) và PHÂN BIỆT
+       DẤU (toLowerCase, không bỏ dấu): gõ "ky thuat" để lọc theo bộ phận là không ra gì, người
+       dùng tưởng ô tìm hỏng. Giờ tìm trên MỌI trường hiển thị, bỏ dấu và tách từ — cùng luật với
+       wireTableSearch của common.js (gõ "nam ky thuat" ra nam giới ở bộ phận Kỹ thuật).
+       Màn này vẽ lại bảng theo bộ nhớ đệm nên không dùng chung wireTableSearch được, nhưng LUẬT
+       so khớp thì phải giống, kẻo hai ô tìm trong cùng hệ thống hành xử khác nhau. */
+    const tu = boDau(q || '').split(/\s+/).filter(Boolean);
+    /* Tên trường lấy ĐÚNG theo các ô đang vẽ bên dưới (TenBoPhan chứ không phải BoPhan,
+       TrangThaiLaoDong chứ không phải TrangThai) — gõ sai tên trường là lọc im lặng ra rỗng. */
+    const chuoiNV = nv => boDau([nv.MaNhanVien, nv.HoTen, nv.GioiTinh, nv.TenBoPhan, nv.ChucVu,
+      nv.TrangThaiLaoDong, nv.SDT].filter(Boolean).join(' '));
+    const rows = !tu.length ? nhanVienCache
+      : nhanVienCache.filter(nv => { const s = chuoiNV(nv); return tu.every(t => s.indexOf(t) !== -1); });
     wrap.innerHTML = `
       <table><thead><tr>
         <th>Mã NV</th><th>Họ và tên</th><th>Giới tính</th><th>Ngày sinh</th><th>Bộ phận</th>
@@ -860,6 +869,7 @@ window.ModuleHRM = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${h.HopDongID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-del" data-id="${h.HopDongID}">Xóa</button>` : ''}
         </td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Chưa có hợp đồng nào.</td></tr>`}</tbody></table>`;
+    themOTimTuDong(container);   // v9.05: ô tìm Số HĐ / Nhân viên / Loại HĐ / Trạng thái
     const btnAdd = container.querySelector('#btnAddHD'); if (btnAdd) btnAdd.addEventListener('click', () => openHopDongForm(null));
     container.querySelectorAll('.act-print').forEach(b => b.addEventListener('click', () => printHopDong(rows.find(r => r.HopDongID == b.dataset.id))));
     container.querySelectorAll('.act-edit').forEach(b => b.addEventListener('click', () => openHopDongForm(b.dataset.id)));
@@ -1018,6 +1028,7 @@ window.ModuleHRM = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${p.PhuLucID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-del" data-id="${p.PhuLucID}">Xóa</button>` : ''}
         </td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Chưa có phụ lục nào.</td></tr>`}</tbody></table>`;
+    themOTimTuDong(container);   // v9.05: ô tìm Số PL / Nhân viên / HĐ gốc / Nội dung thay đổi
     const btnAdd = container.querySelector('#btnAddPL'); if (btnAdd) btnAdd.addEventListener('click', () => openPhuLucForm(null));
     container.querySelectorAll('.act-print').forEach(b => b.addEventListener('click', () => printPhuLuc(rows.find(r => r.PhuLucID == b.dataset.id))));
     container.querySelectorAll('.act-edit').forEach(b => b.addEventListener('click', () => openPhuLucForm(b.dataset.id, null, rows.find(r => r.PhuLucID == b.dataset.id))));
@@ -1093,6 +1104,7 @@ window.ModuleHRM = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${q.QuyetDinhID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-del" data-id="${q.QuyetDinhID}">Xóa</button>` : ''}
         </td></tr>`).join('') || `<tr><td colspan="7" class="empty-hint">Chưa có quyết định nào.</td></tr>`}</tbody></table>`;
+    themOTimTuDong(container);   // v9.05: ô tìm Số QĐ / Nhân viên / Loại / Nội dung
     const btnAdd = container.querySelector('#btnAddQD'); if (btnAdd) btnAdd.addEventListener('click', () => openQuyetDinhForm(null));
     container.querySelectorAll('.act-print').forEach(b => b.addEventListener('click', () => printQuyetDinh(rows.find(r => r.QuyetDinhID == b.dataset.id))));
     container.querySelectorAll('.act-edit').forEach(b => b.addEventListener('click', () => openQuyetDinhForm(b.dataset.id, null, rows.find(r => r.QuyetDinhID == b.dataset.id))));
@@ -1187,6 +1199,7 @@ window.ModuleHRM = (function () {
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${t.ThanhLyID}">Sửa</button>` : ''}
           ${perm.canDelete ? `<button class="btn small danger act-del" data-id="${t.ThanhLyID}">Xóa</button>` : ''}
         </td></tr>`).join('') || `<tr><td colspan="7" class="empty-hint">Chưa có thanh lý nào.</td></tr>`}</tbody></table>`;
+    themOTimTuDong(container);   // v9.05: ô tìm Nhân viên / Lý do / Bàn giao
     const btnAdd = container.querySelector('#btnAddTL'); if (btnAdd) btnAdd.addEventListener('click', () => openThanhLyForm(null));
     container.querySelectorAll('.act-print').forEach(b => b.addEventListener('click', () => printThanhLy(rows.find(r => r.ThanhLyID == b.dataset.id))));
     container.querySelectorAll('.act-edit').forEach(b => b.addEventListener('click', () => openThanhLyForm(b.dataset.id, null, rows.find(r => r.ThanhLyID == b.dataset.id))));

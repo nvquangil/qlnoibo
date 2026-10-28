@@ -33,6 +33,19 @@ async function coCotHangMau(pool) {
   return __coCotHangMau;
 }
 
+/* v9.08: cot PhieuBanHangChiTiet.MauDaChotCai (migration_v884) — "khach mua luon bao nhieu cai".
+   Do cot truoc: CSDL chua chay migration van chay y nhu cu (MauDaChotCai coi nhu 0). */
+let __coCotMauChot = null;
+async function coCotMauChot(pool) {
+  if (__coCotMauChot === null) {
+    try {
+      const r = (await pool.request().query(`SELECT COL_LENGTH('PhieuBanHangChiTiet','MauDaChotCai') AS c`)).recordset[0] || {};
+      __coCotMauChot = r.c != null;
+    } catch (e) { __coCotMauChot = false; }
+  }
+  return __coCotMauChot;
+}
+
 /* ================================================================================================
    layDongDaBan(pool, sql, opts)
      opts.tenKhach   : loc theo TEN khach (khoa nhom cong no). Bo trong = TAT CA khach.
@@ -46,6 +59,7 @@ async function layDongDaBan(pool, sql, opts) {
   const o = opts || {};
   const tenKhach = String(o.tenKhach || '').trim();
   const coCoMau = await coCotHangMau(pool);
+  const coChot = await coCotMauChot(pool);   // v9.08
   if (o.chiHangMau && !coCoMau) return [];   // chua chay migration_v693 -> chua co phieu mau nao
 
   const rq = pool.request();
@@ -59,6 +73,9 @@ async function layDongDaBan(pool, sql, opts) {
            ${coCoMau ? 'ISNULL(p.LaHangMau, 0)' : 'CAST(0 AS BIT)'} AS LaHangMau,
            ct.MaHangID, ct.MauSacID, ct.SoLuong, ct.DonVi, ct.SoLuongCai,
            ct.GiaBanLe, ct.PhanTramCKShop, ct.GiaBan, ct.ThanhTien, ct.GhiChu,
+           ${coChot ? 'ISNULL(ct.MauDaChotCai, 0)' : 'CAST(0 AS INT)'} AS MauDaChotCai,
+           ${coChot ? 'ct.MauChotNgay' : 'CAST(NULL AS DATE)'} AS MauChotNgay,
+           ${coChot ? 'ct.MauChotGhiChu' : "CAST(NULL AS NVARCHAR(200))"} AS MauChotGhiChu,
            h.MaHang, h.TenHang, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi,
            ms.TenMau,
            ISNULL((SELECT SUM(nl.SoLuongCai) FROM PhieuNhapLaiChiTiet nl
@@ -75,7 +92,14 @@ async function layDongDaBan(pool, sql, opts) {
       ${o.chiHangMau ? 'AND ISNULL(p.LaHangMau, 0) = 1' : ''}
     ORDER BY p.NgayBan DESC, p.PhieuBHID DESC, ct.ID`)).recordset;
 
-  const ra = rs.map(r => ({ ...r, ConTraCai: Math.max(0, so(r.SoLuongCai) - so(r.DaTraCai)) }));
+  /* 🔴 v9.08 — TRỪ THÊM `MauDaChotCai` (khách mua luôn). Đây là CHỖ DUY NHẤT tính con số này, nên
+     sổ "Hàng mẫu ở khách" và màn "Phiếu nhập lại" không thể lệch nhau: hàng khách đã mua đứt thì
+     vừa rời sổ mẫu, vừa KHÔNG trả lại được nữa. Thiếu vế trừ này ở một trong hai nơi là mở đường
+     cho việc trả lại hàng đã bán đứt ⇒ tồn kho tăng khống. */
+  const ra = rs.map(r => ({
+    ...r,
+    ConTraCai: Math.max(0, so(r.SoLuongCai) - so(r.DaTraCai) - so(r.MauDaChotCai))
+  }));
   return o.chiConGiu ? ra.filter(r => r.ConTraCai > 0) : ra;
 }
 
@@ -105,6 +129,7 @@ async function hangMauDangOKhach(pool, sql, opts) {
 function gomTheoKhachMa(ds) {
   const m = new Map();
   (ds || []).forEach(r => {
+    // ConTraCai đã trừ cả phần khách mua luôn (v9.08) nên dòng đã chốt bán tự rời khỏi cảnh báo.
     if (so(r.ConTraCai) <= 0) return;
     const k = String(r.TenKhach || '').trim() + '|' + r.MaHangID + '|' + (r.MauSacID == null ? '' : r.MauSacID);
     if (!m.has(k)) {
@@ -125,4 +150,4 @@ function gomTheoKhachMa(ds) {
   return [...m.values()].sort((a, b) => b.SoNgayMuon - a.SoNgayMuon);
 }
 
-module.exports = { layDongDaBan, hangMauDangOKhach, gomTheoKhachMa, coCotHangMau };
+module.exports = { layDongDaBan, hangMauDangOKhach, gomTheoKhachMa, coCotHangMau, coCotMauChot };

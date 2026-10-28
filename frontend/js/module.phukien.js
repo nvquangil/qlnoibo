@@ -1138,6 +1138,7 @@ window.ModulePhuKien = (function () {
            phía trên bảng, không thêm cột lặp lại cùng một tấm ảnh xuống mấy chục dòng. */
         resultEl.innerHTML = anhPKMotLanHtml(rows[0]) + chiTietTableHtml(rows);
         wireChiTietPhieuClick(resultEl);   // v6.13: bấm số phiếu -> mở phiếu
+        themOTimTuDong(resultEl);   // v9.05: ô tìm Số phiếu / Loại phiếu / Đơn hàng ở bảng chi tiết
       } else {
         // v6.13: bấm Mã PK ở bảng tổng hợp -> xem ngay lịch sử nhập/xuất của mã đó (không phải gõ tìm lại).
         // v6.32: + cột "Tồn quy đổi" theo ĐVT quy đổi khai ở Danh mục phụ kiện.
@@ -1151,6 +1152,7 @@ window.ModulePhuKien = (function () {
             <td>${escapeHtml(r.DonViCoBan || '')}</td>
             <td style="text-align:right;background:#f1f8f4;">${tonQuyDoiHtml(r)}</td></tr>`).join('')}</tbody></table>`;
         resultEl.querySelectorAll('.act-ls-pk').forEach(a => a.addEventListener('click', () => moLichSuPK(a.dataset.ma)));
+        themOTimTuDong(resultEl);   // v9.05: ô tìm Mã PK / Tên phụ kiện / Loại / ĐVT
       }
     }
 
@@ -1316,6 +1318,7 @@ window.ModulePhuKien = (function () {
         </form>
       </div>` : ''}`;
 
+    themOTimTuDong(body);   // v9.05: ô tìm Tên loại phụ kiện
     const form = document.getElementById('loaiForm');
     if (form) form.addEventListener('submit', async (e) => {
       e.preventDefault();

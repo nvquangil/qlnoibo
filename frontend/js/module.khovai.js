@@ -148,6 +148,77 @@ window.ModuleKhoVai = (function () {
     modal.querySelector('#clsDong').addEventListener('click', closeModal);
   }
 
+  /* ================================================================================================
+     v9.07 — TAI ANH THEO LOC DANG HIEN (tab Ton kho) — Nguyen: "giong nut tai anh mau con ton cua
+     the kho hang hoa".
+
+     4 ham duoi la BAN SAO CO CHU DICH tu module.khohang.js (chuoi v8.17→v8.23, da chay on tren iOS
+     that): tenFileTaiVe / taiTungAnhVeMay / anhThanhFile / chiaSeAnhVeMay. Hai module la IIFE rieng
+     khong goi cheo duoc; KHONG refactor khoi khohang vi luong do DA XAC NHAN chay tot tren may that
+     — sua CONG THUC o day thi phai sua doi xung ben khohang.js (cung quy uoc voi banHangCommon).
+
+     Khac biet DUY NHAT so voi nut cua the kho hang hoa: bo loc cua man nay la O TIM chay o trinh
+     duyet (an/hien dong) nen danh sach anh lay TU CAC DONG DANG HIEN tren man hinh, va ban .zip
+     gui len bang POST (danh sach dai, khong nhet vao query duoc) — xem route
+     POST /api/khovai/dashboard/anh-ton.zip. */
+  function kvTenFileTaiVe(ten, linkAnh) {
+    const m = String(linkAnh || '').match(/\.[a-zA-Z0-9]+($|\?)/);
+    return ten + (m ? m[0].replace(/\?$/, '') : '.jpg');
+  }
+  async function kvTaiTungAnhVeMay(ds) {
+    for (const c of ds) {
+      const a = document.createElement('a');
+      a.href = c.linkAnh;
+      a.download = kvTenFileTaiVe(c.ten, c.linkAnh);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      await new Promise(res => setTimeout(res, 400));   // giãn cách để trình duyệt không chặn "tải nhiều file"
+    }
+  }
+  async function kvAnhThanhFile(c) {
+    const res = await fetch(c.linkAnh);
+    if (!res.ok) throw new Error('Không tải được ảnh: ' + c.ten);
+    const blob = await res.blob();
+    return new File([blob], kvTenFileTaiVe(c.ten, c.linkAnh), { type: blob.type || 'image/jpeg' });
+  }
+  async function kvChiaSeAnhVeMay(ds) {
+    // Dung TAT CA anh roi share DUNG 1 LAN — goi share() lan 2 la mat user-activation (bai hoc v8.23).
+    const files = await Promise.all(ds.map(kvAnhThanhFile));
+    if (!navigator.canShare({ files })) throw new Error('Trình duyệt không hỗ trợ chia sẻ nhiều ảnh cùng lúc.');
+    try {
+      await navigator.share({ files, title: 'Ảnh tồn kho vải' });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;   // người dùng tự bấm Hủy — dừng hẳn, không phải lỗi
+      throw err;
+    }
+  }
+  /* Tai .zip qua POST: khac taiFileVeMay cua khohang (GET + dieu huong) — o day phai POST vi mang
+     danh sach dai. fetch -> blob -> the <a download> tren chinh trang (desktop; mobile khong di
+     duong nay nen khong dinh han che download cua iOS). Loi tu server (JSON 400/500) duoc doc ra
+     va nem len cho handler toast — khong de nut cam (bai hoc v9.06). */
+  async function kvTaiZipVeMay(ds) {
+    const res = await fetch('/api/khovai/rolls/anh.zip', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ds })
+    });
+    if (!res.ok) {
+      let msg = 'Lỗi ' + res.status;
+      try { const j = await res.json(); if (j && j.message) msg = j.message; } catch (e) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'anh_ton_theo_cay.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
   async function renderDashboard() {
     const body = document.getElementById('kvBody');
     const res = await apiGet('/api/khovai/dashboard');
@@ -181,6 +252,7 @@ window.ModuleKhoVai = (function () {
         <td>${escapeHtml(r.ViTriKho)}</td>
       </tr>`).join('') || '<tr><td colspan="12" class="empty-hint">Chưa có dữ liệu tồn kho</td></tr>'}</tbody></table>`;
 
+    themOTimTuDong(body);   // v9.05: ô tìm Mã vải / Mã PM / Mã loại / Loại vải / Màu / Vị trí kho
     body.querySelectorAll('.act-drill-vai').forEach(td => td.addEventListener('click', async () => {
       const maVai = td.dataset.mavai;
       if (!rollsAllCache) rollsAllCache = await apiGet('/api/khovai/rolls?available=false').then(r => r.data);
@@ -204,12 +276,17 @@ window.ModuleKhoVai = (function () {
     rollsAllCache = rows; // cache lai cho tab "In tem" dung ham tim theo ma cay (GIU DU ca cay het)
     // v5.36: "tồn cây" chỉ hiện cây CÒN TỒN, tự ẩn cây Hết. (rollsAllCache van du cho In tem.)
     const shownRows = rows.filter(conHangVai);
+    /* v9.07: danh sách ĐANG HIỆN theo ô tìm — ô #fSearch của màn này VẼ LẠI tbody từ mảng đã lọc
+       (không ẩn/hiện dòng như themOTimTuDong), nên nút Tải ảnh đọc từ biến này chứ không đọc DOM.
+       Handler của fSearch bên dưới PHẢI gán lại dangHien mỗi lần lọc. */
+    let dangHien = shownRows;
     const colCount = perm.canEdit ? 19 : 18;   // v5.53: +Khổ vải/Số mét đã xuất/Số mét còn · v8.94: +Ảnh
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input type="text" id="fSearch" placeholder="Tìm theo mã cây / mã vải...">
         <button type="button" class="btn small secondary" id="btnQrRolls">📷 Quét QR tìm cây</button>
         <a class="btn small secondary" href="/api/khovai/rolls/export">⬇️ Xuất Excel</a>
+        <button type="button" class="btn small secondary" id="kvTaiAnhCay" title="Tải ảnh các cây ĐANG HIỆN theo ô tìm — máy tính ra 1 file .zip, điện thoại qua hộp thoại chia sẻ">📥 Tải ảnh theo lọc</button>
       </div>
       <table id="rollsTable"><thead><tr><th>STT</th><th>Mã cây</th><th>Mã vải</th><th>Mã PM</th><th>Mã loại</th><th>Loại vải</th><th>Màu</th><th>Ảnh</th><th>KG nhập</th><th>KG đã xuất</th><th>KG còn</th><th>Khổ vải</th><th>Số mét</th><th>Số mét đã xuất</th><th>Số mét còn</th><th>Trạng thái</th><th>Ngày nhập</th><th>QR</th>${perm.canEdit ? '<th>Thao tác</th>' : ''}</tr></thead>
       <tbody>${shownRows.map((r, i) => rowHtml(r, i)).join('') || `<tr><td colspan="${colCount}" class="empty-hint">Chưa có cây vải nào còn tồn</td></tr>`}</tbody></table>`;
@@ -269,8 +346,66 @@ window.ModuleKhoVai = (function () {
       const q = e.target.value.trim().toLowerCase();
       // v8.94: bỏ AnhMau (đường dẫn /uploads/mau_….jpg) khỏi chuỗi tìm — không thì gõ "mau"/"jpg" khớp mọi cây có ảnh.
       const filtered = shownRows.filter(r => Object.keys(r).filter(k => k !== 'AnhMau' && k !== 'QRCode').map(k => r[k]).join(' ').toLowerCase().includes(q));
+      dangHien = filtered;   // v9.07: nút Tải ảnh đọc đúng danh sách đang hiện này
       document.querySelector('#rollsTable tbody').innerHTML = filtered.map((r, i) => rowHtml(r, i)).join('') || `<tr><td colspan="${colCount}" class="empty-hint">Không tìm thấy</td></tr>`;
       wireRowActions();
+    });
+    /* ================================================================================================
+       v9.07 — 📥 TẢI ẢNH THEO LỌC ĐANG HIỆN (Nguyen: "tồn kho vải thêm nút tải ảnh về theo lọc hiện
+       trên màn hình — giống nút tải ảnh màu còn tồn của thẻ kho hàng hóa", chốt lại: đặt ở TAB TỒN
+       THEO CÂY). Ảnh là ảnh TỪNG CÂY (AnhCay, lùi về ảnh màu — v8.96), tên file theo Mã cây.
+       Desktop: POST danh sách lên /api/khovai/rolls/anh.zip nhận 1 file zip. Mobile: Web Share
+       (một lần share cho cả danh sách — bài học v8.23). */
+    const kvBtnAnh = document.getElementById('kvTaiAnhCay');
+    if (kvBtnAnh) kvBtnAnh.addEventListener('click', async () => {
+      const nhanGoc = kvBtnAnh.textContent;
+      kvBtnAnh.disabled = true;
+      kvBtnAnh.textContent = 'Đang gom ảnh...';
+      try {
+        const daCo = new Set();
+        const ds = [];
+        dangHien.forEach(r => {
+          const link = String(r.AnhMau || '');
+          if (link.indexOf('/uploads/') !== 0) return;       // bài học v8.22: link rác kiểu "/" phải loại
+          const ten = String(r.MaCay || 'cay').replace(/[\\/:*?"<>|]+/g, '_');
+          /* Khử trùng theo CẢ tên LẪN link: hai cây khác nhau lùi về cùng một ảnh màu thì vẫn mỗi
+             cây một file mang tên mã cây đó — khử theo link trần là cây sau biến mất khỏi zip. */
+          const khoa = ten + '|' + link;
+          if (daCo.has(khoa)) return;
+          daCo.add(khoa);
+          ds.push({ ten, linkAnh: link });
+        });
+        if (!ds.length) { toast('Các cây đang hiện không có ảnh nào để tải (cột Ảnh trống hết).', 'error'); return; }
+        /* Trần CỨNG khớp đúng trần server (800) — nhận câu chặn ngay tại chỗ thay vì gửi lên rồi 400. */
+        if (ds.length > 800) { toast(`Danh sách quá dài (${ds.length} ảnh) — gõ thêm chữ vào ô tìm để thu hẹp rồi tải lại.`, 'error', 8000); return; }
+        const laDienThoai = (window.innerWidth || document.documentElement.clientWidth || 0) <= 900;
+        if (ds.length > 150 && !confirm(`Có ${ds.length} ảnh theo lọc đang hiện — ${laDienThoai ? 'chuẩn bị trên điện thoại' : 'file nén'} sẽ khá nặng, có thể mất thời gian.\n\nNên gõ thêm chữ vào ô tìm để thu hẹp trước.\n\nVẫn tải hết ${ds.length} ảnh?`)) return;
+        if (laDienThoai) {
+          // Ưu tiên Web Share (đã chạy ổn trên iOS thật từ v8.20/v8.23 bên thẻ kho hàng hóa).
+          if (navigator.share && navigator.canShare) {
+            try {
+              toast(`Đang chuẩn bị ${ds.length} ảnh...`, 'success');
+              await kvChiaSeAnhVeMay(ds);
+              toast('Xong — kiểm tra trong Ảnh/Photos (hoặc nơi bạn vừa chọn lưu).', 'success');
+            } catch (err) {
+              toast('Chia sẻ ảnh không thành công (' + err.message + ') — thử lại bằng cách tải từng ảnh...', 'error');
+              await kvTaiTungAnhVeMay(ds);
+              toast('Đã tải xong.', 'success');
+            }
+          } else {
+            toast('Trình duyệt này chưa hỗ trợ chia sẻ nhiều ảnh — đang tải từng ảnh (có thể không ổn định trên iOS).', 'success');
+            await kvTaiTungAnhVeMay(ds);
+            toast('Đã tải xong.', 'success');
+          }
+        } else {
+          /* Nói ĐÚNG việc đang xảy ra: fetch-blob không hiện gì ở thanh tải của trình duyệt cho tới
+             khi nhận xong byte cuối — không nói trước thì nhiều ảnh trông như nút bị treo. */
+          toast(`Đang nén ${ds.length} ảnh trên máy chủ — nhiều ảnh có thể mất 1–2 phút, CHƯA thấy gì ở thanh tải là bình thường.`, 'success', 8000);
+          await kvTaiZipVeMay(ds);
+          toast('Đã tải xong file anh_ton_theo_cay.zip.', 'success');
+        }
+      } catch (err) { toast(err.message, 'error', 8000); }
+      finally { kvBtnAnh.disabled = false; kvBtnAnh.textContent = nhanGoc; }
     });
     /* v5.73: QUÉT TEM CÓ SẴN ĐỂ TRA CỨU NGAY — dùng được với MỌI tem (tem cũ chỉ có mã cây cũng
        được, không cần in lại). Quét xong: lọc danh sách về đúng cây đó + hiện luôn thông tin chính
@@ -1796,6 +1931,7 @@ window.ModuleKhoVai = (function () {
           <td>${escapeHtml(h.NguoiKiem)}</td><td>${escapeHtml(h.GhiChu)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa có lần kiểm kê nào</td></tr>'}</tbody></table>
       </div>`;
 
+    themOTimTuDong(body);   // v9.05: ô tìm Mã cây / Mã vải / Người kiểm / Ghi chú ở Lịch sử kiểm kê
     function wireRemove() {
       body.querySelectorAll('.k-remove').forEach(btn => btn.onclick = () => {
         if (body.querySelectorAll('#kkRows > div').length > 1) btn.closest('[data-krow]').remove();

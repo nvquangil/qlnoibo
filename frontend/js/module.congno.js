@@ -1722,6 +1722,7 @@ window.ModuleCongNo = (function () {
         <td style="text-align:right;"><b>${fmtNumber(q.soDu)}</b></td></tr>`).join('')}
         ${quy.length ? `<tr data-tong style="font-weight:bold;background:#f1f3f4;"><td colspan="5" style="text-align:right;">TỔNG TIỀN ĐANG CÓ</td>
           <td style="text-align:right;">${fmtNumber(tongDu)}</td></tr>` : ''}</tbody></table>`;
+    themOTimTuDong(body);   // v9.05: ô tìm Quỹ / Số tài khoản
     body.querySelectorAll('.act-quy').forEach(el => el.addEventListener('click', () =>
       soChiTietQuy(el.dataset.loai, el.dataset.id).catch(err => toast(err.message, 'error'))));
   }

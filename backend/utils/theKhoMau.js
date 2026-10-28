@@ -16,38 +16,51 @@ const { sql } = require('../db');
    - Chua co -> INSERT voi NhapCai = 0.
    - Da co   -> chi cap nhat LinkAnh / GhiChu, va CHI KHI co gia tri gui len (ISNULL giu cai cu).
    Tra ve true neu vua TAO MOI dong. */
+/* v9.03: tra ve { moi, anhDoi } — `anhDoi` = anh THAT SU duoc ghi moi (de dem cho dung, xem
+   capNhatAnhDaiDien). Noi goi cu doc gia tri boolean van chay: xem ham boc `laDongMauMoi` ben duoi. */
 async function damBaoDongMau(pool, tran, maHangId, mauSacId, linkAnh, ghiChu) {
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
   const kq = await rq()
     .input('mh', sql.Int, maHangId)
     .input('ms', sql.Int, mauSacId)
-    .input('anh', sql.NVarChar, linkAnh || null)
+    .input('anh', sql.NVarChar(500), linkAnh || null)
     .input('gc', sql.NVarChar, ghiChu || null)
     .query(`
       IF NOT EXISTS (SELECT 1 FROM TheKhoChiTietMau WHERE MaHangID=@mh AND MauSacID=@ms)
       BEGIN
         INSERT INTO TheKhoChiTietMau (MaHangID, MauSacID, LinkAnh, SoCatCai, NhapCai, XuatCai, GhiChu)
         VALUES (@mh, @ms, @anh, 0, 0, 0, @gc);
-        SELECT 1 AS Moi;
+        SELECT 1 AS Moi, CASE WHEN @anh IS NULL THEN 0 ELSE 1 END AS AnhDoi;
       END
       ELSE
       BEGIN
+        DECLARE @doi INT = 0;
+        /* Chi dem khi anh KHAC cai dang luu. ISNULL giu nguyen khi gui NULL (khong bao gio xoa anh). */
+        IF @anh IS NOT NULL AND EXISTS (SELECT 1 FROM TheKhoChiTietMau
+                                         WHERE MaHangID=@mh AND MauSacID=@ms AND ISNULL(LinkAnh, N'') <> @anh)
+          SET @doi = 1;
         UPDATE TheKhoChiTietMau
            SET LinkAnh = ISNULL(@anh, LinkAnh), GhiChu = ISNULL(@gc, GhiChu)
          WHERE MaHangID=@mh AND MauSacID=@ms;
-        SELECT 0 AS Moi;
+        SELECT 0 AS Moi, @doi AS AnhDoi;
       END`);
-  return !!(kq.recordset[0] && kq.recordset[0].Moi);
+  const r = kq.recordset[0] || {};
+  return { moi: !!r.Moi, anhDoi: !!r.AnhDoi };
 }
 
 /* Anh dai dien cua MA HANG. Chi ghi khi co anh moi — ISNULL de gui trong khong xoa mat anh cu
-   (loi nay da tung xay ra o v5.11: edit-save NULL hoa TheKhoHangHoa.AnhDaiDien). */
+   (loi nay da tung xay ra o v5.11: edit-save NULL hoa TheKhoHangHoa.AnhDaiDien).
+   ⚠️ v9.03: tra ve true KHI VA CHI KHI anh THAT SU DOI. Tu v9.03 form Sua phieu dien san anh dang
+   luu roi gui lai nguyen xi, nen ban cu ("co gia tri = da ghi") se bao "da cap nhat anh cho N ma"
+   moi lan bam Luu — cau thong bao duy nhat chung minh anh da vao duoc thi lai keu sai, nguoi dung
+   quen luon khong doc. Loc ngay trong WHERE roi dem rowsAffected. */
 async function capNhatAnhDaiDien(pool, tran, maHangId, anh) {
   if (!anh) return false;
   const rq = tran ? new sql.Request(tran) : pool.request();
-  await rq.input('mh', sql.Int, maHangId).input('anh', sql.NVarChar, anh)
-    .query('UPDATE TheKhoHangHoa SET AnhDaiDien = ISNULL(@anh, AnhDaiDien) WHERE MaHangID = @mh');
-  return true;
+  const kq = await rq.input('mh', sql.Int, maHangId).input('anh', sql.NVarChar(500), anh)
+    .query(`UPDATE TheKhoHangHoa SET AnhDaiDien = @anh
+             WHERE MaHangID = @mh AND ISNULL(AnhDaiDien, N'') <> @anh`);
+  return !!kq.rowsAffected[0];
 }
 
 /* ================================================================================================

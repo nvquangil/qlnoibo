@@ -1803,6 +1803,156 @@ function boDau(s) {
 function searchBoxHtml(id, goiY) {
   return `<input type="text" id="${id || 'dmSearchBox'}" placeholder="${escapeHtml(goiY || '🔍 Gõ để tìm trong mọi cột...')}" autocomplete="off" style="min-width:260px;">`;
 }
+
+/* ================================================================================================
+   v9.05 — CHUỖI TÌM CỦA MỘT DÒNG: BỎ CHỮ TRÊN NÚT
+
+   Trước v9.05 mỗi màn phải tự nhớ gắn data-notim vào ô "Thao tác". 11 màn đã quên — gồm TOÀN BỘ
+   20 tab Danh mục (chung hàm rowActions), Phiếu thu, Phiếu chi, Điều chỉnh công nợ, Danh mục phụ
+   kiện, Bảng kê BTP — nên gõ "sửa" hay "xóa" ra NGUYÊN BẢNG và người dùng tưởng ô tìm hỏng.
+
+   Bỏ nút ngay tại đây thì không ai phải nhớ nữa, và nó bắt được cả nút nằm LẪN trong cột dữ liệu
+   (nút "↔ 2 chiều" trong cột Khách hàng của sổ công nợ) — thứ mà data-notim theo CỘT không bắt
+   được. data-notim vẫn giữ nguyên tác dụng cũ.
+
+   ⚠️ GIỮ thẻ a: số phiếu, mã hàng, mã đơn hầu hết là link mở chi tiết — bỏ chúng là tìm không ra
+   chính thứ người ta tìm nhiều nhất. Chỉ bỏ nút bấm và ô nhập (select/input/textarea) vì nội dung
+   của chúng giống nhau ở mọi dòng.
+   ⚠️ Chỉ nhân bản ô khi ô ĐÓ có nút — bảng vài trăm dòng mà nhân bản mọi ô là render khựng.
+   ================================================================================================ */
+/* 🔴 v8.07 ĐÃ TRẢ GIÁ MỘT LẦN CHO ĐÚNG CHỖ NÀY (xem ghi chú dài ở themCotSttMotBang):
+   `.empty-hint` KHÔNG chỉ là dòng "chưa có dữ liệu" — nó còn là KIỂU CHỮ MỜ cho MỘT Ô bên trong
+   một dòng dữ liệu THẬT: "chưa ghé", "chưa lên phiếu", "chưa có toạ độ", "— chưa liên kết —",
+   "bán trực tiếp", "chưa ghi sổ cắt"... `querySelector` dò MỌI hậu duệ nên bắt nhầm những dòng
+   đó là "dòng thông báo", rồi loại chúng khỏi ô tìm ⇒ gõ gì chúng cũng vẫn hiện, và bảng mà MỌI
+   dòng đều có một ô như thế thì bị đếm là 0 dòng nên KHÔNG ĐƯỢC GẮN ô tìm nào cả. Hỏng im lặng.
+   Dòng thông báo thật = nguyên dòng chỉ có MỘT ô, và chính ô đó là .empty-hint. */
+function laDongThongBao(tr) {
+  const o = tr.children;
+  return o.length === 1 && o[0].classList && o[0].classList.contains('empty-hint');
+}
+
+function chuoiTimCuaDong(tr) {
+  const BO = 'button, select, input, textarea, [data-notim]';
+  const o = Array.from(tr.children).filter(td => !td.hasAttribute('data-notim'));
+  return boDau(o.map(td => {
+    if (!td.querySelector(BO)) return td.textContent || '';
+    const c = td.cloneNode(true);
+    c.querySelectorAll(BO).forEach(e => e.remove());
+    return c.textContent || '';
+  }).join(' '));
+}
+
+/* ================================================================================================
+   v9.05 — TỰ DỰNG Ô TÌM RỒI GẮN VÀO BẢNG ĐÃ VẼ
+
+   Nguyen 2026-10-26: *"rà soát hết các danh sách chức năng chưa có tìm kiếm, bổ sung tìm kiếm ký
+   tự bất kỳ"*. Kiểm kê ra 66 màn danh sách chưa có ô tìm trên 15 file.
+
+   Hai hàm này dựng SẴN ô tìm và chèn ngay trên bảng, nên nơi gọi chỉ thêm MỘT dòng SAU khi vẽ
+   xong — không phải đụng vào bên trong chuỗi HTML. Đó là cả lý do tồn tại của chúng: sửa 66 chỗ
+   bên trong template literal là gần như chắc chắn có một lần đặt nhầm dấu nháy ngược hoặc ${},
+   mà lỗi đó đã làm SẬP máy chạy thật hai lần (v7.98, v8.73).
+
+   themOTim(goc, { table, id, goiY, ...optsCuaWireTableSearch })
+     - table: phần tử bảng, hoặc chuỗi selector, hoặc bỏ trống = bảng đầu tiên trong goc.
+     - Mọi tùy chọn khác (tongTheoLoc, tomTat...) chuyển thẳng cho wireTableSearch.
+
+   themOTimTuDong(goc, { boQua, toiThieu, goiY })
+     - Gắn cho MỌI bảng trong goc chưa có ai lo. Bảng nào đã gọi wireTableSearch rồi thì bỏ qua
+       (wireTableSearch tự đánh dấu data-coOTim), nên gọi thêm dòng này ở màn đã có ô tìm là vô
+       hại — không sinh ô thứ hai.
+     - Bảng không muốn có ô tìm thì gắn thuộc tính data-khongtim lên chính thẻ table.
+   ================================================================================================ */
+function themOTim(goc, opts) {
+  opts = opts || {};
+  const table = typeof opts.table === 'string' ? goc.querySelector(opts.table)
+    : (opts.table || goc.querySelector('table'));
+  if (!table || !goc) return null;
+  if (table.hasAttribute('data-khongtim')) return null;
+  if (!table.querySelector('tbody')) return null;
+  if (table.dataset.coOTim === '1') {
+    /* ⚠️ Có màn VẼ LẠI tbody mà GIỮ NGUYÊN thẻ table (vd danh sách Shop của DMS khi đổi ô lọc:
+       chỉ thay innerHTML của tbody). Dấu coOTim còn nguyên nên nhìn qua tưởng đã có ô tìm, nhưng
+       ô tìm cũ đang giữ danh sách phần tử dòng CŨ — đã bị thay — nên gõ gì cũng không lọc được
+       dòng nào. Đúng kiểu hỏng im lặng: ô vẫn đó, gõ vẫn được, chỉ là vô tác dụng.
+       Nhận ra bằng dòng dữ liệu đầu CHƯA có data-tim (dòng mới tinh), rồi gỡ ô cũ gắn lại. */
+    const dongDau = table.querySelector('tbody > tr:not([data-tong])');
+    // hasAttribute chứ không phải giá trị: data-tim="" (mọi cột đều rỗng) vẫn là ĐÃ GẮN.
+    if (!dongDau || dongDau.hasAttribute('data-tim') || laDongThongBao(dongDau)) return null;
+    const hopCu = table.dataset.oTimHop ? goc.querySelector('#' + table.dataset.oTimHop) : null;
+    if (hopCu && hopCu.parentNode) hopCu.parentNode.removeChild(hopCu);
+    delete table.dataset.coOTim;
+  }
+
+  themOTim._dem = (themOTim._dem || 0) + 1;
+  const id = opts.id || ('oTimTuDong' + themOTim._dem);
+
+  /* Chèn ô tìm NGOÀI khung cuộn ngang của bảng: bảng rộng thường bọc trong một div overflow:auto,
+     để ô tìm bên trong là nó trôi đi mất khi kéo ngang.
+     ⚠️ Chỉ trèo qua lớp bọc THUẦN — thẻ cha phải có ĐÚNG MỘT con, và con đó là bảng. Thiếu điều
+     kiện "đúng một con" là trèo quá tay: ra khỏi cả .card hay fieldset vốn còn chứa tiêu đề, làm
+     ô tìm rơi lên TRÊN khung, trông như ô của khối phía trước (rà chéo v9.05 bắt 6 màn như vậy). */
+  let neo = table;
+  while (neo.parentNode && neo.parentNode !== goc && neo.parentNode.nodeType === 1
+         && neo.parentNode.children.length === 1
+         && neo.parentNode.querySelectorAll('table').length === 1) neo = neo.parentNode;
+  if (!neo.parentNode) return null;
+
+  const hop = document.createElement('div');
+  hop.className = 'o-tim-bang';
+  hop.id = id + 'Hop';
+  hop.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0;';
+  hop.innerHTML = searchBoxHtml(id, opts.goiY || '🔍 Gõ để tìm trong mọi cột...')
+    + '<span id="' + id + 'Info" class="empty-hint" style="padding:0;"></span>';
+  neo.parentNode.insertBefore(hop, neo);
+  table.dataset.oTimHop = hop.id;   // để lần vẽ lại còn gỡ đúng ô cũ (xem khối coOTim ở trên)
+
+  const tuyChon = {};
+  Object.keys(opts).forEach(k => { if (k !== 'table' && k !== 'id' && k !== 'goiY') tuyChon[k] = opts[k]; });
+  tuyChon.table = table;
+  tuyChon.infoId = id + 'Info';
+  wireTableSearch(goc, id, tuyChon);
+
+  /* ⚠️ DÒNG TỔNG LÀ TIỀN. wireTableSearch chỉ cộng lại dòng tổng khi nơi gọi bật `tongTheoLoc`
+     VÀ các ô tiền có khai data-cot/data-so. Phần lớn bảng cũ chưa khai, nên lọc xong thì thân
+     bảng là của vài dòng mà dòng TỔNG vẫn là tổng của cả bảng — người đọc tưởng đó là số của
+     phần đang xem. Chưa cộng lại được thì ít nhất phải NÓI RA, không để số tiền nói dối. */
+  const dongTong = table.querySelector('tbody > tr[data-tong], tfoot tr');
+  if (dongTong && !dongTong.querySelector('[data-cot][data-so]')) {
+    const oGo = hop.querySelector('#' + id);
+    const canh = document.createElement('span');
+    canh.className = 'empty-hint';
+    canh.style.cssText = 'padding:0;color:#c0392b;';
+    hop.appendChild(canh);
+    if (oGo) oGo.addEventListener('input', () => {
+      canh.textContent = oGo.value.trim() ? '⚠️ Dòng TỔNG vẫn là tổng của CẢ bảng, không theo ô tìm.' : '';
+    });
+  }
+  return hop;
+}
+
+function themOTimTuDong(goc, opts) {
+  opts = opts || {};
+  if (!goc) return 0;
+  const toiThieu = opts.toiThieu == null ? 2 : opts.toiThieu;
+  let dem = 0;
+  Array.from(goc.querySelectorAll('table')).forEach((table, i) => {
+    if (i < (opts.boQua || 0)) return;
+    /* KHÔNG tự loại bảng đã có coOTim ở đây — chính themOTim phân biệt "đã có ô tìm còn dùng
+       được" với "đã có ô tìm nhưng dòng đã bị vẽ lại, phải gắn lại". */
+    if (table.hasAttribute('data-khongtim')) return;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    /* Bảng chưa đủ dòng thì ô tìm chỉ làm rối màn hình. Dòng TỔNG và dòng "chưa có dữ liệu"
+       không tính là dòng dữ liệu. */
+    const soDong = Array.from(tbody.querySelectorAll(':scope > tr'))
+      .filter(tr => !tr.hasAttribute('data-tong') && !laDongThongBao(tr)).length;
+    if (soDong < toiThieu) return;
+    if (themOTim(goc, { table, goiY: opts.goiY })) dem++;
+  });
+  return dem;
+}
 /* ================================================================================================
    TÌM KIẾM TRONG MỘT BẢNG ĐÃ VẼ — lọc bằng ẩn/hiện dòng, KHÔNG gọi lại API, KHÔNG vẽ lại bảng.
    Nhờ vậy giữ nguyên mọi sự kiện đã gắn trên dòng (nút Sửa/Xóa, link mở chi tiết) và giữ cột STT
@@ -1824,13 +1974,23 @@ function wireTableSearch(body, id, opts) {
   if (!input || !table) return;
   const tbody = table.querySelector('tbody');
   if (!tbody) return;
+  /* Đánh dấu NGAY — kể cả khi bảng rỗng và hàm thoát sớm bên dưới — để themOTimTuDong() không gắn
+     thêm ô tìm thứ hai lên bảng đã có người lo. */
+  table.dataset.coOTim = '1';
+  /* v9.05: laDongThongBao thay cho querySelector('.empty-hint') — xem ghi chú ở chính hàm đó.
+     Bản cũ loại nhầm MỌI dòng dữ liệu có một ô chữ mờ ("chưa ghé", "chưa lên phiếu"...) khỏi bộ
+     lọc, nên những dòng đó gõ gì cũng vẫn hiện. */
   const rows = Array.from(tbody.querySelectorAll(':scope > tr'))
-    .filter(tr => !tr.hasAttribute('data-tong') && !tr.querySelector('.empty-hint'));
+    .filter(tr => !tr.hasAttribute('data-tong') && !laDongThongBao(tr));
   if (!rows.length) { input.disabled = true; return; }
   // Lay so cot tu <thead> (khong dung rows[0].children.length) - neu bang dang rong (chi co 1 dong
   // "Chua co du lieu" gom 1 <td colspan> duy nhat) thi rows[0].children.length se sai (ra 1 thay vi
   // dung so cot that), lam dong "khong tim thay" hien hep hon ca bang.
-  const colCount = table.querySelectorAll('thead th').length || rows[0].children.length;
+  /* v9.05: __soCotCuaBang chỉ đếm HÀNG ĐẦU của thead và có cộng colspan. Bản cũ đếm mọi <th> của
+     cả thead, nên bảng có thead HAI hàng (vd Đơn khách đặt hàng: hàng tiêu đề + hàng ô lọc) ra số
+     cột gấp đôi — dòng "không tìm thấy" khai colspan sai (trình duyệt tự kẹp nên chỉ sai ngầm). */
+  const colCount = (typeof __soCotCuaBang === 'function' ? __soCotCuaBang(table) : 0)
+    || table.querySelectorAll('thead th').length || rows[0].children.length;
   /* Dựng chuỗi tìm SẴN một lần: bảng vài trăm dòng mà normalize lại textContent mỗi lần gõ phím
      là gõ bị khựng.
 
@@ -1841,8 +2001,7 @@ function wireTableSearch(body, id, opts) {
      Dòng nào đã tự gắn sẵn `data-tim` thì GIỮ NGUYÊN — nơi gọi biết rõ cần tìm theo gì hơn. */
   rows.forEach(tr => {
     if (tr.dataset.tim) return;
-    const o = Array.from(tr.children).filter(td => !td.hasAttribute('data-notim'));
-    tr.dataset.tim = boDau(o.map(td => td.textContent || '').join(' '));
+    tr.dataset.tim = chuoiTimCuaDong(tr);
   });
 
   /* Dòng "không tìm thấy" dựng NGAY BÂY GIỜ, trước khi themCotStt() chèn thêm cột STT — dựng sau

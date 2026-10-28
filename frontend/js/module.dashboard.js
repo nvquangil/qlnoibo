@@ -190,6 +190,7 @@
        ĐÈ LÊN dashboard: không reload, không rời màn, đóng popup là về đúng chỗ đang xem.
        Tên khách khớp được vì CẢ HAI backend đều nhóm theo LTRIM(RTRIM(TenKhach)).
        ============================================================================================ */
+    themOTimTuDong(body);   // v9.05: ô tìm Khách hàng trên bảng phát sinh của Dashboard
     body.querySelectorAll('.db-congno').forEach(a => a.onclick = (e) => {
       e.preventDefault();
       const khach = a.dataset.khach || '';

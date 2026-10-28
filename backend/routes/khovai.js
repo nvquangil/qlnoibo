@@ -148,6 +148,90 @@ router.get('/dashboard/export', requireAuth, requirePermission('KHOVAI', 'view')
   }
 });
 
+/* ================================================================================================
+   v9.07 — TAI ANH .ZIP THEO DANH SACH DANG HIEN TREN MAN HINH (tab TON THEO CAY)
+
+   Nguyen 2026-10-27: "ton kho vai them nut tai anh ve theo loc hien tren man hinh" — chot lai:
+   dat o tab TON THEO CAY (anh TUNG CAY — AnhCay, lui ve anh mau, v8.96; ten file theo Ma cay).
+
+   KHAC voi nut tai anh cua The kho hang hoa (khohang.js /items/anh-ton-kho.zip — GET, bo loc la
+   2 dropdown nen SERVER tu loc lai duoc): o tab Ton theo cay, bo loc la O TIM #fSearch chay
+   HOAN TOAN o trinh duyet (ve lai tbody tu mang da loc) — server KHONG tai hien duoc chuoi tim.
+   Nen frontend gui thang DANH SACH {ten, linkAnh} cua cac CAY DANG HIEN len day; server chi lam
+   hai viec: KIEM AN TOAN tung link roi dong goi zip.
+
+   Vi sao POST (danh sach dai, khong nhet vao query duoc) nhung KHONG dung requireChucNang:
+   middleware do suy action tu HTTP method — POST bi tinh la 'edit' (auth.js actionFromMethod),
+   trong khi day la thao tac DOC THUAN TUY (nguoi dung chi tai ve anh dang hien tren man hinh ho
+   da duoc xem). Dung requireChucNang la nguoi chi-co-quyen-XEM tab Ton kho bi 403 oan. Tu kiem
+   canView cua chuc nang 'dashboard' ngay trong route — dung ngu nghia "xem".
+
+   AN TOAN: moi link PHAI bat dau /uploads/ + path.basename chan "../" (dung tieu chi route zip
+   cua khohang v8.17/v8.22 — mot tieu chi duy nhat toan he thong); gioi han 800 muc/lan. */
+router.post('/rolls/anh.zip', requireAuth, requirePermission('KHOVAI', 'view'), (req, res, next) => {
+  const user = req.session.user;
+  if (!user.isAdmin) {
+    const cn = (user.chucNangPerm && user.chucNangPerm['KHOVAI:rolls']) || null;
+    if (cn && cn.canView === false) {
+      return res.status(403).json({ success: false, message: 'Tài khoản của bạn không có quyền xem tồn theo cây.' });
+    }
+  }
+  next();
+}, async (req, res) => {
+  let archiver;
+  try { archiver = require('archiver'); }
+  catch (e) {
+    return res.status(500).json({ success: false, message: 'Chưa cài thư viện nén (archiver). Vào thư mục backend chạy lệnh: npm install — rồi thử lại.' });
+  }
+  const path = require('path');   // khovai.js chua require path o dau file — de trong ham cho gon pham vi
+  const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');   // khop dung backend/routes/upload.js
+  try {
+    const dsVao = Array.isArray(req.body && req.body.ds) ? req.body.ds : [];
+    if (!dsVao.length) return res.status(400).json({ success: false, message: 'Các dòng đang hiện không có ảnh nào để tải.' });
+    if (dsVao.length > 800) return res.status(400).json({ success: false, message: 'Danh sách quá dài (' + dsVao.length + ' mục) — lọc bớt trên màn hình rồi tải lại.' });
+
+    /* KIEM + GOM TRUOC, pipe SAU: biet chac co it nhat 1 file that roi moi set header zip — danh
+       sach rong tra duoc JSON 400 tu te thay vi mot file zip rong/response dang do. */
+    const tenDaDung = new Set();
+    const dsNen = [];
+    for (const c of dsVao) {
+      const rel = String((c && c.linkAnh) || '');
+      if (rel.indexOf('/uploads/') !== 0) continue;    // chi nhan duong dan noi bo da biet
+      /* ⚠️ path.basename KHONG chan het: '/uploads/..' -> basename ra '..' -> join ra THU MUC backend,
+         existsSync van true, archiver nhan mot thu muc la no loi giua stream (ra cheo v9.07 bat duoc).
+         Whitelist ky tu ten file (khop dung dinh dang upload.js sinh ra: [A-Za-z0-9_-] + '_<time>.<ext>')
+         + bat buoc la FILE that. Cung mot tieu chi voi chuanAnhCay o dau file nay. */
+      const tenFileGoc = path.basename(rel);
+      if (!/^[A-Za-z0-9_\-.]+$/.test(tenFileGoc) || tenFileGoc === '.' || tenFileGoc === '..') continue;
+      const fileDisk = path.join(UPLOAD_DIR, tenFileGoc);
+      let st;
+      try { st = fs.statSync(fileDisk); } catch (e4) { continue; }   // anh bi xoa khoi o dia -> bo qua
+      if (!st.isFile()) continue;
+      const duoi = path.extname(tenFileGoc) || '.jpg';
+      // Ten trong zip do client de xuat (MaVai_TenMau) nhung SERVER lam sach: bo ky tu cam cua ten file.
+      const goc = String((c && c.ten) || 'anh').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) || 'anh';
+      let ten = goc + duoi;
+      let dem = 2;
+      while (tenDaDung.has(ten)) ten = goc + '_' + (dem++) + duoi;
+      tenDaDung.add(ten);
+      dsNen.push({ fileDisk, ten });
+    }
+    if (!dsNen.length) return res.status(400).json({ success: false, message: 'Không mục nào có ảnh hợp lệ trên ổ đĩa để nén.' });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="anh_ton_theo_cay.zip"');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('warning', (e) => console.warn('[khovai rolls/anh.zip]', e.message));
+    archive.on('error', (err) => { console.error(err); try { if (!res.headersSent) res.status(500); res.end(); } catch (e2) {} });
+    archive.pipe(res);
+    dsNen.forEach(f => archive.file(f.fileDisk, { name: f.ten }));
+    await archive.finalize();
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(400).json({ success: false, message: 'Lỗi khi tạo file nén ảnh: ' + err.message });
+  }
+});
+
 // ============ DANH SACH CAY VAI (ton kho theo cay; dung cho man hinh xuat kho & in tem theo ngay nhap) ============
 router.get('/rolls', requireAuth, requirePermission('KHOVAI', 'view'), async (req, res) => {
   const pool = await getPool();

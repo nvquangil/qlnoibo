@@ -39,6 +39,9 @@ const { napGiaVonTuMaHang } = require('../utils/giaNhapHangHoa');
 // v8.90: hang TU SAN XUAT -> nap gia von tu giaThanh1SP cua chinh lenh SX. Song song voi duong NCC
 // o tren, nhung nguon gia khac han nhau nen la ham rieng — xem ghi chu trong giaVonLenhSX.js.
 const { napGiaVonTuLenhSX, loiNhanGiaVon } = require('../utils/giaVonLenhSX');
+// v9.09: SL da lap phieu nhap kho cua tung lenh, QUY VE CAI — de biet lenh nao da nhap xong.
+// ⚠️ KHONG tu cong SoLuongChinh o day: don vi chinh cua ma hang co the la Ri. Xem ghi chu trong file.
+const { slPhieuNhapTheoDon } = require('../utils/slNhapKhoChungTu');
 
 const router = express.Router();
 
@@ -94,27 +97,32 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
        bien mat khoi o chon sau khi nang cap (vd lenh cu da hoan thanh nhung chua tung ghi 'KN').
        v6.89: BO cac lenh DA GAN vao mot phieu nhap khac (phieu chua huy) — mot lenh SX chi nhap kho
        mot lan, de lai trong danh sach la mo duong nhap trung ca lenh.
+       ⛔ LUAT v6.89 NAY DA BI THAY THE O v9.09 — "mot lenh chi nhap kho mot lan" la sai voi thuc te
+          (to kho nhap theo tung dot). Nay lenh o lai den khi NHAP XONG; chong nhap trung bang cach
+          hien ro "da nhap X/Y cai" ngay tren tung dong cua o chon, khong bang cach giau lenh di.
        ⚠️ Phai GIU LAI lenh cua CHINH phieu dang sua (?phieuNKID=), khong thi mo form Sua se thay o
        lenh SX rong roi bam Luu la mat lien ket - dung kieu loi am tham. */
-    /* v7.87: NHAP BO SUNG. `?keCaDaNhap=1` -> GIU LAI ca lenh da nhap kho, kem so phieu da nhap de
-       nguoi dung nhin thay minh dang nhap them cho lenh nao. Mac dinh van BO (nhap trung ca lenh la
-       loi nang hon), chi khi nguoi dung CHU DONG tich "Nhập bổ sung" moi hien.
-       ⚠️ Dem so phieu bang subquery o cot SELECT, KHONG dat trong COUNT(...) — SQL Server Msg 130. */
-    q(`SELECT TOP 300 d.DonHangID, d.MaDH, d.TenSanPham,
-              (SELECT COUNT(*) FROM PhieuNhapKhoHang p2
-                WHERE p2.DonHangID = d.DonHangID AND p2.TrangThai <> N'Đã hủy') AS SoPhieuDaNhap,
-              (SELECT TOP 1 p3.SoPhieu FROM PhieuNhapKhoHang p3
-                WHERE p3.DonHangID = d.DonHangID AND p3.TrangThai <> N'Đã hủy'
-                ORDER BY p3.NgayNhap DESC, p3.PhieuNKID DESC) AS SoPhieuGanNhat
+    /* v7.87: NHAP BO SUNG. `?keCaDaNhap=1` -> GIU LAI ca lenh da nhap xong, de nguoi dung sua/xem lai.
+       v9.09 DOI NGHIA O TICH: truoc day no la "hien ca lenh DA CO PHIEU"; nay la "hien ca lenh DA
+       NHAP DU" — vi lenh dang nhap do dang bay gio TU DONG o lai trong danh sach, khong phai tich gi.
+       v9.09 — BO HAN bo loc NOT EXISTS(phieu nao do), VA BO LUON `TOP`. Luat moi tinh bang JS o
+       locLenhChoPhieuNhap() vi no can luy ke cong doan KN, thu khong the viet lai trong cau nay.
+
+       🔴 VI SAO PHAI BO `TOP` chu khong phai nang len 500: ban cu dat TOP 300 SAU bo loc
+       "NOT EXISTS(phieu)" nen no DAO SAU tuy y vao lich su — luon du 300 lenh chua lap phieu, ke ca
+       lenh tu 2 nam truoc. Doi thanh "TOP 500 roi moi loc bang JS" la THU HEP cua so: lenh xep hang
+       501 tro di khong bao gio vao duoc danh sach du chua tung lap phieu, va o chon la <select>
+       thuan khong co o tim nen khong voi toi duoc. Ra soat cheo bat duoc — da bo TOP.
+       Doi lai: cat con 300 o cuoi locLenhChoPhieuNhap(), tuc 300 lenh CON PHAI NHAP moi nhat.
+       Hai subquery tuong quan (so phieu, so phieu gan nhat) cung da chuyen sang slPhieuNhapTheoDon()
+       — giu lai o day la moi dong lenh do bang phieu hai lan trong khi PhieuNhapKhoHang khong co
+       index tren DonHangID. */
+    q(`SELECT d.DonHangID, d.MaDH, d.TenSanPham, d.TrangThai
        FROM DonHangSanXuat d
        WHERE (d.TrangThai = N'Hoàn thành'
               OR EXISTS (SELECT 1 FROM TienDoSanXuat td
                            JOIN CongDoanSanXuat cd ON cd.StageID = td.StageID
                           WHERE td.DonHangID = d.DonHangID AND cd.MaCongDoan = 'KN'))
-         ${req.query.keCaDaNhap === '1' ? '' : `AND NOT EXISTS (SELECT 1 FROM PhieuNhapKhoHang p
-                         WHERE p.DonHangID = d.DonHangID
-                           AND p.TrangThai <> N'Đã hủy'
-                           AND (${req.query.phieuNKID ? 'p.PhieuNKID <> ' + (parseInt(req.query.phieuNKID, 10) || 0) : '1=1'}))`}
        ORDER BY d.DonHangID DESC`),
     q('SELECT TheKhoDanhMucID, TenTheKho FROM TheKhoDanhMuc ORDER BY TenTheKho'),
     /* ⚠️ Ten bang la DanhMucNhomSanPham (migration_v54), KHONG phai NhomSanPham.
@@ -133,8 +141,111 @@ router.get('/danhmuc', requireAuth, requirePermission('KHOHANG', 'view'), requir
   const hang = await q(`
     SELECT MaHangID, MaHang, TenHang, LoaiRi, DonViCoBan, DonViQuyDoi, GiaBan, ${cotTenHDdm}
     FROM TheKhoHangHoa ORDER BY MaHang`);
-  res.json({ success: true, data: { ncc, donHang, theKho, nhom, mauSac, donVi, hang } });
+  const donHangLoc = await locLenhChoPhieuNhap(pool, donHang, {
+    keCaDaNhap: req.query.keCaDaNhap === '1',
+    phieuNKID: parseInt(req.query.phieuNKID, 10) || 0
+  });
+  res.json({ success: true, data: { ncc, donHang: donHangLoc, theKho, nhom, mauSac, donVi, hang } });
 });
+
+/* ================================================================================================
+   v9.09 — LENH SX O LAI TRONG O CHON CHO DEN KHI NHAP XONG
+
+   Nguyen 2026-10-28: "khi kho nhap cap nhat lan dau du chua hoan thanh nhung phieu nhap kho hang hoa
+   hien lenh sx do luon. khi nao lenh do hoan thanh phieu nhap cuoi cung nhap xong lenh do se khong
+   hien nua."
+
+   TRUOC (v6.89): lenh BIEN MAT ngay sau phieu DAU TIEN. To kho nhap theo nhieu dot nen tu dot 2 tro
+   di lenh khong con trong o chon, phai biet duong tich "Nhap bo sung" — khong ai noi cho ho biet,
+   dung kieu loi "khong co nut de bam" (xem feedback_qlnoibo_an_nut_khong_noi_ly_do).
+
+   NAY — AN lenh khi va chi khi ca BA dieu cung dung:
+     (1) da co it nhat MOT phieu nhap kho chua huy, VA
+     (2) lenh o trang thai 'Hoàn thành', VA
+     (3) DA NHAP DU: tong SL tren cac phieu (quy ve CAI) >= luy ke cong doan Kho nhap (CAI).
+
+   Vi sao moc (3) la LUY KE KN chu khong phai SL cat: chung tu nhap kho phai khop voi cai TO KHO da
+   ghi nhan, khong phai voi san luong cat. Hai so nay duoc phep lech (xem ghi chu v8.47 o tren) va
+   lech do chinh la "con hang chua lam phieu".
+
+   LUI VE AN TOAN:
+     - Lenh CU khong co luy ke KN (canNhap = 0, vd lenh truoc v6.89 chi co TrangThai='Hoàn thành'):
+       quay ve dung luat cu "co phieu la an". Khong lenh cu nao doi hanh vi sau khi nang cap.
+     - Lenh cua CHINH phieu dang sua (?phieuNKID=) LUON duoc giu, du da nhap du. Ban SQL cu lam viec
+       nay bang `p.PhieuNKID <> X`, nhung ban do SAI khi lenh co tu 2 phieu tro len: van con phieu
+       khac X ton tai => lenh bi an => mo form Sua thay o lenh SX rong, bam Luu la mat lien ket.
+       Ban JS nay giu vo dieu kien nen het han loi do.
+     - Moi loi doc (KN / phieu) deu bat lai: hong mot nguon thi coi nhu 0 => KHONG an lenh nao. Tha
+       thua lenh trong o chon con hon lenh bien mat khong ly do.
+   ================================================================================================ */
+async function locLenhChoPhieuNhap(pool, ds, { keCaDaNhap, phieuNKID }) {
+  let luyKeKN = {}, daLapPhieu = {};
+  try {
+    luyKeKN = await require('./qlsx').slKhoNhapTheoDon(pool);
+  } catch (e) { console.error('[nhapkho /danhmuc] khong doc duoc luy ke cong doan KN (coi nhu 0, khong an lenh nao): ', e); }
+  try {
+    daLapPhieu = await slPhieuNhapTheoDon(pool);
+  } catch (e) { console.error('[nhapkho /danhmuc] khong doc duoc SL da lap phieu (coi nhu 0, khong an lenh nao): ', e); }
+
+  let donDangSua = 0;
+  if (phieuNKID) {
+    try {
+      const r = (await pool.request().input('p', sql.Int, phieuNKID)
+        .query('SELECT DonHangID FROM PhieuNhapKhoHang WHERE PhieuNKID = @p')).recordset[0];
+      donDangSua = (r && r.DonHangID) ? Number(r.DonHangID) : 0;
+    } catch (e) { console.error('[nhapkho /danhmuc] khong doc duoc lenh cua phieu dang sua: ', e); }
+  }
+
+  const dungSo = (d) => {
+    const id = Number(d.DonHangID);
+    const p = daLapPhieu[id] || {};
+    /* Lam tron ve so nguyen cai TRUOC khi so: SoLuongChinh la INT nhung tich voi LoaiRi co the ra
+       so le qua DECIMAL cua SQL; luy ke KN la INT. De nguyen so le thi 119.999 >= 120 la false
+       vinh vien => lenh khong bao gio an. */
+    const canNhapCai = Math.round(Number((luyKeKN[id] || {}).SLKhoNhapCai) || 0);
+    const daNhapCai  = Math.round(Number(p.SLCai) || 0);
+    const soPhieu    = Number(p.SoLanNhap) || 0;
+    const tt         = String(d.TrangThai || '').trim();
+    const daDu       = canNhapCai > 0 ? (daNhapCai >= canNhapCai) : (soPhieu > 0);
+    /* Lenh ĐÃ HỦY: GIU NGUYEN luat cu "co phieu la an". Khong cho no roi vao nhanh moi, vi
+       `TrangThai <> Hoàn thành` se lam no nam lai danh sach VINH VIEN (ra soat cheo bat duoc). */
+    const nhapXong   = soPhieu > 0 && (tt === 'Đã hủy' || (tt === 'Hoàn thành' && daDu));
+    return Object.assign({}, d, {
+      SoPhieuDaNhap: soPhieu,
+      SoPhieuGanNhat: p.SoPhieuGanNhat || null,
+      DaNhapCai: daNhapCai,
+      CanNhapCai: canNhapCai,
+      ConThieuCai: Math.max(0, canNhapCai - daNhapCai),
+      NhapXong: nhapXong ? 1 : 0
+    });
+  };
+
+  const ra = [];
+  let coDonDangSua = false;
+  for (const d of ds) {
+    const id = Number(d.DonHangID);
+    const r = dungSo(d);
+    if (r.NhapXong && !keCaDaNhap && id !== donDangSua) continue;
+    if (id === donDangSua) coDonDangSua = true;
+    ra.push(r);
+    if (ra.length >= 300) break;
+  }
+  /* Lenh cua phieu DANG SUA phai co mat du no bi `break` cat o moc 300, du no khong qua noi dieu
+     kien WHERE (vd lenh chua tung ghi KN, chua Hoàn thành — phieu cu tu thoi luat con long hon).
+     Thieu buoc nay la mo form Sua thay o lenh SX rong, bam Luu la am tham go phieu khoi lenh. */
+  if (donDangSua && !coDonDangSua) {
+    const g = ds.find(x => Number(x.DonHangID) === donDangSua);
+    if (g) ra.unshift(dungSo(g));
+    else {
+      try {
+        const r2 = (await pool.request().input('d', sql.Int, donDangSua).query(
+          'SELECT DonHangID, MaDH, TenSanPham, TrangThai FROM DonHangSanXuat WHERE DonHangID = @d')).recordset[0];
+        if (r2) ra.unshift(dungSo(r2));
+      } catch (e) { console.error('[nhapkho /danhmuc] khong lay duoc lenh cua phieu dang sua: ', e); }
+    }
+  }
+  return ra;
+}
 
 /* ================================================================================================
    v6.83: CAC PHIEU NHAP KHO CUA MOT MA HANG.
@@ -303,13 +414,20 @@ async function docPhieu(pool, id) {
   /* v7.85: tra ve co AN de form SUA PHIEU tich/bo tich cho DUNG trang thai hien tai. Khong tra ve
      thi form luon hien o tich SAN — mo phieu dang bi an ra roi bam Luu la ma hien lai am tham. */
   const cotAn = (await coCotAnTheKho(pool)) ? 'ISNULL(hh.AnTheKho, 0) AS AnTheKho' : 'CAST(0 AS BIT) AS AnTheKho';
+  /* v9.03 — TRA VE ANH DANG LUU (anh mau cua dong + anh dai dien cua ma).
+     PhieuNhapKhoHangChiTiet KHONG co cot anh: anh tren form phieu nhap la "ghi xuyen" — dung mot lan
+     luc Luu roi thoi. Nen mo SUA phieu truoc day o anh LUON TRONG, nguoi dung tuong anh bi mat va
+     tai len lai (file moi, file cu thanh mo coi). Nay dien san anh that de nhin la biet da co hay chua.
+     ⚠️ Doc tu TheKhoChiTietMau theo (MaHangID, MauSacID) — KHONG phai tu phieu. */
   const ct = (await pool.request().input('id', sql.Int, id).query(`
     SELECT ct.*, hh.MaHang, hh.TenHang, hh.LoaiRi, hh.DonViCoBan, hh.DonViQuyDoi, ms.TenMau,
            -- v6.98: cac truong CAP MA HANG de form Sua phieu dien san dong khai (khoi sang man khac)
-           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode, ${cotTenHD}, ${cotAn}
+           hh.GiaBan, hh.NhomSanPhamID, hh.TheKhoDanhMucID, hh.MaBarcode, ${cotTenHD}, ${cotAn},
+           tkm.LinkAnh AS AnhMauDangLuu, hh.AnhDaiDien AS AnhDaiDienDangLuu
     FROM PhieuNhapKhoHangChiTiet ct
     LEFT JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
     LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+    LEFT JOIN TheKhoChiTietMau tkm ON tkm.MaHangID = ct.MaHangID AND tkm.MauSacID = ct.MauSacID
     WHERE ct.PhieuNKID = @id ORDER BY ct.ID`)).recordset;
   return { h, ct };
 }
@@ -465,6 +583,14 @@ async function chuanDong(pool, tran, d, loai) {
    ⚠️ CHI tao dong mau + ghi anh. KHONG ghi so luong vao NhapCai — ton den tu chinh bang phieu
    (vw_TonTheoMau). Ghi vao NhapCai la dem hai lan. Xem utils/theKhoMau.js.
    ================================================================================================ */
+/* ⚠️ v9.03 — HAM NAY LUON DUOC GOI, KE CA KHI BO TICH "Tao the kho luon khi luu".
+   Nguyen bao 2026-10-25: "mot so ma hang hoa khi lam phieu nhap tai anh len nhung o the kho hang hoa
+   khong co anh tung mau" + "xem trong thu muc upload cua server CO anh tung mau, nhung khong the hien
+   tren the kho hay catalogue" => file da len /uploads nhung TheKhoChiTietMau.LinkAnh van NULL.
+   Mot trong ba nguyen nhan (ca ba deu IM LANG) la: bo tich o "Tao the kho" thi truoc day CA KHOI nay
+   bi bo qua -> anh da tai len thanh FILE MO COI, khong co duong nao gan lai.
+   Nay: anh LUON duoc ghi. O tich chi con quyet dinh AN/HIEN ma trong danh sach The kho (dung nghia
+   tu v7.85, xem dongBoCoAnTheKho) — ghi anh khong tao ton, khong lam hien lai ma da an. */
 async function taoTheKhoTuDong(pool, tran, dsGhi) {
   let soMau = 0, soAnh = 0, soAnhMau = 0;
   const daAnhDaiDien = new Set();
@@ -479,8 +605,12 @@ async function taoTheKhoTuDong(pool, tran, dsGhi) {
       if (await capNhatAnhDaiDien(pool, tran, d.maHangId, d.anhDaiDien)) soAnh++;
     }
     if (!d.mauSacId) continue;
-    if (d.anhMau) soAnhMau++;   // dem de bao lai cho nguoi dung: anh mau CO den backend hay khong
-    if (await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null)) soMau++;
+    /* v9.03: dem anh THAT SU doi (damBaoDongMau tra { moi, anhDoi }), khong dem "dong co mang anh".
+       Tu v9.03 form Sua phieu dien san anh dang luu roi gui lai y nguyen — dem kieu cu la lan nao bam
+       Luu cung bao "Da ghi N anh mau" ke ca khong doi gi, lam cau thong bao nay mat gia tri. */
+    const kq = await damBaoDongMau(pool, tran, d.maHangId, d.mauSacId, d.anhMau, null);
+    if (kq.anhDoi) soAnhMau++;
+    if (kq.moi) soMau++;
   }
   return { soMau, soAnh, soAnhMau };
 }
@@ -538,6 +668,12 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
   if (loai === 'NhaCungCap' && !b.nccId) {
     return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp — số tiền này sẽ vào công nợ phải trả.' });
   }
+  /* v9.09: doi xung voi phep tren. Thieu phep nay thi phieu tu san xuat luu duoc voi DonHangID = NULL,
+     va dau hieu duy nhat la mot cau canh bao noi vao toast THANH CONG, lai noi ve "gia von" chu khong
+     noi "phieu vua bi go khoi lenh SX". Ra soat cheo v9.09 bat duoc. */
+  if (loai === 'SanXuat' && !b.donHangId) {
+    return res.status(400).json({ success: false, message: 'Nhập từ sản xuất thì phải chọn lệnh SX — không chọn thì phiếu không gắn vào lệnh nào và không tính được giá vốn.' });
+  }
 
   const tran = new sql.Transaction(pool);
   await tran.begin();
@@ -572,7 +708,7 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
     for (const d of dsGhi) await ghiDong(pool, tran, phieuId, d);
 
     // v6.96: tich "Tao the kho" -> tao luon dong mau + ghi anh (khong ghi so luong)
-    const tk = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
+    const tk = await taoTheKhoTuDong(pool, tran, dsGhi);   // v9.03: LUON ghi anh, ke ca khi bo tich
     const co = await dongBoCoAnTheKho(pool, tran, dsGhi, b.taoTheKho);   // v7.85
 
     await tran.commit();
@@ -633,6 +769,10 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   if (loai === 'NhaCungCap' && !b.nccId) {
     return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp.' });
   }
+  // v9.09: xem ghi chu o POST /phieu — mat lien ket lenh SX la loi am tham, phai chan ngay.
+  if (loai === 'SanXuat' && !b.donHangId) {
+    return res.status(400).json({ success: false, message: 'Nhập từ sản xuất thì phải chọn lệnh SX — ô lệnh SX đang trống, chọn lại rồi lưu.' });
+  }
 
   const tran = new sql.Transaction(pool);
   await tran.begin();
@@ -647,7 +787,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
     for (const d of dong) dsGhi.push(await chuanDong(pool, tran, d, loai));
     for (const d of dsGhi) await ghiDong(pool, tran, req.params.id, d);
     // v6.96: sua phieu cung dong bo lai the kho (them mau moi / doi anh); khong dung den so luong.
-    const tk2 = (b.taoTheKho === false) ? { soMau: 0, soAnh: 0 } : await taoTheKhoTuDong(pool, tran, dsGhi);
+    const tk2 = await taoTheKhoTuDong(pool, tran, dsGhi);   // v9.03: LUON ghi anh, ke ca khi bo tich
     const co2 = await dongBoCoAnTheKho(pool, tran, dsGhi, b.taoTheKho);   // v7.85
 
     await new sql.Request(tran)

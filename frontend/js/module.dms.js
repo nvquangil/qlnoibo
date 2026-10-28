@@ -355,6 +355,7 @@ window.ModuleDMS = (function () {
           ${dmPerm.canDelete ? ` <button class="btn small danger dm-xoa" data-id="${r.ShopID}">Xóa</button>` : ''}
         </td></tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có shop nào — bấm "+ Thêm shop".</td></tr>';
 
+      themOTimTuDong(body);   // v9.05: ô tìm Mã shop / Tên shop / NPP / Liên hệ / Địa chỉ / Phụ trách
       document.querySelectorAll('.dm-sua').forEach(b => b.addEventListener('click', () => {
         formShop(rows.find(x => String(x.ShopID) === b.dataset.id));
       }));
@@ -531,6 +532,7 @@ window.ModuleDMS = (function () {
       document.getElementById('dmThemTuyen').addEventListener('click', () => formTuyen(null, shops, chiTiet));
       document.getElementById('dmThemLich').addEventListener('click', () => formLich());
     }
+    themOTimTuDong(body);   // v9.05: ô tìm Mã tuyến / Tên tuyến / Nhân viên / Ngày trong tuần
     document.querySelectorAll('.dmt-sua').forEach(b => b.addEventListener('click',
       () => formTuyen(tuyen.find(x => String(x.TuyenID) === b.dataset.id), shops, chiTiet)));
     document.querySelectorAll('.dmt-xoa').forEach(b => b.addEventListener('click', async () => {
@@ -559,6 +561,7 @@ window.ModuleDMS = (function () {
           try { await apiDelete('/api/dms/lich/' + b.dataset.id); toast('Đã xóa lịch.', 'success'); xemLich(); }
           catch (err) { toast(err.message, 'error'); }
         }));
+        themOTimTuDong(box);   // v9.05: ô tìm Nhân viên / Tuyến / Ghi chú trong lịch đi tuyến
       } catch (err) { box.innerHTML = `<div class="empty-hint">Không tải được lịch: <b>${escapeHtml(err.message)}</b></div>`; }
     };
     document.getElementById('dmXemLich').addEventListener('click', xemLich);
@@ -668,6 +671,7 @@ window.ModuleDMS = (function () {
       }).join('') || '<tr><td colspan="6" class="empty-hint">Chưa ghi nhận điểm nào hôm nay</td></tr>'}</tbody></table>
       <h4 style="margin:18px 0 6px;">Đơn tôi đã lấy (30 ngày gần nhất)</h4>
       <div id="dmDonToi"><div class="empty-hint">Đang tải...</div></div>`;
+    themOTimTuDong(body);   // v9.05: ô tìm cho "Shop theo kế hoạch hôm nay" + "Đã ghi nhận hôm nay"
     const moForm = (loai) => formGheTham(loai, d, shops);
     document.getElementById('dmCheckin').addEventListener('click', () => moForm('GheTham'));
     document.getElementById('dmGoiDien').addEventListener('click', () => moForm('GoiDien'));
@@ -690,6 +694,7 @@ window.ModuleDMS = (function () {
             <td>${statusBadge(o.TrangThai)}</td>
             <td>${o.SoPhieu ? `${escapeHtml(o.SoPhieu)}<div style="font-size:11px;color:#5f6368;">${fmtTien(o.TongThanhToan)} đ</div>` : '<span class="empty-hint" style="padding:0;">chưa lên phiếu</span>'}</td>
           </tr>`).join('') || '<tr><td colspan="8" class="empty-hint">Chưa lấy đơn nào trong 30 ngày</td></tr>'}</tbody></table>`;
+        themOTimTuDong(box);   // v9.05: ô tìm Shop / Mã hàng / Màu / Trạng thái / Phiếu bán hàng
       } catch (err) { box.innerHTML = `<div class="empty-hint">Không tải được đơn: <b>${escapeHtml(err.message)}</b></div>`; }
     })();
   }
@@ -880,6 +885,7 @@ window.ModuleDMS = (function () {
             <td>${p.SoPhieu ? `${escapeHtml(p.SoPhieu)}<div style="font-size:11px;color:#5f6368;">${fmtTien(p.TongThanhToan)} đ</div>` : ''}</td>
             <td style="white-space:pre-wrap;">${escapeHtml(p.GhiChu || '')}</td>
           </tr>`).join('') || '<tr><td colspan="9" class="empty-hint">Không có điểm nào</td></tr>'}</tbody></table>`;
+        themOTimTuDong(box);   // v9.05: ô tìm Nhân viên / Shop / Hình thức / Kết quả / Phiếu BH / Ghi chú
         veBanDo('dmLtBanDo', d.diem.map((p, i) => ({
           lat: p.Latitude != null ? p.Latitude : p.ShopLat,
           lon: p.Longitude != null ? p.Longitude : p.ShopLon,
@@ -944,6 +950,7 @@ window.ModuleDMS = (function () {
             <td>${escapeHtml(r.TenKhachHang || '')}</td>
             <td>${fmtNumber(r.SoPhieu)}</td><td style="text-align:right;">${fmtTien(r.DoanhSo)}</td>
           </tr>`).join('') || '<tr><td colspan="6" class="empty-hint">Chưa có dữ liệu</td></tr>'}</tbody></table>`;
+        themOTimTuDong(box);   // v9.05: ô tìm Nhân viên / Shop / Nhà phân phối ở cả 2 bảng doanh số
       } catch (err) { box.innerHTML = `<div class="empty-hint">Không tải được doanh số: <b>${escapeHtml(err.message)}</b></div>`; }
     };
     document.getElementById('dmDsXem').addEventListener('click', xem);

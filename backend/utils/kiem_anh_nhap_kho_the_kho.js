@@ -66,7 +66,8 @@ async function chay(dsGhi) {
   const f = new Function('damBaoDongMau', 'capNhatAnhDaiDien', `
     ${mHam}
     return taoTheKhoTuDong;`)(
-    async (pool, tran, mh, ms, anh) => { ghi.dongMau.push({ mh, ms, anh: anh || null }); return true; },
+    /* v9.03: damBaoDongMau tra ve { moi, anhDoi } (truoc la boolean) — dem anh THAT SU doi. */
+    async (pool, tran, mh, ms, anh) => { ghi.dongMau.push({ mh, ms, anh: anh || null }); return { moi: true, anhDoi: !!anh }; },
     async (pool, tran, mh, anh) => { ghi.anhDaiDien.push({ mh, anh }); return true; }
   );
   const kq = await f({}, {}, dsGhi);
@@ -128,8 +129,12 @@ async function chay(dsGhi) {
     'dong mau DA CO: bo trong khong xoa mat anh cu');
   kiem(/INSERT INTO TheKhoChiTietMau[^)]*LinkAnh/.test(sTKM), 'dong mau MOI: ghi anh ngay luc tao');
   kiem(/if \(!anh\) return false;/.test(sTKM), 'khong co anh moi thi khong dung toi anh dai dien dang luu');
-  kiem(/UPDATE TheKhoHangHoa SET AnhDaiDien = ISNULL\(@anh, AnhDaiDien\)/.test(sTKM),
-    'anh dai dien cung ghi kieu ISNULL');
+  /* v9.03: doi tu ISNULL sang "chi ghi khi KHAC" + dem rowsAffected. Tac dung bao ve van y het
+     (gui NULL da bi chan o dong `if (!anh) return false` ben tren), nhung nay dem duoc anh THAT SU doi. */
+  kiem(/UPDATE TheKhoHangHoa SET AnhDaiDien = @anh\s+WHERE MaHangID = @mh AND ISNULL\(AnhDaiDien, N''\) <> @anh/.test(sTKM),
+    'anh dai dien: chi ghi khi khac cai dang luu (de dem dung)');
+  kiem(/return !!kq\.rowsAffected\[0\];/.test(sTKM), 'capNhatAnhDaiDien tra ve theo rowsAffected, khong phai "co gia tri la true"');
+  kiem(/return \{ moi: !!r\.Moi, anhDoi: !!r\.AnhDoi \};/.test(sTKM), 'damBaoDongMau tra ve { moi, anhDoi }');
   kiem(!/NhapCai\s*=\s*[^0]/.test(bo(sTKM)),
     'theKhoMau.js KHONG ghi so luong vao NhapCai (ghi la ton dem hai lan)');
 
@@ -209,8 +214,45 @@ async function chay(dsGhi) {
   kiem(/KHÔNG PHẢI ĐƯỜNG DẪN ẢNH — đang lưu/.test(sSoi),
     'gia tri la in NGUYEN VAN (ban dau cat cut thanh "/…", khong chan doan duoc)');
 
+  /* ============================================================================================
+     5c. v9.03 — BON CHO NUOT ANH IM LANG (Nguyen 2026-10-25: anh co trong /uploads nhung the kho
+     va catalogue khong hien). Moi phep kiem duoi day chan DUNG MOT trong bon.
+     ============================================================================================ */
+  console.log('\n=== 5c. v9.03: bon cho nuot anh im lang ===');
+  const sKH = doc('routes/khohang.js');   // backend (sFeKH o tren la FRONTEND module.khohang.js)
+  /* (1) THU PHAM CHINH: PUT /items/:id xoa dong mau khong co trong form. vw_TonTheoMau la UNION voi
+         vw_NhapKhoTuPhieu nen mau VAN HIEN sau khi xoa — chi mat anh. */
+  kiem(/AND ISNULL\(SoCatCai,0\) = 0 AND ISNULL\(NhapCai,0\) = 0 AND ISNULL\(XuatCai,0\) = 0\s*\n\s*AND ISNULL\(LinkAnh, N''\) = N'' AND ISNULL\(GhiChu, N''\) = N''/.test(sKH),
+    '(1) khohang PUT /items: chi xoa dong mau RONG (khong so lieu, khong anh, khong ghi chu)');
+  kiem(/NOT EXISTS \(SELECT 1 FROM vw_NhapKhoTuPhieu pk\s*\n\s*WHERE pk\.MaHangID = TheKhoChiTietMau\.MaHangID/.test(sKH),
+    '(1) va khong xoa dong con hang tu PHIEU NHAP KHO (mau do van hien tren man hinh)');
+  kiem(/GIỮ LẠI/.test(sKH), '(1) dong bi giu lai duoc BAO RA, khong im lang');
+  /* (2) Bo tich "Tao the kho" khong con lam mat anh. */
+  kiem(/const tk = await taoTheKhoTuDong\(pool, tran, dsGhi\);/.test(sNK)
+    && /const tk2 = await taoTheKhoTuDong\(pool, tran, dsGhi\);/.test(sNK),
+    '(2) nhapkho POST+PUT LUON ghi anh, khong con phu thuoc o tich taoTheKho');
+  kiem(!/b\.taoTheKho === false\) \? \{ soMau: 0/.test(sNK), '(2) da bo nhanh "bo tich -> bo qua ca khoi"');
+  /* (3) Dang tai anh thi chua duoc Luu (onchange la async — bam Luu som la anh len server nhung
+         duong dan khong kip vao payload). */
+  kiem(/let soAnhDangTai = 0;/.test(sFeNK) && /function batDauTaiAnh\(\)/.test(sFeNK) && /function xongTaiAnh\(\)/.test(sFeNK),
+    '(3) co bo dem anh dang tai');
+  kiem(/batDauTaiAnh\(\);[\s\S]{0,400}?finally \{ xongTaiAnh\(\); \}/.test(sFeNK),
+    '(3) moi o tai anh deu tang/giam bo dem trong try...finally');
+  bang((sFeNK.match(/batDauTaiAnh\(\);/g) || []).length, 2, '(3) ca HAI o (anh mau + anh dai dien) deu dem');
+  kiem(/if \(soAnhDangTai > 0\) \{\s*\n\s*return toast\(/.test(sFeNK), '(3) nut Luu chan khi con anh dang tai');
+  kiem(/capNhatNutLuuTheoAnh\(\);\s*\n\s*\}/.test(sFeNK), '(3) finally cua Luu mo khoa QUA capNhatNutLuuTheoAnh (khong bat disabled=false)');
+  /* (4) Sua phieu hien lai anh dang luu — va DOI MAU thi phai bo anh cua mau cu. */
+  kiem(/tkm\.LinkAnh AS AnhMauDangLuu, hh\.AnhDaiDien AS AnhDaiDienDangLuu/.test(sNK),
+    '(4) docPhieu tra ve anh dang luu de form Sua hien thumbnail');
+  kiem(/LEFT JOIN TheKhoChiTietMau tkm ON tkm\.MaHangID = ct\.MaHangID AND tkm\.MauSacID = ct\.MauSacID/.test(sNK),
+    '(4) join dung khoa (MaHangID, MauSacID) — bang co UNIQUE nen khong nhan dong');
+  kiem(/anhMau: r\.AnhMauDangLuu \|\| null, anhDaiDien: r\.AnhDaiDienDangLuu \|\| null/.test(sFeNK),
+    '(4) form Sua nap anh dang luu vao dong');
+  kiem(/if \(String\(d\.mauSacId \|\| d\.tenMau \|\| ''\) !== truoc\) d\.anhMau = null;/.test(sFeNK),
+    '🔴 (4) DOI MAU thi BO anh cua mau cu — khong thi anh mau cu bi chep sang mau moi');
+
   console.log('\n=== 6. Bump ?v= ===');
-  [['module.nhapkho.js', 7.60], ['module.khohang.js', 7.60]].forEach(([f, min]) => {
+  [['module.nhapkho.js', 9.03], ['module.khohang.js', 7.60]].forEach(([f, min]) => {
     const v = (sIndex.match(new RegExp(f.replace(/\./g, '\\.') + '\\?v=([\\d.]+)')) || [])[1];
     kiem(v && parseFloat(v) >= min, `index.html: ${f}?v= >= ${min}`, String(v));
   });

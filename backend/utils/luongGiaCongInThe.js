@@ -30,26 +30,49 @@
 
    HAI THAY DOI, deu CO Y:
      1. Loc ky theo qc.NgayQC thay vi CreatedAt.
-     2. CROSS APPLY (khong phai LEFT) -> lenh CHUA qua QC bi loai khoi KET QUA, KE CA khi khong
-        truyen ky. Tuc SO CONG NO NHA GIA CONG cung chi tinh lenh da qua QC.
-        ⚠️ DAY LA THAY DOI CO ANH HUONG TOI SO CONG NO — da bao truoc cho Nguyen. Neu cong no can
-        tinh ca lenh chua qua QC thi doi CROSS APPLY thanh OUTER APPLY o CA HAI cau va them co
-        rieng cho nhanh cong no; dung sua mot cau roi quen cau kia.
+     2. CROSS APPLY + HAVING COUNT(*) > 0 (v9.02) -> lenh CHUA qua QC bi loai khoi KET QUA, KE CA
+        khi khong truyen ky. Tuc SO CONG NO NHA GIA CONG cung chi tinh lenh da qua QC.
+        ⚠️ Tu v8.61 toi truoc v9.02 dieu nay KHONG DUNG voi nhanh cong no (xem ghi chu o
+        APPLY_NGAY_QC): cong no van cong lenh chua QC. v9.02 moi that su loai — so cong no giam dung
+        phan do. Neu cong no can tinh ca lenh chua qua QC thi them co rieng cho nhanh cong no (OUTER
+        APPLY), dung sua mot cau roi quen cau kia.
 
    MIN(NgayGhiNhan) = lan ghi QC DAU TIEN, CO Y khong dung MAX (xem ly do o payroll.js v8.61).
    Khop CA MaCongDoan LAN TenCongDoan vi MaCongDoan la DU LIEU nguoi dung go duoc (bai hoc 'nhatchi'
    o v8.50, lam v8.30/v8.33 khong bao gio chay).
    ================================================================================================ */
 
-/* Khoi CROSS APPLY lay ngay QC cua don, dung CHUNG cho ca hai cau. `bd` la alias cua bang co
-   cot DonHangID (ct cho gia cong, it cho in theu). */
+/* Khoi CROSS APPLY lay ngay QC cua don, dung CHUNG cho moi bang luong theo lenh. `bd` la alias cua
+   bang co cot DonHangID (ct gia cong, it in theu, td tien do cho la/dong goi + so cat + khoan may).
+
+   🔴 v9.02 — HAVING COUNT(*) > 0 LA CAI LAM NEN CONG "CHUA QC THI LOAI". Ra soat chéo 2026-10-24 chi ra:
+   MIN() khong GROUP BY LUON tra ve DUNG MOT dong (NULL khi khong co QC), nen CROSS APPLY mot minh
+   KHONG loai dong nao — ghi chu v8.61 "CROSS APPLY -> lenh chua QC bi loai" la SAI. Tu v8.61 toi
+   v9.02 cac bang luong chi thoat nho WHERE YEAR(qc.NgayQC)=@n (NULL -> false); con SO CONG NO NHA GIA
+   CONG goi khong truyen ky thi KHONG co WHERE do -> van cong ca lenh chua QC (Ngay = NULL).
+   HAVING COUNT(*) > 0 tren mot nhom duy nhat: khong co dong QC -> khong co nhom -> CROSS APPLY loai
+   dong ngoai. Ap cho MOI noi goi — ke ca cong no nha gia cong (so cong no se GIAM dung phan lenh
+   chua QC; da noi ro voi Nguyen trong PRD_v902). */
 const APPLY_NGAY_QC = (bd) => `
     CROSS APPLY (SELECT MIN(q.NgayGhiNhan) AS NgayQC
                    FROM TienDoSanXuat q
                    JOIN CongDoanSanXuat c2 ON c2.StageID = q.StageID
                   WHERE q.DonHangID = ${bd}.DonHangID
                     AND (UPPER(LTRIM(RTRIM(ISNULL(c2.MaCongDoan, N'')))) = N'QC'
-                         OR UPPER(LTRIM(RTRIM(ISNULL(c2.TenCongDoan, N'')))) = N'QC')) qc`;
+                         OR UPPER(LTRIM(RTRIM(ISNULL(c2.TenCongDoan, N'')))) = N'QC')
+                 HAVING COUNT(*) > 0) qc`;
+
+/* v9.02 — NGAY KY cua mot dong ghi cong doan = ngay MUON HON giua ngay ghi cong doan va ngay QC dau.
+   Nguyen chot 2026-10-24 (ra soat "tat ca cac lenh SX khi QC ghi nhan moi tinh luong"):
+   "Thang muon hon giua ngay ghi va ngay QC dau". Ly do: tien KHONG BAO GIO roi vao thang da chot —
+     · cong doan TRUOC QC (cat, may, gia cong): ngay QC muon hon -> ky = thang QC (y het v8.61);
+     · cong doan SAU QC (dong goi): ngay ghi muon hon -> ky = thang ghi (dong goi T11 cua lenh QC T10
+       tinh T11, khong bi day nguoc ve T10 da tra).
+   Dung cho Khoan may, La/Dong goi, Trai vai cat (payroll.js). Gia cong/in theu van loc thang theo
+   qc.NgayQC (dieuKienKy): dong giao/nhan KHONG co cot ngay nhan rieng (SoLuongNhan ghi de), nen khong
+   co "ngay ghi" de so — thang QC la moc duy nhat co that. `cot` = cot ngay ghi cong doan (vd
+   'td.NgayGhiNhan'), phai co qc da APPLY. */
+const bieuThucNgayKy = (cot) => `CASE WHEN qc.NgayQC > ${cot} THEN qc.NgayQC ELSE ${cot} END`;
 
 /* Dieu kien loc ky dung chung cho ca hai cau — nay luon theo qc.NgayQC. */
 function dieuKienKy(_cotCu, ky) {
@@ -140,4 +163,6 @@ function tongHopTheoNha(rows) {
   return Object.values(m);
 }
 
-module.exports = { loadGiaCong, loadInThe, tongHopTheoNha };
+// v9.02: export APPLY_NGAY_QC + bieuThucNgayKy de payroll.js (la/dong goi, trai vai cat) dung CHUNG
+// mot cach tim ngay QC — khong chep tay khoi CROSS APPLY lan thu ba.
+module.exports = { loadGiaCong, loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy };

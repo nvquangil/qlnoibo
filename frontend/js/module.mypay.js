@@ -68,6 +68,7 @@ window.ModuleMyPay = (function () {
         <tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="5" style="text-align:right;">TỔNG KHOÁN MAY</td><td style="text-align:right;">${money(tongMay)}</td></tr></tfoot></table></div>`
         : `<div class="empty-hint">Không có lương khoán may tháng này.</div>`}`;
     wirePeriod();
+    themOTimTuDong(container);   // v9.05: ô tìm Mã ĐH / Công đoạn trong bảng lương khoán may
   }
 
   return { render, getTabs };

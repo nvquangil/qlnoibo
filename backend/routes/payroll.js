@@ -1275,14 +1275,18 @@ async function loadLuongKhoanMay(pool, nam, thang, nhanVienId) {
        ⚠️ Khop CA MaCongDoan LAN TenCongDoan, da chuan hoa. Ly do: MaCongDoan la DU LIEU nguoi dung
        go duoc o man Danh muc, khong phai hang so — cong doan "Nhat chi" tung co ma that la 'nhatchi'
        chu khong phai 'NCH', lam v8.30/v8.33 KHONG BAO GIO chay (xem v8.50). Khong lap lai loi do.
+
+       v9.02 — (a) khoi CROSS APPLY nay chuyen sang dung CHUNG APPLY_NGAY_QC (co HAVING COUNT(*) > 0,
+       xem ghi chu o utils/luongGiaCongInThe.js: MIN() khong GROUP BY luon tra 1 dong, CROSS APPLY
+       tran KHONG loai gi — o day van an toan nho WHERE YEAR(qc.NgayQC), nhung dung mot khoi cho ca
+       bon bang). (b) Ky = THANG MUON HON giua ngay ghi May va ngay QC dau (bieuThucNgayKy) thay vi
+       thang QC thuan: tu v8.74 QC ghi NHIEU DOT, dot May ghi SAU dot QC dau (lo 2 may thang 10, lo 1
+       QC 28/9) ma lay thang QC la tien roi vao thang 9 da tra. Voi dong May ghi TRUOC QC (binh thuong)
+       ket qua y het v8.61.
        ============================================================================================ */
-    CROSS APPLY (SELECT MIN(q.NgayGhiNhan) AS NgayQC
-                   FROM TienDoSanXuat q
-                   JOIN CongDoanSanXuat c ON c.StageID = q.StageID
-                  WHERE q.DonHangID = d.DonHangID
-                    AND (UPPER(LTRIM(RTRIM(ISNULL(c.MaCongDoan, N'')))) = N'QC'
-                         OR UPPER(LTRIM(RTRIM(ISNULL(c.TenCongDoan, N'')))) = N'QC')) qc
-    WHERE YEAR(qc.NgayQC) = @n AND MONTH(qc.NgayQC) = @t ${extra}
+    ${APPLY_NGAY_QC('td')}
+    WHERE qc.NgayQC IS NOT NULL
+      AND YEAR(${bieuThucNgayKy('td.NgayGhiNhan')}) = @n AND MONTH(${bieuThucNgayKy('td.NgayGhiNhan')}) = @t ${extra}
     ORDER BY nv.HoTen, d.MaDH`)).recordset;
 }
 function tongHopKhoanMay(rows) {
@@ -1343,7 +1347,7 @@ router.get('/luongmay/cuatoi', requireAuth, async (req, res) => {
    Ly do: SO CONG NO NHA GIA CONG (routes/congno.js) phai dung DUNG con so cua bang luong. Giu ban thu
    hai la Bang luong va So cong no ra HAI CON SO cho cung mot viec ma khong ai biet ben nao dung.
    Doc ghi chu dau file util TRUOC KHI SUA cong thuc (moc "SL NHAN", bay nhieu-ban-don-gia). */
-const { loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha } = require('../utils/luongGiaCongInThe');
+const { loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy } = require('../utils/luongGiaCongInThe');
 const loadGiaCong = (pool, nam, thang) => __loadGiaCong(pool, sql, { nam, thang });
 const loadInThe = (pool, nam, thang) => __loadInThe(pool, sql, { nam, thang });
 router.get('/giacong-inthe', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luonggcinthe'), async (req, res) => {
@@ -1358,11 +1362,21 @@ router.get('/giacong-inthe', requireAuth, requirePermission('PAYROLL', 'view'), 
 });
 
 // v5.38 (Payroll P4b): LƯƠNG LÀ (LA) + ĐÓNG GÓI (DG) = SL giao (PhanCongLaDongGoi) × đơn giá là/đóng gói
-// (DonHangDonGiaLaDongGoi theo Loai = MaCongDoan). Bảng RIÊNG nên KHÔNG lẫn lương khoán may. Lọc theo NgayGhiNhan.
+// (DonHangDonGiaLaDongGoi theo Loai = MaCongDoan). Bảng RIÊNG nên KHÔNG lẫn lương khoán may.
+/* v9.02 — GẮN ĐIỀU KIỆN QC (Nguyen 2026-10-24: "tất cả các lệnh SX khi công đoạn QC ghi nhận tiến độ
+   mới tính lương"). Trước v9.02 bảng này lọc trần theo tháng ghi Đóng gói, không nhìn QC — là bảng
+   lương theo lệnh DUY NHẤT (cùng Trải vải cắt) còn sót sau v8.61.
+     · CROSS APPLY ngày QC đầu (APPLY_NGAY_QC, dùng chung với gia công/in thêu): lệnh CHƯA QC không
+       có dòng → không vào bảng lương.
+     · Kỳ = tháng MUỘN HƠN giữa ngày ghi Đóng gói và ngày QC đầu (bieuThucNgayKy). Đóng gói làm SAU
+       QC nên thường = tháng ghi như cũ; chỉ khác khi ai đó ghi Đóng gói TRƯỚC QC (chọn tay công
+       đoạn) — khi đó tiền chờ tới tháng QC, không mất.
+   Trả thêm NgayQC + NgayKy để màn hình giải thích được vì sao một dòng nằm ở tháng này. */
 async function loadLuongLaDongGoi(pool, nam, thang) {
+  const ngayKy = bieuThucNgayKy('td.NgayGhiNhan');
   return (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
     SELECT c.MaCongDoan AS Loai, nv.NhanVienID, nv.MaNhanVien, nv.HoTen, d.MaDH, d.TenSanPham,
-           ms.TenMau, td.NgayGhiNhan, pc.SoLuong,
+           ms.TenMau, td.NgayGhiNhan, qc.NgayQC, ${ngayKy} AS NgayKy, pc.SoLuong,
            ISNULL(dg.DonGia,0) AS DonGia,
            pc.SoLuong * ISNULL(dg.DonGia,0) AS ThanhTien
     FROM PhanCongLaDongGoi pc
@@ -1375,7 +1389,9 @@ async function loadLuongLaDongGoi(pool, nam, thang) {
     OUTER APPLY (SELECT TOP 1 x.DonGia FROM DonHangDonGiaLaDongGoi x
                  WHERE x.DonHangID = d.DonHangID AND x.Loai = c.MaCongDoan
                  ORDER BY ISNULL(x.TenPhieu, N''), x.ID) dg
-    WHERE c.MaCongDoan IN ('LA','DG') AND YEAR(td.NgayGhiNhan)=@n AND MONTH(td.NgayGhiNhan)=@t
+    ${APPLY_NGAY_QC('td')}
+    WHERE c.MaCongDoan IN ('LA','DG') AND qc.NgayQC IS NOT NULL
+      AND YEAR(${ngayKy})=@n AND MONTH(${ngayKy})=@t
     ORDER BY nv.HoTen, c.MaCongDoan`)).recordset;
 }
 router.get('/luongladonggoi', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luongladonggoi'), async (req, res) => {
@@ -1418,10 +1434,19 @@ async function getCauHinhLuongCat(pool) {
   } catch (e) { return Object.assign({}, LC_DEFAULT); }
 }
 
-// Danh sách SƠ ĐỒ đã cắt trong tháng + tiền từng sơ đồ.
+// Danh sách SƠ ĐỒ đã cắt THUỘC KỲ + tiền từng sơ đồ.
+/* v9.02 — GẮN ĐIỀU KIỆN QC (Nguyen 2026-10-24, xem ghi chú ở loadLuongLaDongGoi). Trước v9.02 quỹ cắt
+   tháng = mọi sổ cắt ghi trong tháng, không nhìn QC.
+     · Lệnh CHƯA QC: sổ cắt không vào quỹ (CROSS APPLY).
+     · Kỳ của một sổ cắt = tháng MUỘN HƠN giữa ngày cắt và ngày QC đầu. Cắt luôn trước QC nên thực
+       chất = THÁNG QC: sổ cắt tháng 9 của lệnh QC tháng 10 nằm trong quỹ tháng 10 (như khoán may v8.61).
+   ⚠️ HỆ QUẢ CỐ Ý: quỹ tháng theo kỳ QC nhưng GIỜ CÔNG chia quỹ vẫn là giờ chấm công của tháng đó
+   (loadGioCongCat). Tiền của lệnh cắt T9/QC T10 chia cho người làm giờ T10 — tổng tiền không mất,
+   chỉ dịch tháng; Nguyen đã chọn phương án này thay vì giữ tháng cắt (sẽ mất tiền khi T9 đã chốt). */
 async function loadSoDoCat(pool, nam, thang, donGia) {
+  const ngayKy = bieuThucNgayKy('td.NgayGhiNhan');
   return (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).input('g', sql.Decimal(18, 4), donGia).query(`
-    SELECT td.TienDoID, td.NgayGhiNhan, td.SttSoCat, td.SoDoID,
+    SELECT td.TienDoID, td.NgayGhiNhan, td.SttSoCat, td.SoDoID, qc.NgayQC, ${ngayKy} AS NgayKy,
            d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham,
            ISNULL(td.MetSoDoDai, sd.MetSoDoDai) AS MetSoDoDai,
            ISNULL(td.KhoVaiSoDo, sd.KhoVaiSoDo) AS KhoVaiSoDo,
@@ -1440,8 +1465,9 @@ async function loadSoDoCat(pool, nam, thang, donGia) {
     LEFT JOIN DonHangChiTietSoDo sd ON sd.ID = td.SoDoID
     LEFT JOIN NhanVien nvc ON nvc.NhanVienID = td.NhanVienCatID
     LEFT JOIN NhanVien nvt ON nvt.NhanVienID = td.NhanVienTraiVaiID
-    WHERE c.MaCongDoan = 'CAT'
-      AND YEAR(td.NgayGhiNhan)=@n AND MONTH(td.NgayGhiNhan)=@t
+    ${APPLY_NGAY_QC('td')}
+    WHERE c.MaCongDoan = 'CAT' AND qc.NgayQC IS NOT NULL
+      AND YEAR(${ngayKy})=@n AND MONTH(${ngayKy})=@t
       AND EXISTS (SELECT 1 FROM TienDoCatChiTietCay cay WHERE cay.TienDoID = td.TienDoID)
     ORDER BY d.MaDH, td.TienDoID`)).recordset;
 }
@@ -1469,7 +1495,8 @@ function tongHopLuongCat(soDo, nhanVien) {
   soDo.forEach(s => {
     const k = s.DonHangID;
     if (!map[k]) {
-      map[k] = { DonHangID: k, MaDH: s.MaDH, MaSanPham: s.MaSanPham, TenSanPham: s.TenSanPham, SoSoDo: 0, TongLop: 0, ThanhTien: 0 };
+      // v9.02: NgayQC cua lenh (moi so do cua cung lenh co cung NgayQC) de man hinh noi ro vi sao lenh o ky nay.
+      map[k] = { DonHangID: k, MaDH: s.MaDH, MaSanPham: s.MaSanPham, TenSanPham: s.TenSanPham, NgayQC: s.NgayQC || null, SoSoDo: 0, TongLop: 0, ThanhTien: 0 };
       theoDon.push(map[k]);
     }
     map[k].SoSoDo += 1;

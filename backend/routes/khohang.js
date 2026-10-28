@@ -1086,9 +1086,48 @@ router.put('/items/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
           keepIds.push(ins.recordset[0].ID);
         }
       }
+      /* ================================================================================================
+         🔴 v9.03 — KHÔNG XÓA DÒNG MÀU CÒN ĐANG ĐƯỢC DÙNG. Đây là thủ phạm của lỗi Nguyen báo
+         2026-10-25: "một số mã hàng hóa khi làm phiếu nhập tải ảnh lên nhưng ở thẻ kho hàng hóa không
+         có ảnh từng màu… trong thư mục upload của server CÓ ảnh".
+
+         `vw_TonTheoMau` là UNION của TheKhoChiTietMau **và** vw_NhapKhoTuPhieu (migration_v682). Nên
+         xóa dòng màu ở đây KHÔNG làm màu biến mất khỏi màn hình: màu vẫn hiện (vì phiếu nhập còn số
+         lượng) nhưng `LinkAnh` thành NULL ⇒ thẻ kho và catalogue mất ảnh, file vẫn nằm trong /uploads.
+         Không có thông báo nào. Chỉ cần một lần mở Sửa thẻ kho mà form gửi thiếu một dòng màu (vd màu
+         đó chưa được vẽ ra trong form) là ảnh của màu đó mất vĩnh viễn.
+
+         Nay CHỈ xóa dòng thật sự rỗng VÀ không còn nguồn nào dùng:
+           - mọi số liệu khai tay = 0 (SoCat / Nhap / Xuat), VÀ
+           - không có số lượng đến từ phiếu nhập kho (vw_NhapKhoTuPhieu), VÀ
+           - không có ảnh / ghi chú đang lưu — xóa ảnh là mất dữ liệu người dùng đã tải lên.
+         Dòng bị giữ lại được đếm và BÁO RA, không im lặng.
+         ================================================================================================ */
+      let giuLai = [];
       if (keepIds.length) {
-        await pool.request().input('id', sql.Int, maHangId)
-          .query(`DELETE FROM TheKhoChiTietMau WHERE MaHangID=@id AND ID NOT IN (${keepIds.join(',')})`);
+        giuLai = (await pool.request().input('id', sql.Int, maHangId).query(`
+          SELECT ms.TenMau,
+                 CASE WHEN ISNULL(ct.LinkAnh, N'') <> N'' THEN 1 ELSE 0 END AS CoAnh
+          FROM TheKhoChiTietMau ct
+          LEFT JOIN MauSac ms ON ms.MauSacID = ct.MauSacID
+          WHERE ct.MaHangID = @id AND ct.ID NOT IN (${keepIds.join(',')})
+            AND (ISNULL(ct.SoCatCai,0) <> 0 OR ISNULL(ct.NhapCai,0) <> 0 OR ISNULL(ct.XuatCai,0) <> 0
+                 OR ISNULL(ct.LinkAnh, N'') <> N'' OR ISNULL(ct.GhiChu, N'') <> N''
+                 OR EXISTS (SELECT 1 FROM vw_NhapKhoTuPhieu pk
+                             WHERE pk.MaHangID = ct.MaHangID AND pk.MauSacID = ct.MauSacID))`)).recordset;
+        await pool.request().input('id', sql.Int, maHangId).query(`
+          DELETE FROM TheKhoChiTietMau
+          WHERE MaHangID = @id AND ID NOT IN (${keepIds.join(',')})
+            AND ISNULL(SoCatCai,0) = 0 AND ISNULL(NhapCai,0) = 0 AND ISNULL(XuatCai,0) = 0
+            AND ISNULL(LinkAnh, N'') = N'' AND ISNULL(GhiChu, N'') = N''
+            AND NOT EXISTS (SELECT 1 FROM vw_NhapKhoTuPhieu pk
+                             WHERE pk.MaHangID = TheKhoChiTietMau.MaHangID
+                               AND pk.MauSacID = TheKhoChiTietMau.MauSacID)`);
+      }
+      if (giuLai.length) {
+        return res.json({ success: true, message: 'Đã lưu thẻ kho. GIỮ LẠI ' + giuLai.length + ' dòng màu không có trong form ('
+          + giuLai.map(g => (g.TenMau || '?') + (g.CoAnh ? ' — có ảnh' : '')).join(', ')
+          + ') vì còn số liệu / ảnh / hàng từ phiếu nhập kho. Muốn bỏ hẳn thì xóa số liệu của màu đó trước.' });
       }
     }
     res.json({ success: true });

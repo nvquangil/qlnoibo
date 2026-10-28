@@ -59,6 +59,7 @@ window.ModuleVATTU = (function () {
         </table>
       </div>`;
     if (perm.canCreate) document.getElementById('btnAddVt').addEventListener('click', openCreateModal);
+    themOTimTuDong(body);   // v9.05: ô tìm Số phiếu / Mã đơn / Đơn hàng SX / Người nhận
     body.querySelectorAll('.act-view').forEach(btn => btn.addEventListener('click', () => openDetailModal(btn.dataset.id)));
     body.querySelectorAll('.act-del').forEach(btn => btn.addEventListener('click', async () => {
       if (!confirm('Xóa phiếu xuất vật tư này? Tồn kho vải/phụ kiện sẽ được trả lại.')) return;

@@ -69,6 +69,10 @@ window.ModuleUsers = (function () {
         catch (err) { toast(err.message, 'error'); }
       });
     });
+    /* v9.05: gọi SAU vòng lặp trên. Vòng đó duyệt `tbody tr` theo CHỈ SỐ rồi ánh xạ sang rows[i];
+       wireTableSearch có chèn thêm một dòng "không tìm thấy" vào cuối tbody, gọi trước là danh
+       sách dài hơn rows đúng một phần tử. Hiện `if (!row) return` đỡ được, nhưng đừng dựa vào. */
+    themOTimTuDong(body);   // ô tìm Username / Họ tên / Bộ phận / Nhóm quyền / Trạng thái
   }
 
   function openUserForm(row, perm) {
@@ -155,6 +159,7 @@ window.ModuleUsers = (function () {
       try { await apiDelete('/api/users/groups/' + btn.dataset.id); toast('Đã xóa.', 'success'); render(container, currentUser); }
       catch (err) { toast(err.message, 'error'); }
     }));
+    themOTimTuDong(body);   // v9.05: ô tìm Tên nhóm / Mô tả
   }
 
   // v5.0 (muc 1): them che do "Theo tung user" ben canh "Theo nhom" da co - cho phep chon dung 1
