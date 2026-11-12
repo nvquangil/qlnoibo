@@ -10,6 +10,9 @@ const { maRapCuaDon, maRapTheoDon } = require('../utils/maRapCuaDon');   // v7.6
 /* v7.37: ba tang phong ve chong "lech ID trung ten" dung CHUNG mot ban chan doan. */
 const { chanDoanDon, danhMucTrungTen, timIdTheoTen } = require('../utils/chanDoanChiDinhVai');
 const { notifyStageUsers } = require('./notifications');
+/* v9.36: phí vận chuyển vải — CHỈ dùng cho giá thành. Công nợ NCC tuyệt đối không đụng tới.
+   Xem khối ghi chú v9.36 ở utils/tienVaiNhap.js trước khi sửa bất cứ thứ gì liên quan. */
+const { coCotPhiVanChuyen } = require('../utils/tienVaiNhap');
 
 const router = express.Router();
 const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -530,7 +533,13 @@ async function getVaiCayDaXuatChoDon(pool, donHangId) {
   const result = await pool.request().input('id', sql.Int, donHangId).query(`
     SELECT ct.ID, px.DonHangID, ct.CayID, ct.KGXuat AS KGGiao, px.NgayXuat AS NgayGiao,
            px.GhiChu, px.NguoiTaoID, px.CreatedAt, px.PhieuXuatID, px.MaDon,
-           vc.MaCay, vc.KGNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau
+           vc.MaCay, vc.KGNhap, dv.MaVai, lv.TenLoaiVai, ms.TenMau,
+           /* v9.24: SỐ MÉT đi kèm KG để ô chọn cây ở công đoạn Cắt nói đủ hai đơn vị — vải quản lý
+              theo kg hoặc theo mét tùy loại, chỉ có mã cây thì người cắt phải tra sang kho vải.
+              ct.SoMet = mét ĐÃ XUẤT của chính dòng phiếu này, đi CẶP với ct.KGXuat ở trên.
+              ⚠️ KHÔNG lấy vc.SoMet (mét lúc NHẬP cả cây) — cây nhập 300 m mới cấp 60 m mà hiện 300
+              là người cắt tưởng còn thừa vải. */
+           ct.SoMet AS MetGiao
     FROM PhieuXuatVaiChiTiet ct
     JOIN PhieuXuatVai px ON px.PhieuXuatID = ct.PhieuXuatID
     JOIN VaiCay vc ON vc.CayID = ct.CayID
@@ -808,6 +817,39 @@ async function getCatMauList(pool, donHangId, stageId) {
   }).sort((a, b) => String(a.TenMau).localeCompare(String(b.TenMau), 'vi'));
 }
 
+/* ================================================================================================
+   v9.12 — HE SO HIEU LUC CUA MOT LENH (dung cho bang DAI SIZE)
+
+   🔴 LOI Nguyen bao 2026-10-31: *"lenh he so 10 hoac 11 toi muon tach ra ... nho truoc co lam roi
+   ma gio khong nhin thay"*. Chuc nang Tach dai size (v8.59) VAN CON, nhung:
+     - nut chi hien DAM khi DonHangSanXuat.HeSoQuyDoi > 6, va
+     - backend rang "tong he so cac dai = DonHangSanXuat.HeSoQuyDoi".
+   Ma cot do MAC DINH = 1 va chi khai o Chi dinh san xuat. Lenh thuc te cat he so 11 (ghi tren tung
+   cay o So cat) nhung o he so cua LENH van la 1 => nut hien MO, va go 6+5=11 thi bi tu choi
+   "tong 11 khong khop he so cua lenh (1)". Nguoi dung ket luan "tinh nang bien mat".
+
+   Goc re: v8.59 (01/10) neo dai vao he so LENH, nhung v8.92 (17/10) da chot he so DUNG nam o SO CAT
+   (xem khoi ghi chu dai trong getCatMauList). Hai ban ra cach nhau 2 tuan, khong ai noi lai v8.59.
+   Chinh module.qlsx.js (ham nhanHeSo) da canh bao cai bay nay bang chu do tren man hinh.
+
+   Ham nay la MOT NOI duy nhat quyet dinh "he so hieu luc", de form va backend khong the lech luat:
+       1. Moi mau o So cat deu cung MOT he so > 0   -> lay he so do        (nguon 'cat')
+       2. Con lai (chua cat / cac cay lech nhau)    -> he so cua lenh      (nguon 'lenh')
+   Dung lai getCatMauList — KHONG viet lai bo loc cay chinh (da sai 3 lan: v8.31, v8.48, v8.52).
+   ================================================================================================ */
+function heSoHieuLuc(catMauList, order) {
+  const lenh = Number(order && order.HeSoQuyDoi) || 0;
+  const ds = (catMauList || []).filter(c => Number(c.TongSoLop) > 0);
+  if (!ds.length) return { heSo: lenh, nguon: 'lenh', lyDo: 'Cắt chưa ghi sổ nào' };
+  if (ds.some(c => Number(c.HeSoCatLech) === 1))
+    return { heSo: lenh, nguon: 'lenh', lyDo: 'sổ cắt có màu mang nhiều hệ số khác nhau' };
+  const hs = ds.map(c => Number(c.HeSoCat) || 0);
+  if (hs.some(h => h <= 0)) return { heSo: lenh, nguon: 'lenh', lyDo: 'có màu chưa ghi hệ số ở sổ cắt' };
+  if (hs.some(h => Math.abs(h - hs[0]) > 1e-9))
+    return { heSo: lenh, nguon: 'lenh', lyDo: 'các màu ở sổ cắt dùng hệ số khác nhau' };
+  return { heSo: hs[0], nguon: 'cat', lyDo: '' };
+}
+
 // v5.30: tong SL (mau chinh) tu ket qua Cat gan nhat = tong SoLuong tung mau (dung chung getCatMauList).
 // Dung hien o Giao/Nhan nha in theu ("chi hien tong so luong mau chinh tu tat ca so do cat cua lenh SX").
 let __catStageIdCache = null;
@@ -872,6 +914,35 @@ function soCaiGiatCapCua(c) {
 function heSoCuaDong(c, heSoDonHang) {
   const n = Number(c && c.heSoQuyDoi);
   return Number.isFinite(n) && n > 0 ? n : heSoDonHang;
+}
+
+/* ================================================================================================
+   v9.42 — HỆ SỐ MẶC ĐỊNH CỦA MỘT CÂY Ở SỔ CẮT, KHI CLIENT KHÔNG GỬI SỐ
+   ------------------------------------------------------------------------------------------------
+   🔴 PHẢI khớp với `heSoMacDinhCay` ở frontend (module.qlsx.js, đầu openProgressForm). Từ v9.42 màn
+   hình điền sẵn ô hệ số bằng TỔNG hệ số các dải; nếu máy chủ vẫn lùi về `DonHangSanXuat.HeSoQuyDoi`
+   thì một dòng gửi lên với ô hệ số rỗng sẽ được GHI bằng một con số KHÁC con số người dùng vừa nhìn
+   thấy trên màn hình — lệch im lặng, và lệch đúng vào SL cắt tức là vào lương cắt lẫn giá thành.
+   Hai nơi cùng quyết một giá trị thì phải cùng một luật; đây là bản sao có chủ đích của luật đó.
+
+     · tách DẢI SIZE → TỔNG hệ số các dải (một lớp cắt ra cả ri gồm mọi dải)
+     · tách MẪU      → hệ số của một mẫu (các mẫu dùng CHUNG một dải size, KHÔNG cộng dồn)
+     · không tách / khuyết hệ số → hệ số khai ở Ra lệnh SX, y như trước v9.42
+   ================================================================================================ */
+async function heSoMacDinhCayCat(pool, donHangId, order) {
+  const heSoLenh = Number(order && order.HeSoQuyDoi) || 1;
+  try {
+    const ds = await getDaiSizeList(pool, donHangId);
+    if (!ds.length) return heSoLenh;
+    if (ds.some(d => !(Number(d.HeSo) > 0))) return heSoLenh;   // khuyết: không đoán
+    const laMau = ds.some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU');
+    const v = laMau ? Number(ds[0].HeSo) : ds.reduce((s, d) => s + Number(d.HeSo), 0);
+    return v > 0 ? v : heSoLenh;
+  } catch (e) {
+    /* Đọc dải hỏng thì lùi về hành vi trước v9.42 — không để một lỗi phụ chặn việc ghi sổ cắt. */
+    console.error('[qlsx] heSoMacDinhCayCat: ' + (e && e.message));
+    return heSoLenh;
+  }
 }
 async function ghiChiTietCayCat(pool, tienDoId, c, soLuongLop, heSo) {
   const coAnh = await coCotQLSX(pool, 'TienDoCatChiTietCay', 'AnhCay');
@@ -1668,10 +1739,14 @@ router.post('/orders/:maDH/nhannhaintheu', requireAuth, requirePermission('QLSX'
    Bảng lương gia công in thêu đọc cột này để lấy đơn giá của ĐÚNG hạng mục (xem payroll.js loadInThe). */
 async function getInTheList(pool, donHangId) {
   const coHM = await coCotQLSX(pool, 'DonHangNhaInTheu', 'HangMucInThe');
+  // v9.13: dải size của dòng giao in thêu (cột có từ migration_v859 nhưng tới nay chưa ai đọc/ghi).
+  const coDai = await coCotQLSX(pool, 'DonHangNhaInTheu', 'DaiSizeID');
   const r = await pool.request().input('id', sql.Int, donHangId).query(`
     SELECT it.ID, it.NhaInID, it.SoLuongGiao, it.SoLuongNhan, it.GhiChu, ncc.TenNha,
-           ${coHM ? 'it.HangMucInThe' : "CAST(NULL AS NVARCHAR(200)) AS HangMucInThe"}
+           ${coHM ? 'it.HangMucInThe' : "CAST(NULL AS NVARCHAR(200)) AS HangMucInThe"},
+           ${coDai ? 'it.DaiSizeID, ds.TenDai' : 'CAST(NULL AS INT) AS DaiSizeID, CAST(NULL AS NVARCHAR(100)) AS TenDai'}
     FROM DonHangNhaInTheu it JOIN NhaGiaCong ncc ON ncc.NhaGiaCongID = it.NhaInID
+    ${coDai ? 'LEFT JOIN DonHangDaiSize ds ON ds.ID = it.DaiSizeID' : ''}
     WHERE it.DonHangID = @id ORDER BY it.ID`);
   return r.recordset;
 }
@@ -1744,6 +1819,20 @@ router.post('/orders/:maDH/inthe', requireAuth, requirePermission('QLSX', 'edit'
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     const rows = Array.isArray(req.body.rows) ? req.body.rows.filter(r => r.nhaInId) : [];
     const coHM = await coCotQLSX(pool, 'DonHangNhaInTheu', 'HangMucInThe');   // v6.01
+    /* v9.13 — DẢI SIZE cho dòng giao in thêu (bước 5c của v8.59, phần SỐ LƯỢNG — đơn giá theo dải
+       vẫn chưa làm). KHÁC với giao gia công (chỉ frontend chặn), ở đây BACKEND chặn thật: lệnh đã
+       tách dải mà dòng không mang dải (hoặc mang dải của lệnh khác) thì từ chối — form không phải
+       là nơi chặn thật. */
+    const coDai = await coCotQLSX(pool, 'DonHangNhaInTheu', 'DaiSizeID');
+    const dsDai = coDai ? await getDaiSizeList(pool, order.DonHangID) : [];
+    if (dsDai.length && rows.length) {
+      const hopLe = new Set(dsDai.map(d => String(d.ID)));
+      if (rows.some(r => !r.daiSizeId || !hopLe.has(String(r.daiSizeId))))
+        return res.status(400).json({ success: false,
+          message: loaiTachCuaList(dsDai) === 'MAU'
+            ? 'Lệnh này đã tách theo MẪU — mỗi dòng giao in thêu phải chọn đúng một mẫu của chính lệnh.'
+            : 'Lệnh này đã tách dải size — mỗi dòng giao in thêu phải chọn đúng một dải của chính lệnh.' });
+    }
     for (const r of rows) {
       const rq = pool.request()
         .input('DonHangID', sql.Int, order.DonHangID)
@@ -1751,8 +1840,9 @@ router.post('/orders/:maDH/inthe', requireAuth, requirePermission('QLSX', 'edit'
         .input('SoLuongGiao', sql.Int, r.soLuongGiao || null)
         .input('GhiChu', sql.NVarChar, r.ghiChu || null);
       if (coHM) rq.input('HangMucInThe', sql.NVarChar(200), (r.hangMucInThe || '').trim() || null);
-      await rq.query(`INSERT INTO DonHangNhaInTheu (DonHangID, NhaInID, SoLuongGiao, GhiChu${coHM ? ', HangMucInThe' : ''})
-                      VALUES (@DonHangID, @NhaInID, @SoLuongGiao, @GhiChu${coHM ? ', @HangMucInThe' : ''})`);
+      if (coDai) rq.input('DaiSizeID', sql.Int, Number(r.daiSizeId) || null);
+      await rq.query(`INSERT INTO DonHangNhaInTheu (DonHangID, NhaInID, SoLuongGiao, GhiChu${coHM ? ', HangMucInThe' : ''}${coDai ? ', DaiSizeID' : ''})
+                      VALUES (@DonHangID, @NhaInID, @SoLuongGiao, @GhiChu${coHM ? ', @HangMucInThe' : ''}${coDai ? ', @DaiSizeID' : ''})`);
     }
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: 'Lỗi khi lưu nhà in thêu: ' + err.message }); }
@@ -1963,9 +2053,27 @@ async function dangGiuDaiSize(pool, daiIds) {
   }
   return ket;
 }
+/* v9.23: + LoaiTach ('DAI' | 'MAU') — xem migration_v885.sql.
+     'DAI' (mặc định, như cũ) : tách DẢI SIZE, TỔNG hệ số các dòng = hệ số hiệu lực (2-7 + 8-12 = 11).
+     'MAU'                    : tách MẪU/biến thể (in chó / in thỏ) CÙNG một dải size ⇒ MỖI dòng
+                                mang ĐÚNG hệ số hiệu lực, không cộng dồn; vải cắt chung nên SL từ
+                                Cắt của mỗi dòng là số CHUNG của cả màu (màn hình phải ghi rõ).
+   Dò cột để CSDL chưa chạy migration vẫn chạy y như cũ (coi mọi dòng là 'DAI'). */
 async function getDaiSizeList(pool, donHangId) {
+  const coLoai = await coCotQLSX(pool, 'DonHangDaiSize', 'LoaiTach');
+  /* v9.38: TyLeVai — căn cứ chia chi phí vải theo dải. Phải TRẢ RA, không thì hộp thoại tách mở lại
+     là ô tỷ lệ trắng trơn, người dùng gõ lại từ đầu mỗi lần sửa (và lần lưu sau ghi đè bằng NULL). */
+  const coMet = await coCotQLSX(pool, 'DonHangDaiSize', 'TyLeVai');
   return (await pool.request().input('id', sql.Int, donHangId).query(
-    'SELECT ID, TenDai, HeSo, ThuTu FROM DonHangDaiSize WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, 9999), ID')).recordset;
+    `SELECT ID, TenDai, HeSo, ThuTu,
+            ${coLoai ? "ISNULL(NULLIF(LTRIM(RTRIM(LoaiTach)), N''), N'DAI')" : "N'DAI'"} AS LoaiTach,
+            ${coMet ? 'TyLeVai' : 'CAST(NULL AS DECIMAL(10,4)) AS TyLeVai'}
+     FROM DonHangDaiSize WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, 9999), ID`)).recordset;
+}
+/* Kiểu tách của MỘT lệnh = kiểu của các dòng hiện có (một lệnh chỉ một kiểu — không trộn, vì trộn
+   nghĩa là tổ hợp mẫu × dải, chưa ai cần và sẽ nhân đôi số dòng ở mọi công đoạn). */
+function loaiTachCuaList(ds) {
+  return (ds || []).some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU') ? 'MAU' : 'DAI';
 }
 
 router.get('/orders/:maDH/daisize', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'tiendo'), async (req, res) => {
@@ -1986,27 +2094,82 @@ router.put('/orders/:maDH/daisize', requireAuth, requirePermission('QLSX', 'edit
     const order = await getOrderByMaDH(pool, req.params.maDH);
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
 
+    /* 🔴 `tyLeVai` PHẢI được mang sang object mới. Bản đầu v9.38 quên, mà vẫn có dòng
+       `rq.input('TyLeVai', …, metCuaDong(r.tyLeVai))` ở dưới nên nhìn qua tưởng chạy — thực tế
+       `r.tyLeVai` là undefined ⇒ LUÔN ghi NULL, và câu UPDATE còn ĐÈ NULL lên số đã khai trước đó:
+       chỉ cần mở hộp thoại sửa tên dải là mất sạch tỷ lệ, im lặng. Giữ giá trị THÔ ở đây —
+       `metCuaDong()` mới là nơi lọc ''/null/≤0/NaN. */
     const rows = (Array.isArray(req.body.rows) ? req.body.rows : [])
-      .map(r => ({ id: Number(r.id) || null, tenDai: String(r.tenDai || '').trim(), heSo: Number(r.heSo) || 0 }))
+      .map(r => ({ id: Number(r.id) || null, tenDai: String(r.tenDai || '').trim(), heSo: Number(r.heSo) || 0,
+                   tyLeVai: r.tyLeVai }))
       .filter(r => r.tenDai !== '');
+    /* v9.23: kiểu tách của CẢ lệnh — 'MAU' (biến thể cùng dải size) hay 'DAI' (dải size, như cũ).
+       · CÓ gửi lên: giá trị lạ ⇒ 'DAI' (fail-safe về hành vi cũ, không nới lỏng ràng buộc vì gõ sai).
+       · KHÔNG gửi (máy còn cache JS cũ ≤ v9.13): GIỮ kiểu đang có của lệnh. Nếu mặc định 'DAI' ở đây
+         thì một lệnh đang tách MẪU (6 và 6) bị đem đi so tổng = 12 ≠ 6 và chặn bằng câu khó hiểu. */
+    const dsCu = await getDaiSizeList(pool, order.DonHangID);
+    const coGuiLoai = req.body.loaiTach != null && String(req.body.loaiTach).trim() !== '';
+    const loaiTach = coGuiLoai
+      ? (String(req.body.loaiTach).toUpperCase() === 'MAU' ? 'MAU' : 'DAI')
+      : loaiTachCuaList(dsCu);
+    const coCotLoai = await coCotQLSX(pool, 'DonHangDaiSize', 'LoaiTach');
+    /* Chặn khi THẬT SỰ đang ghi dòng mẫu. Gửi rows rỗng là BỎ TÁCH — việc đó không cần cột LoaiTach,
+       chặn nó bằng câu về migration là nói sai việc người dùng đang làm. */
+    if (loaiTach === 'MAU' && !coCotLoai && rows.length)
+      return res.status(400).json({ success: false,
+        message: 'Máy chủ chưa chạy migration_v885.sql nên chưa tách theo MẪU được (cột DonHangDaiSize.LoaiTach chưa có). Chạy migration rồi restart pm2.' });
 
-    const heSoLenh = Number(order.HeSoQuyDoi) || 0;
+    /* v9.12: bất biến giờ so với HỆ SỐ HIỆU LỰC (ưu tiên sổ cắt), KHÔNG phải hệ số của lệnh nữa.
+       Lý do dài ở khối ghi chú của heSoHieuLuc(). Lấy qua getCatMauList để dùng đúng bộ lọc cây
+       chính + luật cộng dồn theo sơ đồ, không tự viết lại. */
+    const catStageIdDai = await getCatStageId(pool);
+    const catMauDai = await getCatMauList(pool, order.DonHangID, catStageIdDai);
+    const hl = heSoHieuLuc(catMauDai, order);
+    /* v9.23: người dùng vừa khai "mẫu" thì câu chặn cũng phải nói "mẫu" — đây là những câu DUY NHẤT
+       họ nhìn thấy khi bị từ chối. */
+    const tuDai = loaiTach === 'MAU' ? 'mẫu' : 'dải';
     if (rows.length) {
       if (rows.some(r => r.heSo <= 0))
-        return res.status(400).json({ success: false, message: 'Mỗi dải phải có hệ số lớn hơn 0.' });
+        return res.status(400).json({ success: false, message: `Mỗi ${tuDai} phải có hệ số lớn hơn 0.` });
       const ten = rows.map(r => r.tenDai.toLowerCase());
       if (new Set(ten).size !== ten.length)
-        return res.status(400).json({ success: false, message: 'Có hai dải trùng tên. Mỗi dải phải có tên khác nhau.' });
-      const tong = rows.reduce((s, r) => s + r.heSo, 0);
-      if (heSoLenh <= 0)
-        return res.status(400).json({ success: false, message: 'Lệnh chưa khai hệ số quy đổi — không tách dải được. Vào Chỉ định sản xuất khai hệ số trước.' });
-      if (tong !== heSoLenh)
+        return res.status(400).json({ success: false, message: `Có hai ${tuDai} trùng tên. Mỗi ${tuDai} phải có tên khác nhau.` });
+      /* v9.12: DonHangDaiSize.HeSo la INT, tedious sql.Int se parseInt IM LANG — go 5.5 thanh 5 ma
+         khong bao gi, roi Dong goi/Kho nhap quy doi ri bang 5 thay vi 5.5. Chan tai day. */
+      if (rows.some(r => !Number.isInteger(r.heSo)))
         return res.status(400).json({ success: false,
-          message: `Tổng hệ số các dải là ${tong}, không khớp hệ số của lệnh (${heSoLenh}). `
-            + 'Phải bằng nhau thì số cắt và số đóng gói mới khớp — sửa lại rồi lưu.' });
+          message: `Hệ số của mỗi ${tuDai} phải là SỐ NGUYÊN (số cái trong một ri).`
+            + (loaiTach === 'MAU'
+              ? ' Tách theo MẪU thì hệ số bắt buộc bằng hệ số hiệu lực — hệ số đó đang là số lẻ nên lệnh này chưa tách mẫu được; sửa hệ số ở sổ cắt về số nguyên rồi làm lại.' : '') });
+      /* v9.12: viet CHIEU THUAN (fail-closed) — neu hl.heSo vi ly do gi thanh NaN/undefined thi phep
+         `<= 0` va `> 1e-9` deu false va bat bien IM LANG cho qua het. Backend la noi chan that
+         duy nhat nen phai khoa khi khong chac, giong het chieu cua form. */
+      const coHeSoDoiChieu = Number.isFinite(hl.heSo) && hl.heSo > 0;
+      if (!coHeSoDoiChieu)
+        return res.status(400).json({ success: false,
+          message: 'Chưa có hệ số nào để đối chiếu — lệnh chưa khai hệ số quy đổi và sổ cắt cũng chưa ghi. '
+            + 'Ghi sổ cắt (có hệ số trên từng cây) hoặc khai hệ số ở Chỉ định sản xuất, rồi tách dải.' });
+      const nguonChu = hl.nguon === 'cat' ? 'ở SỔ CẮT' : 'của LỆNH';
+      const viSao = (hl.nguon === 'lenh' && hl.lyDo) ? ` — đang lấy theo lệnh vì ${hl.lyDo}` : '';
+      if (loaiTach === 'MAU') {
+        /* v9.23 — TÁCH MẪU: mọi mẫu dùng CHUNG một dải size nên MỖI dòng phải mang ĐÚNG hệ số hiệu
+           lực (in chó 6 + in thỏ 6, không phải 6+6=12). Cộng dồn như dải là sai bản chất: dải chia
+           NHỎ một lớp cắt, còn mẫu thì mỗi mẫu vẫn đủ cả dải. */
+        const lech = rows.filter(r => !(Math.abs(r.heSo - hl.heSo) <= 1e-9));
+        if (lech.length)
+          return res.status(400).json({ success: false,
+            message: `Tách theo MẪU thì mỗi mẫu phải mang đúng hệ số ${nguonChu} (${hl.heSo}) vì các mẫu dùng CHUNG một dải size`
+              + ` — đang lệch ở: ${lech.map(r => `${r.tenDai} (${r.heSo})`).join(', ')}${viSao}.` });
+      } else {
+        const tong = rows.reduce((s, r) => s + r.heSo, 0);
+        if (!(Math.abs(tong - hl.heSo) <= 1e-9))
+          return res.status(400).json({ success: false,
+            message: `Tổng hệ số các dải là ${tong}, không khớp hệ số ${nguonChu} (${hl.heSo})${viSao}`
+              + '. Phải bằng nhau thì số cắt và số đóng gói mới khớp — sửa lại rồi lưu.' });
+      }
     }
 
-    const cu = (await getDaiSizeList(pool, order.DonHangID)).map(r => Number(r.ID));
+    const cu = dsCu.map(r => Number(r.ID));
     const idGuiLen = new Set(rows.map(r => r.id).filter(n => Number.isInteger(n) && n > 0));
     const canXoa = cu.filter(id => !idGuiLen.has(id));
     if (canXoa.length) {
@@ -2018,16 +2181,42 @@ router.put('/orders/:maDH/daisize', requireAuth, requirePermission('QLSX', 'edit
       await pool.request().query(`DELETE FROM DonHangDaiSize WHERE ID IN (${canXoa.join(',')})`);
     }
 
+    /* ============================================================================================
+       v9.38 — TỶ LỆ VẢI CỦA TỪNG DẢI (migration_v889), căn cứ chia chi phí vải theo dải.
+
+       Nguyen 2026-11-10: *"Chỉ cần ghi tỷ lệ size này bao nhiêu tỷ lệ size kia bao nhiêu"*.
+
+       🔴 KHÔNG phải "mét sơ đồ từng size" — bản nháp đầu của tôi đặt vậy và Nguyen bác bỏ, đúng:
+       một sơ đồ chạy CHUNG, chi tiết của mọi size nằm LẪN LỘN trên cùng một lá vải, nên không đo
+       được "size 2-7 chiếm bao nhiêu mét". Đặt tên cột theo một đại lượng không đo được chỉ mời
+       người dùng điền bừa cho có.
+
+       ĐƠN VỊ TỰ DO — hệ thống chỉ lấy TỶ LỆ: gõ 0.8/1.2 (mét) hay 40/60 (phần trăm) đều ra 40%/60%.
+       🔴 DECIMAL, KHÔNG phải INT: tedious `sql.Int` parseInt IM LẶNG nên 1.25 thành 1 — sai 20% chi
+       phí vải mà không báo gì (xem khối chặn số lẻ của HeSo ngay phía trên).
+       Chưa khai (rỗng) ⇒ NULL ⇒ mọi nơi lùi về chia theo hệ số như trước.
+       ============================================================================================ */
+    const coCotMet = await coCotQLSX(pool, 'DonHangDaiSize', 'TyLeVai');
+    const metCuaDong = (v) => {
+      if (v === '' || v == null) return null;
+      const n = Number(v);
+      return isFinite(n) && n > 0 ? n : null;
+    };
+
     let tt = 0;
     for (const r of rows) {
       const rq = pool.request().input('TenDai', sql.NVarChar(100), r.tenDai)
         .input('HeSo', sql.Int, r.heSo).input('ThuTu', sql.Int, tt++);
+      if (coCotLoai) rq.input('LoaiTach', sql.NVarChar(10), loaiTach);   // v9.23
+      if (coCotMet) rq.input('TyLeVai', sql.Decimal(10, 4), metCuaDong(r.tyLeVai));   // v9.38
       if (Number.isInteger(r.id) && r.id > 0 && cu.indexOf(r.id) !== -1) {
         await rq.input('ID', sql.Int, r.id).input('DonHangID', sql.Int, order.DonHangID)
-          .query('UPDATE DonHangDaiSize SET TenDai=@TenDai, HeSo=@HeSo, ThuTu=@ThuTu WHERE ID=@ID AND DonHangID=@DonHangID');
+          .query(`UPDATE DonHangDaiSize SET TenDai=@TenDai, HeSo=@HeSo, ThuTu=@ThuTu${coCotLoai ? ', LoaiTach=@LoaiTach' : ''}${coCotMet ? ', TyLeVai=@TyLeVai' : ''}
+                  WHERE ID=@ID AND DonHangID=@DonHangID`);
       } else {
         await rq.input('DonHangID', sql.Int, order.DonHangID)
-          .query('INSERT INTO DonHangDaiSize (DonHangID, TenDai, HeSo, ThuTu) VALUES (@DonHangID,@TenDai,@HeSo,@ThuTu)');
+          .query(`INSERT INTO DonHangDaiSize (DonHangID, TenDai, HeSo, ThuTu${coCotLoai ? ', LoaiTach' : ''}${coCotMet ? ', TyLeVai' : ''})
+                  VALUES (@DonHangID,@TenDai,@HeSo,@ThuTu${coCotLoai ? ', @LoaiTach' : ''}${coCotMet ? ', @TyLeVai' : ''})`);
       }
     }
     res.json({ success: true, data: await getDaiSizeList(pool, order.DonHangID) });
@@ -2058,6 +2247,19 @@ router.post('/orders/:maDH/nhagiacongchitiet', requireAuth, requirePermission('Q
     if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng.' });
     const { rows } = req.body;
     if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ success: false, message: 'Thiếu dữ liệu nhà gia công.' });
+    /* v9.13: GIAO GIA CÔNG cũng chặn dải Ở SERVER — v8.59 chỉ chặn ở form, gọi API thẳng vẫn ghi
+       được dòng KHÔNG dải trong khi LƯƠNG gia công đã tra đơn giá theo dải từ v8.60 (dòng không dải
+       rơi về giá "áp mọi dải", sai tiền im lặng). Cùng luật với POST /inthe. */
+    const dsDaiGC = await getDaiSizeList(pool, order.DonHangID);
+    if (dsDaiGC.length) {
+      const hopLeGC = new Set(dsDaiGC.map(d => String(d.ID)));
+      const dongCoNha = rows.filter(r => r.nhaGiaCongId);
+      if (dongCoNha.some(r => !r.daiSizeId || !hopLeGC.has(String(r.daiSizeId))))
+        return res.status(400).json({ success: false,
+          message: loaiTachCuaList(dsDaiGC) === 'MAU'
+            ? 'Lệnh này đã tách theo MẪU — mỗi dòng giao gia công phải chọn đúng một mẫu của chính lệnh.'
+            : 'Lệnh này đã tách dải size — mỗi dòng giao gia công phải chọn đúng một dải của chính lệnh.' });
+    }
     for (const r of rows) {
       if (!r.nhaGiaCongId) continue;
       await pool.request()
@@ -2351,7 +2553,8 @@ router.put('/orders/:maDH/socat/:tienDoId', requireAuth, requirePermission('QLSX
     if (!hopLe.length) return res.status(400).json({ success: false, message: 'Sổ cắt phải có ít nhất 1 cây vải với số lớp > 0.' });
 
     const tienDoId = Number(req.params.tienDoId);
-    const heSoDonHang = Number(order.HeSoQuyDoi) || 1;
+    // v9.42: mặc định lấy từ TÁCH DẢI nếu lệnh có tách — phải khớp con số màn hình điền sẵn.
+    const heSoDonHang = await heSoMacDinhCayCat(pool, order.DonHangID, order);
 
     // 1) Ghi lại danh sách cây (xóa hết dòng cũ rồi ghi mới — kiểm tra hợp lệ ở trên nên không sợ rỗng).
     await pool.request().input('id', sql.Int, tienDoId).query('DELETE FROM TienDoCatChiTietCay WHERE TienDoID=@id');
@@ -3118,8 +3321,23 @@ async function tinhGiaThanh(pool, order) {
 
   // ---- 1. VẢI theo từng cây đã cắt ----
   const coGiatCap = await coCotQLSX(pool, 'TienDoCatChiTietCay', 'SoCaiGiatCap');
+  /* ================================================================================================
+     v9.36 — PHÍ VẬN CHUYỂN CỘNG VÀO ĐƠN GIÁ VẢI Ở ĐÂY, VÀ CHỈ Ở ĐÂY.
+
+     Nguyen 2026-11-09: *"giá vận chuyển để tính giá thành sản phẩm"* — nên nó vào đúng chỗ này, chứ
+     KHÔNG vào `VaiCay.DonGiaNhap` (cột đó là tiền phải trả NCC, dùng chung với công nợ — xem khối
+     ghi chú v9.36 ở utils/tienVaiNhap.js).
+
+     Vì sao đơn giá cộng thêm là mô hình ĐÚNG cho chỗ này: giá thành nhân với `SoKgMetSuDung` —
+     lượng vải ĐÃ CẮT, không phải lượng đã nhập. Phí dạng "đ/kg" vì thế tự chảy đúng tỉ lệ: cắt 60%
+     cây thì gánh 60% phí, 40% còn lại nằm lại ở vải tồn. Nếu khai phí dạng "trọn gói một cây" thì
+     phải tự chia tiếp theo tỉ lệ đã dùng — phức tạp hơn mà ra cùng kết quả.
+     ================================================================================================ */
+  const coPhiVCGT = await coCotPhiVanChuyen(pool);
+  const colPhiVC = coPhiVCGT ? 'vc.PhiVanChuyenDonGia' : 'CAST(0 AS DECIMAL(14,2)) AS PhiVanChuyenDonGia';
   const vai = (await pool.request().input('id', sql.Int, donHangId).query(`
     SELECT vc.CayID, vc.MaCay, dv.MaVai, lv.TenLoaiVai, ms.TenMau, vc.DonGiaNhap,
+           ${colPhiVC},
            SUM(ISNULL(cay.SoKgMetSuDung, 0)) AS KgMetDaDung,
            SUM(cay.SoLuongLop) AS TongLop,
            ISNULL((SELECT SUM(ct.KGXuat) FROM PhieuXuatVaiChiTiet ct
@@ -3133,15 +3351,20 @@ async function tinhGiaThanh(pool, order) {
     LEFT JOIN LoaiVai lv ON lv.LoaiVaiID = dv.LoaiVaiID
     LEFT JOIN MauSac ms ON ms.MauSacID = dv.MauSacID
     WHERE td.DonHangID = @id
-    GROUP BY vc.CayID, vc.MaCay, dv.MaVai, lv.TenLoaiVai, ms.TenMau, vc.DonGiaNhap
+    GROUP BY vc.CayID, vc.MaCay, dv.MaVai, lv.TenLoaiVai, ms.TenMau, vc.DonGiaNhap${coPhiVCGT ? ', vc.PhiVanChuyenDonGia' : ''}
     ORDER BY vc.MaCay`)).recordset.map(r => {
       const daDung = Number(r.KgMetDaDung) || 0;
       const thieuSL = daDung <= 0;
       const sl = thieuSL ? (Number(r.KgDaXuatChoDon) || 0) : daDung;
-      const dg = Number(r.DonGiaNhap) || 0;
+      const dgHang = Number(r.DonGiaNhap) || 0;
+      const dgPhi = Number(r.PhiVanChuyenDonGia) || 0;
+      const dg = dgHang + dgPhi;   // v9.36 — xem khối ghi chú trên
       return {
         MaCay: r.MaCay, MaVai: r.MaVai, TenLoaiVai: r.TenLoaiVai || '', TenMau: r.TenMau || '',
         SoLuong: lam2(sl), DonGia: dg, ThanhTien: lam2(sl * dg),
+        /* Tách ra để bảng giá thành NÓI ĐƯỢC phí nằm ở đâu. Gộp vào một con số thì người xem thấy
+           đơn giá khác hẳn giá trên phiếu nhập và tưởng hệ thống tính sai. */
+        DonGiaHang: dgHang, DonGiaPhiVC: dgPhi, TienPhiVC: lam2(sl * dgPhi),
         TongLop: Number(r.TongLop) || 0,
         ThieuSoLuong: thieuSL, ThieuDonGia: dg <= 0,
         NguonSoLuong: thieuSL ? 'KG đã xuất cho đơn (chưa khai KG/mét đã dùng ở sổ cắt)' : 'KG/mét đã dùng ở sổ cắt'
@@ -4447,7 +4670,8 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
     let chiTietMauFinal = chiTietMau;
 
     if (isMultiCatGroups) {
-      const heSoDonHang = Number(order.HeSoQuyDoi) || 1;
+      // v9.42: xem heSoMacDinhCayCat() — phải khớp mặc định mà màn hình điền sẵn.
+      const heSoDonHang = await heSoMacDinhCayCat(pool, order.DonHangID, order);
       const createdIds = [];
       for (const grp of catGroups) {
         const grpResult = await pool.request()
@@ -4564,7 +4788,8 @@ router.post('/orders/:maDH/tiendo', requireAuth, requirePermission('QLSX', 'edit
         // module.qlsx.js) - lay THANG tu DonHangSanXuat.HeSoQuyDoi (khai bao 1 lan o Ra lenh san xuat,
         // xem POST/PUT /orders), dung CHUNG cho MOI cay trong lan Ghi tien do Cat nay. Khong con tin theo
         // gia tri client gui (neu co gui vi ly do tuong thich nguoc, bo qua - server la nguon su that).
-        const heSoDonHang = Number(order.HeSoQuyDoi) || 1;
+        // v9.42: xem heSoMacDinhCayCat() — phải khớp mặc định mà màn hình điền sẵn.
+        const heSoDonHang = await heSoMacDinhCayCat(pool, order.DonHangID, order);
         for (const c of chiTietCay) {
           if (!c.cayId) continue;
           const soLuongLop = Number(c.soLuongLop) || 0;

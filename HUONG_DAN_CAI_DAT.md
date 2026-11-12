@@ -1869,12 +1869,56 @@ Sau khi copy: **`pm2 restart qlnoibo`** + **Ctrl+F5**.
 
 Thêm trường nhập tự do **"Tên sản phẩm trên tem"** ở cả form tạo mới lẫn form sửa, và in ra bản Chỉ định. **Dòng in luôn hiện kể cả khi để trống** — cố ý, để xưởng ghi tay lên bản in.
 
-**Báo giá Aloha (v8.37, v8.38)**
+**Báo giá Aloha (v8.37, v8.38 — công thức giá ĐÃ THAY ở v9.16, xem bên dưới)**
 
-- **Đổi gốc tính giá: lấy Giá sau CK shop (33%) làm giá TRƯỚC thuế.** Ví dụ Giá bán 100.000, CK shop 33% → **trước VAT 67.000**, VAT 8% → **sau VAT 72.360**.
-  > ⚠️ Chiều tính này **ngược** với bản v6.61/v6.62 (trước kia chia xuống). Có chủ đích: v6.62 lấy giá bán **lẻ đã gồm thuế**, bản này lấy giá bán **buôn chưa thuế**. Đừng "sửa cho giống bản cũ".
-  > Tỷ lệ CK đọc từ `CauHinhHeThong` (`CK_SHOP`, mặc định 33), không gõ cứng — đổi tỷ lệ thì sửa ở Cấu hình hệ thống, không sửa code.
-- **File Excel xuất ra thêm cột "Mã hàng"**, chèn ngay trước "Tên sản phẩm" (29 cột).
+- ~~Đổi gốc tính giá: lấy Giá sau CK shop (33%) làm giá TRƯỚC thuế~~ — **hết hiệu lực từ v9.16** (2026-11-04), xem mục v9.16.
+- **File Excel xuất ra thêm cột "Mã hàng"**, chèn ngay trước "Tên sản phẩm" (29 cột) — vẫn hiệu lực.
+
+**Báo giá Aloha (v9.16) — Giá bán là giá SAU thuế, chia ngược ra giá trước thuế; thêm Chọn tất cả**
+
+- **Gốc tính là GIÁ BÁN của thẻ kho và coi là giá ĐÃ GỒM THUẾ**: cột **Sau VAT = Giá bán** (100.000), cột **Giá trước VAT = Giá bán ÷ (1+%VAT)** (92.593 với VAT 8%). **CK shop không còn xuất hiện trong báo giá** (bỏ cách tính v8.37; tỷ lệ `CK_SHOP` vẫn dùng cho Thẻ kho/Bán hàng như cũ).
+  > ⚠️ Đây là lần đổi chiều thứ BA (v6.62 chia ↓ → v8.37 nhân ↑ → v9.16 chia ↓), mỗi lần đều do Nguyen chốt bằng ví dụ số. Muốn đổi tiếp phải có ví dụ số mới — xem bảng lịch sử ở ghi chú `SQL_GIA_ALOHA` trong `backend/routes/khohang.js`.
+- Form tạo/sửa báo giá có thêm nút **"☑️ Chọn tất cả (dòng đang hiện)"** và **"☐ Bỏ chọn (dòng đang hiện)"** — chỉ tác động các dòng đang hiện sau bộ lọc (lọc còn 3 mã thì chỉ tích 3 mã đó), %VAT từng dòng giữ nguyên.
+
+**Công nợ (v9.17) — lọc từ ngày–đến ngày + chọn Tháng/Quý/Năm ở mọi chức năng**
+
+- Danh sách **Phiếu thu / Phiếu chi / Điều chỉnh**: lọc từ–đến + ô "⏱ Tháng/Quý/Năm…" (12 tháng, 8 quý, 4 năm gần nhất) + nút ✖; **số tổng trên toolbar tính từ đúng các dòng đang lọc** (Điều chỉnh có thêm dòng "Cộng gộp"). Kỳ lọc được nhớ — xóa/sửa phiếu xong vẫn giữ.
+- 5 khối kỳ sẵn có (sổ công nợ KH/NCC/gia công, sổ quỹ, khối "Sổ chi tiết — kỳ") thêm cùng ô chọn nhanh — chọn là sổ lọc lại ngay.
+- Nút Xuất Excel của Phiếu thu/chi vẫn xuất **toàn bộ** (chưa theo kỳ) — title nút nói rõ khi đang lọc.
+
+**Lương trải vải cắt (v9.18) — BỎ chờ QC, quỹ theo THÁNG GHI SỔ CẮT**
+
+- Quỹ tháng = **mọi sổ cắt ghi trong tháng** (cắt tháng nào ăn quỹ tháng đó) — bỏ luật v9.02 "chờ QC + tháng muộn hơn" cho **riêng** bảng này; **ba bảng kia (khoán may, GC/in thêu, là/đóng gói) vẫn chờ QC như v9.02**. Cột Ngày QC giữ lại chỉ để biết lệnh đã QC chưa (trống = chưa QC).
+- Hệ quả: quỹ cắt các tháng đổi lại gần về số trước v9.02 (T8 ~85,6tr, T9 ~48,9tr). Đối chiếu bằng `database/kiem_tra_v918_quy_cat_theo_thang.sql` (Bảng 1: hai luật cạnh nhau; Bảng 2: phần trước đây treo nay vào quỹ). **Tháng đã trả lương theo số v9.02 thì xử lý nghiệp vụ, hệ thống không truy thu tự động.**
+
+**Lương trải vải cắt (v9.19) — Ngày cắt + Mã rập + Xuất Excel**
+
+- Bảng **"Bàn cắt theo lệnh sản xuất"**: cột "Ngày QC" → **"Ngày cắt"** (ngày ghi tiến độ; lệnh nhiều sơ đồ nhiều ngày thì hiện khoảng `15/10 – 18/10`), cột "Mã hàng" → **"Mã rập"** lấy từ công đoạn **Kỹ thuật** (gộp bảng Sơ đồ + mã rập gõ lúc ghi tiến độ KT; ưu tiên mã rập của sơ đồ cắt trong kỳ, trống mới lấy của cả lệnh). Trống = Kỹ thuật chưa khai.
+- Nút **📊 Xuất Excel** — 3 sheet đúng 3 bảng đang xem (lương NV Cắt / bàn cắt theo lệnh / chi tiết sơ đồ), **theo đúng tháng đang chọn**, cùng bộ số với màn hình.
+**Chọn cây vải ở công đoạn Cắt — hiện thêm KG và MÉT (v9.24)**
+
+- Ô **"Cây vải (đã xuất cho đơn)"** (Ghi tiến độ → Cắt) và ô chọn cây trong **Sửa sổ cắt** nay hiện: `CAY-01 — Cotton Trắng (đã xuất 35 KG · 84 m, xuất 12/10 – 20/10)`.
+- Số là phần **đã cấp cho chính lệnh này**, không phải số của cả cây lúc nhập. Cây chỉ quản theo kg thì không hiện mét.
+- Một cây cấp qua **nhiều phiếu xuất** nay gom thành **một dòng**, KG/mét cộng dồn, ngày hiện thành khoảng.
+
+**Tách lệnh thành nhiều MẪU, vẫn chung một dải size (v9.23)** — ⚠️ **cần chạy `migration_v885.sql`**
+
+- Ở công đoạn **Cắt**, nút **🧩 Tách dải size / mẫu** nay hỏi **kiểu tách**:
+  - **📏 Dải size** (như cũ): chia một lớp cắt thành nhiều dải — `2-7` (6) + `8-12` (5) = 11. **Tổng** hệ số các dải phải bằng hệ số sổ cắt.
+  - **🧩 Mẫu** (mới): nhiều biến thể **dùng chung một dải size** — `Mẫu 1 in chó` (6) và `Mẫu 2 in thỏ` (6). **Mỗi mẫu** mang đúng hệ số sổ cắt, **không cộng dồn** (hệ số tự điền sẵn).
+- Từ May/QC/Đóng gói/Kho nhập/In thêu/Gia công: mỗi màu nở **một dòng cho mỗi mẫu**, nhập số thật của từng mẫu.
+- 🔴 **Vải cắt chung một bàn**: ô **"SL từ Cắt"**, **"Đã ghi (lũy kế)"** và **"Còn lại"** của các dòng mẫu là **số CHUNG của cả màu** — có ghi rõ *"(chung cả N mẫu)"* ngay trên nhãn. Cắt 18 lớp × 6 = **108 cái cho cả màu**, không phải 108 mỗi mẫu. Ghi 54 cho mẫu 1 thì "Còn lại" của **cả hai dòng** đều còn 54; ghi quá tổng 108 sẽ có cảnh báo.
+- Đổi kiểu trên lệnh đã lưu bảng dải/mẫu sẽ hỏi lại, vì đổi kiểu là đổi hệ số của chính các dòng đó.
+- Lệnh có hệ số sổ cắt **lẻ** (ví dụ 5.5) chưa tách mẫu được — form nói rõ lý do.
+
+**Phiếu nhập lại hàng hóa (v9.21) — SỬA ĐƯỢC**
+
+- Danh sách Phiếu nhập lại có thêm nút **Sửa**: đổi được **số lượng từng dòng, ngày, lý do, ghi chú**. **Giá vẫn khóa cứng** theo phiếu xuất gốc và **không đổi được khách hàng** (đổi khách = công nợ nhảy giữa hai người — muốn vậy thì Hủy rồi lập phiếu mới).
+- Phiếu **đã hủy không sửa được** (tồn kho và công nợ đã trả về như trước) — nút Sửa hiện mờ kèm lý do.
+- **(v9.22)** Form sửa **chỉ liệt kê các mã đã nhập lại trong phiếu** (không hiện cả phiếu xuất như lúc lập). Đặt số lượng = 0 để bỏ một dòng — dòng vẫn ở lại bảng để gõ lại. Cần bổ sung mã thì tích **"➕ Thêm mã khác vào phiếu"**. Ô **Khách hàng** và **Phiếu xuất** bị khóa khi sửa.
+- Sửa xong: tồn kho và công nợ tự khớp số mới ngay (hệ thống hoàn tồn của bản cũ rồi ghi lại bản mới trong cùng một lần). Dòng cũ không gắn được với dòng phiếu bán nào sẽ bị bỏ — form cảnh báo trước.
+
+- **(v9.20)** Bấm một nhân viên trong *Bảng lương nhân viên bộ phận Cắt* → phiếu lương nay chỉ liệt kê **bàn cắt người đó trải vải hoặc cắt** (lọc theo ID, không theo tên). Bảng tóm tắt phía trên vẫn là số **cả bộ phận**; phiếu ghi rõ **lương khoán KHÔNG bằng tổng tiền các bàn đó** — vẫn chia theo giờ công trên quỹ chung. Bản in "Quỹ + bàn cắt", "In bảng lương" và file Excel vẫn là **cả bộ phận**.
 
 **Hóa đơn điện tử (v8.36 → v8.45)** — phân hệ mới, xem BƯỚC 3.76 cho phần cài đặt. Các bản từ v8.39 trở đi bổ sung:
 

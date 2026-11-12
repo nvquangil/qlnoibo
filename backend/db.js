@@ -47,4 +47,8 @@ function getPool() {
   return poolPromise;
 }
 
-module.exports = { sql, getPool };
+/* v9.37: xuất `config` để utils/saoLuuCSDL.js dựng kết nối RIÊNG với requestTimeout dài.
+   🔴 KHÔNG tăng requestTimeout của pool CHUNG: mặc định 15s đang là tấm chắn — một câu truy vấn
+   treo sẽ gãy sau 15s thay vì giữ kết nối nửa tiếng và làm cạn pool của cả xưởng. Chỉ riêng việc
+   sao lưu mới cần chờ lâu, nên nó dùng kết nối của riêng nó. */
+module.exports = { sql, getPool, config };

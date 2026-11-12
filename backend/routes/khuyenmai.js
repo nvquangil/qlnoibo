@@ -84,7 +84,8 @@ router.get('/chon-ma-hang', requireAuth, requirePermission('KHOHANG', 'view'), r
 
 /* Kiem TRUNG ma giua cac chuong trinh chong thoi gian. CANH BAO, khong chan — co the co ly do
    nghiep vu. Frontend goi truoc khi luu de hien cho nguoi dung xem. */
-router.post('/kiem-trung', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
+// v9.11: ép kiểm 'view' — chỉ truy vấn trùng, không ghi gì. Xem ghi chú ở middleware/auth.js.
+router.post('/kiem-trung', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN, 'view'), async (req, res) => {
   try {
     const pool = await getPool();
     const d = req.body || {};

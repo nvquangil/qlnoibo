@@ -118,14 +118,32 @@ async function kiemTaiKhoanTheoPhieu(pool, taiKhoanId, loaiPhieu) {
   }
   return null;
 }
+/* v9.32: thêm nhánh NHÂN VIÊN. Mỗi loại đối tượng chỉ giữ ĐÚNG id của mình, các id khác NULL hóa —
+   nếu không, đổi "chi cho NCC" sang "chi cho nhân viên" mà id NCC còn sót là tiền trừ nhầm công nợ.
+   LoaiChiNV: chỉ 'TamUng' mới trừ lương (xem utils/tamUngNhanVien.js). Giá trị lạ ⇒ 'Khac' — fail-safe
+   về phía KHÔNG trừ lương, vì trừ nhầm lương là lấy mất tiền của người ta. */
+const LOAI_CHI_NV = ['TamUng', 'HoanUng', 'CongTacPhi', 'ThuongTienMat', 'Khac'];
 function chuanHoaPhieuChi(b) {
   const loai = ['NhaCungCap', 'NhaGiaCong', 'NhanVien', 'Khac'].includes(b.loaiDoiTuong) ? b.loaiDoiTuong : 'NhaCungCap';
+  const laNV = loai === 'NhanVien';
+  const nhanVienId = laNV ? (parseInt(b.nhanVienId, 10) || null) : null;
+  const loaiChiNV = laNV ? (LOAI_CHI_NV.includes(b.loaiChiNV) ? b.loaiChiNV : 'Khac') : null;
+  /* Tháng trừ lương: chỉ có nghĩa với tạm ứng. Không khai thì để NULL — utils/tamUngNhanVien.js lùi
+     về tháng của NgayChi, nên phiếu vẫn vào đúng kỳ chứ không rơi mất. */
+  const laTamUng = loaiChiNV === 'TamUng';
+  const nam = laTamUng ? (parseInt(b.truLuongNam, 10) || null) : null;
+  const thang = laTamUng ? (parseInt(b.truLuongThang, 10) || null) : null;
   return {
     loai,
     nccId: loai === 'NhaCungCap' ? (b.nccId || null) : null,
-    nhaGiaCongId: loai === 'NhaGiaCong' ? (b.nhaGiaCongId || null) : null
+    nhaGiaCongId: loai === 'NhaGiaCong' ? (b.nhaGiaCongId || null) : null,
+    nhanVienId, loaiChiNV,
+    truLuongNam: (nam && nam >= 2000 && nam <= 2100) ? nam : null,
+    truLuongThang: (thang && thang >= 1 && thang <= 12) ? thang : null
   };
 }
+/* Máy chưa chạy migration_v886 vẫn phải lập phiếu chi bình thường — chỉ là chưa gắn được nhân viên. */
+const { coCotTamUng } = require('../utils/tamUngNhanVien');
 /* v6.24: hinh thuc thanh toan + tai khoan ngan hang.
    - "Chuyển khoản" thi BAT BUOC chon so tai khoan (de so quy ngan hang biet tien vao/ra TK nao).
    - "Tiền mặt" thi NULL hoa TaiKhoanNHID (form an o chon van co the gui id cu). */
@@ -710,14 +728,17 @@ router.get('/phieuchi', requireAuth, requirePermission('CONGNO', 'view'), requir
      không biết khoản này sinh ra từ phiếu thu nào, mà phiếu chi kiểu này KHÔNG sửa/xóa được từ đây
      (v6.54) nên càng cần chỉ rõ phải sang phiếu thu mà sửa. */
   const coCT = await coCotChuyenThang(pool);
+  const coNVls = await coCotTamUng(pool);   // v9.32: máy chưa chạy migration_v886 vẫn xem được phiếu chi
   const rows = (await pool.request().query(`
     SELECT c.*, tk.MaTK, tk.TenTK, l.TenLoai AS TenLoaiTK, l.TinhChiPhiKD,
            ncc.TenNCC, ngc.TenNha AS TenNhaGiaCong, u.HoTen AS NguoiTao
            ${coNH ? ', nh.TenNganHang, nh.SoTaiKhoan' : ''}
            ${coCT ? ', pt.SoPhieu AS SoPhieuThuKem, pt.NgayThu AS NgayThuKem, pt.TenDoiTuong AS TenNguoiNopKem' : ''}
+           ${coNVls ? ', nv.MaNhanVien, nv.HoTen AS TenNhanVien' : ''}
     FROM PhieuChi c
     ${coNH ? 'LEFT JOIN DanhMucTaiKhoanNganHang nh ON nh.TaiKhoanNHID = c.TaiKhoanNHID' : ''}
     ${coCT ? 'LEFT JOIN PhieuThu pt ON pt.PhieuThuID = c.PhieuThuKemID' : ''}
+    ${coNVls ? 'LEFT JOIN NhanVien nv ON nv.NhanVienID = c.NhanVienID' : ''}
     LEFT JOIN DanhMucTaiKhoan tk ON tk.TaiKhoanID = c.TaiKhoanID
     LEFT JOIN DanhMucLoaiTaiKhoan l ON l.LoaiTKID = tk.LoaiTKID
     LEFT JOIN NhaCungCap ncc ON ncc.NCC_ID = c.NCC_ID
@@ -736,8 +757,14 @@ router.post('/phieuchi', requireAuth, requirePermission('CONGNO', 'create'), req
   const loiTK = await kiemTaiKhoanTheoPhieu(pool, b.taiKhoanId, 'Chi');
   if (loiTK) return res.status(400).json({ success: false, message: loiTK });
   const chC = chuanHoaPhieuChi(b);
+  const coNV = await coCotTamUng(pool);   // v9.32
+  if (chC.loai === 'NhanVien' && !coNV)
+    return res.status(400).json({ success: false,
+      message: 'Máy chủ chưa chạy migration_v886.sql nên chưa chi cho nhân viên được. Chạy migration rồi restart pm2.' });
+  if (chC.loai === 'NhanVien' && !chC.nhanVienId)
+    return res.status(400).json({ success: false, message: 'Chi cho nhân viên thì phải chọn nhân viên.' });
   const soPhieu = await sinhSoPhieu(pool, 'PhieuChi', 'SoPhieu', 'PC');
-  await pool.request()
+  const rq = pool.request()
     .input('SoPhieu', sql.NVarChar, soPhieu)
     .input('NgayChi', sql.Date, b.ngay || new Date())
     .input('Loai', sql.NVarChar, chC.loai)
@@ -749,12 +776,47 @@ router.post('/phieuchi', requireAuth, requirePermission('CONGNO', 'create'), req
     .input('HinhThuc', sql.NVarChar, hinhThuc)
     .input('DienGiai', sql.NVarChar, b.dienGiai || null)
     .input('NguoiTaoID', sql.Int, req.session.user.userId)
-    .input('TaiKhoanNHID', sql.Int, tknh)
-    .query(`INSERT INTO PhieuChi (SoPhieu, NgayChi, LoaiDoiTuong, NCC_ID, NhaGiaCongID, TenDoiTuong,
-              TaiKhoanID, SoTien, HinhThuc, DienGiai, NguoiTaoID${coNH ? ', TaiKhoanNHID' : ''})
+    .input('TaiKhoanNHID', sql.Int, tknh);
+  if (coNV) {
+    rq.input('NhanVienID', sql.Int, chC.nhanVienId)
+      .input('LoaiChiNV', sql.NVarChar(20), chC.loaiChiNV)
+      .input('TruLuongNam', sql.SmallInt, chC.truLuongNam)
+      .input('TruLuongThang', sql.TinyInt, chC.truLuongThang);
+  }
+  await rq.query(`INSERT INTO PhieuChi (SoPhieu, NgayChi, LoaiDoiTuong, NCC_ID, NhaGiaCongID, TenDoiTuong,
+              TaiKhoanID, SoTien, HinhThuc, DienGiai, NguoiTaoID${coNH ? ', TaiKhoanNHID' : ''}${coNV ? ', NhanVienID, LoaiChiNV, TruLuongNam, TruLuongThang' : ''})
             VALUES (@SoPhieu, @NgayChi, @Loai, @NCC_ID, @NhaGiaCongID, @Ten,
-              @TaiKhoanID, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID${coNH ? ', @TaiKhoanNHID' : ''})`);
+              @TaiKhoanID, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID${coNH ? ', @TaiKhoanNHID' : ''}${coNV ? ', @NhanVienID, @LoaiChiNV, @TruLuongNam, @TruLuongThang' : ''})`);
   res.json({ success: true, data: { soPhieu } });
+});
+
+/* v9.32: danh sách nhân viên cho ô chọn ở phiếu chi.
+   🔴 KHÔNG bắt kế toán phải có quyền DANHMUC: `/api/danhmuc/nhanvien` gác bằng moduleCode 'DANHMUC',
+   mà người lập phiếu chi thường chỉ có quyền CONGNO ⇒ danh sách rỗng, không chọn được ai, và không
+   một thông báo nào. Cùng bài học v9.27 (màn hình khóa chặt hơn việc đang làm).
+   Chỉ trả ba trường cần cho ô chọn — không phải lương, không phải hồ sơ. */
+router.get('/nhanvien', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'phieuchi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    /* 🔴 NhanVien KHÔNG có cột `BoPhan` — chỉ có `BoPhanID`; tên nằm ở bảng BoPhan (payroll.js và
+       hrm.js đều JOIN như vậy). Viết thẳng `BoPhan` là SQL ném "Invalid column name", mà route
+       không có try/catch thì request TREO luôn, kéo theo Promise.all ở màn Công nợ đứng mãi ⇒ cả
+       phân hệ không mở được. Bản đầu mắc đúng lỗi này, rà chéo bắt.
+       🔴 Và lọc nhân viên phải GIỐNG HỆT route tính lương (payroll.js): ở đó là
+       `nv.TrangThaiLaoDong <> N'Đã nghỉ việc'` — NULL bị loại. Nếu ở đây dùng ISNULL(...,'') thì
+       người có trạng thái NULL vẫn chọn ứng được nhưng tháng đó KHÔNG có dòng lương nào ⇒ tiền ứng
+       nằm im vĩnh viễn, không ai bị trừ. Hai nơi phải cùng một luật. */
+    const rows = (await pool.request().query(`
+      SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan AS BoPhan
+      FROM NhanVien nv
+      LEFT JOIN BoPhan bp ON bp.BoPhanID = nv.BoPhanID
+      WHERE nv.TrangThaiLaoDong <> N'Đã nghỉ việc'
+      ORDER BY nv.HoTen`)).recordset;
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    console.error('[congno nhanvien] ', err);
+    res.status(500).json({ success: false, message: 'Lỗi khi tải danh sách nhân viên: ' + err.message });
+  }
 });
 /* v6.54: phiếu chi SINH RA TỪ phiếu thu chuyển thẳng không được sửa/xóa từ phía này — mọi thao tác
    phải làm ở phiếu thu để cả cặp đi cùng nhau. */
@@ -780,7 +842,13 @@ router.put('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
   const loiTK = await kiemTaiKhoanTheoPhieu(pool, b.taiKhoanId, 'Chi');
   if (loiTK) return res.status(400).json({ success: false, message: loiTK });
   const chC = chuanHoaPhieuChi(b);
-  await pool.request().input('id', sql.Int, req.params.id)
+  const coNV = await coCotTamUng(pool);   // v9.32
+  if (chC.loai === 'NhanVien' && !coNV)
+    return res.status(400).json({ success: false,
+      message: 'Máy chủ chưa chạy migration_v886.sql nên chưa chi cho nhân viên được. Chạy migration rồi restart pm2.' });
+  if (chC.loai === 'NhanVien' && !chC.nhanVienId)
+    return res.status(400).json({ success: false, message: 'Chi cho nhân viên thì phải chọn nhân viên.' });
+  const rqU = pool.request().input('id', sql.Int, req.params.id)
     .input('NgayChi', sql.Date, b.ngay || new Date())
     .input('Loai', sql.NVarChar, chC.loai)
     .input('NCC_ID', sql.Int, chC.nccId)
@@ -790,10 +858,20 @@ router.put('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
     .input('SoTien', sql.Decimal(18, 2), so(b.soTien))
     .input('HinhThuc', sql.NVarChar, hinhThuc)
     .input('DienGiai', sql.NVarChar, b.dienGiai || null)
-    .input('TaiKhoanNHID', sql.Int, tknh)
+    .input('TaiKhoanNHID', sql.Int, tknh);
+  if (coNV) {
+    rqU.input('NhanVienID', sql.Int, chC.nhanVienId)
+       .input('LoaiChiNV', sql.NVarChar(20), chC.loaiChiNV)
+       .input('TruLuongNam', sql.SmallInt, chC.truLuongNam)
+       .input('TruLuongThang', sql.TinyInt, chC.truLuongThang);
+  }
+  /* 🔴 Bốn cột nhân viên GHI ĐÈ THẲNG (không ISNULL giữ cũ) — đổi phiếu từ "tạm ứng" sang loại khác
+     mà vẫn giữ NhanVienID/LoaiChiNV cũ là tiền tiếp tục bị trừ lương dù đã sửa. */
+  await rqU
     // v6.59: xem ghi chú ở PUT /phieuthu/:id — không gửi thì giữ nguyên, gửi rồi mới ghi đè.
     .query(`UPDATE PhieuChi SET NgayChi=@NgayChi, LoaiDoiTuong=@Loai, NCC_ID=@NCC_ID,
               NhaGiaCongID=@NhaGiaCongID, TenDoiTuong=@Ten, SoTien=@SoTien, HinhThuc=@HinhThuc,
+              ${coNV ? 'NhanVienID=@NhanVienID, LoaiChiNV=@LoaiChiNV, TruLuongNam=@TruLuongNam, TruLuongThang=@TruLuongThang,' : ''}
               ${coGui(b, 'taiKhoanId') ? 'TaiKhoanID=@TaiKhoanID' : 'TaiKhoanID=ISNULL(@TaiKhoanID, TaiKhoanID)'},
               ${coGui(b, 'dienGiai') ? 'DienGiai=@DienGiai' : 'DienGiai=ISNULL(@DienGiai, DienGiai)'}
               ${coNH ? (coGui(b, 'taiKhoanNHID') ? ', TaiKhoanNHID=@TaiKhoanNHID' : ', TaiKhoanNHID=ISNULL(@TaiKhoanNHID, TaiKhoanNHID)') : ''}
@@ -1344,6 +1422,7 @@ async function soDoiTac2Chieu(pool, khachHangId, capBiet) {
     ...(soKH.rows || []).slice().reverse().map(r => ({
       Ngay: r.Ngay, Loai: r.Loai, SoPhieu: r.SoPhieu, DienGiai: r.DienGiai,
       Ben: 'ThuVe', CtLoai: r.CtLoai, CtID: r.CtID,
+      LaHangMau: Number(r.LaHangMau) === 1 ? 1 : 0,   // v9.10: khong de rot co gui mau khi map lai
       PhaiThu: so(r.PhatSinh) - so(r.ThanhToan), PhaiTra: 0
     })),
     ...(soNCC.rows || []).slice().reverse().map(r => ({
@@ -1415,7 +1494,9 @@ function sheetDoiTac2Chieu(wb, tienIch, d) {
   (d.rows || []).forEach(r => ws.addRow({
     Ngay: ngayVN(r.Ngay),
     Ben: r.Ben === 'ThuVe' ? 'Bán / thu' : 'Mua / chi',
-    Loai: r.Loai || '', SoPhieu: r.SoPhieu || '',
+    // v9.10: cung cho, cung chu voi ban in so 2 chieu (COT_SO_2CHIEU gan nhan o cot Loai chung tu).
+    Loai: (r.Loai || '') + (Number(r.LaHangMau) === 1 ? ' (Gửi mẫu)' : ''),
+    SoPhieu: r.SoPhieu || '',
     /* Ghi 0 thanh o TRONG cho de doc — nhung van la SO o cac o co gia tri, de SUM duoc. */
     PhaiThu: so(r.PhaiThu) || null, PhaiTra: so(r.PhaiTra) || null,
     ChenhLech: so(r.ChenhLech), DienGiai: r.DienGiai || ''
@@ -2403,9 +2484,12 @@ function veSoKeToan(wb, tienIch, opt) {
   trongKy.forEach(r => {
     const { tangNo, giamNo } = xeTien(r);
     tongNo += tangNo; tongCo += giamNo;
+    /* v9.10: Excel khong co badge -> ghi THANG CHU "[Gửi mẫu]" vao dau Dien giai. Dat o DAU de doc
+       luot cot van thay, va de loc/tim trong Excel ra ngay. Cung chu voi ban in va man hinh. */
     ws.addRow({
       Ma: MA_CHUNG_TU[r.Loai] || '', Ngay: ngayVN(r.Ngay), So: r.SoPhieu || '',
-      DienGiai: r.DienGiai || '', No: tangNo || null, Co: giamNo || null
+      DienGiai: (Number(r.LaHangMau) === 1 ? '[Gửi mẫu] ' : '') + (r.DienGiai || ''),
+      No: tangNo || null, Co: giamNo || null
     });
     (chiTiet.get(r.CtLoai + '#' + r.CtID) || []).forEach(h => ws.addRow({
       DienGiai: '    ' + h.Ten,          // thut le 4 khoang trang, giong mau nguoi dung dua
@@ -2474,6 +2558,11 @@ async function duLieuSoKeToan(pool, opt) {
     return {
       Ma: MA_CHUNG_TU[r.Loai] || '', Ngay: r.Ngay, SoPhieu: r.SoPhieu || '',
       DienGiai: r.DienGiai || '', No: tangNo, Co: giamNo,
+      /* v9.10: PHAI mang theo co GUI MAU. soChiTietKH() da tra ve LaHangMau tu v7.59, nhung moi noi
+         "map lai tung field" nhu cho nay deu lam rot no — do la ly do so chi tiet / ban in / Excel
+         khong co nhan trong khi man hinh thi co. Them field moi o soChiTietKH thi phai ra soat lai
+         CA BON cho map: day, veSoKeToan(), doSo(), soDoiTac2Chieu(). */
+      LaHangMau: Number(r.LaHangMau) === 1 ? 1 : 0,
       hang: (chiTiet.get(r.CtLoai + '#' + r.CtID) || [])
     };
   });
@@ -2541,9 +2630,13 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       { header: 'Lũy kế còn nợ', key: 'LuyKe', width: 16 },
       { header: 'Diễn giải', key: 'DienGiai', width: 34 }
     ];
+    /* v9.10: co GUI MAU vao cot "Loai" — DUNG CHO voi ban in (COT_SO_1CHIEU cung dat nhan o cot Loai),
+       de hai ban doc giong het nhau. Excel khong co badge nen dung chu "(Gửi mẫu)". */
     const doSo = (ws, rows, doiTuong) => rows.forEach(r => ws.addRow({
       ...(doiTuong != null ? { DoiTuong: doiTuong } : {}),
-      Ngay: ngayVN(r.Ngay), Loai: r.Loai, SoPhieu: r.SoPhieu || '',
+      Ngay: ngayVN(r.Ngay),
+      Loai: (r.Loai || '') + (Number(r.LaHangMau) === 1 ? ' (Gửi mẫu)' : ''),
+      SoPhieu: r.SoPhieu || '',
       PhatSinh: so(r.PhatSinh), ThanhToan: so(r.ThanhToan), LuyKe: so(r.LuyKe), DienGiai: r.DienGiai || ''
     }));
     /* Dòng đầu ghi rõ đang xếp mới->cũ: cột "Lũy kế còn nợ" đọc từ DƯỚI LÊN mới đúng thứ tự phát

@@ -315,25 +315,31 @@ function giaNPPSauCK(giaBan, ck) {
   return Math.round(giaShopSauCK(giaBan, ck) * (1 - (Number(ck.npp) || 0) / 100) * 100) / 100;
 }
 
-/* ===== v8.37: BAO GIA ALOHA LAY GIA SAU CK SHOP LAM GOC (thay vi Gia ban) =====
-   Nguyen 2026-09-24: "Bao gia aloha sua lai lay Gia sau CK shop (33%) de lam gia
-   truoc thue", sau do chot lai bang VI DU SO THAT:
-     "gia ban 100.000, CK shop 33% thanh con 67.000 dien vao cot gia truoc thue cua
-      aloha, thue 8%, gia sau thue = 67000 + 67000*8%"
-   =>  Gia sau CK shop = GiaBan x (1 - CK_SHOP/100)     <- gia tri cua GiaAloha (67.000)
-       Truoc VAT       = GiaAloha                       (67.000)
-       Sau VAT         = GiaAloha x (1 + %VAT)          (72.360)
-   ⚠️ DAO CHIEU so voi v6.62 (chia xuong) - CO CHU DICH, xem ghi chu day du tai cho
-   tinh gia trong route /baogia/:id/export ben duoi.
+/* ===== v9.16: BAO GIA ALOHA — GIA BAN la gia SAU THUE, chia nguoc ra gia truoc thue =====
+   Nguyen 2026-11-04: "lay cot gia ban dua vao cot gia sau thue, tu chia gia truoc thue dien vao
+   cot gia ban truoc thue" — hoi lai bang vi du so (AskUserQuestion), Nguyen CHOT: "Gia ban 100.000
+   (bo CK shop)":
+       GiaAloha  = GiaBan           (100.000 — DA GOM thue)
+       Sau VAT   = GiaAloha         (100.000)
+       Truoc VAT = GiaAloha / (1+%VAT)  (92.593 voi VAT 8%)
+   CK SHOP KHONG con xuat hien trong bao gia (bo cach tinh v8.37).
+
+   🔴 LICH SU BA LAN DOI CHIEU — dung "sua lai cho giong" bat ky ban nao truoc:
+     v6.62  goc GiaBan (da gom thue)      -> CHIA xuong ra truoc VAT
+     v8.37  goc Gia sau CK shop (chua thue)-> NHAN len ra sau VAT (chot bang vi du so 67.000/72.360)
+     v9.16  goc GiaBan (da gom thue)      -> CHIA xuong (chot bang vi du so 100.000/92.593)
+   Moi lan deu la YEU CAU TUONG MINH cua Nguyen kem vi du so; muon doi tiep phai co vi du so moi.
 
    CACH LAM: doi ngay trong SQL, GIU ALIAS GiaAloha. Nho vay MOI noi doc phia sau
    (frontend popup, ban in, Excel xuat) tu dung ma KHONG phai sua theo - dung tinh
-   than da ghi o v6.61. Ty le lay tu CauHinhHeThong qua layTyLeCK(), KHONG go cung 33.
-   ⚠️ Cau SQL nao dung SQL_GIA_ALOHA thi BAT BUOC phai .input('ckShop', ...). */
-const SQL_GIA_ALOHA = 'ROUND(h.GiaBan * (1 - @ckShop / 100.0), 2) AS GiaAloha';
+   than da ghi o v6.61. (v9.16: SQL khong con tham so @ckShop — cac route da bo .input('ckShop');
+   ham layTyLeCK van con cho tab The kho, khong lien quan bao gia nua.)
+   CHIEU TINH thue nam o HAI noi phai khop nhau: route /baogia/:id/export (backend) va
+   baoGiaTruocVat()/baoGiaSauVat() (module.khohang.js) — lech la man hinh va file Excel ra so khac. */
+const SQL_GIA_ALOHA = 'h.GiaBan AS GiaAloha';
 /* Ghi chu dat TRONG cau SQL - dung /* *\/ cua SQL, TUYET DOI khong chua dau backtick
    vi chuoi nay duoc nhung vao template literal cua cau query (bai hoc v7.98). */
-const SQL_GHI_CHU_GIA_ALOHA = '/* v8.37: GiaAloha = gia SAU CK SHOP (khong con la GiaBan) - xem ghi chu SQL_GIA_ALOHA */';
+const SQL_GHI_CHU_GIA_ALOHA = '/* v9.16: GiaAloha = GiaBan, la gia SAU THUE cua bao gia - xem ghi chu SQL_GIA_ALOHA */';
 
 // v6.21: doc/ghi ty le CK ngay tren tab The kho (khong bat vao Danh muc -> Cau hinh vi nguoi dung
 // thao tac gia ban o day). Ghi bang MERGE nen KHONG can migration - lan luu dau tu tao dong.
@@ -1959,9 +1965,8 @@ router.get('/baogia/candidates', requireAuth, requirePermission('KHOHANG', 'view
     /* v7.54: TEN VIET HOA DON (v7.46, migration_v690) — bao gia gui khach ngoai phai ghi ten thuong
        mai, khong ghi ten noi bo. Chua chay migration thi tra NULL, frontend tu lui ve TenHang. */
     const cotTenHDBG = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
-    const ckUV = await layTyLeCK(pool);   // v8.37: ty le CK shop dung chung, lay tu CauHinhHeThong
-    const result = await pool.request().input('excludeBaoGiaId', sql.Int, excludeBaoGiaId)
-      .input('ckShop', sql.Decimal(5, 2), Number(ckUV.shop) || 0).query(`
+    // v9.16: bo .input('ckShop') — SQL_GIA_ALOHA khong con dung @ckShop (GiaAloha = GiaBan).
+    const result = await pool.request().input('excludeBaoGiaId', sql.Int, excludeBaoGiaId).query(`
       /* v6.61: Bao gia Aloha lay thang GIA BAN cua the kho, bo han truong "Gia Aloha" rieng.
          Hai o gia song song luon lech nhau: sua gia ban ma quen sua gia Aloha la bao gia gui khach
          sai gia, khong co gi bao. Giu ALIAS GiaAloha de moi cho doc phia sau (frontend, Excel,
@@ -2025,9 +2030,8 @@ router.get('/baogia/:id', requireAuth, requirePermission('KHOHANG', 'view'), req
        do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
     const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
 
-    const ckCT = await layTyLeCK(pool);   // v8.37
-    const itemsResult = await pool.request().input('id', sql.Int, req.params.id)
-      .input('ckShop', sql.Decimal(5, 2), Number(ckCT.shop) || 0).query(`
+    // v9.16: bo .input('ckShop') — SQL_GIA_ALOHA khong con dung @ckShop.
+    const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
       ${SQL_GHI_CHU_GIA_ALOHA}
       SELECT ct.ID, ct.MaHangID, ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, ${SQL_GIA_ALOHA}, h.MaBarcode, h.AnhDaiDien, h.LoaiRi,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
@@ -2263,9 +2267,8 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
        do cot moi (bai hoc v7.49.1: goi ham cua file khac = ReferenceError giua route). */
     const cotTenHDCT = (await coCotTenHoaDon(pool)) ? 'h.TenHoaDon' : 'CAST(NULL AS NVARCHAR(255))';
 
-    const ckXuat = await layTyLeCK(pool);   // v8.37
-    const itemsResult = await pool.request().input('id', sql.Int, req.params.id)
-      .input('ckShop', sql.Decimal(5, 2), Number(ckXuat.shop) || 0).query(`
+    // v9.16: bo .input('ckShop') — SQL_GIA_ALOHA khong con dung @ckShop.
+    const itemsResult = await pool.request().input('id', sql.Int, req.params.id).query(`
       ${SQL_GHI_CHU_GIA_ALOHA}
       SELECT ct.PhanTramVAT, ct.ThuTu, h.MaHang, h.TenHang, ${cotTenHDCT} AS TenHoaDon, ${SQL_GIA_ALOHA}, h.MaBarcode, h.LoaiRi, h.AnhDaiDien,
         (SELECT COUNT(*) FROM TheKhoChiTietMau c2 WHERE c2.MaHangID = h.MaHangID) AS SoMau
@@ -2339,21 +2342,15 @@ router.get('/baogia/:id/export', requireAuth, requirePermission('KHOHANG', 'view
       const it = items[i];
       const r = DATA_START + i;
       const vat = Number(it.PhanTramVAT) || 0;
-      /* v8.37: GiaAloha nay la GIA SAU CK SHOP (= GiaBan x (1 - CK_SHOP%), tinh trong SQL - xem
-         SQL_GIA_ALOHA). Nguyen chot bang vi du so THAT (2026-09-24):
-           "gia ban 100.000, CK shop 33% thanh con 67.000 dien vao cot gia truoc thue cua aloha,
-            thue 8%, gia sau thue = 67000 + 67000*8%"
-         => So sau CK CHINH LA gia TRUOC thue, va SAU VAT = NHAN len:
-              Truoc VAT = GiaAloha            (67.000)
-              Sau VAT   = GiaAloha x (1+%VAT) (72.360)
-
-         ⚠️ DAY LA DAO CHIEU so voi v6.62 (v6.62 coi gia lay vao la DA GOM thue nen CHIA xuong).
-         KHONG phai loi "cong thue hai lan" tai phat: v6.62 lay GIA BAN LE (gia da gom thue ban cho
-         nguoi tieu dung), con day lay GIA SAU CK SHOP - la gia BAN BUON chua thue theo cach Nguyen
-         dinh nghia. Goc tinh khac nhau nen chieu tinh khac nhau. Da xac nhan bang vi du so, dung
-         "sua lai cho giong v6.62". */
-      const giaTruocVat = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-      const sauVat = giaTruocVat != null ? giaTruocVat * (1 + vat) : null;
+      /* v9.16: GiaAloha = GiaBan (da gom thue). Nguyen 2026-11-04 chot qua hoi dap vi du so:
+           "Gia ban 100.000 (bo CK shop)" => Sau VAT = 100.000, Truoc VAT = 100.000 / 1,08 = 92.593.
+         CK shop khong con trong bao gia (bo cach tinh v8.37).
+         ⚠️ Lich su BA lan doi chieu (v6.62 chia / v8.37 nhan / v9.16 chia) — xem bang o ghi chu
+         SQL_GIA_ALOHA dau file; dung tu y "sua lai cho giong" ban nao, moi lan doi deu kem vi du so.
+         ⚠️ Cong thuc nay phai KHOP voi baoGiaTruocVat()/baoGiaSauVat() trong module.khohang.js
+         (popup Xem + ban in) — lech la man hinh va file Excel ra so khac nhau. */
+      const sauVat = it.GiaAloha != null ? Number(it.GiaAloha) : null;
+      const giaTruocVat = sauVat != null ? sauVat / (1 + vat) : null;
       /* v7.54: ten tren bao gia = TEN VIET HOA DON, lui ve TenHang neu chua khai. Bao gia gui ra ngoai
          phai ghi ten thuong mai; frontend (popup xem + ban in) dung cung quy tac qua tenBaoGia(). */
       const tenBG = String(it.TenHoaDon || it.TenHang || '').trim();

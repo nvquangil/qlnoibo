@@ -21,7 +21,17 @@ window.ModuleDanhMuc = (function () {
                { name: 'KhachHangID', label: 'Đồng thời là khách hàng (để xem công nợ 2 chiều)',
                  type: 'number', optionsApi: '/api/danhmuc/khachhang',
                  optionsValue: 'KhachHangID', optionsLabel: 'TenKhachHang',
-                 optionsRong: '— không, chỉ là nhà cung cấp —' }] },
+                 optionsRong: '— không, chỉ là nhà cung cấp —' },
+               /* v9.36 (Nguyen 2026-11-09: "mỗi NCC giá vận chuyển khác nhau") — khai MỘT LẦN ở đây,
+                  lập phiếu nhập vải thì tự áp cho từng cây, vẫn sửa tay được trên phiếu.
+                  🔴 Phí này chỉ vào GIÁ THÀNH, KHÔNG vào công nợ NCC (cước trả nhà xe, không phải nợ
+                  NCC). Đơn vị phải TRÙNG "Đơn giá tính theo" của phiếu nhập thì mới tự áp được. */
+               { name: 'PhiVanChuyenDonGia', label: 'Phí vận chuyển — đơn giá (đ/kg hoặc đ/mét)', type: 'number' },
+               /* `options` của bộ dựng ô chung là mảng {value,label} — xem napOptions(). Khai sẵn
+                  mảng ở đây (không có optionsApi) thì napOptions bỏ qua, dùng đúng mảng này. */
+               { name: 'PhiVanChuyenDVT', label: 'Phí vận chuyển — tính theo',
+                 options: [{ value: '', label: '— chưa khai —' },
+                           { value: 'Kg', label: 'Kg' }, { value: 'Met', label: 'Mét' }] }] },
     /* v7.45: thêm 4 ô THÔNG TIN XUẤT HÓA ĐƠN (migration_v689). Hóa đơn GTGT xuất từ phiếu bán hàng
        đọc thẳng từ đây, để trống thì tự lùi về tên/địa chỉ của phiếu.
        ⚠️ "Tên khách hàng" KHÔNG dùng cho hóa đơn: nó là khóa gom công nợ (congno.js gom theo chuỗi

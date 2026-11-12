@@ -186,8 +186,11 @@ const dong = (o) => ({
   kiem(demSQL(sNL) === 0, 'nhaplai.js KHONG con ban sao cong thuc', String(demSQL(sNL)));
   kiem(demSQL(sBH) === 0, 'banhang.js KHONG viet cong thuc rieng', String(demSQL(sBH)));
   kiem(demSQL(sCongNo) === 0, 'congno.js cung khong tu tinh lai', String(demSQL(sCongNo)));
-  kiem(/const layDongDaBan = \(pool, tenKhach, phieuBHID\) =>/.test(sNL),
-    'nhaplai.js giu NGUYEN chu ky ham cu -> 3 cho goi ben duoi khong phai sua');
+  /* v9.21: chu ky them tham so TUY CHON boPhieuNLID (bo phieu dang SUA khoi phep "da tra").
+     Phep kiem noi long dung phan do — ghim cung ba tham so la do oan moi lan them tham so tuy chon
+     (dung vet xe ghim ?v=8.97 va danh sach export cua luongGiaCongInThe). */
+  kiem(/const layDongDaBan = \(pool, tenKhach, phieuBHID(, boPhieuNLID)?\) =>/.test(sNL),
+    'nhaplai.js giu chu ky ham (pool, tenKhach, phieuBHID[, boPhieuNLID]) -> cac cho goi khong phai sua');
   kiem((sNL.match(/layDongDaBan\(/g) || []).length >= 4,
     'cac cho goi cu van con nguyen (khong bi bo sot)');
 

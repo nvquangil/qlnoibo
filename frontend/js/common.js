@@ -1305,6 +1305,150 @@ function xemAnh(src, tieuDe) {
   else batDau();
 })();
 
+/* ================================================================================================
+   v9.47 — RÊ CHUỘT VÀO ẢNH NHỎ LÀ HIỆN TO NGAY (Nguyen 12/11/2026: "thẻ kho hàng hóa, chi tiết hàng
+   hóa, thẻ kho phụ kiện, thẻ kho vải có hình ảnh: hiện tại đang phải click vào ảnh mới hiện to. Sửa
+   để khi di chuột vào hình ảnh là hiện to luôn").
+
+   LUẬT: ảnh nhỏ nào trong hệ thống cũng vậy, không riêng bốn màn trên — bắt ở TẦNG DOCUMENT như
+   lightbox v7.77 ở trên (sửa từng chỗ thì ô ảnh thêm sau lại quên). Một <img> được xem trước khi:
+     · nằm trong <a href=ảnh> (phụ kiện, kho vải, danh mục màu…), hoặc có class "thumb" / data-src
+       (thẻ kho hàng hóa, chi tiết theo màu), hoặc src là ảnh máy chủ phục vụ (/uploads/, /anh/);
+     · VÀ đang hiện NHỎ (bề rộng ≤ 160px) — ảnh đã to rồi thì không có gì để "hiện to".
+   Bấm vẫn mở lightbox toàn màn hình như cũ (nút ✕, Esc, Back điện thoại).
+   · Khung xem trước là "chú giải": pointer-events:none, bám cạnh ảnh đang rê, rời ảnh là biến mất.
+   · CHỈ bật trên máy có chuột thật (hover: hover + pointer: fine). Điện thoại không có "rê chuột":
+     chạm sinh mouseover giả, khung hiện rồi kẹt — nên tắt hẳn ở đó, chạm vẫn mở lightbox như cũ.
+   · Ảnh to lấy bản 800px (/anh/800/…) cho nhanh, không tải file gốc vài MB chỉ vì rê qua. Hiện ngay
+     ảnh nhỏ phóng lên (đã có sẵn) cho khỏi trống, tải xong bản 800 thì thay — kích thước khung tính
+     từ tỷ lệ ảnh nên không nhảy. Lightbox (bấm) vẫn dùng ảnh gốc.
+   · Trễ 120 ms: rê lướt qua cột ảnh không nháy liên tục.
+   · Trong lúc xem trước, tạm cất `title` của ảnh/link (kẻo chú giải nhỏ của trình duyệt "Bấm để
+     phóng to" đè lên khung) — trả lại trước khi lightbox đọc nó làm tiêu đề (bắt click ở pha capture).
+   Opt-out: data-khong-xem-truoc trên <img>, trên <a> bọc nó, hoặc trên một thẻ cha bất kỳ.
+   ================================================================================================ */
+/* '/anh/160/x.jpg' (bản thu nhỏ) -> '/uploads/x.jpg' (gốc); đường dẫn khác trả nguyên. */
+function anhGocTuDuongDan(s) {
+  s = String(s == null ? '' : s).trim();
+  const m = /^\/anh\/\d+\/([^\/?#]+)/.exec(s);
+  return m ? '/uploads/' + m[1] : s;
+}
+/* Ảnh này có được xem trước không? Trả { src (bản 800px), tieuDe, a } hoặc null. */
+function anhXemTruocCua(img) {
+  if (!img || img.tagName !== 'IMG') return null;
+  if (img.closest('.xem-anh-lop, .xem-truoc-anh, [data-khong-xem-truoc]')) return null;
+  const a = img.closest('a[href]');
+  const hrefLaAnh = !!(a && a.dataset.khongLightbox == null && !a.hasAttribute('download') && laDuongDanAnh(a.getAttribute('href')));
+  const src = img.getAttribute('src') || '';
+  const srcMayChu = src.indexOf('/uploads/') === 0 || src.indexOf('/anh/') === 0;
+  if (!hrefLaAnh && !img.dataset.src && !img.classList.contains('thumb') && !srcMayChu) return null;
+  const rong = img.getBoundingClientRect().width;
+  if (!(rong > 0) || rong > 160) return null;   // chưa vẽ, hoặc đã to sẵn
+  const goc = anhGocTuDuongDan(img.dataset.src || (hrefLaAnh ? a.getAttribute('href') : src));
+  if (!goc) return null;
+  return { src: anhNho(goc, 800), tieuDe: img.dataset.title || img.getAttribute('alt') || '', a: hrefLaAnh ? a : null };
+}
+(function () {
+  if (!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches)) return;
+  let khung = null, hinh = null, chuThich = null;
+  let dangRe = null, hen = null, taiTo = null, titleCat = [];
+  function taoKhung() {
+    khung = document.createElement('div');
+    khung.className = 'xem-truoc-anh';
+    khung.setAttribute('style', 'position:fixed;z-index:11000;display:none;pointer-events:none;background:#fff;'
+      + 'padding:6px;border-radius:8px;border:1px solid #cfd8dc;box-shadow:0 10px 32px rgba(0,0,0,.35);');
+    khung.innerHTML = '<img alt="" style="display:block;object-fit:contain;border-radius:4px;background:#f1f3f4;">'
+      + '<div class="xem-truoc-anh-tieude" style="font-size:12px;color:#333;text-align:center;margin-top:4px;'
+      + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>';
+    document.body.appendChild(khung);
+    hinh = khung.querySelector('img');
+    chuThich = khung.querySelector('.xem-truoc-anh-tieude');
+  }
+  /* Cỡ khung theo TỶ LỆ ảnh, phóng cho vừa hộp tối đa (≤ 60% ngang, ≤ 80% dọc màn hình, ≤ 640px). */
+  function coKhung(nw, nh) {
+    const maxW = Math.min(640, Math.floor(window.innerWidth * 0.6)), maxH = Math.min(640, Math.floor(window.innerHeight * 0.8));
+    const w0 = nw > 0 ? nw : 4, h0 = nh > 0 ? nh : 3;
+    const ty = Math.min(maxW / w0, maxH / h0);
+    const w = Math.max(120, Math.round(w0 * ty)), h = Math.max(90, Math.round(h0 * ty));
+    hinh.style.width = w + 'px'; hinh.style.height = h + 'px';
+    chuThich.style.maxWidth = w + 'px';
+  }
+  function datViTri() {
+    if (!dangRe || !khung) return;
+    if (!dangRe.isConnected) { an(); return; }   // bảng vừa vẽ lại dưới con chuột
+    const r = dangRe.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight, KHE = 12, MEP = 8;
+    const w = khung.offsetWidth, h = khung.offsetHeight;
+    let left;
+    if (r.right + KHE + w <= vw - MEP) left = r.right + KHE;          // bên phải ảnh nhỏ
+    else if (r.left - KHE - w >= MEP) left = r.left - KHE - w;        // bên trái
+    else left = Math.max(MEP, Math.min(vw - w - MEP, r.left));        // chật quá: đè lên, giữ trong màn
+    let top = r.top + r.height / 2 - h / 2;                            // canh giữa theo ảnh nhỏ
+    top = Math.max(MEP, Math.min(vh - h - MEP, top));
+    khung.style.left = Math.round(left) + 'px';
+    khung.style.top = Math.round(top) + 'px';
+  }
+  function catTitle(els) {
+    titleCat = [];
+    els.forEach(el => {
+      if (el && el.hasAttribute('title')) { titleCat.push([el, el.getAttribute('title')]); el.removeAttribute('title'); }
+    });
+  }
+  function traTitle() {
+    titleCat.forEach(([el, t]) => { if (!el.hasAttribute('title')) el.setAttribute('title', t); });
+    titleCat = [];
+  }
+  function hien(img, tt) {
+    if (!khung) taoKhung();
+    traTitle();                                    // rê thẳng từ ảnh này sang ảnh khác: trả title ảnh trước
+    dangRe = img;
+    catTitle([img, tt.a]);
+    coKhung(img.naturalWidth, img.naturalHeight);
+    hinh.src = img.currentSrc || img.src;          // bản nhỏ phóng lên, hiện NGAY
+    chuThich.textContent = tt.tieuDe;
+    chuThich.style.display = tt.tieuDe ? '' : 'none';
+    khung.style.display = 'block';
+    datViTri();
+    if (taiTo) { taiTo.onload = null; taiTo = null; }
+    const to = new Image();
+    taiTo = to;
+    to.onload = () => {
+      if (dangRe !== img || taiTo !== to) return;
+      coKhung(to.naturalWidth, to.naturalHeight);
+      hinh.src = to.src;
+      datViTri();
+    };
+    to.src = tt.src;
+  }
+  function an() {
+    clearTimeout(hen); hen = null;
+    if (taiTo) { taiTo.onload = null; taiTo = null; }
+    traTitle();
+    dangRe = null;
+    if (khung) khung.style.display = 'none';
+  }
+  document.addEventListener('mouseover', (e) => {
+    const img = e.target && e.target.closest ? e.target.closest('img') : null;
+    const tt = anhXemTruocCua(img);
+    if (!tt) { if (dangRe || hen) an(); return; }
+    if (img === dangRe) return;
+    if (__xemAnhDong) return;                      // lightbox đang mở thì thôi
+    clearTimeout(hen);
+    hen = setTimeout(() => { hen = null; hien(img, tt); }, 120);
+  });
+  /* Rời hẳn cửa sổ (relatedTarget null) thì mouseover không tới nữa — phải ẩn ở đây. */
+  document.addEventListener('mouseout', (e) => { if (!e.relatedTarget && (dangRe || hen)) an(); });
+  document.addEventListener('mousemove', () => { if (dangRe && !dangRe.isConnected) an(); });
+  /* Bấm (mở lightbox), cuộn, gõ phím: ẩn. Click bắt ở pha CAPTURE để trả `title` TRƯỚC khi lightbox
+     (listener pha bubble ở trên) đọc nó làm tiêu đề ảnh. */
+  document.addEventListener('click', () => { if (dangRe || hen) an(); }, true);
+  document.addEventListener('scroll', () => { if (dangRe || hen) an(); }, true);
+  document.addEventListener('wheel', () => { if (dangRe || hen) an(); }, { passive: true, capture: true });
+  document.addEventListener('keydown', () => { if (dangRe || hen) an(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && (dangRe || hen)) an(); });
+  window.addEventListener('resize', datViTri);
+})();
+
 function closeModal(opts) {
   opts = opts || {};
   const el = document.getElementById('__modal');

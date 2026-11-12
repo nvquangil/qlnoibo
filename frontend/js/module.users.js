@@ -19,11 +19,15 @@ window.ModuleUsers = (function () {
   }
 
   function getTabs() {
-    return [
+    const ds = [
       { key: 'users', label: 'Tài khoản' },
       { key: 'groups', label: 'Nhóm quyền' },
       { key: 'perm', label: 'Ma trận phân quyền' }
     ];
+    /* v9.37 từng nhét tab "💾 Sao lưu" vào đây. v9.39 ĐÃ GỠ: sao lưu không phải việc con của quản
+       lý tài khoản, và chôn vào đây thì không ai tìm ra (Nguyen 2026-11-10: *"tôi chưa thấy nút"*).
+       Nay là PHÂN HỆ RIÊNG — xem frontend/js/module.saoluu.js. */
+    return ds;
   }
 
   async function render(el, user, tabKey) {
@@ -32,9 +36,16 @@ window.ModuleUsers = (function () {
     const perm = user.isAdmin ? { canView: true, canCreate: true, canEdit: true, canDelete: true } : (user.permissions.USERS || {});
     container.innerHTML = `<div id="uBody"></div>`;
 
+    /* 🔴 v9.11: BA lời gọi sang phân hệ DANH MỤC đều phải có `.catch`, không chỉ mỗi `nhanvien`.
+       Người quản trị được cấp Quản lý User nhưng KHÔNG được cấp Danh mục thì hai dòng bộ phận /
+       công đoạn ném lỗi, `Promise.all` đổ theo, và **vỡ CẢ màn Phân quyền** (cả 3 tab) chứ không
+       phải mất một ô chọn. Nặng hơn hẳn ca "Tải NV từ máy" của Nguyen 2026-10-31 — cùng một bệnh:
+       màn này đi mượn route của phân hệ khác. Suy biến êm: thiếu thì ô chọn rỗng, màn vẫn chạy. */
     const [groupsRes, bpRes, stageRes, modRes, nvRes] = await Promise.all([
-      apiGet('/api/users/groups/list'), apiGet('/api/danhmuc/bophan'),
-      apiGet('/api/danhmuc/congdoan'), apiGet('/api/users/modules/list'),
+      apiGet('/api/users/groups/list'),
+      apiGet('/api/danhmuc/bophan').catch(() => ({ data: [] })),
+      apiGet('/api/danhmuc/congdoan').catch(() => ({ data: [] })),
+      apiGet('/api/users/modules/list'),
       apiGet('/api/danhmuc/nhanvien').catch(() => ({ data: [] }))
     ]);
     groupsCache = groupsRes.data; boPhanCache = bpRes.data; stagesCache = stageRes.data; modulesCache = modRes.data; nhanVienCache = nvRes.data || [];
@@ -42,6 +53,184 @@ window.ModuleUsers = (function () {
     if (activeTab === 'users') return renderUsers(perm);
     if (activeTab === 'groups') return renderGroups(perm);
     if (activeTab === 'perm') return renderPermMatrix(perm);
+  }
+
+  /* v9.39: toàn bộ màn Sao lưu đã CHUYỂN sang phân hệ riêng `frontend/js/module.saoluu.js`
+     (Nguyen 2026-11-10: *"làm riêng hẳn 1 chức năng backup"*). Khối dưới đây là bản cũ, KHÔNG CÒN
+     AI GỌI — xóa nốt trong lần dọn tới. 🔴 ĐỪNG SỬA ở đây: sửa bản chết rồi tưởng đã xong là kiểu
+     lỗi tốn cả buổi để phát hiện. Mọi thay đổi về sao lưu làm trong module.saoluu.js. */
+  async function __CU_renderSaoLuu_KHONG_DUNG() {
+    const body = document.getElementById('uBody');
+    body.innerHTML = '<div class="empty-hint">Đang đọc trạng thái sao lưu…</div>';
+    let d;
+    try {
+      d = (await apiGet('/api/saoluu/trangthai')).data;
+    } catch (err) {
+      body.innerHTML = `<div class="card"><h3>Sao lưu CSDL</h3>
+        <p style="color:#c0392b;">Không đọc được trạng thái: ${escapeHtml(err.message)}</p></div>`;
+      return;
+    }
+    const mb = (n) => (Number(n) / 1024 / 1024).toFixed(1) + ' MB';
+    const gio = (v) => v ? new Date(v).toLocaleString('vi-VN') : '—';
+    const ch = d.cauHinh || {};
+    const m = d.moiNhat;
+    const soGio = m ? (Date.now() - new Date(m.luc).getTime()) / 3600000 : null;
+    const quaHan = !m || soGio > 36;
+
+    body.innerHTML = `
+      <div class="card">
+        <h3 style="margin-top:0;">💾 Sao lưu cơ sở dữ liệu</h3>
+
+        ${d.canhBao.map(c => `<div style="background:#fdecea;border:1px solid #f5c6cb;border-radius:6px;padding:10px;margin-bottom:8px;color:#8a1c1c;">${escapeHtml(c)}</div>`).join('')}
+
+        ${/* Con số quan trọng nhất của cả màn — để to, đổi màu theo tình trạng. */''}
+        <div style="border:2px solid ${quaHan ? '#c0392b' : '#137333'};border-radius:8px;padding:14px;margin-bottom:12px;background:${quaHan ? '#fff5f5' : '#f3fbf5'};">
+          <div style="font-size:13px;color:#5f6368;">Bản sao lưu dùng được gần nhất</div>
+          <div style="font-size:22px;font-weight:700;color:${quaHan ? '#c0392b' : '#137333'};">
+            ${m ? gio(m.luc) : 'CHƯA CÓ BẢN NÀO'}
+          </div>
+          ${m ? `<div style="font-size:13px;color:#5f6368;">${escapeHtml(m.ten)} · ${mb(m.dungLuong)}
+                 · ${soGio < 24 ? Math.round(soGio) + ' giờ trước' : Math.floor(soGio / 24) + ' ngày trước'}</div>` : ''}
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row"><label>Đang có</label><div class="readonly-fact">${d.soBan} bản · ${mb(d.tongDungLuong)}</div></div>
+          <div class="form-row"><label>Chỗ trống ổ đích</label><div class="readonly-fact">${d.choTrongMB == null ? '(không đo được)' : Math.round(d.choTrongMB) + ' MB'}</div></div>
+          ${d.mayChu ? `<div class="form-row"><label>SQL Server</label><div class="readonly-fact">${escapeHtml(d.mayChu.edition)}</div></div>
+          <div class="form-row"><label>Dữ liệu / Log</label><div class="readonly-fact">${Math.round(d.mayChu.dataMB)} MB / ${Math.round(d.mayChu.logMB)} MB — chế độ ${escapeHtml(d.mayChu.recoveryModel)}</div></div>` : ''}
+        </div>
+
+        ${/* ------ CẤU HÌNH: chọn thư mục ngay trong phần mềm, không phải sửa .env rồi restart ------
+             Trình duyệt KHÔNG duyệt được ổ đĩa của MÁY CHỦ (và không nên — đó là máy khác). Nên
+             thay cho hộp thoại chọn thư mục: liệt kê ổ của máy chủ kèm chỗ trống + đánh dấu ổ đang
+             chứa CSDL, bấm là điền sẵn đường dẫn, rồi "Kiểm tra" bằng phép thử THẬT. */''}
+        <h4 style="margin:16px 0 6px;">Cấu hình</h4>
+        <div id="slODia" class="empty-hint" style="text-align:left;margin-bottom:8px;">Đang đọc danh sách ổ đĩa…</div>
+        <div class="form-grid">
+          <div class="form-row"><label>Thư mục lưu *</label>
+            <input id="slThuMuc" value="${escapeHtml(ch.thuMuc || '')}" placeholder="VD: E:\\BackupQLNoiBo"></div>
+          <div class="form-row"><label>Giờ chạy hằng ngày</label>
+            <input id="slGio" type="time" value="${escapeHtml(gioTuCron(ch.gioChay))}"></div>
+          <div class="form-row"><label>Giữ lại (ngày)</label>
+            <input id="slNgay" type="number" min="1" max="3650" value="${Number(ch.soNgayGiu) || 30}"></div>
+          <div class="form-row"><label>Luôn giữ ít nhất (bản)</label>
+            <input id="slLuonGiu" type="number" min="1" max="100" value="${Number(ch.soBanLuonGiu) || 3}"></div>
+          <div class="form-row"><label>Email báo khi hỏng</label>
+            <input id="slEmail" value="${escapeHtml(ch.emailBao || '')}" placeholder="a@cty.vn, b@cty.vn"></div>
+          <div class="form-row"><label>Bật lịch tự động</label>
+            <label style="display:flex;gap:6px;align-items:center;">
+              <input type="checkbox" id="slBat" ${ch.bat !== false ? 'checked' : ''}> Chạy tự động mỗi ngày</label></div>
+        </div>
+        <div class="empty-hint" style="text-align:left;">
+          "Luôn giữ ít nhất" là lưới an toàn: dù đã quá hạn, hệ thống <b>không bao giờ</b> xóa đến mức
+          còn ít hơn số này — tránh cảnh sao lưu hỏng dài ngày mà vẫn dọn đều, đến lúc cần thì không còn bản nào.
+        </div>
+        <div class="modal-actions" style="justify-content:flex-start;margin:6px 0 0;">
+          <button type="button" class="btn secondary" id="btnKiemThuMuc">Kiểm tra thư mục</button>
+          <button type="button" class="btn" id="btnLuuCauHinh">Lưu cấu hình</button>
+          <span class="empty-hint" id="slKetQuaKiem" style="margin-left:10px;"></span>
+        </div>
+
+        ${d.lanCuoi ? `<div class="empty-hint" style="text-align:left;margin-top:8px;">
+          Lần chạy gần nhất (${gio(d.lanCuoi.luc)}, ${d.lanCuoi.soGiay}s):
+          <b style="color:${d.lanCuoi.thanhCong ? '#137333' : '#c0392b'};">${d.lanCuoi.thanhCong ? 'THÀNH CÔNG' : 'THẤT BẠI'}</b>
+          — ${escapeHtml(d.lanCuoi.thongDiep)}</div>` : ''}
+
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:12px;">
+          <button type="button" class="btn" id="btnSaoLuuNgay">💾 Sao lưu ngay</button>
+          <span class="empty-hint" id="slTienTrinh" style="margin-left:10px;"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">Các bản đang có</h3>
+        <table><thead><tr><th>Tên file</th><th>Lúc</th><th style="text-align:right;">Dung lượng</th><th></th></tr></thead>
+        <tbody>${d.danhSach.length ? d.danhSach.map(b => `<tr>
+          <td>${escapeHtml(b.ten)}</td><td>${gio(b.luc)}</td>
+          <td style="text-align:right;">${mb(b.dungLuong)}</td>
+          <td><a class="btn small" href="/api/saoluu/tai/${encodeURIComponent(b.ten)}">Tải về</a></td>
+        </tr>`).join('') : '<tr><td colspan="4" class="empty-hint">Chưa có bản nào.</td></tr>'}</tbody></table>
+      </div>`;
+
+    /* ---- Danh sách ổ đĩa của MÁY CHỦ: bấm là điền sẵn đường dẫn gợi ý ---- */
+    (async () => {
+      const el = body.querySelector('#slODia');
+      try {
+        const o = (await apiGet('/api/saoluu/odia')).data;
+        el.innerHTML = 'Ổ trên máy chủ: ' + o.danhSach.map(x =>
+          `<a href="#" data-o="${escapeHtml(x.goiY)}" style="margin-right:12px;${x.coCSDL ? 'color:#c0392b;' : ''}"
+             title="${x.coCSDL ? 'Ổ này ĐANG CHỨA CSDL — chọn ở đây thì ổ hỏng là mất cả hai' : 'Bấm để điền đường dẫn gợi ý'}">
+             ${x.o}: ${x.choTrongMB == null ? '' : '(' + Math.round(x.choTrongMB / 1024) + ' GB trống)'}${x.coCSDL ? ' ⚠️ có CSDL' : ''}</a>`).join('')
+          + (o.oCuaCSDL.length ? `<div style="color:#c0392b;margin-top:4px;">CSDL đang nằm trên ổ: ${o.oCuaCSDL.join(', ')} — nên chọn ổ KHÁC.</div>` : '');
+        el.querySelectorAll('a[data-o]').forEach(a => a.addEventListener('click', (e) => {
+          e.preventDefault();
+          body.querySelector('#slThuMuc').value = a.dataset.o;
+        }));
+      } catch (err) { el.textContent = 'Không đọc được danh sách ổ: ' + err.message; }
+    })();
+
+    const oKetQua = body.querySelector('#slKetQuaKiem');
+    const layForm = () => {
+      const g = cronTuGio(body.querySelector('#slGio').value);
+      const o = {
+        thuMuc: body.querySelector('#slThuMuc').value.trim(),
+        soNgayGiu: Number(body.querySelector('#slNgay').value),
+        soBanLuonGiu: Number(body.querySelector('#slLuonGiu').value),
+        emailBao: body.querySelector('#slEmail').value.trim(),
+        bat: body.querySelector('#slBat').checked
+      };
+      /* Ô giờ để rỗng (cron đang là biểu thức lạ) thì KHÔNG gửi gioChay — giữ nguyên biểu thức cũ
+         thay vì âm thầm đổi lịch của người ta. */
+      if (g) o.gioChay = g;
+      return o;
+    };
+
+    body.querySelector('#btnKiemThuMuc').addEventListener('click', async (e) => {
+      const nutK = e.currentTarget;
+      nutK.disabled = true;
+      oKetQua.textContent = 'Đang bắt SQL Server ghi thử một file vào đó…';
+      try {
+        const r = (await apiPost('/api/saoluu/kiemthumuc',
+          { thuMuc: body.querySelector('#slThuMuc').value.trim() })).data;
+        oKetQua.innerHTML = `<span style="color:${r.ok ? '#137333' : '#c0392b'};">${escapeHtml(r.thongDiep)}</span>`;
+      } catch (err) {
+        oKetQua.innerHTML = `<span style="color:#c0392b;">${escapeHtml(err.message)}</span>`;
+      } finally { nutK.disabled = false; }
+    });
+
+    body.querySelector('#btnLuuCauHinh').addEventListener('click', async (e) => {
+      const nutL = e.currentTarget;
+      nutL.disabled = true;
+      try {
+        const r = (await apiPut('/api/saoluu/cauhinh', layForm())).data;
+        toast(r.lich && r.lich.chay
+          ? 'Đã lưu. Lịch chạy lúc ' + gioTuCron(r.lich.gioChay) + ' mỗi ngày.'
+          : 'Đã lưu. ⚠️ Lịch KHÔNG chạy: ' + ((r.lich && r.lich.lyDo) || 'chưa rõ'),
+        r.lich && r.lich.chay ? 'success' : 'error');
+        renderSaoLuu();
+      } catch (err) {
+        toast(err.message, 'error');
+        nutL.disabled = false;
+      }
+    });
+
+    const nut = body.querySelector('#btnSaoLuuNgay');
+    const bao = body.querySelector('#slTienTrinh');
+    nut.addEventListener('click', async () => {
+      /* Khóa nút NGAY: sao lưu mất vài chục giây, bấm hai lần là hai tiến trình (backend cũng chặn
+         bằng __dangChay, nhưng để nút sáng là người dùng tưởng lần một hỏng rồi bấm lại). */
+      nut.disabled = true;
+      bao.textContent = 'Đang sao lưu… có thể mất vài chục giây, đừng đóng trang.';
+      try {
+        const kq = (await apiPost('/api/saoluu/chay', {})).data;
+        toast(kq.thongDiep, kq.thanhCong ? 'success' : 'error');
+      } catch (err) {
+        toast('Lỗi khi sao lưu: ' + err.message, 'error');
+      } finally {
+        nut.disabled = false;
+        renderSaoLuu();   // vẽ lại để thấy bản mới + trạng thái mới
+      }
+    });
   }
 
   async function renderUsers(perm) {

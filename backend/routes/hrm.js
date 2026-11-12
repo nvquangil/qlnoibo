@@ -936,6 +936,93 @@ const cotHDThem = (co) => (co ? ', ' + COT_HD_V882.join(', ') : '');
 const thamSoHDThem = (co) => (co ? ', ' + COT_HD_V882.map(c => '@' + c).join(', ') : '');
 const ganHDThem = (co) => (co ? ', ' + COT_HD_V882.map(c => `${c}=@${c}`).join(', ') : '');
 
+/* ==================================================================================================
+   v9.35 — NOI DUNG CONG VIEC (in vao muc 1.5 cua hop dong).
+
+   Nguyen 2026-11-09: *"ky hop dong them truong noi dung cong viec de nhap tay va gan vao muc 1.5
+   cua mau hop dong, vi moi nguoi 1 noi dung cu the khac nhau"*.
+
+   🔴 CO DO COT RIENG, KHONG gop vao COT_HD_V882. May da chay migration_v877 (co NgayKy) nhung CHUA
+   chay migration_v887 van phai them/sua hop dong binh thuong. Gop chung thi co V882 = true keo theo
+   NoiDungCongViec vao cau SQL => "Invalid column name" => VO CA them lan sua hop dong. Dung bai hoc
+   da ghi o khoi ghi chu COT_HD_V882 ngay tren.
+
+   🔴 KHONG cache ket qua do cot (khac __coCotHDv882 phia tren): cache song qua migration la sau khi
+   chay migration van phai restart pm2 moi luu duoc o moi, ma nguoi dung thi thay o nhap hien ra binh
+   thuong roi go vao — go xong mat trang. Mot truy van COL_LENGTH moi lan luu hop dong la khong dang
+   ke so voi viec do.
+   ================================================================================================== */
+async function coCotNoiDungCongViec(pool) {
+  const r = (await pool.request()
+    .query("SELECT COL_LENGTH('HopDongLaoDong','NoiDungCongViec') AS c")).recordset[0] || {};
+  return r.c != null;
+}
+function bindNoiDungCongViec(reqDb, b) {
+  /* sql.MAX la BAT BUOC: sql.NVarChar tran mac dinh la NVARCHAR(4000) ở tham số, noi dung cong viec
+     la doan van dai, gõ qua 4000 ky tu la bi cat cut MA KHONG BAO LOI. */
+  reqDb.input('NoiDungCongViec', sql.NVarChar(sql.MAX), nn(b.noiDungCongViec));
+}
+const cotNDCV = (co) => (co ? ', NoiDungCongViec' : '');
+const thamSoNDCV = (co) => (co ? ', @NoiDungCongViec' : '');
+const ganNDCV = (co) => (co ? ', NoiDungCongViec=@NoiDungCongViec' : '');
+
+/* ==================================================================================================
+   v9.45 — THONG SO LUONG TREN HOP DONG (migration_v890). Nguyen 11/11/2026: "ky hop dong co lua chon
+   theo KPI hay theo SP". Tu v9.45 payroll.js DOC thang hop dong de tinh luong — cac cot v8.82
+   (PhuCapChuyenCan/PhuCapChucVu/QuyKPI/SoCongXangXe/TyLeThuViec) khong con "chi de in" nua.
+
+   🔴 Co do cot RIENG, KHONG cache — cung ly do voi NoiDungCongViec o tren: may chua chay migration_v890
+   van them/sua hop dong binh thuong; chay migration xong khong can restart la luu duoc ngay.
+   `KieuLuong` la MOC do (cot dau tien cua v890): mot migration la mot don vi, co cot nay la co ca 6.
+   ================================================================================================== */
+const COT_HD_V890 = ['KieuLuong', 'DonGiaNgay', 'MucDongBH', 'LuongCoDinhThang', 'NgayHetThuViec', 'KieuThuong'];
+async function coCotHopDongV890(pool) {
+  const r = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','KieuLuong') AS c")).recordset[0] || {};
+  return r.c != null;
+}
+function bindHopDongV890(reqDb, b) {
+  const kieuLuong = String(b.kieuLuong || '').trim() === 'Ngay' ? 'Ngay' : (String(b.kieuLuong || '').trim() === 'Thang' ? 'Thang' : null);
+  const kt = String(b.kieuThuong || '').trim();
+  const kieuThuong = kt === 'KPI' ? 'KPI' : (kt === 'SanPham' ? 'SanPham' : null);
+  reqDb.input('KieuLuong', sql.NVarChar(10), kieuLuong)
+    .input('DonGiaNgay', sql.Decimal(14, 2), nn(b.donGiaNgay))
+    /* 🔴 MucDongBH: trong/0 = KHONG dong BH. Tien BH 10,5% tinh tren cot nay, KHONG tren LuongCoBan. */
+    .input('MucDongBH', sql.Decimal(14, 2), nn(b.mucDongBH))
+    .input('LuongCoDinhThang', sql.Decimal(14, 2), nn(b.luongCoDinhThang))
+    .input('NgayHetThuViec', sql.Date, nn(b.ngayHetThuViec))
+    .input('KieuThuong', sql.NVarChar(10), kieuThuong);
+}
+const cotHDV890 = (co) => (co ? ', ' + COT_HD_V890.join(', ') : '');
+const thamSoHDV890 = (co) => (co ? ', ' + COT_HD_V890.map(c => '@' + c).join(', ') : '');
+const ganHDV890 = (co) => (co ? ', ' + COT_HD_V890.map(c => `${c}=@${c}`).join(', ') : '');
+
+/* Danh sach san pham + don gia cua hop dong (KieuThuong='SanPham'). Ghi lai TOAN BO moi lan luu
+   hop dong: xoa het roi chen lai theo thu tu — don gian, va hop dong la ban ghi nho. */
+async function luuSanPhamHopDong(pool, hopDongId, ds) {
+  if (!Array.isArray(ds)) return;   // client cu khong gui => KHONG dong vao (giu nguyen danh sach da co)
+  const co = (await pool.request().query("SELECT OBJECT_ID('HopDongSanPham') AS o")).recordset[0] || {};
+  if (co.o == null) return;
+  await pool.request().input('id', sql.Int, hopDongId).query('DELETE FROM HopDongSanPham WHERE HopDongID=@id');
+  let thuTu = 0;
+  for (const sp of ds) {
+    const ten = String(sp && sp.tenSanPham || '').trim();
+    if (!ten) continue;
+    await pool.request().input('id', sql.Int, hopDongId).input('ten', sql.NVarChar(150), ten)
+      .input('dg', sql.Decimal(14, 2), Number(sp.donGia) || 0).input('tt', sql.Int, thuTu++)
+      .query('INSERT INTO HopDongSanPham (HopDongID, TenSanPham, DonGia, ThuTu) VALUES (@id, @ten, @dg, @tt)');
+  }
+}
+async function docSanPhamHopDong(pool, hopDongIds) {
+  const co = (await pool.request().query("SELECT OBJECT_ID('HopDongSanPham') AS o")).recordset[0] || {};
+  if (co.o == null || !hopDongIds.length) return new Map();
+  const rows = (await pool.request().query(
+    `SELECT ID, HopDongID, TenSanPham, DonGia, ThuTu FROM HopDongSanPham
+     WHERE HopDongID IN (${hopDongIds.map(n => Number(n) || 0).join(',')}) ORDER BY HopDongID, ThuTu, ID`)).recordset;
+  const m = new Map();
+  rows.forEach(r => { if (!m.has(r.HopDongID)) m.set(r.HopDongID, []); m.get(r.HopDongID).push(r); });
+  return m;
+}
+
 // v8.82: QuyetDinhNhanSu.NgayKy (tách khỏi NgayHieuLuc — mẫu quyết định có cả hai ngày).
 let __coNgayKyQD = null;
 async function coCotNgayKyQD(pool) {
@@ -1003,6 +1090,9 @@ router.get('/hopdong', requireAuth, requirePermission('HRM', 'view'), requireChu
       SELECT hd.*, nv.HoTen, nv.MaNhanVien FROM HopDongLaoDong hd
       JOIN NhanVien nv ON nv.NhanVienID = hd.NhanVienID
       ${where} ORDER BY hd.TuNgay DESC, hd.HopDongID DESC`)).recordset;
+    /* v9.45: gan danh sach san pham vao tung hop dong (mang rong neu khong co / chua migration). */
+    const spMap = await docSanPhamHopDong(pool, rows.map(r => r.HopDongID));
+    rows.forEach(r => { r.sanPham = spMap.get(r.HopDongID) || []; });
     res.json({ success: true, data: rows });
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
@@ -1016,13 +1106,25 @@ router.post('/hopdong', requireAuth, requirePermission('HRM', 'create'), require
     bindHopDong(reqDb, b);
     const coV882 = await coCotHopDongV882(pool);   // v8.82
     if (coV882) bindHopDongV882(reqDb, b);
+    const coNDCV = await coCotNoiDungCongViec(pool);   // v9.35 — cờ RIÊNG, xem khối ghi chú
+    if (coNDCV) bindNoiDungCongViec(reqDb, b);
+    /* v9.45 — cờ RIÊNG, không cache. Chỉ ghi 6 cột lương khi CLIENT CÓ GỬI (`kieuLuong` có mặt): tab
+       còn mở từ bản JS cũ không gửi ⇒ KHÔNG ghi NULL đè lên thông số đã khai (rà chéo v9.45). Máy chưa
+       chạy migration mà client gửi ⇒ nói thẳng trong `canhBao` thay vì nuốt im lặng. */
+    const coV890 = await coCotHopDongV890(pool);
+    const guiV890 = b.kieuLuong !== undefined;
+    const ghiV890 = coV890 && guiV890;
+    if (ghiV890) bindHopDongV890(reqDb, b);
     const r = await reqDb.query(`
       INSERT INTO HopDongLaoDong (NhanVienID, SoHopDong, LoaiHopDong, TuNgay, DenNgay, ChucVu, NoiLamViec,
-        LuongCoBan, HeSoLuong, PhuCapAnCa, PhuCapTrangPhuc, PhuCapXangXe, PhuCapDienThoai, TrangThai, FileDinhKem, GhiChu, NguoiTaoID${cotHDThem(coV882)})
+        LuongCoBan, HeSoLuong, PhuCapAnCa, PhuCapTrangPhuc, PhuCapXangXe, PhuCapDienThoai, TrangThai, FileDinhKem, GhiChu, NguoiTaoID${cotHDThem(coV882)}${cotNDCV(coNDCV)}${cotHDV890(ghiV890)})
       OUTPUT INSERTED.HopDongID
       VALUES (@NhanVienID, @SoHopDong, @LoaiHopDong, @TuNgay, @DenNgay, @ChucVu, @NoiLamViec,
-        @LuongCoBan, @HeSoLuong, @PhuCapAnCa, @PhuCapTrangPhuc, @PhuCapXangXe, @PhuCapDienThoai, @TrangThai, @FileDinhKem, @GhiChu, @NguoiTaoID${thamSoHDThem(coV882)})`);
-    res.json({ success: true, data: { HopDongID: r.recordset[0].HopDongID } });
+        @LuongCoBan, @HeSoLuong, @PhuCapAnCa, @PhuCapTrangPhuc, @PhuCapXangXe, @PhuCapDienThoai, @TrangThai, @FileDinhKem, @GhiChu, @NguoiTaoID${thamSoHDThem(coV882)}${thamSoNDCV(coNDCV)}${thamSoHDV890(ghiV890)})`);
+    const hopDongId = r.recordset[0].HopDongID;
+    if (ghiV890) await luuSanPhamHopDong(pool, hopDongId, b.sanPham);
+    res.json({ success: true, data: { HopDongID: hopDongId },
+      canhBao: guiV890 && !coV890 ? 'Máy chủ CHƯA chạy migration_v890.sql — hợp đồng đã lưu nhưng THÔNG SỐ TÍNH LƯƠNG CÔNG NHẬT (kiểu lương, đơn giá, BH, thưởng, sản phẩm) KHÔNG được lưu.' : null });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 
@@ -1033,13 +1135,22 @@ router.put('/hopdong/:id', requireAuth, requirePermission('HRM', 'edit'), requir
     bindHopDong(reqDb, req.body);
     const coV882 = await coCotHopDongV882(pool);   // v8.82
     if (coV882) bindHopDongV882(reqDb, req.body);
+    const coNDCV = await coCotNoiDungCongViec(pool);   // v9.35 — cờ RIÊNG, xem khối ghi chú
+    if (coNDCV) bindNoiDungCongViec(reqDb, req.body);
+    /* v9.45 — như POST: chỉ ghi 6 cột lương khi client CÓ GỬI, kẻo JS cũ ghi NULL đè thông số đã khai. */
+    const coV890 = await coCotHopDongV890(pool);
+    const guiV890 = req.body.kieuLuong !== undefined;
+    const ghiV890 = coV890 && guiV890;
+    if (ghiV890) bindHopDongV890(reqDb, req.body);
     await reqDb.query(`
       UPDATE HopDongLaoDong SET SoHopDong=@SoHopDong, LoaiHopDong=@LoaiHopDong, TuNgay=@TuNgay, DenNgay=@DenNgay,
         ChucVu=@ChucVu, NoiLamViec=@NoiLamViec, LuongCoBan=@LuongCoBan, HeSoLuong=@HeSoLuong, PhuCapAnCa=@PhuCapAnCa,
         PhuCapTrangPhuc=@PhuCapTrangPhuc, PhuCapXangXe=@PhuCapXangXe, PhuCapDienThoai=@PhuCapDienThoai,
-        TrangThai=@TrangThai, FileDinhKem=@FileDinhKem, GhiChu=@GhiChu, UpdatedAt=SYSDATETIME()${ganHDThem(coV882)}
+        TrangThai=@TrangThai, FileDinhKem=@FileDinhKem, GhiChu=@GhiChu, UpdatedAt=SYSDATETIME()${ganHDThem(coV882)}${ganNDCV(coNDCV)}${ganHDV890(ghiV890)}
       WHERE HopDongID=@id`);
-    res.json({ success: true });
+    if (ghiV890) await luuSanPhamHopDong(pool, parseInt(req.params.id, 10), req.body.sanPham);
+    res.json({ success: true,
+      canhBao: guiV890 && !coV890 ? 'Máy chủ CHƯA chạy migration_v890.sql — hợp đồng đã lưu nhưng THÔNG SỐ TÍNH LƯƠNG CÔNG NHẬT (kiểu lương, đơn giá, BH, thưởng, sản phẩm) KHÔNG được lưu.' : null });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 

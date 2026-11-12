@@ -69,8 +69,11 @@ kiem(/apiPut\(`\/api\/qlsx\/orders\/\$\{maDH\}\/sodo\/\$\{row\.ID\}`/.test(sFeQl
 /* ================================ (B) CONG NO GIA CONG ================================ */
 console.log('\n=== B1. MOT ban cong thuc luong (khong hai ban) ===');
 // v9.02: util export them APPLY_NGAY_QC + bieuThucNgayKy (khoi QC dung chung) — van la MOT ban cong thuc.
-kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha(, APPLY_NGAY_QC, bieuThucNgayKy)? \}/.test(sUtil),
-  'utils/luongGiaCongInThe.js export 3 ham tinh tien (+ 2 khoi SQL dung chung tu v9.02)');
+// v9.18: + OUTER_APPLY_NGAY_QC (hien thi NgayQC cho quy cat, khong gate). Phep kiem doi thanh
+// "3 ham tinh tien PHAI dung dau danh sach export" — khong ghim cung phan duoi de moi lan them
+// mot khoi SQL dung chung lai vo oan (dung vet xe ghim ?v=8.97).
+kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha(,[^}]*)? \}/.test(sUtil),
+  'utils/luongGiaCongInThe.js export 3 ham tinh tien (+ cac khoi SQL dung chung)');
 kiem(/require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sPayroll), 'payroll.js NHAP tu util');
 kiem(/require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sCongNo), 'congno.js NHAP tu util');
 /* Cau SQL tinh tien chi duoc xuat hien o DUNG MOT file. */

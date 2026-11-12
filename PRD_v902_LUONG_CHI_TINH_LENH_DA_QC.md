@@ -29,7 +29,7 @@ Lương **công nhật** tính theo chấm công, không theo lệnh — ngoài 
 | 2 | Gia công / In thêu | `utils/luongGiaCongInThe.js` | lọc tháng QC khi có kỳ | giữ tháng QC (dòng giao/nhận **không có ngày nhận riêng** nên không có "ngày ghi" để so) |
 | 2b | **Sổ công nợ nhà gia công** | `congno.js` ← cùng util | ❌ **cộng cả lệnh chưa QC** | loại lệnh chưa QC (số giảm) |
 | 3 | **Là / Đóng gói** | `payroll.js loadLuongLaDongGoi` | ❌ lọc trần theo tháng ghi, không nhìn QC | gắn QC + kỳ "tháng muộn hơn" |
-| 4 | **Trải vải cắt** (quỹ) | `payroll.js loadSoDoCat` | ❌ lọc trần theo tháng ghi sổ cắt | gắn QC + kỳ "tháng muộn hơn" |
+| 4 | **Trải vải cắt** (quỹ) | `payroll.js loadSoDoCat` | ❌ lọc trần theo tháng ghi sổ cắt | gắn QC + kỳ "tháng muộn hơn" — **⛔ HẾT HIỆU LỰC từ v9.18 (2026-11-04): quỹ cắt quay về tháng ghi sổ cắt, không chờ QC; xem PRD_v918** |
 
 Đã grep toàn backend: không có đường tính lương nào khác từ `PhanCongMay` / `PhanCongLaDongGoi` / `TienDoCatChiTietCay`. Giá thành (`qlsx.js`) đọc các bảng này nhưng là **chi phí theo lệnh**, không phải kỳ lương — đúng, không đụng.
 

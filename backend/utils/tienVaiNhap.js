@@ -126,6 +126,107 @@ async function bieuThucTienTraVai(pool, biDanhCT, biDanhCay) {
   return `(ISNULL(${ct}.KGXuat, 0) * ${gia})`;
 }
 
+/* ================================================================================================
+   v9.36 — PHÍ VẬN CHUYỂN VẢI: VÀO GIÁ THÀNH, TUYỆT ĐỐI KHÔNG VÀO CÔNG NỢ NCC
+
+   Nguyen 2026-11-09: *"vải nhập về chưa có giá vận chuyển. mỗi NCC giá vận chuyển khác nhau. làm thế
+   nào để đưa vào giá thành từng cây vải mà không ảnh hưởng đến công nợ NCC"*.
+
+   🔴 ĐÂY LÀ LÝ DO CẢ KHỐI NÀY TỒN TẠI RIÊNG, ĐỌC KỸ TRƯỚC KHI SỬA:
+   `congNoNCC()` (routes/congno.js) và `tinhGiaThanh()` (routes/qlsx.js) CÙNG đọc `VaiCay.DonGiaNhap`.
+   Cộng phí vận chuyển vào cột đó thì công nợ phải trả NCC PHÌNH THEO ĐÚNG SỐ PHÍ — tức là hệ thống
+   bảo ta nợ nhà cung cấp cả tiền cước đã trả cho nhà xe. Nên phí phải nằm ở CỘT RIÊNG
+   (`VaiCay.PhiVanChuyenDonGia`), và:
+
+     · `bieuThucTienCay()`      — công nợ NCC        ⇒ TUYỆT ĐỐI KHÔNG cộng phí
+     · `bieuThucTienTraVai()`   — trả vải về NCC     ⇒ TUYỆT ĐỐI KHÔNG cộng phí
+         (trả hàng giảm nợ theo GIÁ NCC; cước đã trả nhà xe không đòi lại được. Cộng vào là phiếu trả
+          giảm nợ NHIỀU HƠN thực tế.)
+     · `bieuThucDonGiaCoPhiVC()` — giá thành / giá vốn ⇒ CÓ cộng phí
+
+   Ai sau này thấy "hai biểu thức na ná nhau, gộp cho gọn" thì dừng lại: gộp là phá đúng yêu cầu mà
+   bản này sinh ra để đáp ứng. Bộ kiểm `kiem_phi_van_chuyen_vai.js` khoá việc đó bằng phép chạy thật.
+
+   ĐƠN VỊ: phí khai theo đ/kg hoặc đ/mét, và phải TRÙNG `DonViTinhGia` của phiếu — nhân đơn giá
+   theo mét với số kg là sai lặng lẽ. Chỗ áp phí (routes/khovai.js) chịu trách nhiệm kiểm trùng đơn
+   vị; các biểu thức dưới đây chỉ nhân, giả định cột đã mang đúng đơn vị của phiếu.
+   ================================================================================================ */
+/* ⚠️ CỐ Ý KHÔNG CACHE — cùng lý do đã ghi ở coCotDonGiaTra(): chạy migration mà quên restart thì
+   giá thành và màn nhập phiếu đọc hai trạng thái khác nhau. */
+async function coCotPhiVanChuyen(pool) {
+  try {
+    const r = (await pool.request().query(
+      `SELECT COL_LENGTH('VaiCay','PhiVanChuyenDonGia') AS a`)).recordset[0] || {};
+    return r.a != null;
+  } catch (e) { return false; }
+}
+
+/* 🔴 CỜ RIÊNG CHO BẢNG NhaCungCap — rà chéo bắt được. Hai cột nằm ở HAI BẢNG khác nhau, mà
+   migration có thể chạy dở (ALTER thứ nhất xong, ALTER thứ hai gãy). Nếu dùng chung một cờ: `VaiCay`
+   có cột mà `NhaCungCap` chưa ⇒ câu `SELECT PhiVanChuyenDonGia FROM NhaCungCap` ném "Invalid column
+   name" ⇒ rơi vào catch của route ⇒ **không lập được phiếu nhập kho vải nào cả**. */
+async function coCotPhiVCNhaCungCap(pool) {
+  try {
+    const r = (await pool.request().query(
+      `SELECT COL_LENGTH('NhaCungCap','PhiVanChuyenDonGia') AS a,
+              COL_LENGTH('NhaCungCap','PhiVanChuyenDVT') AS b`)).recordset[0] || {};
+    return r.a != null && r.b != null;
+  } catch (e) { return false; }
+}
+
+/* Chuẩn hóa ô phí người dùng gõ. Trả `undefined` = "KHÔNG khai tay" (chỗ gọi lùi về đơn giá NCC),
+   `null` = không có phí, số >= 0 = phí.
+   🔴 Số 0 PHẢI giữ nguyên là 0, không gộp vào "để trống": 0 nghĩa là chuyến đó không mất cước (khách
+   tự chở), khác hẳn "bỏ trống để lấy theo NCC". Số âm và chuỗi rác về null — phí âm làm GIẢM giá
+   thành, và `min="0"` trên form chỉ chặn được đường UI bình thường. */
+function chuanPhiVC(v) {
+  if (v === '' || v == null) return undefined;
+  const n = Number(v);
+  return isFinite(n) && n >= 0 ? n : null;
+}
+
+/* Phí vận chuyển của MỘT cây = số lượng tính tiền × đơn giá phí. Dùng được trong SUM(). */
+async function bieuThucPhiVCCay(pool, biDanhCay, biDanhPhieu) {
+  const b = biDanhCay || 'vc';
+  if (!(await coCotPhiVanChuyen(pool))) return '0';
+  const sl = await bieuThucSoLuongTinhTien(pool, b, biDanhPhieu);
+  return `((${sl}) * ISNULL(${b}.PhiVanChuyenDonGia, 0))`;
+}
+
+/* Đơn giá ĐÃ GỒM phí vận chuyển — CHỈ dùng cho giá thành / giá vốn / giá trị tồn kho.
+   KHÔNG được dùng cho công nợ NCC hay phiếu trả NCC. */
+async function bieuThucDonGiaCoPhiVC(pool, biDanhCay) {
+  const b = biDanhCay || 'vc';
+  return (await coCotPhiVanChuyen(pool))
+    ? `(ISNULL(${b}.DonGiaNhap, 0) + ISNULL(${b}.PhiVanChuyenDonGia, 0))`
+    : `ISNULL(${b}.DonGiaNhap, 0)`;
+}
+
+/* Bản JS: đơn giá đã gồm phí (cho tinhGiaThanh, vốn tính bằng JS trên dữ liệu đã SELECT về). */
+function donGiaCoPhiVC(row) {
+  return so(row && row.DonGiaNhap) + so(row && row.PhiVanChuyenDonGia);
+}
+function phiVCCay(row, donViTinhGia) {
+  return soLuongTinhTien(row, donViTinhGia) * so(row && row.PhiVanChuyenDonGia);
+}
+
+/* Đơn giá phí của NCC chỉ áp được khi ĐƠN VỊ KHỚP với phiếu. Lệch đơn vị mà cứ nhân là sai lặng lẽ
+   (2.000đ/kg nhân với số MÉT), nên trả 0 kèm lý do để chỗ gọi nói ra cho người dùng biết. */
+function phiVCTheoNCC(ncc, donViTinhGiaPhieu) {
+  const dg = so(ncc && ncc.PhiVanChuyenDonGia);
+  if (!(dg > 0)) return { donGia: 0, lyDo: 'NCC chưa khai đơn giá vận chuyển' };
+  const dvtNCC = chuanDonViTinhGia(ncc && ncc.PhiVanChuyenDVT);
+  const dvtPhieu = chuanDonViTinhGia(donViTinhGiaPhieu);
+  if (dvtNCC !== dvtPhieu) {
+    return {
+      donGia: 0,
+      lyDo: `NCC khai phí theo ${nhanDonVi(dvtNCC)} nhưng phiếu này tính giá theo `
+        + `${nhanDonVi(dvtPhieu)} — không tự áp được, nhập tay phí cho từng cây`
+    };
+  }
+  return { donGia: dg, lyDo: '' };
+}
+
 /* Nhãn đơn vị của số lượng dùng để tính tiền — cho các bảng chứng từ hiện "SL / ĐVT / Đơn giá". */
 async function bieuThucDonViSQL(pool, biDanhPhieu) {
   return (await coCotDonViTinhGia(pool)) && biDanhPhieu
@@ -170,6 +271,9 @@ function chuanDonViTinhGia(v) { return laTinhTheoMet(v) ? MET : KG; }
 module.exports = {
   bieuThucTienCay, bieuThucSoLuongTinhTien, bieuThucDonViSQL,
   bieuThucTienTraVai, coCotDonGiaTra, chuanDonGiaTra,   // v8.91
+  // v9.36 — phí vận chuyển: CHỈ cho giá thành/giá vốn, KHÔNG cho công nợ NCC (xem khối ghi chú)
+  coCotPhiVanChuyen, coCotPhiVCNhaCungCap, bieuThucPhiVCCay, bieuThucDonGiaCoPhiVC,
+  donGiaCoPhiVC, phiVCCay, phiVCTheoNCC, chuanPhiVC,
   coCotDonViTinhGia, chuanDonViTinhGia,
   tienCay, tongTien, laTienNghiNgo, laTinhTheoMet, soLuongTinhTien, nhanDonVi,
   MET, KG

@@ -73,6 +73,13 @@ function buildCrudRouter(config) {
   const layGiaTri = (c, body) => {
     const v = body[c.name];
     if ((c.trim || c.duyNhat) && typeof v === 'string') return chuanTen(v);
+    /* v9.36: cot khai `rongThanhNull` thi CHUOI RONG duoc coi la NULL.
+       🔴 Vi sao can: o <select> cua form danh muc, muc "— chua khai —" co value='' va bo dung o
+       chung CHI doi '' thanh null khi cot khai `type:'number'` (xem module.danhmuc.js). Cot chuoi co
+       rang buoc CHECK (vi du CK_NhaCungCap_PhiVCDVT chi nhan N'Kg'/N'Met'/NULL) se bi '' lam VI PHAM
+       rang buoc ⇒ nut Luu bao do ⇒ CHET CA MAN DANH MUC, ke ca khi nguoi dung chi sua so dien thoai.
+       Ra soat cheo bat duoc truoc khi deploy. */
+    if (c.rongThanhNull && typeof v === 'string' && v.trim() === '') return null;
     return v;
   };
   /* Kiem trung cho moi cot khai duyNhat. `boId` = ID dang sua (PUT) de khong tu bao trung voi chinh no. */

@@ -391,7 +391,8 @@ const BIEN_RIENG = {
     'SoNgayThuViec', 'ChucVu', 'NoiLamViec', 'QuanLyTrucTiep', 'LuongCoBan', 'LuongCoBanBangChu',
     'HeSoLuong', 'PhuCapAnCa', 'PhuCapTrangPhuc', 'PhuCapXangXe', 'PhuCapDienThoai',
     'PhuCapChuyenCan', 'PhuCapChucVu', 'QuyKPI', 'SoCongXangXe', 'SoCongAnTrua', 'TyLeThuViec',
-    'CauThoiHan'],
+    'CauThoiHan',
+    'NoiDungCongViec'],   // v9.35 — muc 1.5 nhap tay (dung chung ca HDLD_THUVIEC, xem dong duoi)
   QD_TANGLUONG: ['SoQuyetDinh', 'LoaiQuyetDinh', 'NgayKy', 'NgayHieuLuc', 'GiaTriCu', 'GiaTriMoi',
     'NoiDung', 'KhoiNoiDung', 'BoPhanChucVu'],
   PHULUC: ['SoPhuLuc', 'SoHopDong', 'NgayKy', 'NgayHieuLuc', 'LuongCoBanMoi',

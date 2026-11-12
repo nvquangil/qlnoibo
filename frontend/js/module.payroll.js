@@ -15,6 +15,7 @@ window.ModulePayroll = (function () {
     { key: 'cauhinh', label: 'Cấu hình lương' },
     { key: 'chamcong', label: 'Chấm công' },
     { key: 'luongcongnhat', label: 'Lương công nhật' },
+    { key: 'kpi', label: 'Đánh giá KPI' },   // v9.45: điểm KPI + sản phẩm theo tháng (ChucNang 'kpi', migration_v890)
     { key: 'luongmay', label: 'Lương khoán may' },
     { key: 'luonggcinthe', label: 'Lương GC / In thêu' },
     { key: 'luongladonggoi', label: 'Lương là / đóng gói' },
@@ -30,6 +31,7 @@ window.ModulePayroll = (function () {
     if (activeTab === 'cauhinh') return renderCauHinh();
     if (activeTab === 'chamcong') return renderChamCong();
     if (activeTab === 'luongcongnhat') return renderLuong();
+    if (activeTab === 'kpi') return renderKPI();   // v9.45
     if (activeTab === 'luongmay') return renderLuongMay();
     if (activeTab === 'luonggcinthe') return renderLuongGcInThe();
     if (activeTab === 'luongladonggoi') return renderLuongLaDongGoi();
@@ -105,9 +107,23 @@ window.ModulePayroll = (function () {
           ${f('BHXH NLĐ (%)', 'c_bhxhNld', c.BhxhNld)} ${f('BHYT NLĐ (%)', 'c_bhytNld', c.BhytNld)} ${f('BHTN NLĐ (%)', 'c_bhtnNld', c.BhtnNld)}
           ${f('BHXH DN (%)', 'c_bhxhDn', c.BhxhDn)} ${f('BHYT DN (%)', 'c_bhytDn', c.BhytDn)} ${f('BHTN DN (%)', 'c_bhtnDn', c.BhtnDn)}
           ${f('Giảm trừ bản thân (đ)', 'c_gtBanThan', c.GiamTruBanThan)} ${f('Giảm trừ / người phụ thuộc (đ)', 'c_gtNPT', c.GiamTruNPT)} ${f('Giờ chuẩn / ngày', 'c_gioChuan', c.GioChuanNgay)}
-          ${f('Hệ số TC ngày thường', 'c_hsThuong', c.HsTangCaThuong)} ${f('Hệ số TC chủ nhật', 'c_hsCN', c.HsTangCaChuNhat)} ${f('Hệ số TC lễ tết', 'c_hsLe', c.HsTangCaLeTet)}
+          ${/* v9.45 (Nguyen 11/11): OT lương công nhật dùng MỘT hệ số cho mọi giờ = ô "ngày thường". Hai ô
+               CN / lễ tết hiện KHÔNG được công thức nào đọc — nói rõ trên nhãn, kẻo sửa rồi tưởng OT đổi. */''}
+          ${f('Hệ số OT — dùng cho MỌI giờ tăng ca lương công nhật', 'c_hsThuong', c.HsTangCaThuong)} ${f('Hệ số TC chủ nhật (chưa dùng ở đâu)', 'c_hsCN', c.HsTangCaChuNhat)} ${f('Hệ số TC lễ tết (chưa dùng ở đâu)', 'c_hsLe', c.HsTangCaLeTet)}
           ${f('Phụ cấp ca đêm (+)', 'c_caDem', c.PcCaDem)} ${f('Tăng ca đêm (+)', 'c_tcDem', c.PcTangCaDem)} ${f('Ngày trả lương', 'c_ngayTra', c.NgayTraLuong)}
         </div>
+        ${/* v9.45: bốn tham số của bảng lương công nhật thực tế (migration_v890). Chưa chạy migration thì
+             c.TruThueTNCN === undefined -> ẩn cả khối, tránh gửi giá trị lên để rồi máy chủ bỏ qua im lặng. */''}
+        ${c.TruThueTNCN !== undefined ? `
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e0e0e0;font-weight:600;color:#1a73e8;">Lương công nhật (v9.45)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 16px;margin-top:6px;">
+          <div class="form-row" style="margin:0;"><label>Trừ thuế TNCN vào thực lĩnh</label>
+            <select id="c_truThue"><option value="0" ${c.TruThueTNCN ? '' : 'selected'}>Không — chỉ tính để xem (như bảng hiện tại)</option><option value="1" ${c.TruThueTNCN ? 'selected' : ''}>Có — trừ thẳng vào thực lĩnh</option></select></div>
+          ${f('Tỷ lệ lương thử việc (%)', 'c_tyLeTV', c.TyLeThuViec, 1)}
+          ${f('Làm tròn thực lĩnh (đ)', 'c_lamTron', c.LamTronThucLinh, 1)}
+          ${f('Đi muộn châm chước (phút)', 'c_chamChuoc', c.DiMuonChamChuocPhut, 1)}
+        </div>
+        <p style="color:#5f6368;font-size:12px;margin:6px 0 0;">Thử việc: lương ngày × tỷ lệ này (bảng thực tế 85%) cho các ngày trước <i>Ngày hết thử việc</i> ở hợp đồng. Đi muộn = giờ vào máy chấm công trễ hơn giờ vào của nhóm quá số phút châm chước — một ngày là mất chuyên cần.</p>` : ''}
         ${perm.canEdit ? `<div style="margin-top:10px;"><button class="btn" id="btnSaveCfg">💾 Lưu cấu hình</button></div>` : ''}
       </fieldset>
       <fieldset style="border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;margin-bottom:12px;"><legend style="font-weight:600;color:#1a73e8;">Biểu thuế TNCN (5 bậc)</legend>
@@ -162,7 +178,12 @@ window.ModulePayroll = (function () {
       await apiPut('/api/payroll/config', {
         bhxhNld: g('c_bhxhNld'), bhytNld: g('c_bhytNld'), bhtnNld: g('c_bhtnNld'), bhxhDn: g('c_bhxhDn'), bhytDn: g('c_bhytDn'), bhtnDn: g('c_bhtnDn'),
         giamTruBanThan: g('c_gtBanThan'), giamTruNPT: g('c_gtNPT'), gioChuanNgay: g('c_gioChuan'),
-        hsTangCaThuong: g('c_hsThuong'), hsTangCaChuNhat: g('c_hsCN'), hsTangCaLeTet: g('c_hsLe'), pcCaDem: g('c_caDem'), pcTangCaDem: g('c_tcDem'), ngayTraLuong: g('c_ngayTra')
+        hsTangCaThuong: g('c_hsThuong'), hsTangCaChuNhat: g('c_hsCN'), hsTangCaLeTet: g('c_hsLe'), pcCaDem: g('c_caDem'), pcTangCaDem: g('c_tcDem'), ngayTraLuong: g('c_ngayTra'),
+        // v9.45: chỉ gửi khi khối có trên màn (đã chạy migration_v890)
+        ...(container.querySelector('#c_truThue') ? {
+          truThueTNCN: container.querySelector('#c_truThue').value === '1',
+          tyLeThuViec: g('c_tyLeTV'), lamTronThucLinh: g('c_lamTron'), diMuonChamChuocPhut: g('c_chamChuoc')
+        } : {})
       });
       toast('Đã lưu cấu hình.', 'success');
     } catch (e) { toast(e.message, 'error'); }
@@ -321,10 +342,25 @@ window.ModulePayroll = (function () {
   async function openDeviceUsers(mayId) {
     toast('Đang lấy danh sách...', 'info');
     let nvList = [], rawList = [], devUsers = [];
-    try { nvList = (await apiGet('/api/danhmuc/nhanvien')).data || []; } catch (e) { toast(e.message, 'error'); return; }
+    /* 🔴 v9.11: NÓI RÕ đang hỏng ở ĐÂU. Hàm này gọi 3 API khác nhau; trước đây câu báo lỗi không
+       kèm tên việc nên "tải nhân viên từ máy báo không có quyền" bị hiểu nhầm là máy chấm công
+       chặn, trong khi thủ phạm là DANH MỤC NHÂN SỰ. Đoán nhầm mất nguyên một vòng sửa. */
+    /* 🔴 v9.11: ĐỔI từ `/api/danhmuc/nhanvien` sang `/api/payroll/nhanvien`.
+       Đường cũ thuộc phân hệ DANH MỤC, nên người làm chấm công phải được cấp cả Danh mục mới bấm
+       được nút này — sai nghiệp vụ, và đúng là lỗi `huongns` gặp (có đủ Nhân sự + Tính lương nhưng
+       không có Danh mục). Đường mới gác bằng chính quyền của màn này. */
+    try { nvList = (await apiGet('/api/payroll/nhanvien')).data || []; }
+    catch (e) {
+      toast('Không đọc được DANH SÁCH NHÂN VIÊN: ' + e.message, 'error', 10000);
+      return;
+    }
     // v5.37.1: dựng danh sách từ MÃ ĐÃ KÉO VỀ (ChamCongRaw distinct) — không phụ thuộc getUsers (nhiều máy trả rỗng).
     try { rawList = (await apiGet('/api/payroll/maychamcong/' + mayId + '/machamcong-list')).data || []; } catch (e) { }
-    try { devUsers = (await apiPost('/api/payroll/maychamcong/' + mayId + '/nhanvien-tumay', {})).data || []; } catch (e) { /* máy có thể không hỗ trợ getUsers/chưa cài lib — vẫn dùng danh sách đã kéo */ }
+    /* 🔴 v9.11: KHÔNG nuốt im lặng nữa. Máy không hỗ trợ getUsers là chuyện bình thường nên vẫn đi
+       tiếp bằng danh sách đã kéo về — NHƯNG phải nói ra. Bản cũ nuốt MỌI lỗi ở đây, kể cả 403 thiếu
+       quyền và lỗi mạng tới máy chấm công, nên không ai từng nhìn thấy câu từ chối của backend. */
+    try { devUsers = (await apiPost('/api/payroll/maychamcong/' + mayId + '/nhanvien-tumay', {})).data || []; }
+    catch (e) { toast('Không lấy được danh sách TỪ MÁY CHẤM CÔNG: ' + e.message + ' — vẫn dùng mã đã kéo về.', 'error', 9000); }
     const merged = {};
     rawList.forEach(r => { const k = String(r.MaChamMay); merged[k] = { enrollId: k, ten: r.HoTen || '', soLan: r.SoLan || 0, nvId: r.NhanVienID || null }; });
     devUsers.forEach(u => { const k = String(u.enrollId); if (!merged[k]) merged[k] = { enrollId: k, ten: u.ten || '', soLan: 0, nvId: null }; else if (!merged[k].ten) merged[k].ten = u.ten || ''; });
@@ -780,36 +816,111 @@ window.ModulePayroll = (function () {
                     <button class="btn small secondary" id="btnCK">🏦 Xuất file CK</button>` : ''}
       ${(d.rows || []).length ? '<button class="btn small secondary" id="btnInCN">🖨️ In bảng lương</button>' : ''}
       ${d.header ? `<span style="margin-left:8px;color:${daChot ? '#137333' : '#b06000'};font-weight:600;">${daChot ? '● Đã chốt' : '● Nháp'}</span>` : ''}`;
+    /* v9.45: cột theo BẢNG THỰC TẾ T10/2026 (sheet 2) — kiểu lương, công TV/CT, phép, OT, KPI, xăng,
+       chức vụ, chuyên cần, BH, thuế (hiện luôn, cột "trừ" nói có vào thực lĩnh không), tạm ứng, điều
+       chỉnh có lý do. Dòng chưa có cột v890 (bảng tính trước migration) thì các ô mới trống. */
+    const tongTU = (d.rows || []).reduce((s, r) => s + num(r.TamUng), 0);
+    const tongDC = (d.rows || []).reduce((s, r) => s + num(r.DieuChinh), 0);
+    const coV890 = (d.rows || []).some(r => r.KieuLuong != null);
     container.innerHTML = periodBar(null, actions) + `
-      <div style="overflow:auto;"><table style="font-size:13px;min-width:1100px;"><thead><tr><th style="width:38px;">STT</th>
-        <th>Mã NV</th><th>Họ tên</th><th>Công</th><th>Lương CB</th><th>Lương ngày công</th><th>TN chịu thuế</th><th>Tổng BH</th><th>Giảm trừ</th><th>Thuế TNCN</th><th>Tạm ứng</th><th>Thực lĩnh</th>
+      <div style="overflow:auto;"><table style="font-size:12px;min-width:1700px;"><thead><tr><th style="width:38px;">STT</th>
+        <th>Mã NV</th><th>Họ tên</th><th>Kiểu</th><th title="Công thử việc (× tỷ lệ thử việc)">Công TV</th><th title="Công chính thức (gồm lễ hưởng lương)">Công CT</th><th>Phép</th><th title="Số ngày đi muộn — một ngày là mất chuyên cần">Muộn</th>
+        <th title="Lương tháng (kiểu Tháng) hoặc đơn giá ngày (kiểu Ngày)">Lương CB / ĐG ngày</th><th>Lương</th><th>Giờ OT</th><th>Tiền OT</th>
+        <th>Thưởng KPI/SP</th><th>Xăng xe</th><th>Chức vụ</th><th>Chuyên cần</th><th title="10,5% × mức đóng BH khai ở hợp đồng">BH</th>
+        <th title="Thuế TNCN TÍNH ra. Có trừ vào thực lĩnh hay không là công tắc ở Cấu hình lương.">Thuế TNCN</th><th>Tạm ứng</th><th>Điều chỉnh</th><th>Thực lĩnh</th>
       </tr></thead><tbody>${(d.rows || []).map((r, __i) => `<tr class="cn-nv" data-id="${r.ID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td>
-        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
-        <td style="text-align:right;">${num(r.Cong)}</td><td style="text-align:right;">${money(r.LuongCoBan)}</td>
-        <td style="text-align:right;">${money(r.LuongNgayCong)}</td><td style="text-align:right;">${money(r.TnChiuThue)}</td>
-        <td style="text-align:right;">${money(r.TongBH)}</td><td style="text-align:right;">${money(num(r.GiamTruBanThan) + num(r.GiamTruNPT))}</td>
-        <td style="text-align:right;">${money(r.ThueTNCN)}</td>
-        <td style="text-align:right;">${perm.canEdit && !daChot ? `<input type="number" class="tu-inp" data-id="${r.ID}" value="${num(r.TamUng)}" style="width:100px;text-align:right;">` : money(r.TamUng)}</td>
-        <td style="text-align:right;font-weight:600;">${money(r.ThucLinh)}</td>
-      </tr>`).join('') || `<tr><td colspan="11" class="empty-hint">Chưa có bảng lương. Bấm "Tính lương" để tạo.</td></tr>`}</tbody>
-      ${(d.rows || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="10" style="text-align:right;">TỔNG THỰC LĨNH</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}
+        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}${r.KieuThuong ? ` <span style="font-size:10px;color:#5f6368;">(${r.KieuThuong === 'KPI' ? 'KPI' : 'SP'})</span>` : ''}</td>
+        <td style="text-align:center;">${r.KieuLuong === 'Ngay' ? 'Ngày' : (r.KieuLuong ? 'Tháng' : '')}</td>
+        <td style="text-align:right;">${r.CongThuViec != null ? num(r.CongThuViec) : ''}</td>
+        <td style="text-align:right;">${r.CongChinhThuc != null ? num(r.CongChinhThuc) : num(r.Cong)}</td>
+        <td style="text-align:right;${num(r.SoPhep) > 0 ? 'color:#b06000;' : ''}">${r.SoPhep != null ? num(r.SoPhep) : ''}</td>
+        <td style="text-align:right;${num(r.SoNgayMuon) > 0 ? 'color:#c0392b;' : ''}">${r.SoNgayMuon != null ? num(r.SoNgayMuon) : ''}</td>
+        <td style="text-align:right;">${r.KieuLuong === 'Ngay' ? money(r.DonGiaNgay) : money(r.LuongCoBan)}</td>
+        <td style="text-align:right;">${money(r.LuongNgayCong)}</td>
+        <td style="text-align:right;">${r.GioOT != null ? num(r.GioOT) : ''}</td><td style="text-align:right;">${money(r.TangCa)}</td>
+        <td style="text-align:right;" title="${r.DiemKPI != null ? 'Điểm KPI ' + num(r.DiemKPI) + '/100' : ''}">${money(r.Thuong)}${r.KieuThuong === 'KPI' && r.DiemKPI == null && num(r.Thuong) === 0 ? ' <span title="Chưa chấm KPI tháng này" style="color:#c0392b;">⚠️</span>' : ''}</td>
+        <td style="text-align:right;">${money(r.PcXangXe)}</td><td style="text-align:right;">${money(r.PcChucVu)}</td><td style="text-align:right;">${money(r.ChuyenCan)}</td>
+        <td style="text-align:right;">${money(r.TongBH)}</td>
+        <td style="text-align:right;color:${r.ThueDaTru ? 'inherit' : '#8a8a8a'};" title="${r.ThueDaTru ? 'ĐÃ trừ vào thực lĩnh' : 'CHƯA trừ vào thực lĩnh (công tắc đang tắt)'}">${money(r.ThueTNCN)}${r.ThueDaTru ? '' : ' <span style="font-size:10px;">(không trừ)</span>'}</td>
+        ${/* v9.32: tạm ứng = tổng phiếu chi loại "Tạm ứng" của tháng, KHÔNG gõ tay. Bấm số để xem từng phiếu. */''}
+        <td style="text-align:right;">${num(r.TamUng) > 0
+          ? `<a href="#" class="tu-xem" data-nv="${r.NhanVienID}" title="Xem các phiếu chi tạm ứng">${money(r.TamUng)}</a>`
+          : money(r.TamUng)}</td>
+        ${/* v9.45: điều chỉnh ± có lý do — bấm để sửa (bảng chưa chốt). GIỮ qua lần tính lại. */''}
+        <td style="text-align:right;${num(r.DieuChinh) < 0 ? 'color:#c0392b;' : (num(r.DieuChinh) > 0 ? 'color:#137333;' : '')}" title="${escapeHtml(r.LyDoDieuChinh || '')}">
+          ${perm.canEdit && !daChot && coV890 ? `<a href="#" class="dc-sua" data-id="${r.ID}">${num(r.DieuChinh) ? money(r.DieuChinh) : '±'}</a>` : (num(r.DieuChinh) ? money(r.DieuChinh) : '')}</td>
+        ${/* v9.32: thực lĩnh ÂM (ứng nhiều hơn lương) phải đỏ và nói lý do — bị loại khỏi file CK. */''}
+        <td style="text-align:right;font-weight:600;${num(r.ThucLinh) < 0 ? 'color:#c0392b;' : ''}"
+            ${num(r.ThucLinh) < 0 ? 'title="Tạm ứng nhiều hơn lương — dòng này KHÔNG vào file chuyển khoản"' : ''}>${money(r.ThucLinh)}${num(r.ThucLinh) < 0 ? ' ⚠️' : ''}</td>
+      </tr>`).join('') || `<tr><td colspan="21" class="empty-hint">Chưa có bảng lương. Bấm "Tính lương" để tạo.</td></tr>`}</tbody>
+      ${(d.rows || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="17" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongTU)}</td><td style="text-align:right;">${tongDC ? money(tongDC) : ''}</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}
       </table></div>
-      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lương công nhật lấy Lương CB + phụ cấp từ hợp đồng đang hiệu lực của nhân viên, và tổng công từ Chấm công tháng. Thưởng doanh thu chưa gộp (nhập ở phiên bản sau).</p>`;
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">
+        <b>Nguồn số:</b> thông số lương lấy từ <b>hợp đồng đang hiệu lực</b> (Nhân sự → Hợp đồng: kiểu lương Ngày/Tháng, đơn giá ngày hoặc lương CB, mức đóng BH, quỹ KPI, chức vụ, chuyên cần, xăng xe, ngày hết thử việc) — <b>người chưa có hợp đồng thì KHÔNG có trong bảng</b> (danh sách hiện lên sau khi Tính lương).
+        Công, phép, đi muộn, giờ OT lấy từ <b>Chấm công</b>. Điểm KPI / số sản phẩm lấy từ tab <b>Đánh giá KPI</b>.
+        <br><b>OT</b> = lương cơ bản ÷ số giờ một ngày × hệ số (cấu hình, mặc định 1,5) × giờ OT — một công thức cho mọi người. <b>Chuyên cần</b> mất khi có phép, thiếu công chuẩn, hoặc đi muộn dù một ngày. <b>Xăng</b> = đơn giá/ngày × ngày đi làm (không tính phép).
+        <br><b>Tạm ứng</b> lấy tự động từ <b>Công nợ → Phiếu chi</b> loại Tạm ứng — bấm con số để xem từng phiếu. <b>Điều chỉnh</b> ± bắt buộc ghi lý do, được giữ nguyên khi tính lại. Thực lĩnh làm tròn theo cấu hình (mặc định nghìn đồng).
+      </p>`;
     wirePeriod(container, renderLuong);
     themOTimTuDong(container);   // v9.05: ô tìm Mã NV / Họ tên trên bảng lương công nhật
     const bTinh = container.querySelector('#btnTinh'); if (bTinh) bTinh.addEventListener('click', tinhLuong);
     const bChot = container.querySelector('#btnChot'); if (bChot) bChot.addEventListener('click', () => chotLuong(d.header.BangLuongID));
     const bEx = container.querySelector('#btnExcel'); if (bEx) bEx.addEventListener('click', () => downloadFile(`/api/payroll/bangluong/excel?nam=${selNam}&thang=${selThang}`, `BangLuong_T${selThang}_${selNam}.xlsx`));
     const bCK = container.querySelector('#btnCK'); if (bCK) bCK.addEventListener('click', () => downloadFile(`/api/payroll/bangluong/ck?nam=${selNam}&thang=${selThang}`, `CK_Luong_T${selThang}_${selNam}.xlsx`));
-    container.querySelectorAll('.tu-inp').forEach(inp => inp.addEventListener('change', async () => {
-      try { await apiPut('/api/payroll/bangluong/chitiet/' + inp.dataset.id, { tamUng: inp.value }); toast('Đã cập nhật tạm ứng.', 'success'); renderLuong(); }
-      catch (e) { toast(e.message, 'error'); }
+    /* v9.32: bấm vào số tạm ứng -> xem ĐÚNG những phiếu chi tạo nên con số đó. "Tự tính" mà không
+       soi được từng phiếu thì với kế toán nó là hộp đen, và nhân viên hỏi "sao trừ tôi ngần này"
+       thì không ai trả lời được. */
+    container.querySelectorAll('.tu-xem').forEach(a => a.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const nvId = a.dataset.nv;
+      const r = (d.rows || []).find(x => String(x.NhanVienID) === String(nvId)) || {};
+      let kq;
+      try { kq = (await apiGet(`/api/payroll/bangluong/tamung/${nvId}?nam=${selNam}&thang=${selThang}`)).data; }
+      catch (err) { toast(err.message, 'error'); return; }
+      const m = openModal(`<h3>Tạm ứng tháng ${selThang}/${selNam} — ${escapeHtml(r.HoTen || '')}</h3>
+        <table><thead><tr><th style="width:38px;">STT</th><th>Số phiếu</th><th>Ngày chi</th><th>Hình thức</th><th>Diễn giải</th><th style="text-align:right;">Số tiền</th></tr></thead>
+        <tbody>${(kq.rows || []).map((x, i) => `<tr><td style="text-align:center;">${i + 1}</td>
+          <td>${escapeHtml(x.SoPhieu || '')}</td><td>${fmtDate(x.NgayChi)}</td>
+          <td>${escapeHtml(x.HinhThuc || '')}</td><td>${escapeHtml(x.DienGiai || '')}</td>
+          <td style="text-align:right;">${money(x.SoTien)}</td></tr>`).join('')
+          || '<tr><td colspan="6" class="empty-hint">Không có phiếu chi tạm ứng nào.</td></tr>'}</tbody>
+        <tfoot><tr style="font-weight:700;"><td colspan="5" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(kq.tong)}</td></tr></tfoot></table>
+        <div class="empty-hint" style="text-align:left;margin-top:6px;">Sửa số ở <b>Công nợ → Phiếu chi</b> rồi bấm <b>Tính lương</b> lại.</div>
+        <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Đóng</button></div>`);
+      m.querySelector('#btnCancel').addEventListener('click', closeModal);
+    }));
+    /* v9.45: sửa ĐIỀU CHỈNH ± của một dòng — bắt buộc lý do khi khác 0 (máy chủ cũng chặn). Không
+       gọi lại bộ tính: máy chủ dịch thực lĩnh đúng phần chênh từ các cột đã lưu. */
+    container.querySelectorAll('.dc-sua').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const r = (d.rows || []).find(x => String(x.ID) === String(a.dataset.id)) || {};
+      const m = openModal(`<h3>Điều chỉnh lương — ${escapeHtml(r.HoTen || '')}</h3>
+        <div class="form-grid">
+          <div class="form-group"><label>Số tiền (+ cộng thêm / − trừ bớt)</label>
+            <input type="number" id="dcTien" step="1000" value="${num(r.DieuChinh) || ''}" placeholder="VD: -200000"></div>
+          <div class="form-group" style="grid-column:1/-1;"><label>Lý do <span style="color:#c0392b;">*</span></label>
+            <input type="text" id="dcLyDo" maxlength="255" value="${escapeHtml(r.LyDoDieuChinh || '')}" placeholder="VD: Nghỉ nhiều không xin phép"></div>
+        </div>
+        <div class="empty-hint" style="text-align:left;">Thực lĩnh hiện tại: <b>${money(r.ThucLinh)}</b>. Khoản này được <b>giữ nguyên</b> khi bấm Tính lương lại. Đặt 0 để bỏ.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="dcHuy">Hủy</button>
+          <button type="button" class="btn" id="dcLuu">💾 Lưu</button>
+        </div>`);
+      m.querySelector('#dcHuy').addEventListener('click', closeModal);
+      m.querySelector('#dcLuu').addEventListener('click', async () => {
+        const dieuChinh = Math.round(Number(m.querySelector('#dcTien').value) || 0);
+        const lyDoDieuChinh = m.querySelector('#dcLyDo').value.trim();
+        if (dieuChinh !== 0 && !lyDoDieuChinh) { toast('Điều chỉnh khác 0 thì phải ghi lý do.', 'error'); return; }
+        try { await apiPut(`/api/payroll/bangluong/chitiet/${r.ID}`, { dieuChinh, lyDoDieuChinh }); closeModal(); toast('Đã lưu điều chỉnh.', 'success'); renderLuong(); }
+        catch (err) { toast(err.message, 'error'); }
+      });
     }));
     // v5.91 (rà soát): in cả bảng + bấm 1 dòng để xem/in PHIẾU LƯƠNG riêng của nhân viên đó.
     const bInCN = container.querySelector('#btnInCN');
     if (bInCN) bInCN.addEventListener('click', () => printHtml(`Bang luong cong nhat T${selThang}/${selNam}`, buildLuongCongNhatBangBody(d, tong)));
     container.querySelectorAll('.cn-nv').forEach(tr => tr.addEventListener('click', (e) => {
-      if (e.target && e.target.classList && e.target.classList.contains('tu-inp')) return;   // đang sửa tạm ứng thì không mở popup
+      // Bấm vào link tạm ứng / điều chỉnh thì link đã tự xử lý (stopPropagation) — còn lại mở phiếu lương.
+      if (e.target && e.target.closest && e.target.closest('a')) return;
       openLuongCongNhatNVDetail(tr.dataset.id, d);
     }));
   }
@@ -821,33 +932,60 @@ window.ModulePayroll = (function () {
      MỘT Ô TRỐNG cho thẳng cột STT rồi mới tới ô gộp "TỔNG". Cột STT tự động (common.js) chỉ nhận ra
      ô GỘP nếu nó nằm Ở VỊ TRÍ ĐẦU DÒNG — ô trống đứng trước làm nó "nhìn không ra", nên trước đây
      những dòng TỔNG này bị đánh số y như một dòng lương thật. Cùng lớp lỗi với Báo cáo kinh doanh. */
+  /* v9.45: bảng in theo cột của BẢNG THỰC TẾ + ba chữ ký (Người lập / Kế toán trưởng / Giám đốc) như
+     sheet 2 T10/2026. Thuế chỉ in khi có trừ (công tắc bật) — bảng thực tế không có cột thuế. */
   function buildLuongCongNhatBangBody(d, tong) {
-    return `<h2 style="text-align:center;">BẢNG LƯƠNG CÔNG NHẬT — Tháng ${selThang}/${selNam}</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;" border="1" cellpadding="4"><thead><tr><th style="width:38px;">STT</th>
-        <th>Mã NV</th><th>Họ tên</th><th>Công</th><th>Lương CB</th><th>Lương ngày công</th><th>TN chịu thuế</th><th>Tổng BH</th><th>Giảm trừ</th><th>Thuế TNCN</th><th>Tạm ứng</th><th>Thực lĩnh</th>
-      </tr></thead><tbody>${(d.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
-        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
-        <td style="text-align:right;">${num(r.Cong)}</td><td style="text-align:right;">${money(r.LuongCoBan)}</td>
-        <td style="text-align:right;">${money(r.LuongNgayCong)}</td><td style="text-align:right;">${money(r.TnChiuThue)}</td>
-        <td style="text-align:right;">${money(r.TongBH)}</td><td style="text-align:right;">${money(num(r.GiamTruBanThan) + num(r.GiamTruNPT))}</td>
-        <td style="text-align:right;">${money(r.ThueTNCN)}</td><td style="text-align:right;">${money(r.TamUng)}</td>
-        <td style="text-align:right;font-weight:600;">${money(r.ThucLinh)}</td></tr>`).join('') || '<tr><td colspan="11" style="text-align:center;">—</td></tr>'}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="10" style="text-align:right;">TỔNG THỰC LĨNH</td><td style="text-align:right;">${money(tong)}</td></tr>
-      </tbody></table>`;
+    const rows = d.rows || [];
+    const coThue = rows.some(r => r.ThueDaTru);
+    const sum = (k) => rows.reduce((s, r) => s + num(r[k]), 0);
+    const td = (v) => `<td style="text-align:right;">${v}</td>`;
+    const nCot = 17 + (coThue ? 1 : 0);
+    return `<h2 style="text-align:center;margin-bottom:2px;">BẢNG LƯƠNG CÔNG NHẬT — Tháng ${selThang}/${selNam}</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;" border="1" cellpadding="3"><thead><tr><th style="width:30px;">STT</th>
+        <th>Họ tên</th><th>Kiểu</th><th>Công TV</th><th>Công CT</th><th>Phép</th><th>Lương CB / ĐG</th><th>Lương</th><th>Giờ OT</th><th>Tiền OT</th>
+        <th>Thưởng</th><th>Xăng xe</th><th>Chức vụ</th><th>Chuyên cần</th><th>BH</th>${coThue ? '<th>Thuế TNCN</th>' : ''}<th>Tạm ứng</th><th>Điều chỉnh</th><th>Thực lĩnh</th>
+      </tr></thead><tbody>${rows.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
+        <td>${escapeHtml(r.HoTen)}</td><td style="text-align:center;">${r.KieuLuong === 'Ngay' ? 'Ngày' : (r.KieuLuong ? 'Tháng' : '')}</td>
+        ${td(r.CongThuViec != null ? num(r.CongThuViec) : '')}${td(r.CongChinhThuc != null ? num(r.CongChinhThuc) : num(r.Cong))}${td(r.SoPhep != null ? num(r.SoPhep) : '')}
+        ${td(r.KieuLuong === 'Ngay' ? money(r.DonGiaNgay) : money(r.LuongCoBan))}${td(money(r.LuongNgayCong))}
+        ${td(r.GioOT != null ? num(r.GioOT) : '')}${td(money(r.TangCa))}${td(money(r.Thuong))}${td(money(r.PcXangXe))}${td(money(r.PcChucVu))}${td(money(r.ChuyenCan))}
+        ${td(money(r.TongBH))}${coThue ? td(money(r.ThueDaTru ? r.ThueTNCN : 0)) : ''}${td(money(r.TamUng))}
+        <td style="text-align:right;" title="${escapeHtml(r.LyDoDieuChinh || '')}">${num(r.DieuChinh) ? money(r.DieuChinh) : ''}</td>
+        <td style="text-align:right;font-weight:600;">${money(r.ThucLinh)}</td></tr>`).join('') || `<tr><td colspan="${nCot + 1}" style="text-align:center;">—</td></tr>`}
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG</td>
+          ${td(money(sum('LuongNgayCong')))}<td></td>${td(money(sum('TangCa')))}${td(money(sum('Thuong')))}${td(money(sum('PcXangXe')))}${td(money(sum('PcChucVu')))}${td(money(sum('ChuyenCan')))}
+          ${td(money(sum('TongBH')))}${coThue ? td(money(rows.reduce((s, r) => s + (r.ThueDaTru ? num(r.ThueTNCN) : 0), 0))) : ''}${td(money(sum('TamUng')))}${td(money(sum('DieuChinh')))}${td(money(tong))}</tr>
+      </tbody></table>
+      ${rows.some(r => r.LyDoDieuChinh) ? `<p style="font-size:11px;margin:6px 0 0;"><b>Điều chỉnh:</b> ${rows.filter(r => r.LyDoDieuChinh).map(r => `${escapeHtml(r.HoTen)}: ${money(r.DieuChinh)} (${escapeHtml(r.LyDoDieuChinh)})`).join('; ')}</p>` : ''}
+      <table style="width:100%;margin-top:28px;font-size:12px;text-align:center;border:0;"><tr>
+        <td style="width:33%;"><b>NGƯỜI LẬP</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td>
+        <td style="width:33%;"><b>KẾ TOÁN TRƯỞNG</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td>
+        <td style="width:33%;"><b>GIÁM ĐỐC</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td>
+      </tr></table>`;
   }
   function buildLuongCongNhatNVBody(r) {
-    const dong = (nhan, gt) => `<tr><td style="width:52%;background:#f5f6f8;"><b>${nhan}</b></td><td style="text-align:right;">${gt}</td></tr>`;
+    const dong = (nhan, gt, an) => an ? '' : `<tr><td style="width:52%;background:#f5f6f8;"><b>${nhan}</b></td><td style="text-align:right;">${gt}</td></tr>`;
+    const coV890 = r.KieuLuong != null;
     return `<h2 style="text-align:center;">PHIẾU LƯƠNG CÔNG NHẬT — Tháng ${selThang}/${selNam}</h2>
-      <p><b>Nhân viên:</b> ${escapeHtml(r.HoTen || '')} (${escapeHtml(r.MaNhanVien || '')})</p>
+      <p><b>Nhân viên:</b> ${escapeHtml(r.HoTen || '')} (${escapeHtml(r.MaNhanVien || '')})${coV890 ? ` — lương theo <b>${r.KieuLuong === 'Ngay' ? 'ngày' : 'tháng'}</b>` : ''}</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6">
-        ${dong('Số công trong tháng', num(r.Cong))}
-        ${dong('Lương cơ bản', money(r.LuongCoBan))}
+        ${coV890
+          ? dong('Công thử việc', num(r.CongThuViec), !num(r.CongThuViec)) + dong('Công chính thức (gồm lễ hưởng lương)', num(r.CongChinhThuc))
+            + dong('Ngày phép (không lương)', num(r.SoPhep), !num(r.SoPhep)) + dong('Ngày đi muộn', num(r.SoNgayMuon), !num(r.SoNgayMuon))
+          : dong('Số công trong tháng', num(r.Cong))}
+        ${r.KieuLuong === 'Ngay' ? dong('Đơn giá ngày', money(r.DonGiaNgay)) : dong('Lương cơ bản', money(r.LuongCoBan))}
         ${dong('Lương theo ngày công', money(r.LuongNgayCong))}
-        ${dong('Thu nhập chịu thuế', money(r.TnChiuThue))}
-        ${dong('Tổng bảo hiểm (trừ vào lương)', money(r.TongBH))}
-        ${dong('Giảm trừ bản thân + người phụ thuộc', money(num(r.GiamTruBanThan) + num(r.GiamTruNPT)))}
-        ${dong('Thuế TNCN', money(r.ThueTNCN))}
-        ${dong('Tạm ứng', money(r.TamUng))}
+        ${dong(`Tăng ca (${num(r.GioOT)} giờ × ${money(r.DonGiaGioOT)})`, money(r.TangCa), !num(r.TangCa))}
+        ${dong(r.KieuThuong === 'SanPham' ? 'Thưởng theo sản phẩm' : `Thưởng KPI${r.DiemKPI != null ? ` (${num(r.DiemKPI)}/100 điểm)` : ''}`, money(r.Thuong), !num(r.Thuong))}
+        ${dong('Phụ cấp ăn ca', money(r.PcAnCa), !num(r.PcAnCa))}
+        ${dong('Phụ cấp xăng xe', money(r.PcXangXe), !num(r.PcXangXe))}
+        ${dong('Phụ cấp điện thoại', money(r.PcDienThoai), !num(r.PcDienThoai))}
+        ${dong('Phụ cấp chức vụ', money(r.PcChucVu), !num(r.PcChucVu))}
+        ${dong('Chuyên cần', money(r.ChuyenCan), !num(r.ChuyenCan))}
+        ${dong('Bảo hiểm (trừ vào lương)', money(r.TongBH), !num(r.TongBH))}
+        ${dong('Thuế TNCN' + (r.ThueDaTru ? '' : ' (tính, chưa trừ)'), money(r.ThueTNCN), !num(r.ThueTNCN))}
+        ${dong('Tạm ứng', money(r.TamUng), !num(r.TamUng))}
+        ${dong(`Điều chỉnh${r.LyDoDieuChinh ? ` — ${escapeHtml(r.LyDoDieuChinh)}` : ''}`, money(r.DieuChinh), !num(r.DieuChinh))}
         <tr><td style="background:#f5f6f8;"><b>THỰC LĨNH</b></td><td style="text-align:right;font-weight:700;">${money(r.ThucLinh)}</td></tr>
       </table>`;
   }
@@ -864,14 +1002,140 @@ window.ModulePayroll = (function () {
     modal.querySelector('#btnInNVCN').addEventListener('click', () => printHtml(`Luong cong nhat - ${r.HoTen || ''} - T${selThang}/${selNam}`, buildLuongCongNhatNVBody(r)));
   }
   async function tinhLuong() {
-    if (!confirm(`Tính lương công nhật tháng ${selThang}/${selNam}? (Sẽ tính lại toàn bộ theo cấu hình + chấm công hiện tại.)`)) return;
-    try { const r = await apiPost('/api/payroll/bangluong/tinh', { nam: selNam, thang: selThang }); toast(`Đã tính lương cho ${r.data.soNhanVien} nhân viên.`, 'success'); renderLuong(); }
-    catch (e) { toast(e.message, 'error'); }
+    if (!confirm(`Tính lương công nhật tháng ${selThang}/${selNam}? (Sẽ tính lại toàn bộ theo hợp đồng + chấm công + KPI hiện tại. Điều chỉnh đã ghi được giữ nguyên.)`)) return;
+    let r;
+    try { r = (await apiPost('/api/payroll/bangluong/tinh', { nam: selNam, thang: selThang })).data || {}; }
+    catch (e) { toast(e.message, 'error'); return; }
+    /* v9.45: kết quả tính phải NÓI ai bị bỏ ra (chưa có hợp đồng) và tiền nào đang là 0 vì thiếu dữ
+       liệu — toast 3 giây không đủ, kế toán chốt bảng thiếu người mới biết. Có gì đáng nói thì mở hộp. */
+    const thieu = r.thieuHopDong || [], cb = r.canhBao || [];
+    if (!thieu.length && !cb.length) { toast(`Đã tính lương cho ${r.soNhanVien} nhân viên.`, 'success'); renderLuong(); return; }
+    renderLuong();
+    const m = openModal(`<h3>Đã tính lương cho ${r.soNhanVien} nhân viên — có ${thieu.length + cb.length} điều cần xem</h3>
+      ${thieu.length ? `<p style="margin:6px 0;"><b style="color:#c0392b;">${thieu.length} người KHÔNG có trong bảng</b> vì chưa có hợp đồng hiệu lực (Nhân sự → Hợp đồng lao động → Thêm, khai kiểu lương + đơn giá):</p>
+        <div style="max-height:160px;overflow:auto;border:1px solid #e0e0e0;padding:6px;font-size:13px;">${thieu.map(x => `${escapeHtml(x.MaNhanVien || '')} ${escapeHtml(x.HoTen || '')}`).join('<br>')}</div>` : ''}
+      ${cb.length ? `<p style="margin:10px 0 6px;"><b style="color:#b06000;">${cb.length} cảnh báo</b> (dòng vẫn có trong bảng nhưng số có thể thiếu):</p>
+        <div style="max-height:200px;overflow:auto;border:1px solid #e0e0e0;padding:6px;font-size:13px;">${cb.map(x => '• ' + escapeHtml(x)).join('<br>')}</div>` : ''}
+      <p class="empty-hint" style="text-align:left;margin-top:8px;">Thuế TNCN: ${r.truThue ? '<b>ĐANG trừ</b> vào thực lĩnh' : 'chỉ tính để xem, <b>KHÔNG trừ</b> (bật ở Cấu hình lương nếu muốn trừ)'}. Sửa xong bấm <b>Tính lương</b> lại.</p>
+      <div class="modal-actions"><button type="button" class="btn" id="btnCancel">Đã hiểu</button></div>`);
+    m.querySelector('#btnCancel').addEventListener('click', closeModal);
   }
   async function chotLuong(id) {
     if (!confirm('Chốt bảng lương? Sau khi chốt sẽ không tính lại/sửa tạm ứng được.')) return;
     try { await apiPut('/api/payroll/bangluong/' + id + '/chot', {}); toast('Đã chốt bảng lương.', 'success'); renderLuong(); }
     catch (e) { toast(e.message, 'error'); }
+  }
+
+  /* ================================================================
+     3b. ĐÁNH GIÁ KPI THÁNG + THƯỞNG THEO SẢN PHẨM (v9.45)
+     Nguyen 11/11: "thêm chức năng đánh giá KPI từng người", "theo sản phẩm: tên, đơn giá, số lượng =
+     thành tiền", "Ký hợp đồng có lựa chọn theo KPI hay theo SP", "người có thể nhiều SP, mỗi SP 1 đơn giá".
+     Chỉ hiện người mà HỢP ĐỒNG hiệu lực có khai Kiểu thưởng. Điểm 0–100; tiền KPI thật = quỹ KPI ×
+     điểm/100 × tổng công/công chuẩn (bộ tính), nên ở đây chỉ xem trước mức "đủ công". Ô "Tiền ghi đè"
+     để kế toán ấn định số (bảng thực tế có người được 450.000 không theo tỷ lệ nào).
+     ================================================================ */
+  async function renderKPI() {
+    container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+    let d;
+    try { d = (await apiGet(`/api/payroll/kpi?nam=${selNam}&thang=${selThang}`)).data; }
+    catch (e) { container.innerHTML = periodBar(null, '') + `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`; wirePeriod(container, renderKPI); return; }
+    const rows = d.rows || [];
+    const tongSP = (r) => (r.sanPhamThang || []).reduce((s, x) => s + num(x.ThanhTien), 0);
+    container.innerHTML = periodBar(null, `<span style="color:#5f6368;font-size:12px;">Chỉ hiện người có <b>Kiểu thưởng</b> ở hợp đồng hiệu lực.</span>`) + `
+      <div style="overflow:auto;"><table style="font-size:13px;min-width:900px;"><thead><tr><th style="width:38px;">STT</th>
+        <th>Mã NV</th><th>Họ tên</th><th>Kiểu thưởng</th><th>Quỹ KPI / Danh mục SP</th><th style="width:90px;">Điểm (0–100)</th><th style="width:120px;" title="Để trống = tính theo điểm. Điền = lấy đúng số này.">Tiền ghi đè</th><th>Nhận xét</th><th style="width:110px;">Tiền thưởng</th><th style="width:90px;"></th>
+      </tr></thead><tbody>${rows.map((r, i) => {
+        const laKPI = r.KieuThuong === 'KPI';
+        const duKien = laKPI ? (r.TienGhiDe != null ? num(r.TienGhiDe) : Math.round(num(r.QuyKPI) * num(r.DiemKPI) / 100)) : tongSP(r);
+        return `<tr data-nv="${r.NhanVienID}">
+          <td style="text-align:center;">${i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
+          <td style="text-align:center;">${laKPI ? 'KPI' : 'Sản phẩm'}</td>
+          <td>${laKPI ? money(r.QuyKPI) : (r.danhMucSanPham || []).map(x => `${escapeHtml(x.TenSanPham)} <span style="color:#5f6368;">(${money(x.DonGia)})</span>`).join(', ') || '<span style="color:#c0392b;">chưa khai SP ở hợp đồng</span>'}</td>
+          ${laKPI ? `
+          <td><input type="number" class="k-diem" min="0" max="100" step="1" value="${r.DiemKPI != null ? num(r.DiemKPI) : ''}" style="width:80px;" ${perm.canEdit ? '' : 'disabled'}></td>
+          <td><input type="number" class="k-ghide" step="1000" value="${r.TienGhiDe != null ? num(r.TienGhiDe) : ''}" style="width:110px;" ${perm.canEdit ? '' : 'disabled'}></td>
+          <td><input type="text" class="k-nx" maxlength="500" value="${escapeHtml(r.NhanXet || '')}" style="width:100%;min-width:160px;" ${perm.canEdit ? '' : 'disabled'}></td>
+          <td style="text-align:right;" class="k-tien" title="Mức khi đủ công chuẩn — bộ tính nhân thêm tổng công/công chuẩn">${r.DiemKPI == null && r.TienGhiDe == null ? '<span style="color:#c0392b;">chưa chấm</span>' : money(duKien)}${r.TienGhiDe == null && r.DiemKPI != null && num(r.DiemKPI) === 0 ? ' <span title="Điểm 0 ⇒ thưởng 0. Nếu từng điền Tiền ghi đè rồi xóa, điểm vẫn là 0 — chấm lại." style="color:#b06000;">(0 điểm)</span>' : ''}</td>
+          <td>${perm.canEdit ? `<button class="btn small k-luu" data-nv="${r.NhanVienID}">💾 Lưu</button>` : ''}</td>`
+          : `
+          <td colspan="3" style="color:#5f6368;">${(r.sanPhamThang || []).length ? (r.sanPhamThang || []).map(x => `${escapeHtml(x.TenSanPham)} × ${num(x.SoLuong)}`).join('; ') : 'chưa nhập sản phẩm tháng này'}</td>
+          <td style="text-align:right;">${money(duKien)}</td>
+          <td>${perm.canEdit ? `<button class="btn small secondary k-sp" data-nv="${r.NhanVienID}">📝 Sản phẩm</button>` : ''}</td>`}
+        </tr>`;
+      }).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có ai khai Kiểu thưởng (KPI / Sản phẩm) ở hợp đồng lao động hiệu lực.</td></tr>'}</tbody></table></div>
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Tiền KPI = quỹ KPI (hợp đồng) × điểm/100 × tổng công/công chuẩn. Điền <b>Tiền ghi đè</b> khi muốn ấn định số bất kể điểm. Lưu xong sang tab <b>Lương công nhật</b> bấm <b>Tính lương</b> lại thì mới vào bảng.</p>`;
+    wirePeriod(container, renderKPI);
+    themOTimTuDong(container);
+    container.querySelectorAll('.k-luu').forEach(b => b.addEventListener('click', async () => {
+      const tr = b.closest('tr');
+      const diemRaw = tr.querySelector('.k-diem').value, ghiDe = tr.querySelector('.k-ghide').value;
+      if (diemRaw === '' && ghiDe === '') { toast('Nhập điểm (0–100) hoặc tiền ghi đè.', 'error'); return; }
+      const diem = Math.max(0, Math.min(100, num(diemRaw)));
+      try {
+        await apiPut('/api/payroll/kpi/diem', { nam: selNam, thang: selThang, nhanVienId: b.dataset.nv, diemKPI: diem, tienGhiDe: ghiDe === '' ? null : num(ghiDe), nhanXet: tr.querySelector('.k-nx').value });
+        toast('Đã lưu điểm KPI.', 'success'); renderKPI();
+      } catch (e) { toast(e.message, 'error'); }
+    }));
+    container.querySelectorAll('.k-sp').forEach(b => b.addEventListener('click', () => {
+      const r = rows.find(x => String(x.NhanVienID) === String(b.dataset.nv));
+      if (r) openSanPhamThangModal(r);
+    }));
+  }
+  /* Bảng sản phẩm tháng của MỘT người: chọn tên từ danh mục hợp đồng (đơn giá tự điền) hoặc gõ tay
+     (đơn giá gõ tay). Lưu = ghi lại toàn bộ dòng (PUT /kpi/sanpham). */
+  function openSanPhamThangModal(r) {
+    const dm = r.danhMucSanPham || [];
+    const rowHtml = (x) => `<tr>
+      <td><input type="text" class="sp-ten" list="spDM_${r.NhanVienID}" value="${escapeHtml((x && x.TenSanPham) || '')}" placeholder="Tên sản phẩm" style="width:100%;min-width:160px;"></td>
+      <td><input type="number" class="sp-dg" step="1000" value="${x && x.DonGia != null ? num(x.DonGia) : ''}" style="width:110px;"></td>
+      <td><input type="number" class="sp-sl" step="1" value="${x && x.SoLuong != null ? num(x.SoLuong) : ''}" style="width:80px;"></td>
+      <td style="text-align:right;" class="sp-tt">${x ? money(num(x.DonGia) * num(x.SoLuong)) : '0'}</td>
+      <td><input type="text" class="sp-gc" maxlength="255" value="${escapeHtml((x && x.GhiChu) || '')}" style="width:100%;min-width:100px;"></td>
+      <td><button type="button" class="btn small secondary sp-xoa" title="Bỏ dòng">✕</button></td></tr>`;
+    const m = openModal(`<h3>Sản phẩm tháng ${selThang}/${selNam} — ${escapeHtml(r.HoTen || '')}</h3>
+      <datalist id="spDM_${r.NhanVienID}">${dm.map(x => `<option value="${escapeHtml(x.TenSanPham)}">`).join('')}</datalist>
+      <div style="max-height:50vh;overflow:auto;"><table style="font-size:13px;"><thead><tr><th>Tên sản phẩm</th><th>Đơn giá</th><th>Số lượng</th><th>Thành tiền</th><th>Ghi chú</th><th></th></tr></thead>
+        <tbody id="spBody">${(r.sanPhamThang || []).map(rowHtml).join('')}</tbody>
+        <tfoot><tr style="font-weight:700;"><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;" id="spTong">${money((r.sanPhamThang || []).reduce((s, x) => s + num(x.ThanhTien), 0))}</td><td colspan="2"></td></tr></tfoot></table></div>
+      <div style="margin-top:6px;"><button type="button" class="btn small secondary" id="spThem">＋ Thêm dòng</button>
+        <span style="color:#5f6368;font-size:12px;margin-left:8px;">${dm.length ? 'Chọn tên trong danh mục hợp đồng thì đơn giá tự điền; gõ tên khác thì tự nhập đơn giá.' : 'Hợp đồng chưa khai danh mục sản phẩm — nhập tay tên + đơn giá.'}</span></div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="spHuy">Hủy</button><button type="button" class="btn" id="spLuu">💾 Lưu</button></div>`);
+    const body = m.querySelector('#spBody');
+    const tinhLai = () => {
+      let tong = 0;
+      body.querySelectorAll('tr').forEach(tr => {
+        const tt = num(tr.querySelector('.sp-dg').value) * num(tr.querySelector('.sp-sl').value);
+        tr.querySelector('.sp-tt').textContent = money(tt); tong += tt;
+      });
+      m.querySelector('#spTong').textContent = money(tong);
+    };
+    const wireRow = (tr) => {
+      tr.querySelector('.sp-ten').addEventListener('change', (e) => {
+        const hit = dm.find(x => String(x.TenSanPham).trim().toLowerCase() === e.target.value.trim().toLowerCase());
+        if (hit) tr.querySelector('.sp-dg').value = num(hit.DonGia);
+        tinhLai();
+      });
+      tr.querySelector('.sp-dg').addEventListener('input', tinhLai);
+      tr.querySelector('.sp-sl').addEventListener('input', tinhLai);
+      tr.querySelector('.sp-xoa').addEventListener('click', () => { tr.remove(); tinhLai(); });
+    };
+    body.querySelectorAll('tr').forEach(wireRow);
+    m.querySelector('#spThem').addEventListener('click', () => {
+      body.insertAdjacentHTML('beforeend', rowHtml(null));
+      const tr = body.lastElementChild; wireRow(tr); tr.querySelector('.sp-ten').focus();
+    });
+    if (!body.children.length) m.querySelector('#spThem').click();
+    m.querySelector('#spHuy').addEventListener('click', closeModal);
+    m.querySelector('#spLuu').addEventListener('click', async () => {
+      const ds = [...body.querySelectorAll('tr')].map(tr => ({
+        tenSanPham: tr.querySelector('.sp-ten').value.trim(), donGia: num(tr.querySelector('.sp-dg').value),
+        soLuong: num(tr.querySelector('.sp-sl').value), ghiChu: tr.querySelector('.sp-gc').value.trim()
+      })).filter(x => x.tenSanPham && x.soLuong > 0);
+      try {
+        const kq = await apiPut('/api/payroll/kpi/sanpham', { nam: selNam, thang: selThang, nhanVienId: r.NhanVienID, rows: ds });
+        closeModal(); toast(`Đã lưu ${ds.length} dòng — thưởng SP ${money(kq.data && kq.data.tong)}.`, 'success'); renderKPI();
+      } catch (e) { toast(e.message, 'error'); }
+    });
   }
 
   /* ================================================================
@@ -1076,9 +1340,32 @@ window.ModulePayroll = (function () {
       </table></div>`;
   }
   // Bản in: chi tiết từng lệnh SX có bao nhiêu sơ đồ + thành tiền từng sơ đồ + tổng bàn cắt.
-  function buildLuongCatQuyBody(d) {
-    const donRows = (d.theoDon || []).map(o => {
-      const soDoCuaDon = (d.soDo || []).filter(s => String(s.DonHangID) === String(o.DonHangID));
+  /* v9.20 — Nguyen 2026-11-04: phiếu lương của MỘT nhân viên Cắt "chỉ hiển thị bàn cắt nhân viên đó
+     trải vải hoặc cắt".
+     🔴 Lọc theo ID, KHÔNG theo tên (hai người trùng họ tên là phiếu hiện nhầm bàn của nhau).
+     `NhanVienTraiVaiIDs` là chuỗi id nối dấu phẩy (một bàn có thể nhiều người trải vải) — backend
+     loadSoDoCat v9.20 trả về, lùi về td.NhanVienTraiVaiID cho bàn ghi theo kiểu cũ. */
+  function laBanCuaNV(s, nvId) {
+    const id = String(nvId || '');
+    if (!id) return true;
+    if (String(s.NhanVienCatID || '') === id) return true;
+    return String(s.NhanVienTraiVaiIDs || '').split(',').map(x => x.trim()).includes(id);
+  }
+
+  /* `nv` (tuỳ chọn) — có thì CHỈ liệt kê bàn cắt người đó tham gia; dòng tổng + tiêu đề nói rõ đây
+     không phải cả quỹ tháng. Số CỘT KHÔNG đổi theo nhánh (9 cột) để bản in, colspan và STT của
+     common.js cư xử y hệt hai trường hợp. */
+  function buildLuongCatQuyBody(d, nv) {
+    const nvId = nv ? nv.NhanVienID : null;
+    const soDoHien = (d.soDo || []).filter(s => !nvId || laBanCuaNV(s, nvId));
+    const donHien = (d.theoDon || []).filter(o => soDoHien.some(s => String(s.DonHangID) === String(o.DonHangID)));
+    const tienHien = soDoHien.reduce((t, x) => t + (Number(x.ThanhTien) || 0), 0);
+    const donRows = donHien.map(o => {
+      // Lọc trên DANH SÁCH ĐÃ LỌC; tổng của lệnh tính lại từ chính các sơ đồ đang hiện (khi không
+      // lọc thì bằng đúng o.ThanhTien/o.SoSoDo — cùng một phép cộng của tongHopLuongCat).
+      const soDoCuaDon = soDoHien.filter(s => String(s.DonHangID) === String(o.DonHangID));
+      const tienLenh = soDoCuaDon.reduce((t, x) => t + (Number(x.ThanhTien) || 0), 0);
+      const lopLenh = soDoCuaDon.reduce((t, x) => t + num(x.TongLop), 0);
       const chiTiet = soDoCuaDon.map((s, i) => `<tr><td style="text-align:center;">${i + 1}</td>
           <td style="text-align:center;">${i + 1}/${soDoCuaDon.length}</td>
           <td>${fmtDate(s.NgayGhiNhan)}</td>
@@ -1090,17 +1377,27 @@ window.ModulePayroll = (function () {
           <td style="text-align:right;">${money(s.ThanhTien)}</td></tr>`).join('');
       // v9.02: data-tong — dòng tiêu đề lệnh KHÔNG phải dòng dữ liệu; thiếu nó thì danhLaiStt (common.js)
       // coi là dòng thường, đánh số vào ô trống đầu và ghi đè STT của các dòng sơ đồ. Lỗi có từ trước.
-      return `<tr data-tong style="background:#f1f3f4;font-weight:600;"><td></td><td colspan="7">Lệnh SX ${escapeHtml(o.MaDH || '')}${o.TenSanPham ? ' — ' + escapeHtml(o.TenSanPham) : ''} · ${o.SoSoDo} sơ đồ · tổng ${num(o.TongLop)} lớp</td><td style="text-align:right;">${money(o.ThanhTien)}</td></tr>${chiTiet}`;
+      // v9.19: + MÃ RẬP (nguồn Kỹ thuật) và NGÀY CẮT ngay trên dòng tiêu đề lệnh — bản in phải nói
+      // cùng thứ với bảng "Bàn cắt theo lệnh sản xuất" trên màn. Số cột KHÔNG đổi (vẫn colspan 7).
+      /* v9.20: ở bản LỌC ghi rõ "2/5 sơ đồ" — người đối chiếu với màn chính (lệnh có 5 sơ đồ) nhìn
+         thấy ngay vì sao ở đây chỉ có 2, không tưởng là thiếu dữ liệu. */
+      const nhanSoDo = nvId ? `${soDoCuaDon.length}/${o.SoSoDo} sơ đồ (tham gia / cả lệnh)` : `${soDoCuaDon.length} sơ đồ`;
+      return `<tr data-tong style="background:#f1f3f4;font-weight:600;"><td></td><td colspan="7">Lệnh SX ${escapeHtml(o.MaDH || '')}${o.MaRap ? ' · rập ' + escapeHtml(o.MaRap) : ''}${o.TenSanPham ? ' — ' + escapeHtml(o.TenSanPham) : ''} · ${nhanSoDo} · tổng ${num(lopLenh)} lớp${khoangNgayCat(o) ? ' · cắt ' + escapeHtml(khoangNgayCat(o)) : ''}</td><td style="text-align:right;">${money(tienLenh)}</td></tr>${chiTiet}`;
     }).join('');
-    // v9.02: + cột Ngày QC — 9 cột. Kỳ = tháng muộn hơn giữa Ngày cắt và Ngày QC.
-    return `<h2 style="text-align:center;">QUỸ LƯƠNG TRẢI VẢI CẮT — Tháng ${selThang}/${selNam}</h2>
-      <p style="text-align:center;font-size:13px;">Công thức 1 sơ đồ: mét sơ đồ × tổng số lớp × khổ vải × ${money(d.donGia)} · chỉ lệnh đã ghi QC; kỳ = tháng muộn hơn giữa ngày cắt và ngày QC đầu</p>
+    // v9.18: kỳ = THÁNG GHI SỔ CẮT, không chờ QC (bỏ luật v9.02 cho riêng quỹ cắt). Cột Ngày QC giữ
+    // lại chỉ để biết lệnh đã QC chưa — trống = chưa QC.
+    /* v9.20: bản của MỘT nhân viên — đổi tiêu đề + nhãn dòng tổng, và NÓI RÕ lương không tính theo
+       tổng tiền các bàn này (chia theo giờ công trên quỹ cả bộ phận). Thiếu câu đó là người xem
+       cộng cột Thành tiền rồi hỏi "sao lương tôi không bằng số này". */
+    return `<h2 style="text-align:center;">${nvId ? `BÀN CẮT CÓ ${escapeHtml((nv.HoTen || '').toUpperCase())} THAM GIA` : 'QUỸ LƯƠNG TRẢI VẢI CẮT'} — Tháng ${selThang}/${selNam}</h2>
+      <p style="text-align:center;font-size:13px;">Công thức 1 sơ đồ: mét sơ đồ × tổng số lớp × khổ vải × ${money(d.donGia)} · kỳ = tháng ghi sổ cắt (không chờ QC — v9.18)</p>
+      ${nvId ? `<p style="text-align:center;font-size:12px;color:#5f6368;">Chỉ liệt kê bàn cắt nhân viên này <b>trải vải hoặc cắt</b>. Lương khoán tháng <b>KHÔNG</b> bằng tổng tiền các bàn dưới đây — nó chia theo <b>giờ công</b> trên quỹ của cả bộ phận Cắt (xem bảng trên).</p>` : ''}
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="5"><thead><tr><th style="width:38px;">STT</th>
         <th>Sơ đồ</th><th>Ngày cắt</th><th>Ngày QC</th><th>STT sổ cắt</th><th>Mét sơ đồ</th><th>Khổ vải</th><th>Tổng lớp</th><th>Thành tiền</th>
-      </tr></thead><tbody>${donRows || '<tr><td colspan="9" style="text-align:center;">Chưa có sổ cắt nào thuộc kỳ này.</td></tr>'}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG BÀN CẮT: ${(d.soDo || []).length} sơ đồ / ${(d.theoDon || []).length} lệnh SX</td>
-            <td style="text-align:right;">${num((d.soDo || []).reduce((s, x) => s + num(x.TongLop), 0))}</td>
-            <td style="text-align:right;">${money(d.quy)}</td></tr>
+      </tr></thead><tbody>${donRows || `<tr><td colspan="9" style="text-align:center;">${nvId ? 'Tháng này nhân viên không tham gia bàn cắt nào (lương vẫn chia theo giờ công).' : 'Chưa có sổ cắt nào ghi trong tháng này.'}</td></tr>`}
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">${nvId ? 'TỔNG BÀN CÓ THAM GIA' : 'TỔNG BÀN CẮT'}: ${soDoHien.length} sơ đồ / ${donHien.length} lệnh SX</td>
+            <td style="text-align:right;">${num(soDoHien.reduce((s, x) => s + num(x.TongLop), 0))}</td>
+            <td style="text-align:right;">${money(nvId ? tienHien : d.quy)}</td></tr>
       </tbody></table>`;
   }
   // Bản in phiếu lương 1 nhân viên: kèm luôn bảng quỹ (để công nhân đối chiếu cách chia).
@@ -1115,8 +1412,10 @@ window.ModulePayroll = (function () {
         <tr><td style="background:#f5f6f8;"><b>Lương 1 giờ</b></td><td>${money(d.donGiaGio)}</td></tr>
         <tr><td style="background:#f5f6f8;"><b>LƯƠNG KHOÁN THÁNG</b></td><td style="font-weight:700;">${money(nv.ThanhTien)} <span style="font-weight:400;font-size:12px;">= ${num(nv.TongGioLam)} giờ × ${num(nv.HeSoLuong)} × ${money(d.donGiaGio)}</span></td></tr>
       </table>
-      <h3 style="margin:14px 0 4px;">Cơ sở tính quỹ tháng</h3>
-      ${buildLuongCatQuyBody(d)}`;
+      ${/* v9.20: phần này trước đây in CẢ quỹ tháng (mọi bàn cắt của bộ phận). Nguyen 2026-11-04:
+           chỉ hiện bàn cắt mà chính nhân viên này trải vải hoặc cắt. */''}
+      <h3 style="margin:14px 0 4px;">Bàn cắt ${escapeHtml(nv.HoTen || '')} tham gia trong tháng</h3>
+      ${buildLuongCatQuyBody(d, nv)}`;
   }
   function openLuongCatNVDetail(nvid, d) {
     const nv = (d.nhanVien || []).find(r => String(r.NhanVienID) === String(nvid));
@@ -1141,7 +1440,9 @@ window.ModulePayroll = (function () {
       </tr></thead><tbody>${list.map((s, i) => `<tr><td style="text-align:center;">${i + 1}</td>
         <td style="text-align:center;">${i + 1}/${list.length}</td><td>${fmtDate(s.NgayGhiNhan)}</td><td>${fmtDate(s.NgayQC)}</td>
         <td style="text-align:center;">${escapeHtml(s.SttSoCat != null ? String(s.SttSoCat) : '')}</td>
-        <td>${escapeHtml(s.MaRap || '')}</td>
+        ${/* v9.19: sơ đồ chưa khai mã rập thì lùi về mã rập của CẢ LỆNH — khớp với sheet "Chi tiết
+             sơ đồ" của file Excel (trước đây màn để trống, Excel lại có, hai nơi nhìn khác nhau). */''}
+        <td>${escapeHtml(String(s.MaRap || '').trim() || o.MaRap || '')}</td>
         <td style="text-align:right;">${num(s.MetSoDoDai)}</td><td style="text-align:right;">${num(s.KhoVaiSoDo)}</td>
         <td style="text-align:right;">${num(s.TongLop)}</td>
         <td>${escapeHtml(s.NhanVienTraiVai || '')}</td><td>${escapeHtml(s.NhanVienCat || '')}</td>
@@ -1157,6 +1458,18 @@ window.ModulePayroll = (function () {
     modal.querySelector('#btnCloseDonCat').addEventListener('click', closeModal);
     modal.querySelector('#btnInDonCat').addEventListener('click', () => printHtml(`Ban cat - ${o.MaDH || ''} - T${selThang}/${selNam}`, body));
   }
+  /* v9.19 — NGÀY CẮT của một LỆNH trên bảng "Bàn cắt theo lệnh sản xuất" (thay cột Ngày QC cũ).
+     Một lệnh nhiều sơ đồ ghi nhiều ngày ⇒ hiện KHOẢNG "dd/mm – dd/mm"; cùng ngày thì một ngày.
+     ⚠️ BẢN SAO CÓ CHỦ ĐÍCH của chuoiNgayCat() trong backend/routes/payroll.js (file Excel dùng bản
+     backend) — không có bundler để dùng chung; đổi quy tắc thì đổi CẢ HAI, bộ kiểm so hai bản. */
+  function khoangNgayCat(o) {
+    const a = o && o.NgayCatDau ? fmtDate(o.NgayCatDau) : '';
+    const b = o && o.NgayCatCuoi ? fmtDate(o.NgayCatCuoi) : '';
+    if (!a && !b) return '';
+    if (!a || !b || a === b) return a || b;
+    return a + ' – ' + b;
+  }
+
   function openCauHinhLuongCat(d) {
     const modal = openModal(`<h3>Cấu hình lương trải vải cắt</h3>
       <div class="form-row"><label>Đơn giá (đồng) — dùng trong: mét sơ đồ × tổng lớp × khổ vải × đơn giá</label>
@@ -1188,7 +1501,9 @@ window.ModulePayroll = (function () {
     catch (e) { container.innerHTML = `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`; return; }
     const actions = `${perm.canEdit ? '<button class="btn small secondary" id="btnCfgCat">⚙️ Cấu hình đơn giá / hệ số</button>' : ''}
       <button class="btn small secondary" id="btnInQuyCat">🖨️ In quỹ + bàn cắt</button>
-      <button class="btn small secondary" id="btnInBangCat">🖨️ In bảng lương</button>`;
+      <button class="btn small secondary" id="btnInBangCat">🖨️ In bảng lương</button>
+      ${/* v9.19: 3 sheet — bảng lương NV Cắt / bàn cắt theo lệnh / chi tiết sơ đồ, cùng bộ số với màn. */''}
+      <button class="btn small secondary" id="btnExCat">📊 Xuất Excel</button>`;
     container.innerHTML = periodBar(null, actions) + lcTomTat(d) + `
       <h4 style="margin:4px 0;">Bảng lương nhân viên bộ phận Cắt <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm 1 nhân viên để xem / in phiếu lương)</span></h4>
       <table><thead><tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Giờ công</th><th>Hệ số</th><th>Lương 1 giờ</th><th>Lương khoán tháng</th></tr></thead>
@@ -1201,20 +1516,28 @@ window.ModulePayroll = (function () {
       ${(d.nhanVien || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${num(d.tongGio)}</td><td></td><td></td><td style="text-align:right;">${money(d.tongLuong)}</td></tr></tfoot>` : ''}</table>
 
       <h4 style="margin:16px 0 4px;">Bàn cắt theo lệnh sản xuất <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm 1 lệnh để xem / in chi tiết từng sơ đồ)</span></h4>
-      ${/* v9.02: + cột Ngày QC — quỹ tháng gồm lệnh có kỳ (= tháng muộn hơn giữa ngày cắt và ngày QC đầu) rơi vào tháng này. */''}
-      <table><thead><tr><th style="width:38px;">STT</th><th>Mã ĐH</th><th>Mã hàng</th><th>Tên sản phẩm</th><th>Ngày QC</th><th>Số sơ đồ</th><th>Tổng lớp</th><th>Thành tiền</th></tr></thead>
+      ${/* v9.18: quỹ tháng = mọi sổ cắt GHI trong tháng (không chờ QC).
+           v9.19 (Nguyen 2026-11-04): cột "Ngày QC" → "NGÀY CẮT" (khoảng ngày ghi tiến độ của các sơ
+           đồ trong lệnh); cột "Mã hàng" → "MÃ RẬP" (nguồn: công đoạn Kỹ thuật — gộp bảng Sơ đồ +
+           ghi tiến độ KT qua utils/maRapCuaDon.js). */''}
+      <table><thead><tr><th style="width:38px;">STT</th><th>Mã ĐH</th><th>Mã rập</th><th>Tên sản phẩm</th><th>Ngày cắt</th><th>Số sơ đồ</th><th>Tổng lớp</th><th>Thành tiền</th></tr></thead>
       <tbody>${(d.theoDon || []).map((o, __i) => `<tr class="lc-don" data-donid="${o.DonHangID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td>
-        <td>${escapeHtml(o.MaDH || '')}</td><td>${escapeHtml(o.MaSanPham || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
-        <td>${fmtDate(o.NgayQC)}</td>
+        <td>${escapeHtml(o.MaDH || '')}</td><td>${escapeHtml(o.MaRap || '')}</td><td>${escapeHtml(o.TenSanPham || '')}</td>
+        <td>${escapeHtml(khoangNgayCat(o))}</td>
         <td style="text-align:center;">${o.SoSoDo}</td><td style="text-align:right;">${num(o.TongLop)}</td>
         <td style="text-align:right;font-weight:600;">${money(o.ThanhTien)}</td></tr>`).join('')
-        || '<tr><td colspan="8" class="empty-hint">Chưa có sổ cắt nào thuộc kỳ này (lệnh chưa ghi QC thì chưa vào quỹ).</td></tr>'}</tbody>
+        || '<tr><td colspan="8" class="empty-hint">Chưa có sổ cắt nào ghi trong tháng này.</td></tr>'}</tbody>
       ${(d.theoDon || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="4" style="text-align:right;">TỔNG BÀN CẮT</td><td style="text-align:center;">${(d.soDo || []).length}</td><td></td><td style="text-align:right;">${money(d.quy)}</td></tr></tfoot>` : ''}</table>
       <p style="color:#5f6368;font-size:12px;margin-top:8px;">Mét sơ đồ / khổ vải lấy từ sơ đồ của lệnh SX. Giờ công lấy từ Chấm công (cột Số giờ làm) của nhân viên bộ phận "Cắt" trong tháng.
-        <b>Chỉ tính sổ cắt của lệnh đã ghi tiến độ QC</b>; sổ cắt thuộc kỳ = tháng <b>muộn hơn</b> giữa ngày cắt và ngày QC đầu tiên của lệnh (v9.02) — tức sổ cắt tháng trước của lệnh QC tháng này nằm trong quỹ tháng này.</p>`;
+        <b>Quỹ tháng = mọi sổ cắt GHI trong tháng — không chờ QC</b> (v9.18, bỏ luật chờ-QC v9.02 cho riêng quỹ cắt; các bảng lương khác vẫn chờ QC).
+        Cột <b>Ngày cắt</b> = ngày ghi tiến độ của các sơ đồ trong lệnh (nhiều ngày thì hiện khoảng đầu – cuối). Cột <b>Mã rập</b> lấy từ công đoạn <b>Kỹ thuật</b> (bảng Sơ đồ + mã rập gõ lúc ghi tiến độ KT) — trống nghĩa là Kỹ thuật chưa khai mã rập cho lệnh đó.</p>`;
     wirePeriod(container, renderLuongTraiVaiCat);
     themOTimTuDong(container);   // v9.05: ô tìm cho bảng lương NV Cắt + bảng bàn cắt theo lệnh SX
     const bc = container.querySelector('#btnCfgCat'); if (bc) bc.addEventListener('click', () => openCauHinhLuongCat(d));
+    // v9.19: xuất Excel 3 sheet — dùng downloadFile() chung (báo lỗi bằng toast nếu máy chủ từ chối).
+    const bxc = container.querySelector('#btnExCat');
+    if (bxc) bxc.addEventListener('click', () => downloadFile(
+      `/api/payroll/luongtraivaicat/excel?nam=${selNam}&thang=${selThang}`, `LuongTraiVaiCat_T${selThang}_${selNam}.xlsx`));
     container.querySelector('#btnInQuyCat').addEventListener('click', () => printHtml(`Quy luong cat T${selThang}/${selNam}`, buildLuongCatQuyBody(d)));
     container.querySelector('#btnInBangCat').addEventListener('click', () => printHtml(`Bang luong trai vai cat T${selThang}/${selNam}`, buildLuongCatBangBody(d)));
     container.querySelectorAll('.lc-nv').forEach(tr => tr.addEventListener('click', () => openLuongCatNVDetail(tr.dataset.nvid, d)));

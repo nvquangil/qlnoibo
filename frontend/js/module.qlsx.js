@@ -2190,7 +2190,12 @@ window.ModuleQLSX = (function () {
       return;
     }
     const recs = data.records;
-    const suaDuoc = !perm || perm.canEdit;
+    /* 🔴 v9.27 — CÙNG LỖI với nút Tách dải size: `perm` ở đây là quyền theo TAB đang mở, còn backend
+       `PUT /orders/:maDH/socat/:tienDoId` gác bằng requirePermission('QLSX','edit') +
+       requireChucNang('QLSX','tiendo'). Tổ cắt ghi được sổ cắt thì PHẢI sửa được sổ cắt — ẩn nút ở
+       đây là màn hình khóa chặt hơn máy chủ. Xóa cũng vậy: theo quyền XÓA của chức năng tiến độ. */
+    const suaDuoc = coQuyenSuaTienDo();
+    const xoaDuoc = coQuyenXoaTienDo();
 
     // v6.01: tổng SL cái của 1 sổ = (lớp × hệ số) + giật cấp — dùng chung cho nhãn ô chọn, dòng tổng và hộp xác nhận xóa.
     const tongCaiCuaSo = (r) => (r.cays || []).reduce((s, c) => s + Number(c.SoLuongCai || 0) + Number(c.SoCaiGiatCap || 0), 0);
@@ -2208,16 +2213,28 @@ window.ModuleQLSX = (function () {
       + (Number(r.TongSoSoDo) > 1 && r.SoDoThuTu ? ` · sơ đồ ${r.SoDoThuTu}/${r.TongSoSoDo}` : '')
       + ` · ${fmtDate(r.NgayGhiNhan)} · ${(r.cays || []).length} cây`
       + ` · ${fmtNumber(tongCaiCuaSo(r))} cái`;
+    /* v9.13: (a) TỰ DỌN khối cũ — nhánh "đã có sổ cắt hết" của renderCatMultiSoDo và nhánh CAT của
+       renderStageFields CÙNG gọi hàm này, hai fetch chạy đua nên trước đây thi thoảng hai khối
+       "Sổ cắt đã ghi nhận" chồng nhau (trùng id #soCatXem). (b) chèn SAU khung Dải size nếu có —
+       giữ đúng chủ đích v8.59.1 "dải size nằm ĐẦU form".
+       v9.26: khung Dải size đã dời ra NGOÀI #pStageFields (#daiSizeHost) nên nhánh (b) gần như không
+       còn chạy — giữ lại vì hàm này cũng được gọi với box khác, và rơi về nhánh cuối là đúng chỗ. */
+    const khoiCu = box.querySelector('#soCatKhoi');
+    if (khoiCu) khoiCu.remove();
     const wrap = document.createElement('div');
+    wrap.id = 'soCatKhoi';
     wrap.className = 'form-row';
     wrap.innerHTML = `<label>Sổ cắt đã ghi nhận (${recs.length} sổ) &nbsp;
         <button type="button" class="btn small secondary" id="btnInSoCat">🖨️ In sổ đang chọn</button>
         ${recs.length > 1 ? '<button type="button" class="btn small secondary" id="btnInTatCaSoCat">🖨️ In tất cả</button>' : ''}
         ${suaDuoc ? '<button type="button" class="btn small secondary" id="btnSuaSoCat">✏️ Sửa / thêm cây</button>' : ''}
-        ${(perm && perm.canDelete) ? '<button type="button" class="btn small danger" id="btnXoaSoCat">🗑️ Xóa sổ này</button>' : ''}</label>
+        ${xoaDuoc ? '<button type="button" class="btn small danger" id="btnXoaSoCat">🗑️ Xóa sổ này</button>' : ''}</label>
       ${recs.length > 1 ? `<select id="soCatPicker" style="margin-bottom:6px;">${recs.map((r, i) => `<option value="${r.TienDoID}">${escapeHtml(nhanSo(r, i))}</option>`).join('')}</select>` : ''}
       <div id="soCatXem" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;background:#fafafa;max-height:340px;overflow:auto;"></div>`;
-    box.insertBefore(wrap, box.firstChild);
+    const thanhDai = box.querySelector('#daiSizeBar');
+    if (thanhDai && thanhDai.nextSibling) box.insertBefore(wrap, thanhDai.nextSibling);
+    else if (thanhDai) box.appendChild(wrap);
+    else box.insertBefore(wrap, box.firstChild);
 
     const picker = wrap.querySelector('#soCatPicker');
     const chonHienTai = () => {
@@ -2528,7 +2545,12 @@ window.ModuleQLSX = (function () {
       <td>${escapeHtml(r.MaCay)}${canhBao(r.ThieuSoLuong, 'chưa khai KG/mét đã dùng')}</td>
       <td>${escapeHtml(r.TenLoaiVai)} ${escapeHtml(r.TenMau)}</td>
       <td style="text-align:right;">${fmtNumber(r.SoLuong)}</td>
-      <td style="text-align:right;">${tien(r.DonGia)}${canhBao(r.ThieuDonGia, 'chưa có đơn giá nhập')}</td>
+      ${/* v9.36: đơn giá ở cột này ĐÃ GỒM phí vận chuyển. Phải nói rõ phí bao nhiêu, nếu không người
+           xem so với đơn giá trên phiếu nhập thấy lệch và tưởng hệ thống tính sai.
+           Chỉ hiện khi cây đó THỰC SỰ có phí — không thì mọi dòng dính thêm chữ thừa. */''}
+      <td style="text-align:right;">${tien(r.DonGia)}${canhBao(r.ThieuDonGia, 'chưa có đơn giá nhập')}${
+        Number(r.DonGiaPhiVC) > 0
+          ? `<div style="font-size:11px;color:#5f6368;" title="Đơn giá hàng ${tien(r.DonGiaHang)} + phí vận chuyển ${tien(r.DonGiaPhiVC)}. Phí vận chuyển KHÔNG tính vào công nợ nhà cung cấp.">gồm phí VC ${tien(r.DonGiaPhiVC)}</div>` : ''}</td>
       <td style="text-align:right;">${tien(r.ThanhTien)}</td></tr>`).join('');
     const dongPK = (d.phuKien || []).map(r => `<tr>
       <td>${escapeHtml(r.MaPhuKien)}</td><td>${escapeHtml(r.TenPhuKien)}</td>
@@ -2632,18 +2654,57 @@ window.ModuleQLSX = (function () {
      v8.59 — TÁCH DẢI SIZE. Một lệnh cắt chung một sơ đồ nhiều size, nhưng đóng gói / nhập kho tách
      theo dải: hệ số 11 → dải "2-7" (hệ số 6) + dải "8-12" (hệ số 5).
 
-     ⚠️ BẤT BIẾN: tổng hệ số các dải = hệ số quy đổi của lệnh. Nút Lưu khoá tới khi khớp.
+     ⚠️ BẤT BIẾN (v9.12): tổng hệ số các dải = HỆ SỐ ĐỐI CHIẾU — ưu tiên hệ số ở SỔ CẮT, lùi về hệ
+     số của lệnh khi Cắt chưa ghi (xem heSoHieuLucLenh ngay dưới). Nút Lưu khoá tới khi khớp.
      Backend CHẶN LẠI LẦN NỮA (PUT /orders/:maDH/daisize) — form không phải là nơi chặn thật.
 
-     Nút hiện ĐẬM khi hệ số > 6 (ngưỡng Nguyen chốt), nhưng KHÔNG chặn cứng: hệ số nhỏ hơn vẫn mở
-     được, chỉ là nút hiện dạng mờ. Lệnh đã tách rồi thì luôn hiện đậm để còn sửa.
+     v9.12 bỏ ngưỡng làm mờ nút (NGUONG_TACH_DAI = 6 của v8.59): Nguyen 2026-10-31 chốt nút LUÔN
+     hiện đậm ở Cắt — chính cái nút mờ làm anh ấy tưởng tính năng đã biến mất.
      ================================================================================================ */
-  const NGUONG_TACH_DAI = 6;
-  function renderDaiSizeBar(box, maDH, perm, detail) {
-    const heSoLenh = Number(detail && detail.HeSoQuyDoi) || 0;
+  /* ================================================================================================
+     v9.12 — HỆ SỐ HIỆU LỰC. Bản sao CÓ CHỦ ĐÍCH của `heSoHieuLuc()` trong backend/routes/qlsx.js
+     (dự án không có bundler, frontend không require được backend). Đổi luật một bên phải đổi cả hai;
+     `kiem_he_so_hieu_luc.js` có phép so khớp hai nơi.
+
+     🔴 Vì sao phải có: v8.59 neo bảng dải vào `DonHangSanXuat.HeSoQuyDoi` (mặc định 1, ít ai khai),
+     còn v8.92 đã chốt hệ số ĐÚNG nằm ở SỔ CẮT. Lệnh cắt hệ số 11 mà ô hệ số của lệnh vẫn là 1 thì
+     nút "Tách dải size" hiện MỜ và gõ 6+5 bị từ chối — Nguyen tưởng tính năng biến mất (2026-10-31).
+     ================================================================================================ */
+  function heSoHieuLucLenh(detail) {
+    const lenh = Number(detail && detail.HeSoQuyDoi) || 0;
+    const ds = ((detail && detail.catMauList) || []).filter(c => Number(c.TongSoLop) > 0);
+    if (!ds.length) return { heSo: lenh, nguon: 'lenh', lyDo: 'Cắt chưa ghi sổ nào' };
+    if (ds.some(c => Number(c.HeSoCatLech) === 1))
+      return { heSo: lenh, nguon: 'lenh', lyDo: 'sổ cắt có màu mang nhiều hệ số khác nhau' };
+    const hs = ds.map(c => Number(c.HeSoCat) || 0);
+    if (hs.some(h => h <= 0)) return { heSo: lenh, nguon: 'lenh', lyDo: 'có màu chưa ghi hệ số ở sổ cắt' };
+    if (hs.some(h => Math.abs(h - hs[0]) > 1e-9))
+      return { heSo: lenh, nguon: 'lenh', lyDo: 'các màu ở sổ cắt dùng hệ số khác nhau' };
+    return { heSo: hs[0], nguon: 'cat', lyDo: '' };
+  }
+
+  /* `cheDo` (v9.38): 'DAI' = công đoạn Kỹ thuật (chỉ nút tách dải size) · 'MAU' = công đoạn Cắt
+     (chỉ nút tách mẫu). Bỏ trống = hiện đủ cả hai (dành cho nơi gọi khác, nếu sau này có). */
+  function renderDaiSizeBar(box, maDH, perm, detail, cheDo) {
+    const hl = heSoHieuLucLenh(detail);
+    /* v9.12: đổi tên — con số này KHÔNG còn là "hệ số của lệnh" mà là hệ số ĐỐI CHIẾU (ưu tiên sổ
+       cắt). Giữ tên cũ là mồi cho lần trôi dạt v8.59→v8.92 tái diễn. */
+    const heSoDoiChieu = hl.heSo;
+    const heSoKhaiOLenh = Number(detail && detail.HeSoQuyDoi) || 0;
     const ds = (detail && detail.daiSizeList) || [];
-    const noiBat = ds.length > 0 || heSoLenh > NGUONG_TACH_DAI;
+    /* v9.12 (Nguyen 2026-10-31): *"ở công đoạn cắt luôn hiện tách dải, để bàn nào cần thì tích vào
+       tách — các trường thông tin ở lệnh SX không gắn liền với công đoạn nào, chỉ để tham khảo"*.
+       Bỏ ngưỡng làm mờ nút theo hệ số (NGUONG_TACH_DAI của v8.59) — nút LUÔN hiện đậm ở Cắt;
+       lệnh không cần tách thì đơn giản là không bấm. Chính cái nút mờ là lý do anh ấy tưởng
+       tính năng đã biến mất. */
+    const noiBat = true;
+    /* v9.13: khung có ID + tự dọn bản cũ trước khi chèn — nhánh Cắt nay vẽ khung này ở NHIỀU thời
+       điểm (đồng bộ lúc mở form + vẽ lại sau mỗi lần renderCatMultiSoDo ghi đè innerHTML), không
+       idempotent là có ngày hai khung chồng nhau. */
+    const cu = box.querySelector('#daiSizeBar');
+    if (cu) cu.remove();
     const wrap = document.createElement('div');
+    wrap.id = 'daiSizeBar';
     wrap.className = 'form-row';
     /* v8.59.1 (Nguyen): đặt lên ĐẦU form Cắt cho dễ nhìn — dải size quyết định cách nhập của mọi
        công đoạn sau, nên phải thấy ngay chứ không nằm lẫn dưới khối "Sổ cắt đã ghi". */
@@ -2652,27 +2713,123 @@ window.ModuleQLSX = (function () {
     wrap.style.border = '1px solid #c9dcff';
     wrap.style.borderRadius = '6px';
     wrap.style.padding = '8px 10px';
+    // v9.23: lệnh có thể tách theo DẢI SIZE (cũ) hoặc theo MẪU/biến thể cùng dải size — đổi nhãn theo.
+    const laTachMau = ds.some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU');
+    /* v9.38: tỷ lệ chia vải — người dùng tự khai, đơn vị tự do. Đủ số cho MỌI dải mới tính; khuyết
+       một dải thì không hiện gì, vì tỷ lệ tính trên dữ liệu khuyết là con số sai mà nhìn vẫn như đúng.
+       🔴 Kiểu MẪU KHÔNG cần tỷ lệ: các mẫu dùng chung một dải size nên tỷ lệ vải giống hệt nhau
+       (Nguyen 2026-11-10: *"tách mẫu thì tỷ lệ size giống nhau, chỉ là tách 50% cho mẫu 1 50% cho
+       mẫu 2"*) — hỏi thêm một con số ai cũng biết trước là làm phiền vô ích. */
+    const tongMet = ds.reduce((s, d) => s + (Number(d.TyLeVai) || 0), 0);
+    const duMet = !laTachMau && ds.length > 0 && ds.every(d => Number(d.TyLeVai) > 0);
     const tomTat = ds.length
-      ? ds.map(d => `<b>${escapeHtml(d.TenDai)}</b> (hệ số ${fmtNumber(d.HeSo)})`).join(' · ')
+      ? ds.map(d => `<b>${escapeHtml(d.TenDai)}</b>${laTachMau ? '' : ` (hệ số ${fmtNumber(d.HeSo)})`}`
+          + (duMet ? ` <span style="color:#0d47a1;">${(Number(d.TyLeVai) / tongMet * 100).toFixed(1)}% vải</span>` : '')).join(' · ')
+        + (laTachMau ? ` <span style="color:#5f6368;">— ${ds.length} mẫu, cùng một dải size (hệ số ${fmtNumber(ds[0].HeSo)}); vải cắt chung nên “SL từ Cắt” là số chung cả ${ds.length} mẫu</span>` : '')
+        /* 🔴 KHÔNG được viết "giá thành chia vải theo tỷ lệ trên". tinhGiaThanh() (backend) hiện
+           KHÔNG đọc TyLeVai — nó vẫn gộp toàn bộ tiền vải của lệnh rồi chia cho SL hoàn thành, ra
+           MỘT con số chung. Câu cũ hứa một cơ chế chưa tồn tại, mà đây là chữ Nguyen đọc để quyết
+           định về tiền. Chia giá thành theo dải là việc riêng (cần tách cả MẪU SỐ theo dải, không
+           thì ra đơn giá vô nghĩa) — xem phần "nợ" trong PRD v9.39. */
+        + (laTachMau ? ''
+          : duMet
+            ? ' <span style="color:#5f6368;">— đã khai đủ tỷ lệ vải (chưa dùng vào giá thành)</span>'
+            : ' <span style="color:#b06000;">— chưa khai <b>tỷ lệ vải</b></span>')
       : '<span style="color:#8a8a8a;">Chưa tách — cả lệnh tính chung một dải</span>';
-    wrap.innerHTML = `<label>Dải size của lệnh &nbsp;
-        ${perm && perm.canEdit
-          ? `<button type="button" class="btn small ${noiBat ? '' : 'secondary'}" id="btnTachDai">📏 ${ds.length ? 'Sửa dải size' : 'Tách dải size'}</button>`
-          : ''}</label>
+    /* 🔴 v9.27 — QUYỀN: dùng ĐÚNG quyền mà BACKEND đòi, không phải quyền của tab đang mở.
+       Nguyen 2026-11-06: *"nhân viên tổ cắt đang không thấy chức năng tách dải size, mẫu mà chỉ có
+       user admin thấy"*.
+       `perm` truyền vào đây là quyền theo TAB đang mở (effectivePerm(user,'QLSX', activeTab, …)) —
+       tổ cắt mở từ tab danh sách nên canEdit = false ⇒ nút bị ẩn. Trong khi backend
+       `PUT /orders/:maDH/daisize` gác bằng requirePermission('QLSX','edit') + requireChucNang('QLSX',
+       'tiendo') — ĐÚNG BẰNG gác của POST /tiendo, tức ai ghi được sổ cắt thì tách được dải.
+       Màn hình khóa chặt hơn máy chủ = người đủ quyền vẫn không làm được việc, mà không ai báo gì.
+       permTienDo() là bản sao chính xác của cặp gác đó. */
+    const tachDuoc = coQuyenSuaTienDo();
+    /* v9.27 — HAI VIỆC KHÁC NHAU, HAI NÚT KHÁC NHAU (Nguyen: *"đang bị lẫn lộn ở chỗ tách size và
+       mẫu"*). Một nút "Tách dải size / mẫu" rồi bắt chọn kiểu trong hộp thoại là bắt người dùng đoán
+       trước khi thấy. Chưa tách thì hiện đủ hai nút, bấm nút nào là vào thẳng kiểu đó. */
+    /* ============================================================================================
+       🔴 v9.38 — HAI VIỆC, HAI CÔNG ĐOẠN KHÁC NHAU.
+
+       Nguyen 2026-11-10: *"chỉ tách DẢI SIZE ở công đoạn kỹ thuật, còn TÁCH MẪU vẫn ở công đoạn
+       cắt, vì tách mẫu thì tỷ lệ size giống nhau chỉ là tách 50% cho mẫu 1 50% cho mẫu 2"*.
+
+       Lý do hợp với bản chất hai việc:
+         · DẢI SIZE — quyết định lúc làm sơ đồ, cần khai tỷ lệ vải ⇒ việc của KỸ THUẬT.
+         · MẪU      — chia một bàn cắt cho hai biến thể, tỷ lệ vải như nhau, quyết lúc trải ⇒ CẮT.
+
+       `cheDo` do capNhatKhungDaiSize truyền vào ('DAI' ở KT, 'MAU' ở CAT). Tóm tắt hiện ở CẢ HAI
+       nơi (ai cũng cần biết lệnh đang tách thế nào), chỉ NÚT là gác theo công đoạn.
+       🔴 Lệnh đã tách rồi thì nút Sửa chỉ hiện ở ĐÚNG công đoạn của kiểu đó — để ở cả hai là mở ra
+       sửa nhầm kiểu, mà đổi kiểu là đổi hệ số của mọi dòng tiến độ đang trỏ vào (xem cảnh báo
+       trong openTachDaiSizeModal).
+       ============================================================================================ */
+    const hopCheDo = (kieu) => !cheDo || cheDo === kieu;
+    const nutTach = !tachDuoc ? ''
+      : ds.length
+        ? (hopCheDo(laTachMau ? 'MAU' : 'DAI')
+            ? `<button type="button" class="btn small" id="btnTachDai">${laTachMau ? '🧩 Sửa mẫu' : '📏 Sửa dải size'}</button>`
+            : `<span style="font-size:12px;color:#8a8a8a;">— sửa ở công đoạn ${laTachMau ? 'Cắt' : 'Kỹ thuật'}</span>`)
+        : [hopCheDo('DAI') ? '<button type="button" class="btn small" id="btnTachDai">📏 Tách dải size</button>' : '',
+           hopCheDo('MAU') ? '<button type="button" class="btn small" id="btnTachMau">🧩 Tách mẫu</button>' : ''
+          ].join(' ');
+    wrap.innerHTML = `<label>${laTachMau ? 'Mẫu của lệnh (cùng dải size)' : 'Dải size của lệnh'} &nbsp;${nutTach}</label>
       <div class="empty-hint" style="text-align:left;">${tomTat}
-        ${heSoLenh > 0 ? ` &nbsp;·&nbsp; Hệ số quy đổi của lệnh: <b>${fmtNumber(heSoLenh)}</b>` : ''}</div>`;
+        ${heSoDoiChieu > 0
+          ? ` &nbsp;·&nbsp; Hệ số đang dùng để đối chiếu: <b>${fmtNumber(heSoDoiChieu)}</b>`
+            + (hl.nguon === 'cat'
+                ? ' <span style="color:#0d47a1;">(theo SỔ CẮT)</span>'
+                  + (heSoKhaiOLenh > 0 && Math.abs(heSoKhaiOLenh - heSoDoiChieu) > 1e-9
+                      ? ` <span style="color:#b06000;">— lệnh khai ${fmtNumber(heSoKhaiOLenh)}, lấy theo Cắt</span>` : '')
+                : ' (theo lệnh)' + (hl.lyDo ? ` <span style="color:#8a8a8a;">— ${escapeHtml(hl.lyDo)}</span>` : ''))
+          : ` &nbsp;·&nbsp; <span style="color:#c62828;">Chưa có hệ số nào — ghi sổ cắt (có hệ số trên cây) hoặc khai hệ số ở Chỉ định sản xuất rồi mới tách được.</span>`}
+        ${tachDuoc ? '' : ' &nbsp;·&nbsp; <span style="color:#8a8a8a;">Bạn không có quyền ghi tiến độ nên chỉ xem được, không tách/sửa được.</span>'}
+        ${(tachDuoc && !ds.length) ? `<div style="margin-top:4px;color:#5f6368;">
+            <b>📏 Dải size</b>: chia MỘT lớp cắt thành nhiều dải, hệ số CỘNG lại bằng hệ số Cắt (2-7 có 6 + 8-12 có 5 = 11).
+            &nbsp;·&nbsp; <b>🧩 Mẫu</b>: nhiều biến thể dùng CHUNG một dải size (in chó / in thỏ), mỗi mẫu mang ĐỦ hệ số, vải cắt chung một bàn.</div>` : ''}</div>`;
     box.insertBefore(wrap, box.firstChild);   // v8.59.1: lên ĐẦU form, không phải cuối
+    /* v9.27: nút nào mở thẳng kiểu đó; lệnh đã tách rồi thì giữ nguyên kiểu đang có. */
+    const moModal = (kieu) => openTachDaiSizeModal(maDH, heSoDoiChieu, ds, perm, hl.nguon, kieu);
     const btn = wrap.querySelector('#btnTachDai');
-    if (btn) btn.addEventListener('click', () => openTachDaiSizeModal(maDH, heSoLenh, ds, perm));
+    if (btn) btn.addEventListener('click', () => moModal(ds.length ? null : 'DAI'));
+    const btnMau = wrap.querySelector('#btnTachMau');
+    if (btnMau) btnMau.addEventListener('click', () => moModal('MAU'));
   }
 
-  function openTachDaiSizeModal(maDH, heSoLenh, dsBanDau, perm) {
+  function openTachDaiSizeModal(maDH, heSoDoiChieu, dsBanDau, perm, nguonHeSo, kieuMoSan) {
     /* Bản sao để sửa trong modal — KHÔNG đụng vào detailHienTai cho tới khi lưu thành công. */
-    let rows = (dsBanDau || []).map(d => ({ id: d.ID, tenDai: d.TenDai || '', heSo: d.HeSo != null ? d.HeSo : '' }));
-    if (!rows.length) rows = [{ id: null, tenDai: '', heSo: '' }, { id: null, tenDai: '', heSo: '' }];
-    const modal = openModal(`<h3>Tách dải size — ${escapeHtml(maDH)}</h3>
-      <p class="empty-hint" style="text-align:left;">Mỗi lớp cắt ra <b>${fmtNumber(heSoLenh)}</b> cái, chia thành các dải dưới đây.
-        <b>Tổng hệ số các dải phải đúng bằng ${fmtNumber(heSoLenh)}</b> — có vậy số cắt và số đóng gói mới khớp nhau.</p>
+    let rows = (dsBanDau || []).map(d => ({
+      id: d.ID, tenDai: d.TenDai || '', heSo: d.HeSo != null ? d.HeSo : '',
+      tyLeVai: d.TyLeVai != null ? d.TyLeVai : ''   // v9.38
+    }));
+    if (!rows.length) rows = [{ id: null, tenDai: '', heSo: '', tyLeVai: '' },
+                              { id: null, tenDai: '', heSo: '', tyLeVai: '' }];
+    /* ============================================================================================
+       v9.23 — HAI KIỂU TÁCH (Nguyen 2026-11-05: *"một số lệnh muốn tách làm 2 mẫu từ khâu cắt
+       nhưng vẫn cùng dải size"* — ví dụ: áo cộc size 2-7, mẫu 1 in chó, mẫu 2 in thỏ):
+         · DAI — tách DẢI SIZE (như cũ): một lớp cắt chia nhỏ cho từng dải ⇒ TỔNG hệ số = hệ số hiệu lực.
+         · MAU — tách MẪU/biến thể: mọi mẫu dùng CHUNG một dải size ⇒ MỖI mẫu mang ĐÚNG hệ số hiệu lực.
+       Vải cắt chung (Nguyen chốt) nên ở kiểu MẪU, "SL từ Cắt" của mỗi dòng là số CHUNG của cả màu —
+       form ghi tiến độ phải nói ra điều đó, xem nhãn ở slCatCuaDong/nhanDong.
+       ============================================================================================ */
+    /* v9.27: `kieuMoSan` = kiểu người dùng vừa bấm ở thanh ngoài ("📏 Tách dải size" / "🧩 Tách mẫu").
+       Lệnh ĐÃ tách rồi thì bỏ qua, giữ đúng kiểu đang có — đổi kiểu phải là hành động cố ý trong
+       hộp thoại (có hỏi lại), không phải hệ quả của việc bấm nhầm nút ở ngoài. */
+    const kieuDangCo = (dsBanDau || []).some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU') ? 'MAU' : 'DAI';
+    let loaiTach = (dsBanDau || []).length ? kieuDangCo
+      : (String(kieuMoSan || '').toUpperCase() === 'MAU' ? 'MAU' : 'DAI');
+    const laMau = () => loaiTach === 'MAU';
+    /* Kiểu MẪU chỉ có MỘT giá trị hệ số hợp lệ — điền sẵn luôn, khỏi bắt gõ đi gõ lại (giống nhánh
+       đổi radio ở dưới). */
+    if (laMau() && heSoDoiChieu > 0) rows.forEach(x => { if (!(Number(x.heSo) > 0)) x.heSo = heSoDoiChieu; });
+    const modal = openModal(`<h3>${laMau() ? 'Tách MẪU' : 'Tách DẢI SIZE'} — ${escapeHtml(maDH)}</h3>
+      <div class="form-row" style="margin-bottom:8px;">
+        <label style="display:block;margin-bottom:4px;">Kiểu tách</label>
+        <label style="margin-right:16px;"><input type="radio" name="dsLoai" value="DAI" ${laMau() ? '' : 'checked'}> 📏 <b>Dải size</b> — chia một lớp cắt thành nhiều dải (2-7 + 8-12)</label>
+        <label><input type="radio" name="dsLoai" value="MAU" ${laMau() ? 'checked' : ''}> 🧩 <b>Mẫu</b> — nhiều biến thể CÙNG một dải size (in chó / in thỏ)</label>
+      </div>
+      <p class="empty-hint" style="text-align:left;" id="dsGiaiThich"></p>
       <div id="dsBox"></div>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="btnHuyDS">Hủy</button>
@@ -2686,55 +2843,183 @@ window.ModuleQLSX = (function () {
         const r = rows[Number(el.dataset.i)]; if (!r) return;
         r.tenDai = el.querySelector('.ds-ten').value;
         r.heSo = el.querySelector('.ds-heso').value;
+        const om = el.querySelector('.ds-met');
+        if (om) r.tyLeVai = om.value;   // v9.38
       });
     }
     function tongHeSo() { return rows.reduce((s, r) => s + (Number(r.heSo) || 0), 0); }
+    /* ============================================================================================
+       v9.38 — TỶ LỆ CHIA VẢI GIỮA CÁC DẢI.
+
+       Nguyen 2026-11-10: *"Chỉ cần ghi tỷ lệ size này bao nhiêu tỷ lệ size kia bao nhiêu. Ví dụ
+       tổng size 2-12 là 2 mét thì size 2-7 là bao nhiêu size 8-12 là bao nhiêu"*.
+
+       🔴 KHÔNG phải "mét sơ đồ từng size" — bản nháp đầu của tôi đặt vậy và Nguyen bác bỏ, ĐÚNG:
+       một sơ đồ chạy CHUNG, chi tiết của mọi size nằm LẪN LỘN trên cùng một lá vải, nên không ai đo
+       được "size 2-7 chiếm bao nhiêu mét". Hỏi một con số không tồn tại chỉ mời người dùng điền bừa.
+       Đây là TỶ LỆ NGƯỜI DÙNG TỰ KHAI.
+
+       🔴 VÌ SAO KHÔNG DÙNG HỆ SỐ: hệ số là SỐ CÁI. Chia 10kg theo hệ số 6 và 5 ra 5,45kg và 4,55kg
+       — tức 0,909 kg/cái ở CẢ HAI dải, y hệt nhau. Tách dải xong không biết thêm được gì, trong khi
+       áo size 12 tốn vải hơn size 2 rõ rệt.
+
+       ĐƠN VỊ TỰ DO, chỉ lấy tỷ lệ: gõ 0.8/1.2 (mét) hay 40/60 (%) hay 4/6 đều ra 40% và 60%.
+       Khuyết một dải ⇒ trả null ⇒ mọi nơi LÙI VỀ chia theo hệ số. Không tự suy ra tỷ lệ nửa vời từ
+       dữ liệu khuyết — sai lặng lẽ trên giá thành tệ hơn là giữ nguyên cách cũ.
+       ============================================================================================ */
+    function tyLeTheoMet() {
+      /* 🔴 Kiểu MẪU KHÔNG có cột này. Nguyen 2026-11-10: *"tách mẫu thì tỷ lệ size giống nhau, chỉ
+         là tách 50% cho mẫu 1 50% cho mẫu 2"* — các mẫu dùng CHUNG một dải size nên tỷ lệ vải của
+         chúng bằng nhau theo định nghĩa. Hỏi thêm một con số mà câu trả lời đã biết trước là mời
+         người dùng gõ bừa rồi lấy số bừa đó đi tính giá thành. */
+      if (laMau()) return null;
+      const ds = rows.filter(r => String(r.tenDai || '').trim() !== '');
+      if (!ds.length) return null;
+      if (ds.some(r => !(Number(r.tyLeVai) > 0))) return null;   // khuyết một dải = không dùng
+      const tong = ds.reduce((s, r) => s + Number(r.tyLeVai), 0);
+      if (!(tong > 0)) return null;
+      const m = new Map();
+      ds.forEach(r => m.set(r, Number(r.tyLeVai) / tong));
+      return { map: m, tong };
+    }
+    /* v9.23: luật kiểm theo KIỂU — bản sao có chủ đích của luật backend (PUT /daisize). Đổi một bên
+       phải đổi bên kia; bộ kiểm `kiem_tach_mau_cung_dai.js` chạy cả hai trên cùng bộ dữ liệu. */
+    function dungLuat() {
+      if (!(heSoDoiChieu > 0)) return false;
+      const ds = rows.filter(r => String(r.tenDai || '').trim() !== '');
+      if (!ds.length) return true;   // bỏ trống hết = bỏ tách (hỏi lại ở nút Lưu)
+      if (ds.some(r => !(Number(r.heSo) > 0))) return false;
+      /* v9.23: DonHangDaiSize.HeSo là INT và backend chặn số lẻ (v9.12). Thiếu phép này thì ở kiểu
+         MẪU — nơi hệ số hiệu lực là giá trị hợp lệ DUY NHẤT — hệ số lẻ (5.5 từ sổ cắt) làm nút Lưu
+         sáng xanh rồi server trả 400, không có đường nào gõ khác đi. */
+      if (ds.some(r => !Number.isInteger(Number(r.heSo)))) return false;
+      return laMau()
+        ? ds.every(r => Math.abs(Number(r.heSo) - heSoDoiChieu) <= 1e-9)
+        : Math.abs(ds.reduce((s, r) => s + (Number(r.heSo) || 0), 0) - heSoDoiChieu) <= 1e-9;
+    }
     function veLai() {
       const tong = tongHeSo();
-      const khop = heSoLenh > 0 && tong === heSoLenh;
+      const khop = dungLuat();
+      const tl = tyLeTheoMet();   // v9.38
       box.innerHTML = `<table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;">
-        <thead><tr><th style="width:38px;">STT</th><th>Tên dải</th><th style="width:120px;">Hệ số (cái/ri)</th><th style="width:40px;"></th></tr></thead>
-        <tbody>${rows.map((r, i) => `<tr data-dsrow data-i="${i}">
+        <thead><tr><th style="width:38px;">STT</th><th>${laMau() ? 'Tên mẫu' : 'Tên dải'}</th><th style="width:110px;">Hệ số (cái/ri)</th>
+          ${/* v9.38: ô NHẬP tỷ lệ (đơn vị tự do) + cột % tự tính, chỉ xem. Kiểu MẪU KHÔNG có hai
+               cột này — các mẫu chung một dải size nên tỷ lệ vải bằng nhau theo định nghĩa. */''}
+          ${laMau() ? '' : `<th style="width:120px;" title="Gõ tỷ lệ vải của dải này. Đơn vị tự do — 0.8 / 1.2 (mét) hay 40 / 60 (%) đều cho cùng kết quả, hệ thống chỉ lấy tỷ lệ giữa các dải.">Tỷ lệ vải</th>
+          <th style="width:90px;" title="Phần trăm chi phí vải mà dải này gánh khi tính giá thành.">= %</th>`}
+          <th style="width:40px;"></th></tr></thead>
+        <tbody>${rows.map((r, i) => {
+          const p = tl && tl.map.get(r);
+          return `<tr data-dsrow data-i="${i}">
           <td style="text-align:center;">${i + 1}</td>
-          <td><input class="ds-ten" value="${escapeHtml(r.tenDai || '')}" placeholder="VD: 2-7" style="width:100%;"></td>
+          <td><input class="ds-ten" value="${escapeHtml(r.tenDai || '')}" placeholder="${laMau() ? 'VD: Mẫu 1 in chó' : 'VD: 2-7'}" style="width:100%;"></td>
           <td><input class="ds-heso" type="number" min="1" step="1" value="${r.heSo}" style="width:100%;"></td>
-          <td><button type="button" class="btn small danger ds-del" data-i="${i}">X</button></td></tr>`).join('')}</tbody>
+          ${laMau() ? '' : `<td><input class="ds-met" type="number" min="0" step="0.0001" value="${r.tyLeVai}" placeholder="VD: 0.8" style="width:100%;"></td>
+          <td class="ds-tyle" style="text-align:center;font-weight:600;color:${p != null ? '#0d47a1' : '#8a8a8a'};">${p != null ? (p * 100).toFixed(1) + '%' : '—'}</td>`}
+          <td><button type="button" class="btn small danger ds-del" data-i="${i}">X</button></td></tr>`;
+        }).join('')}</tbody>
         <tfoot><tr>
-          <td></td><td style="text-align:right;font-weight:700;">Tổng hệ số</td>
-          <td style="text-align:center;font-weight:700;color:${khop ? '#137333' : '#c0392b'};">${fmtNumber(tong)} / ${fmtNumber(heSoLenh)} ${khop ? '✓' : ''}</td>
+          <td></td><td style="text-align:right;font-weight:700;">${laMau() ? 'Hệ số mỗi mẫu' : 'Tổng hệ số'}</td>
+          <td style="text-align:center;font-weight:700;color:${khop ? '#137333' : '#c0392b'};">${laMau() ? 'phải = ' + fmtNumber(heSoDoiChieu) : fmtNumber(tong) + ' / ' + fmtNumber(heSoDoiChieu)} ${khop ? '✓' : ''}</td>
+          ${laMau() ? '' : `<td style="text-align:center;font-weight:700;">${tl ? fmtNumber(Math.round(tl.tong * 10000) / 10000) : ''}</td><td></td>`}
           <td></td></tr></tfoot>
       </table>
-      <button type="button" class="btn small secondary" id="dsAdd" style="margin-top:6px;">+ Thêm dải</button>
-      ${khop ? '' : `<div class="empty-hint" style="text-align:left;color:#c0392b;margin-top:4px;">Chưa lưu được: tổng hệ số các dải phải bằng <b>${fmtNumber(heSoLenh)}</b>.</div>`}`;
-      box.querySelectorAll('.ds-ten, .ds-heso').forEach(inp => inp.addEventListener('input', () => { sync(); capNhatTong(); }));
+      ${/* Nói rõ hệ quả của việc BỎ TRỐNG — không thì người dùng tưởng để trống là hệ thống tự tính. */''}
+      ${laMau() ? '' : `<div class="empty-hint" style="text-align:left;margin-top:4px;">
+        <b>Tỷ lệ vải</b> là căn cứ chia chi phí vải cho từng dải.
+        <b>Đơn vị tự do</b> — gõ <code>0.8</code> và <code>1.2</code> (mét), hay <code>40</code> và <code>60</code> (%),
+        hay <code>4</code> và <code>6</code> đều cho cùng kết quả; hệ thống chỉ lấy tỷ lệ giữa các dải.
+        ${tl ? '<b style="color:#137333;">Đã đủ số — giá thành sẽ chia vải theo cột “= %”.</b>'
+             : '<span style="color:#b06000;">Chưa khai đủ cho mọi dải — giá thành sẽ chia theo <b>hệ số</b> như trước (mọi size ra cùng một số kg/cái, không phản ánh được size to tốn vải hơn).</span>'}
+      </div>`}
+      <button type="button" class="btn small secondary" id="dsAdd" style="margin-top:6px;">+ Thêm ${laMau() ? 'mẫu' : 'dải'}</button>
+      ${khop ? '' : `<div class="empty-hint" style="text-align:left;color:#c0392b;margin-top:4px;">Chưa lưu được: ${
+        rows.some(r => String(r.tenDai || '').trim() !== '' && Number(r.heSo) > 0 && !Number.isInteger(Number(r.heSo)))
+        ? `hệ số phải là <b>số nguyên</b> (số cái trong một ri)${laMau() && !Number.isInteger(heSoDoiChieu)
+            ? ` — mà hệ số đang dùng để đối chiếu là <b>${fmtNumber(heSoDoiChieu)}</b>, số lẻ. <b>Lệnh này chưa tách MẪU được</b>: sửa hệ số ở sổ cắt về số nguyên rồi quay lại.` : '.'}`
+        : (laMau()
+          ? `mỗi mẫu phải mang đúng hệ số <b>${fmtNumber(heSoDoiChieu)}</b> (các mẫu dùng chung một dải size nên không cộng dồn).`
+          : `tổng hệ số các dải phải bằng <b>${fmtNumber(heSoDoiChieu)}</b>.`)}</div>`}`;
+      box.querySelectorAll('.ds-ten, .ds-heso, .ds-met').forEach(inp => inp.addEventListener('input', () => { sync(); capNhatTong(); }));
       box.querySelectorAll('.ds-del').forEach(b => b.addEventListener('click', () => {
         sync(); rows.splice(Number(b.dataset.i), 1);
-        if (!rows.length) rows.push({ id: null, tenDai: '', heSo: '' });
+        if (!rows.length) rows.push({ id: null, tenDai: '', heSo: '', tyLeVai: '' });
         veLai();
       }));
-      box.querySelector('#dsAdd').addEventListener('click', () => { sync(); rows.push({ id: null, tenDai: '', heSo: '' }); veLai(); });
+      box.querySelector('#dsAdd').addEventListener('click', () => { sync(); rows.push({ id: null, tenDai: '', heSo: '', tyLeVai: '' }); veLai(); });
       capNhatTong();
     }
     /* Chỉ cập nhật DÒNG TỔNG + trạng thái nút, KHÔNG vẽ lại bảng — vẽ lại khi đang gõ là mất con trỏ. */
     function capNhatTong() {
-      const tong = tongHeSo();
-      const khop = heSoLenh > 0 && tong === heSoLenh;
+      const khop = dungLuat();
       const o = box.querySelector('tfoot td:nth-child(3)');
-      if (o) { o.textContent = `${fmtNumber(tong)} / ${fmtNumber(heSoLenh)} ${khop ? '✓' : ''}`; o.style.color = khop ? '#137333' : '#c0392b'; }
+      if (o) {
+        o.textContent = laMau() ? `phải = ${fmtNumber(heSoDoiChieu)} ${khop ? '✓' : ''}`
+                                : `${fmtNumber(tongHeSo())} / ${fmtNumber(heSoDoiChieu)} ${khop ? '✓' : ''}`;
+        o.style.color = khop ? '#137333' : '#c0392b';
+      }
+      /* v9.38: cột Tỷ lệ cập nhật THEO TỪNG DÒNG, không vẽ lại bảng — vẽ lại là mất con trỏ đang gõ
+         (đúng lý do capNhatTong tồn tại tách khỏi veLai). */
+      const tl = tyLeTheoMet();
+      box.querySelectorAll('[data-dsrow]').forEach(el => {
+        const r = rows[Number(el.dataset.i)];
+        const o2 = el.querySelector('.ds-tyle');
+        if (!r || !o2) return;
+        const p = tl && tl.map.get(r);
+        o2.textContent = p != null ? (p * 100).toFixed(1) + '%' : '—';
+        o2.style.color = p != null ? '#0d47a1' : '#8a8a8a';
+      });
+      const oTongMet = box.querySelector('tfoot td:nth-child(4)');
+      // v9.39: BỎ hậu tố " m" — đơn vị do người dùng tự chọn, gắn chữ "m" vào là nói dối dữ liệu.
+      if (oTongMet) oTongMet.textContent = tl ? fmtNumber(Math.round(tl.tong * 10000) / 10000) : '';
       const btn = modal.querySelector('#btnLuuDS');
       if (btn) { btn.disabled = !khop; btn.style.opacity = khop ? '' : '.5'; }
     }
+    /* v9.23: đổi kiểu tách ⇒ vẽ lại cả bảng (đổi nhãn/placeholder) + gợi ý hệ số cho kiểu MẪU. */
+    function veGiaiThich() {
+      const el = modal.querySelector('#dsGiaiThich');
+      if (!el) return;
+      const nguon = nguonHeSo === 'cat' ? '<span style="color:#0d47a1;">(hệ số theo SỔ CẮT)</span>' : '(hệ số theo lệnh — Cắt chưa ghi)';
+      el.innerHTML = laMau()
+        ? `Mỗi lớp cắt ra <b>${fmtNumber(heSoDoiChieu)}</b> cái ${nguon}. Các mẫu dùng <b>CHUNG một dải size</b> nên
+           <b>mỗi mẫu đều mang hệ số ${fmtNumber(heSoDoiChieu)}</b> — không cộng dồn.
+           Vải cắt chung một bàn, vì vậy ở các công đoạn sau, ô <b>“SL từ Cắt”</b> của mỗi mẫu là
+           <b>số chung của cả màu</b> (cả ${Math.max(2, rows.length)} mẫu) — tự nhập số thật của từng mẫu.`
+        : `Mỗi lớp cắt ra <b>${fmtNumber(heSoDoiChieu)}</b> cái ${nguon}, chia thành các dải dưới đây.
+           <b>Tổng hệ số các dải phải đúng bằng ${fmtNumber(heSoDoiChieu)}</b> — có vậy số cắt và số đóng gói mới khớp nhau.
+           Hệ số mỗi dải là <b>số nguyên</b>.`;
+    }
+    /* v9.23: đổi KIỂU trên lệnh đã lưu bảng dải/mẫu là đổi luôn HỆ SỐ của chính những dòng đó, mà
+       tiến độ May/QC/Đóng gói/Kho nhập/In thêu/Gia công đang trỏ vào theo ID — số đã ghi giữ nguyên
+       còn mốc đối chiếu nhảy. Không chặn (có thể là đúng ý), nhưng phải nói trước. */
+    const daLuuDong = (dsBanDau || []).filter(d => Number(d.ID) > 0).length;
+    modal.querySelectorAll('input[name="dsLoai"]').forEach(r => r.addEventListener('change', () => {
+      sync();
+      if (daLuuDong > 0 && !confirm(`Lệnh này đã lưu ${daLuuDong} dòng ${laMau() ? 'mẫu' : 'dải size'}.\n\n`
+        + 'Đổi kiểu sẽ đổi HỆ SỐ của chính các dòng đó, nên mọi ô "SL từ Cắt" / "Còn lại" ở các công '
+        + 'đoạn sau tính lại theo hệ số mới (số đã ghi không đổi). Tiếp tục?')) {
+        modal.querySelector(`input[name="dsLoai"][value="${laMau() ? 'MAU' : 'DAI'}"]`).checked = true;
+        return;
+      }
+      loaiTach = r.value === 'MAU' ? 'MAU' : 'DAI';
+      /* Sang kiểu MẪU: điền sẵn hệ số = hệ số hiệu lực cho mọi dòng (đó là giá trị DUY NHẤT hợp lệ)
+         — đỡ bắt người dùng gõ đi gõ lại cùng một số rồi mới được bấm Lưu. */
+      if (laMau() && heSoDoiChieu > 0) rows.forEach(x => { x.heSo = heSoDoiChieu; });
+      veGiaiThich();
+      veLai();
+    }));
+    veGiaiThich();
     veLai();
 
     modal.querySelector('#btnLuuDS').addEventListener('click', async () => {
       sync();
       /* Xoá HẾT dải = bỏ tách, quay về tính chung cả lệnh. Hỏi lại cho chắc. */
       const coDuLieu = rows.some(r => (r.tenDai || '').trim());
-      if (!coDuLieu && !confirm('Bỏ trống hết = BỎ TÁCH dải size, lệnh quay về tính chung một dải. Tiếp tục?')) return;
+      if (!coDuLieu && !confirm('Bỏ trống hết = BỎ TÁCH, lệnh quay về tính chung một dải. Tiếp tục?')) return;
       try {
-        await apiPut(`/api/qlsx/orders/${encodeURIComponent(maDH)}/daisize`, { rows });
+        await apiPut(`/api/qlsx/orders/${encodeURIComponent(maDH)}/daisize`, { rows, loaiTach });   // v9.23
         closeModal();
-        toast('Đã lưu dải size.', 'success');
+        toast(laMau() ? 'Đã lưu các mẫu (cùng dải size).' : 'Đã lưu dải size.', 'success');
         /* ⚠️ Đóng NỐT modal Ghi tiến độ rồi mở lại, để mọi công đoạn nạp lại danh sách dải mới —
            các form Đóng gói / Kho nhập nở dòng theo dải nên phải dựng lại từ dữ liệu mới.
            openModal có NGĂN XẾP (xem [[reference_qlnoibo_modal_stack]]) nên phải đóng đủ 2 lớp. */
@@ -3205,6 +3490,44 @@ window.ModuleQLSX = (function () {
      nên gọi được từ bất cứ đâu, không phụ thuộc form Ghi tiến độ đang mở.
      Lưu ý: SL cái = số lớp × hệ số của ĐƠN (server là nguồn sự thật, ở đây chỉ hiển thị cho dễ nhìn).
      ================================================================================================ */
+  /* v9.24 — "25,5 KG · 60 m" cho mọi ô chọn cây vải. Dùng CHUNG cho ghi tiến độ Cắt và Sửa sổ cắt;
+     hai nơi viết riêng là kiểu gì cũng có ngày lệch nhau. Bỏ qua phần trống (cây chỉ quản theo kg
+     thì không in chữ thừa), cả hai trống thì nơi gọi tự quyết định in gì. */
+  function soKgMet(kg, met) {
+    const p = [];
+    if (Number(kg) > 0) p.push(fmtNumber(kg) + ' KG');
+    if (Number(met) > 0) p.push(fmtNumber(met) + ' m');
+    return p.join(' · ');
+  }
+  /* v9.24 — GOM danh sách cây đã xuất cho lệnh (detail.giaoVai) THEO CÂY: một cây có thể xuất qua
+     nhiều phiếu, lấy mỗi dòng đầu là nói THIẾU phần đã cấp ở các phiếu sau. Trả MẢNG MỚI gồm các
+     BẢN SAO — không bao giờ sửa vào detail.giaoVai, vì các màn khác đọc chung mảng đó.
+     Giữ NgayDau/NgayCuoi thay vì NgayGiao của phiếu đầu: dòng đã gộp thì một ngày lẻ là nói dối. */
+  function gomCayDaXuat(ds) {
+    const out = [];
+    (ds || []).forEach(c => {
+      const cu = out.find(x => String(x.CayID) === String(c.CayID));
+      const kg = Number(c.KGGiao) || 0, met = Number(c.MetGiao) || 0;
+      if (!cu) {
+        out.push(Object.assign({}, c, { KGGiao: kg, MetGiao: met, SoPhieu: 1,
+          NgayDau: c.NgayGiao || null, NgayCuoi: c.NgayGiao || null }));
+        return;
+      }
+      cu.KGGiao += kg; cu.MetGiao += met; cu.SoPhieu++;
+      if (c.NgayGiao) {
+        if (!cu.NgayDau || c.NgayGiao < cu.NgayDau) cu.NgayDau = c.NgayGiao;
+        if (!cu.NgayCuoi || c.NgayGiao > cu.NgayCuoi) cu.NgayCuoi = c.NgayGiao;
+      }
+    });
+    return out;
+  }
+  /* Chuỗi ngày của dòng đã gộp: một phiếu thì "12/10", nhiều phiếu thì "12/10 – 20/10". */
+  function chuoiNgayXuat(c) {
+    const a = c.NgayDau ? fmtDate(c.NgayDau) : '';
+    const b = c.NgayCuoi ? fmtDate(c.NgayCuoi) : '';
+    if (!a && !b) return '';
+    return (a && b && a !== b) ? `${a} – ${b}` : (a || b);
+  }
   let __ssIdx = 0;
   async function openSuaSoCatModal(maDH, rec, onDone) {
     let det;
@@ -3213,10 +3536,47 @@ window.ModuleQLSX = (function () {
     /* GET /orders/:maDH trả về object PHẲNG (các trường của đơn + giaoVai), KHÔNG bọc trong .order —
        xem cách openProgressForm đọc detail.HeSoQuyDoi / detail.giaoVai. */
     // 1 cây có thể xuất qua NHIỀU phiếu -> giaoVai có thể trùng CayID; lọc trùng cho danh sách gọn.
-    const dsCay = [];
-    (det.giaoVai || []).forEach(c => { if (!dsCay.some(x => String(x.CayID) === String(c.CayID))) dsCay.push(c); });
-    const heSo = Number(det.HeSoQuyDoi) || 1;
-    const nhanApp = (c) => `${c.MaCay || ''}${c.TenLoaiVai ? ' · ' + c.TenLoaiVai : ''}${c.TenMau ? ' · ' + c.TenMau : ''}`;
+    const dsCay = gomCayDaXuat(det.giaoVai);   // v9.24: dùng CHUNG với form Ghi tiến độ Cắt
+    /* ================================================================================================
+       🔴 v9.42 — MÀN NÀY CŨNG GHI `TienDoCatChiTietCay`, NÊN PHẢI DÙNG CÙNG MỘT MẶC ĐỊNH
+       ------------------------------------------------------------------------------------------------
+       Có HAI màn ghi sổ cắt: `openProgressForm` (Ghi tiến độ Cắt) và màn này (Sửa sổ cắt). Bản đầu
+       v9.42 chỉ sửa màn thứ nhất — rà soát chéo bắt được, và hậu quả nặng chứ không nhỏ:
+
+       v9.42 CHỈ đổi được con số khi tổng hệ số dải ≠ hệ số lệnh. Mà theo `heSoHieuLuc()`, tình huống
+       đó xảy ra đúng ở kịch bản v8.92: ô "Hệ số quy đổi" ở Ra lệnh SX để mặc định 1, ít ai sửa, còn
+       tổ cắt dùng 11. Nghĩa là ĐÚNG MỌI LỆNH mà v9.42 có tác dụng thì màn này đang điền sẵn 1 trong
+       khi màn kia điền 11. Thêm một cây qua nút Sửa ⇒ `SoLuongCai = lớp × 1` thay vì `× 11`, sai
+       MƯỜI MỘT LẦN ở đúng cột đi vào LƯƠNG CẮT và GIÁ THÀNH.
+       Tệ hơn nữa: sổ cắt của màu đó khi ấy mang hai hệ số khác nhau ⇒ `HeSoCatLech = 1` ⇒
+       `heSoHieuLuc()` lùi về hệ số LỆNH ⇒ Đóng gói/Kho nhập quy đổi ri bằng 1 ⇒ sập cả chuỗi v8.92.
+
+       Và màn này LUÔN gửi hệ số tường minh (`heSoQuyDoi: ...ss-heso.value`), nên `heSoMacDinhCayCat()`
+       ở máy chủ KHÔNG cứu được — `heSoCuaDong()` thấy số > 0 là dùng luôn.
+
+       🔴 `p.HeSoQuyDoi` của dòng ĐÃ LƯU phải giữ nguyên — đây là số đã xảy ra, không được điền đè.
+       Mặc định mới chỉ áp cho dòng THÊM MỚI.
+       ================================================================================================ */
+    const heSoLenhSS = Number(det.HeSoQuyDoi) || 1;
+    const dsDaiSS = (det && det.daiSizeList) || [];
+    const laTachMauSS = dsDaiSS.some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU');
+    const heSoTuTachDaiSS = (() => {
+      if (!dsDaiSS.length) return 0;
+      if (dsDaiSS.some(d => !(Number(d.HeSo) > 0))) return 0;
+      return laTachMauSS ? Number(dsDaiSS[0].HeSo) : dsDaiSS.reduce((s, d) => s + Number(d.HeSo), 0);
+    })();
+    const heSo = heSoTuTachDaiSS > 0 ? heSoTuTachDaiSS : heSoLenhSS;
+    const nguonHeSoSS = heSoTuTachDaiSS > 0
+      ? (laTachMauSS
+          ? `tách MẪU (mỗi mẫu hệ số ${fmtNumber(heSoTuTachDaiSS)})`
+          : `tách DẢI SIZE ở Kỹ thuật (${dsDaiSS.map(d => `${d.TenDai} ${fmtNumber(d.HeSo)}`).join(' + ')} = ${fmtNumber(heSoTuTachDaiSS)})`)
+      : `Ra lệnh SX (${fmtNumber(heSoLenhSS)})`;
+    /* v9.24 (Nguyen): thêm KG + mét ĐÃ XUẤT cho lệnh này vào nhãn, giống ô chọn cây ở Ghi tiến độ Cắt. */
+    const nhanApp = (c) => {
+      const so = soKgMet(c.KGGiao, c.MetGiao);
+      return `${c.MaCay || ''}${c.TenLoaiVai ? ' · ' + c.TenLoaiVai : ''}${c.TenMau ? ' · ' + c.TenMau : ''}`
+        + (so ? ` — đã xuất ${so}` : '');
+    };
     // v6.01: sổ đang sửa ĐÃ có giật cấp thì bật cột sẵn, không thì để ẩn cho gọn.
     let ssCoGiatCap = (rec.cays || []).some(c => Number(c.SoCaiGiatCap) > 0);
     const dongHtml = (p) => {
@@ -3226,8 +3586,10 @@ window.ModuleQLSX = (function () {
         <td>${searchableSelectHtml('sscay_' + idx, dsCay, 'CayID', nhanApp, p.CayID || '')}</td>
         <td class="col-so"><input class="ss-stt" type="text" value="${escapeHtml(p.SttCay || '')}"></td>
         <td class="col-so"><input class="ss-lop" type="number" min="0" value="${p.SoLuongLop != null ? p.SoLuongLop : ''}"></td>
-        ${/* v6.08: hệ số sửa được cho từng cây (mặc định hệ số của đơn). */''}
-        <td class="col-so"><input class="ss-heso" type="number" min="0" step="0.001" value="${p.HeSoQuyDoi != null ? p.HeSoQuyDoi : heSo}"></td>
+        ${/* v6.08: hệ số sửa được cho từng cây. v9.42: mặc định của dòng MỚI lấy từ tách dải —
+             dòng ĐÃ LƯU giữ nguyên `p.HeSoQuyDoi` (số đã xảy ra, không điền đè). */''}
+        <td class="col-so"><input class="ss-heso" type="number" min="0" step="0.001" value="${p.HeSoQuyDoi != null ? p.HeSoQuyDoi : heSo}" title="Mặc định lấy từ ${escapeHtml(nguonHeSoSS)}">
+          <div class="ss-heso-canhbao" style="font-size:11px;color:#c0392b;line-height:1.3;"></div></td>
         ${/* v6.01: giật cấp (số CÁI) — cột chỉ hiện khi ô tick "Có cắt giật cấp" đang bật. */''}
         <td class="col-so gc-cell" style="${ssCoGiatCap ? '' : 'display:none;'}"><input class="ss-giatcap" type="number" min="0" value="${p.SoCaiGiatCap != null ? p.SoCaiGiatCap : ''}"></td>
         <td class="col-so"><input class="ss-kgmet" type="number" min="0" step="0.01" value="${p.SoKgMetSuDung != null ? p.SoKgMetSuDung : ''}"></td>
@@ -3242,7 +3604,8 @@ window.ModuleQLSX = (function () {
     const modal = openModal(`
       <h3>Sửa sổ cắt — ${escapeHtml(maDH)}${rec.SttSoCat != null ? ' · STT sổ ' + escapeHtml(String(rec.SttSoCat)) : ''}</h3>
       <p class="empty-hint">Thêm cây vải cắt tiếp vào ĐÚNG sổ này (không tạo sổ mới). Sửa được STT cây, số lớp, KG/mét, ảnh.
-        Ngày cắt của sổ: <b>${fmtDate(rec.NgayGhiNhan)}</b>. Hệ số quy đổi của đơn: <b>${fmtNumber(heSo)}</b>.</p>
+        Ngày cắt của sổ: <b>${fmtDate(rec.NgayGhiNhan)}</b>.
+        Hệ số mặc định cho cây thêm mới: <b>${fmtNumber(heSo)}</b> — lấy từ ${escapeHtml(nguonHeSoSS)}.</p>
       <div class="form-grid">
         <div class="form-row"><label>STT sổ cắt</label><input type="number" id="ssSttSo" value="${rec.SttSoCat != null ? rec.SttSoCat : ''}"></div>
       </div>
@@ -3282,9 +3645,19 @@ window.ModuleQLSX = (function () {
         // v6.01: SL cái = lớp × hệ số + giật cấp (giật cấp ghi bằng CÁI, không nhân hệ số).
         const oGC = r.querySelector('.ss-giatcap');
         const gc = (ssCoGiatCap && oGC) ? (Number(oGC.value) || 0) : 0;
-        // v6.08: hệ số theo ô của DÒNG (sửa được), bỏ trống/≤0 thì dùng hệ số của đơn.
+        // v6.08: hệ số theo ô của DÒNG (sửa được), bỏ trống/≤0 thì dùng hệ số mặc định (v9.42).
         const oHS = r.querySelector('.ss-heso');
         const hs = (oHS && Number(oHS.value) > 0) ? Number(oHS.value) : heSo;
+        /* 🔴 v9.42 — cảnh báo lệch, giống hệt form Ghi tiến độ Cắt. Đây là màn dễ sinh lệch NHẤT
+           (thêm cây vào một sổ cũ, hệ số của dòng cũ có thể là số của thời trước khi tách dải) mà
+           trước v9.42 lại im lặng hoàn toàn. CẢNH BÁO, không chặn — xem khối ghi chú heSoTuTachDaiSS. */
+        const oCB = r.querySelector('.ss-heso-canhbao');
+        if (oCB) {
+          const lech = heSoTuTachDaiSS > 0 && Math.abs(hs - heSoTuTachDaiSS) > 1e-9;
+          oCB.textContent = lech
+            ? `⚠️ Lệch với ${laTachMauSS ? 'tách mẫu' : 'tách dải size'}: ${fmtNumber(heSoTuTachDaiSS)}. Kiểm lại — nhiều khả năng gõ nhầm.`
+            : '';
+        }
         lop += l; cai += l * hs + gc;
         r.querySelector('.ss-cai').textContent = fmtNumber(Math.round((l * hs + gc) * 100) / 100);
       });
@@ -3483,9 +3856,49 @@ window.ModuleQLSX = (function () {
     // san xuat, DonHangSanXuat.HeSoQuyDoi) - dung CHUNG cho MOI cay vai o cong doan Cat, thay vi nhap
     // lai tung dong (xem catPickRowHtml()/wireCatPickRow() ben duoi, da bo o nhap ".cat-heso").
     const heSoQuyDoiDonHang = Number(detail.HeSoQuyDoi) || 1;
+    /* ================================================================================================
+       v9.42 — HỆ SỐ MẶC ĐỊNH CỦA CÂY Ở SỔ CẮT LẤY TỪ TÁCH DẢI (Nguyen 2026-11-10)
+       ------------------------------------------------------------------------------------------------
+       Nguyen: *"hoặc sẽ tự lấy tổng hệ số từ tách dải size ở kỹ thuật sang, công đoạn cắt không phải
+       điền"*. Làm NỬA đó — điền sẵn — nhưng KHÔNG khóa ô.
+
+       🔴 VÌ SAO KHÔNG KHÓA: tách dải là KẾ HOẠCH, sổ cắt là CÁI ĐÃ XẢY RA. Chiều "hệ số thật nằm ở sổ
+       cắt" là kết luận sau BA lần sai (v8.31, v8.48, v8.52) — xem
+       reference_qlnoibo_ri_bang_so_lop_he_so_la_cai_moi_ri. Khóa ô đi thì khi ri thật khác kế hoạch
+       (hết vải một size, bàn lẻ) không còn chỗ nào khai đúng, và sai đó chảy thẳng vào LƯƠNG CẮT và
+       GIÁ THÀNH mà không ai thấy. Hệ số để theo TỪNG CÂY cũng là cố ý (v6.08) vì các bàn có thể ra ri
+       khác nhau — hệ thống đã có cờ `HeSoCatLech` để xử lý ca đó.
+
+       Nguyen nói ở xưởng ri LUÔN đủ theo kế hoạch ⇒ ô này gần như không bao giờ phải sửa, và mỗi lần
+       cảnh báo lệch bật lên thì gần như chắc chắn là GÕ NHẦM. Câu cảnh báo viết theo đúng nghĩa đó.
+
+       Lấy số nào:
+         · tách DẢI SIZE  → TỔNG hệ số các dải (6 + 5 = 11): một lớp cắt ra cả ri gồm mọi dải.
+         · tách MẪU       → hệ số của một mẫu (các mẫu dùng CHUNG một dải size nên bằng nhau, KHÔNG cộng).
+         · không tách     → hệ số khai ở Ra lệnh SX, y như trước v9.42.
+       ================================================================================================ */
+    const dsDaiCuaLenh = (detail && detail.daiSizeList) || [];
+    const laTachMauLenh = dsDaiCuaLenh.some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU');
+    const heSoTuTachDai = (() => {
+      if (!dsDaiCuaLenh.length) return 0;
+      if (dsDaiCuaLenh.some(d => !(Number(d.HeSo) > 0))) return 0;   // khuyết: không đoán
+      return laTachMauLenh
+        ? Number(dsDaiCuaLenh[0].HeSo)
+        : dsDaiCuaLenh.reduce((s, d) => s + Number(d.HeSo), 0);
+    })();
+    const heSoMacDinhCay = heSoTuTachDai > 0 ? heSoTuTachDai : heSoQuyDoiDonHang;
+    const nguonHeSoMacDinh = heSoTuTachDai > 0
+      ? (laTachMauLenh
+          ? `tách MẪU ở công đoạn Cắt (mỗi mẫu hệ số ${fmtNumber(heSoTuTachDai)}, các mẫu dùng chung một dải size)`
+          : `tách DẢI SIZE ở công đoạn Kỹ thuật (${dsDaiCuaLenh.map(d => `${d.TenDai} ${fmtNumber(d.HeSo)}`).join(' + ')} = ${fmtNumber(heSoTuTachDai)})`)
+      : `Ra lệnh SX (${fmtNumber(heSoQuyDoiDonHang)})`;
     // v5.2: state co the thay doi TRONG luc modal dang mo (them/xoa Giao vai, Phu kien) - dung mang
     // rieng thay vi doc thang tu detail de refresh tai cho khong can dong modal.
-    let giaoVaiList = detail.giaoVai || [];
+    /* v9.24: GOM THEO CÂY. Một cây xuất cho lệnh qua NHIỀU phiếu thì trước đây dropdown hiện mấy
+       dòng trùng mã cây, chỉ khác ngày — người cắt chọn CÂY chứ không chọn phiếu (và catAvailListFor
+       ẩn cả cây sau khi chọn), nên mấy dòng kia chỉ là nhiễu. Gom lại còn một dòng, KG/mét CỘNG DỒN
+       = đúng phần đã cấp cho lệnh, khớp số của màn Sửa sổ cắt (gomCayDaXuat dùng chung). */
+    let giaoVaiList = gomCayDaXuat(detail.giaoVai);
     // v5.14: "Chỉ định NPL" (phụ kiện) đã tách khỏi màn hình này - xem module.tailieukythuat.js (dùng
     // chung 3 API /orders/:maDH/phukien như cũ, chỉ chuyển UI, không đụng chạm state máy công đoạn).
     // v5.13 (muc 1.2.1.1/1.2.1.2): cung 1 pattern list-rieng-luu-ngay nhu giaoVaiList o tren -
@@ -3520,6 +3933,23 @@ window.ModuleQLSX = (function () {
           </div>
           <div class="form-row"><label>Ngày ghi nhận *</label><input type="date" name="ngayGhiNhan" value="${homNayISO()}" required></div>
         </div>
+        ${/* 🔴 v9.26 — KHUNG DẢI SIZE / MẪU RA NGOÀI #pStageFields.
+             Nguyen 2026-11-06: *"tách dải size, tách mầu sau khi lưu sổ cắt mới có, nhưng khi lưu
+             hết bàn cắt công đoạn cắt không hiện ra nữa"*. Trước đây khung chỉ được vẽ trong NHÁNH
+             CẮT của renderStageFields — cắt xong, lệnh tự chuyển sang May/QC, form mở ra ở công
+             đoạn hiện tại nên khung biến mất; muốn tách mẫu phải tự biết đường chọn ngược về Cắt.
+             Mà tách MẪU lại là việc làm SAU khi cắt xong (tách từ khâu in) — đúng lúc cần nhất thì
+             không thấy nút.
+             Dải size/mẫu là thuộc tính của LỆNH, không của công đoạn (chính Nguyen đã nói ở v9.12:
+             "các trường thông tin ở lệnh SX không gắn liền với công đoạn nào"). Đặt ở đây thì:
+               · hiện ở MỌI công đoạn, không phải đi đường vòng;
+               · nằm NGOÀI #pStageFields nên renderStageFields vẽ lại bao nhiêu lần cũng không xóa
+                 mất — dẹp luôn cả họ lỗi "khung dải size biến mất" (v8.79 → v9.13).
+             🔴 v9.33 (Nguyen đổi ý CÙNG NGÀY 2026-11-06: "chức năng tách dải size tách mẫu CHỈ
+             hiển thị ở công đoạn cắt... để tách TRƯỚC khi trải vì hệ số đã biết rồi") — gạch ý
+             đầu: host vẫn nằm đúng chỗ này (giữ nguyên cách chống innerHTML async), nhưng NỘI DUNG
+             chỉ đổ vào khi công đoạn đang chọn là CẮT. Xem capNhatKhungDaiSize(). */''}
+        <div id="daiSizeHost"></div>
         <div id="pStageFields"></div>
         <div class="form-row"><label>Ghi chú</label><textarea name="ghiChu" rows="2"></textarea></div>
         <div class="modal-actions">
@@ -3578,10 +4008,12 @@ window.ModuleQLSX = (function () {
     function soOLuyKe(stageCode) { return laCongDoanCongDon(stageCode) && stageCode !== 'KN' ? 2 : 0; }
     function oLuyKeHtml(stageCode, ct, dai) {
       if (!soOLuyKe(stageCode)) return '';
-      const daGhi = daNhapCuaDong(stageCode, ct, dai);
-      const con = Math.max(0, slCatCuaDong(ct, dai) - daGhi);
-      return `<div class="form-row"><label>Đã ghi (lũy kế)</label><div class="readonly-fact">${fmtNumber(daGhi)}</div></div>
-        <div class="form-row"><label>Còn lại</label><div class="readonly-fact" style="color:${con > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(con)}</div></div>`;
+      /* v9.23: kiểu MẪU thì hai ô này là số CHUNG của cả màu (xem slCatCuaMau) — nhãn phải nói ra,
+         kẻo mỗi mẫu đều thấy "còn 54" rồi cả hai cùng ghi bù. */
+      const daGhi = laTachMau ? daGhiCuaMau(stageCode, ct) : daNhapCuaDong(stageCode, ct, dai);
+      const con = conLaiCuaDong(stageCode, ct, dai);
+      return `<div class="form-row"><label>Đã ghi (lũy kế)${nhanChungMau}</label><div class="readonly-fact">${fmtNumber(daGhi)}</div></div>
+        <div class="form-row"><label>Còn lại${nhanChungMau}</label><div class="readonly-fact" style="color:${con > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(con)}</div></div>`;
     }
 
     /* ================================================================================================
@@ -3609,19 +4041,25 @@ window.ModuleQLSX = (function () {
        mà không ai biết. Trả về false = người dùng bấm Hủy, nơi gọi phải `return` ngay.
        ⚠️ So theo TỪNG DÒNG (màu × dải): lệnh đã tách dải mà so tổng cả màu là cảnh báo sai chỗ. */
     function canhBaoVuotSoCat(chiTietMau, ma) {
-      const conLaiCuaKhoa = new Map();
+      /* v9.23: kiểu MẪU thì các mẫu ăn CHUNG một bàn cắt ⇒ phải GOM THEO MÀU rồi mới so. So từng
+         mẫu với trần chung (108) thì ghi 108 cho mẫu 1 và 108 cho mẫu 2 vẫn im lặng, dù tổng 216
+         gấp đôi số thật đã cắt. */
+      const gom = laTachMau;
+      const theoKhoa = new Map();
       dongNhapList().forEach(({ ct, dai }) => {
-        const khoa = `${ct.MauSacID}|${dai ? dai.ID : ''}`;
-        conLaiCuaKhoa.set(khoa, {
-          ten: nhanDong(ct, dai),
-          con: Math.max(0, slCatCuaDong(ct, dai) - daNhapCuaDong(ma, ct, dai))
+        const khoa = gom ? String(ct.MauSacID) : `${ct.MauSacID}|${dai ? dai.ID : ''}`;
+        if (theoKhoa.has(khoa)) return;
+        theoKhoa.set(khoa, {
+          ten: gom ? `${ct.TenMau} (cả ${daiList.length} mẫu)` : nhanDong(ct, dai),
+          con: conLaiCuaDong(ma, ct, dai),
+          them: 0
         });
       });
-      const vuot = (chiTietMau || []).map(m => {
-        const d = conLaiCuaKhoa.get(`${m.mauSacId}|${m.daiSizeId || ''}`);
-        const them = Number(m.soLuong) || 0;
-        return d && them > d.con ? { ten: d.ten, them, con: d.con } : null;
-      }).filter(Boolean);
+      (chiTietMau || []).forEach(m => {
+        const d = theoKhoa.get(gom ? String(m.mauSacId) : `${m.mauSacId}|${m.daiSizeId || ''}`);
+        if (d) d.them += Number(m.soLuong) || 0;
+      });
+      const vuot = Array.from(theoKhoa.values()).filter(d => d.them > d.con);
       if (!vuot.length) return true;
       return confirm('Các dòng sau ghi VƯỢT phần còn lại so với sổ cắt:\n\n'
         + vuot.map(v => `• ${v.ten}: ghi ${fmtNumber(v.them)} / còn lại ${fmtNumber(v.con)}`).join('\n')
@@ -3630,8 +4068,10 @@ window.ModuleQLSX = (function () {
     function ganKhoiKetThucDot(box, ma, maDH, perm) {
       /* Dòng gợi ý nói đúng tình trạng HIỆN TẠI của lệnh — người dùng quyết định có tích hay không
          mà không phải tự cộng lại từng màu. Dùng CHÍNH daNhapCuaDong/slCatCuaDong như mọi ô khác. */
-      const tongCat = dongNhapList().reduce((a, { ct, dai }) => a + slCatCuaDong(ct, dai), 0);
-      const tongDaGhi = dongNhapList().reduce((a, { ct, dai }) => a + daNhapCuaDong(ma, ct, dai), 0);
+      /* v9.23: gom theo MÀU — ở kiểu MẪU cộng thẳng mọi dòng là nhân đôi mốc sổ cắt, trong khi
+         backend vẫn đo theo màu ⇒ màn hình nói "còn thiếu" mà lệnh đã tự chuyển tiếp. */
+      const tongCat = tongCatCuaLenh();
+      const tongDaGhi = tongDaGhiCuaLenh(ma);
       const con = Math.max(0, tongCat - tongDaGhi);
       const ten = ma === 'QC' ? 'QC' : 'đóng gói';
       const el = box.querySelector('#knKetThucGoiY');
@@ -3649,7 +4089,7 @@ window.ModuleQLSX = (function () {
     // Trả về 1 HOẶC 2 ô (div.form-row) - nơi gọi phải đặt grid-template-columns khớp số ô này.
     // v8.59: nhận thêm `dai` — số đối chiếu phải là số CỦA ĐÚNG DẢI, không phải tổng cả lệnh.
     function oDoiChieuHtml(stageCode, ct, dai) {
-      const oCat = `<div class="form-row"><label>Cắt</label><div class="readonly-fact">${fmtNumber(slCatCuaDong(ct, dai))}</div></div>`;
+      const oCat = `<div class="form-row"><label>${nhanCat}</label><div class="readonly-fact">${fmtNumber(slCatCuaDong(ct, dai))}</div></div>`;
       if (!coCotCongDoanTruoc(stageCode)) return oCat;
       const ma = maCongDoanTruoc(stageCode);
       const coSo = dai
@@ -3671,12 +4111,13 @@ window.ModuleQLSX = (function () {
       /* v8.74: ô nhập của công đoạn cộng dồn là SỐ CỦA ĐỢT NÀY, không phải lũy kế — nhãn phải nói rõ,
          nếu không người dùng gõ lại tổng và số bị cộng gấp đôi. */
       const goiY = laCongDoanCongDon(stageCode) ? 'SL đợt này' : 'SL lũy kế';
-      return dongNhapList().map(({ ct, dai }) => `<div class="row-item" style="grid-template-columns:${cols};">
+      // v9.33: lệnh đã tách thì mỗi dải/mẫu là một khối riêng (xem khoiTheoDai).
+      return khoiTheoDai(({ ct, dai }) => `<div class="row-item" style="grid-template-columns:${cols};">
           <div class="form-row"><label>${nhanDong(ct, dai)}</label></div>
           <div class="form-row"><input type="number" min="0" class="mau-qty" data-mausac="${ct.MauSacID}" data-dai="${dai ? dai.ID : ''}" placeholder="${goiY}"></div>
           ${oDoiChieuHtml(stageCode, ct, dai)}
           ${oLuyKeHtml(stageCode, ct, dai)}
-        </div>`).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>';
+        </div>`, '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>');
     }
     /* v8.31: giống mauQtyRowsHtml() nhưng dành RIÊNG cho Đóng gói - nhập theo Ri, hệ số = TongSoLop của
        đúng màu đó (catMauList[].TongSoLop do backend getCatMauList() cộng dồn mọi cây cùng màu).
@@ -3693,7 +4134,8 @@ window.ModuleQLSX = (function () {
       const cols = (coCotCongDoanTruoc('DG')
         ? '190px 110px 120px 110px 140px 110px'
         : '190px 110px 120px 110px 110px') + (soOLuyKe('DG') ? ' 150px 110px' : '');
-      return dongNhapList().map(({ ct, dai }) => {
+      // v9.33: lệnh đã tách thì mỗi dải/mẫu là một khối riêng (xem khoiTheoDai).
+      return khoiTheoDai(({ ct, dai }) => {
         /* v8.52: hệ số quy đổi Ri → cái là HeSoQuyDoi CỦA LỆNH, không phải TongSoLop (xem khối
            ghi chú ở soLuongRiLe). TongSoLop vẫn hiện, nhưng với đúng ý nghĩa của nó: SỐ RI cắt được.
            v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
@@ -3723,7 +4165,7 @@ window.ModuleQLSX = (function () {
           ${oLuyKeHtml('DG', ct, dai)}
         </div>
         <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${nhanDong(ct, dai)}: ${ghiChu}</div>`;
-      }).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>';
+      }, '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>');
     }
     /* ============================================================================================
        v8.49 — CÔNG THỨC "Ri × hệ số + SL lẻ" NẰM ĐÚNG MỘT CHỖ: soLuongRiLe().
@@ -3768,6 +4210,16 @@ window.ModuleQLSX = (function () {
        ============================================================================================ */
     const daiList = (detail.daiSizeList || []);
     const coTachDai = daiList.length > 0;
+    /* v9.23: lệnh tách theo MẪU (biến thể cùng dải size) — vải CẮT CHUNG một bàn nên "SL từ Cắt" của
+       mỗi dòng là số CHUNG của cả màu, không phải của riêng mẫu đó. Nhãn phải nói ra, kẻo người ghi
+       tiến độ tưởng mỗi mẫu cắt được từng ấy (nhân đôi sản lượng trên giấy). */
+    const laTachMau = daiList.some(d => String(d.LoaiTach || '').toUpperCase() === 'MAU');
+    const nhanCat = laTachMau ? `Cắt <span style="color:#b06000;font-weight:400;">(chung cả ${daiList.length} mẫu)</span>` : 'Cắt';
+    const nhanChungMau = laTachMau ? ` <span style="color:#b06000;font-weight:400;">(chung cả ${daiList.length} mẫu)</span>` : '';
+    /* Người dùng vừa khai "mẫu" thì mọi màn sau phải gọi là "mẫu" — dùng hai biến này cho nhãn cột,
+       ô chọn và badge ở Giao/Nhận gia công, Giao/Nhận in thêu. */
+    const tuDaiHoa = laTachMau ? 'Mẫu' : 'Dải size';
+    const tuDaiThuong = laTachMau ? 'mẫu' : 'dải';
     function khoaDong(ct, dai) { return `${ct.MauSacID}|${dai ? dai.ID : ''}`; }
     /* Trả về danh sách CẶP (màu, dải) theo đúng thứ tự hiển thị. */
     function dongNhapList() {
@@ -3775,6 +4227,45 @@ window.ModuleQLSX = (function () {
       const ds = [];
       catMauList.forEach(ct => daiList.forEach(dai => ds.push({ ct, dai })));
       return ds;
+    }
+    /* ============================================================================================
+       v9.33 — LỆNH ĐÃ TÁCH THÌ MỖI DẢI/MẪU LÀ MỘT BẢNG RIÊNG Ở CÁC CÔNG ĐOẠN SAU CẮT.
+
+       Nguyen 2026-11-06: *"sau công đoạn cắt mà có tách size, tách mẫu thì các công đoạn sau sẽ
+       hiển thị các bảng các màu chính riêng theo tách nên làm bảng riêng, ví dụ size 2-7 màu đỏ,
+       màu xanh như hiện tại, size 8-12"*.
+
+       Trước bản này mọi màn nhập đổ dongNhapList() ra MỘT danh sách phẳng theo thứ tự
+       màu-ngoài-dải-trong: Đỏ·2-7, Đỏ·8-12, Xanh·2-7, Xanh·8-12. Số liệu đúng, nhưng hai dải nằm
+       xen kẽ nên người nhập phải tự nhặt xem dòng nào thuộc dải nào — đúng chỗ Nguyen kêu "lẫn lộn".
+       Nay gom theo DẢI: mỗi dải một khối có khung và tiêu đề riêng, bên trong liệt kê đủ các màu.
+
+       🔴 KHÔNG đổi dongNhapList(): payload lúc Gửi vẫn duyệt qua đúng hàm đó (thứ tự các phần tử
+       không mang ý nghĩa với backend — khoá là MauSacID + DaiSizeID). Đây THUẦN TÚY là cách bày,
+       không đụng tới một con số nào. Lệnh KHÔNG tách thì hàm này trả về y hệt bản cũ.
+       `veDong` nhận ({ ct, dai }) giống hệt callback cũ của .map(), nên ba nơi gọi dùng chung.
+       ============================================================================================ */
+    function khoiTheoDai(veDong, khiRong) {
+      if (!coTachDai) return dongNhapList().map(veDong).join('') || khiRong;
+      if (!catMauList.length || !daiList.length) return khiRong;
+      return daiList.map(dai => {
+        const than = catMauList.map(ct => veDong({ ct, dai })).join('');
+        const heSo = Number(dai.HeSo) || 0;
+        const ghiHeSo = heSo > 0
+          ? ` <span style="font-weight:400;color:#5f6368;">— hệ số ${fmtNumber(heSo)} cái/lớp</span>`
+          : '';
+        /* 🔴 Kiểu MẪU: mọi mẫu mang CÙNG một hệ số (vải cắt chung một bàn) nên hai khối cạnh nhau
+           cùng ghi "hệ số 6". Trước v9.33 hai dòng nằm sát nhau nên nhìn ra ngay là một con số;
+           nay mỗi khối một khung riêng, cách nhau cả màn hình — rất dễ cộng 108 + 108 = 216.
+           Nhãn "(chung cả N mẫu)" ở từng ô vẫn còn, nhưng nó nhỏ; nói thẳng một câu ở đầu khối. */
+        const nhacChung = laTachMau
+          ? `<div class="empty-hint" style="text-align:left;margin:-4px 0 8px 0;">Các số <b>SL từ Cắt</b> / <b>Còn lại</b> dưới đây là số <b>CHUNG của cả ${daiList.length} mẫu</b> (một bàn cắt) — <b>không cộng</b> sang khối mẫu kia.</div>`
+          : '';
+        return `<div class="khoi-dai" data-daiid="${dai.ID}" style="border:1px solid #c8d4e3;border-radius:6px;padding:8px 8px 2px 8px;margin-bottom:12px;background:#fbfcfe;overflow-x:auto;">
+            <div style="font-weight:600;color:#0d47a1;margin-bottom:8px;">${tuDaiHoa}: ${escapeHtml(dai.TenDai)}${ghiHeSo}</div>
+            ${nhacChung}${than}
+          </div>`;
+      }).join('');
     }
     /* ============================================================================================
        v8.92 — HỆ SỐ RI → CÁI LẤY THEO SỔ CẮT, KHÔNG THEO LỆNH.
@@ -3808,8 +4299,17 @@ window.ModuleQLSX = (function () {
            với Cắt. Lệnh khai 1, Cắt dùng 11, rồi tách dải theo lệnh: tổng dải = 1 ≠ 11 ⇒ mọi số theo
            dải (Cắt / Còn lại / cảnh báo vượt) sai đúng tỉ lệ đó. Không tự sửa — bảng dải là thứ
            người dùng đã cố ý khai — nhưng PHẢI nói ra ngay dưới ô nhập. */
-        const tongDai = (daiList || []).reduce((s, d) => s + (Number(d.HeSo) || 0), 0);
         const cat = Number(ct && ct.HeSoCat) || 0;
+        /* v9.23: kiểu MẪU KHÔNG cộng dồn — mỗi mẫu mang đúng hệ số hiệu lực (các mẫu dùng chung một
+           dải size). So tổng ở đây thì lệnh 6+6 luôn ra "12 ≠ 6" và bảo người dùng đi sửa một thứ
+           mà chính form lẫn backend đều từ chối cho sửa. */
+        if (laTachMau) {
+          const he = Number(dai.HeSo) || 0;
+          const lechMau = cat > 0 && he > 0 && Math.abs(he - cat) > 1e-9;
+          return 'của mẫu ' + escapeHtml(dai.TenDai) + (lechMau
+            ? ` — <span style="color:#c62828;">⚠️ mẫu này khai hệ số ${fmtNumber(he)} nhưng sổ cắt dùng ${fmtNumber(cat)}/lớp; các mẫu dùng chung một dải size nên phải bằng đúng hệ số Cắt</span>` : '');
+        }
+        const tongDai = (daiList || []).reduce((s, d) => s + (Number(d.HeSo) || 0), 0);
         const lech = cat > 0 && tongDai > 0 && Math.abs(tongDai - cat) > 1e-9;
         return 'của dải ' + escapeHtml(dai.TenDai) + (lech
           ? ` — <span style="color:#c62828;">⚠️ tổng hệ số các dải = ${fmtNumber(tongDai)} nhưng sổ cắt dùng ${fmtNumber(cat)}/lớp; sửa lại bảng dải size cho khớp Cắt</span>` : '');
@@ -3841,6 +4341,37 @@ window.ModuleQLSX = (function () {
       if (m) return Number(m[khoaDong(ct, dai)]) || 0;
       const cu = (slTheoMauCongDoan[maCongDoan] || {})[String(ct.MauSacID)];
       return Number(cu) || 0;
+    }
+    /* ============================================================================================
+       v9.23 — TRẦN ĐỐI CHIẾU GOM THEO MÀU. Bắt buộc phải có, vì ở kiểu MẪU vải CẮT CHUNG một bàn:
+       "SL từ Cắt" của mỗi mẫu là số chung của CẢ MÀU (18 lớp × 6 = 108), không phải phần riêng.
+         · Trần TỪNG DÒNG  = 108  — một mẫu có thể chiếm tối đa cả bàn, nên slCatCuaDong giữ nguyên.
+         · Trần CẢ MÀU     = 108  — KHÔNG phải 108 × số mẫu.
+       Cộng thẳng mọi dòng như trước là 216: màn hình báo "đã đóng gói 108 / sổ cắt 216 — còn 108"
+       trong khi backend đo bằng getTongSLCatForOrder (cộng theo MÀU, = 108) nên đã cho lệnh CHUYỂN
+       TIẾP. Đúng cái lệch mà khối ghi chú CONG_DOAN_CONG_DON ở trên cấm. Kiểu DẢI thì mỗi dải là
+       phần RIÊNG nên vẫn cộng — hai nhánh dưới đây cho kết quả y hệt bản cũ khi không tách mẫu.
+       ============================================================================================ */
+    function slCatCuaMau(ct) {
+      if (!coTachDai) return slCatCuaDong(ct, null);
+      /* Mọi mẫu PHẢI cùng hệ số (ràng buộc lúc lưu) ⇒ lấy MỘT lần. Dùng max thay vì daiList[0] để
+         dữ liệu cũ/sửa tay lệch nhau thì trần chỉ rộng ra, không bao giờ hụt — hụt là chặn oan người
+         ghi tiến độ. Dòng lệch vẫn bị nhanHeSo() gắn cảnh báo đỏ ngay dưới ô nhập. */
+      if (laTachMau) return Math.max.apply(null, daiList.map(d => slCatCuaDong(ct, d)));
+      return daiList.reduce((s, d) => s + slCatCuaDong(ct, d), 0);     // dải: các phần cộng lại
+    }
+    function daGhiCuaMau(maCongDoan, ct) {
+      if (!coTachDai) return daNhapCuaDong(maCongDoan, ct, null);
+      return daiList.reduce((s, d) => s + daNhapCuaDong(maCongDoan, ct, d), 0);
+    }
+    function tongCatCuaLenh() { return catMauList.reduce((s, ct) => s + slCatCuaMau(ct), 0); }
+    function tongDaGhiCuaLenh(ma) { return catMauList.reduce((s, ct) => s + daGhiCuaMau(ma, ct), 0); }
+    /* "Còn lại" của một dòng: ở kiểu MẪU là phần còn lại CHUNG của cả màu (hai mẫu ăn chung một bàn
+       nên trừ cả hai), ở kiểu dải/không tách thì y như cũ. */
+    function conLaiCuaDong(maCongDoan, ct, dai) {
+      return laTachMau
+        ? Math.max(0, slCatCuaMau(ct) - daGhiCuaMau(maCongDoan, ct))
+        : Math.max(0, slCatCuaDong(ct, dai) - daNhapCuaDong(maCongDoan, ct, dai));
     }
 
     function soLuongRiLe(root, pre, ct, dai) {
@@ -4421,9 +4952,15 @@ window.ModuleQLSX = (function () {
     // che THEM tung dong TUONG MINH - nguoi dung tu chon dung cay (trong so cay DA XUAT that cho don
     // hang) can dua vao, giong pattern "Giao vai" cu vua bi go (searchableSelectHtml + nut "+ Thêm dòng")
     // thay vi 1 danh sach tinh luon hien HET moi cay.
+    /* v9.24 (Nguyen): ô chọn cây ở công đoạn Cắt phải nói cả KG LẪN MÉT — vải quản lý theo kg hoặc
+       theo mét tùy loại, chỉ đọc mã cây thì người cắt phải tra ngược sang kho vải.
+       Số lấy theo ĐÚNG DÒNG phiếu xuất (KGGiao/MetGiao), tức phần ĐÃ CẤP cho lệnh này — không phải
+       số của cả cây lúc nhập. Mét trống (cây chỉ quản theo kg) thì không in chữ thừa. */
     function labelForGiaoVai(r) {
-      const ngay = r.NgayGiao ? `, xuất ${fmtDate(r.NgayGiao)}` : '';
-      return `${r.MaCay} — ${r.TenLoaiVai || ''} ${r.TenMau || ''} (đã xuất ${fmtNumber(r.KGGiao)} KG${ngay})`;
+      const n = chuoiNgayXuat(r);
+      const ngay = n ? `, xuất ${n}` : '';
+      const so = soKgMet(r.KGGiao, r.MetGiao);
+      return `${r.MaCay} — ${r.TenLoaiVai || ''} ${r.TenMau || ''} (đã xuất ${so || '—'}${ngay})`;
     }
     let catPickIdx = 0;
     /* v6.01 — GIẬT CẤP: cột SL cái cắt giật cấp của từng cây/bàn cắt. Mặc định KHÔNG hiện (đa số bàn cắt
@@ -4493,8 +5030,10 @@ window.ModuleQLSX = (function () {
                này, nay mở lại theo yêu cầu). Mặc định vẫn là hệ số của đơn; sửa dòng nào chỉ ảnh hưởng SL
                cái của DÒNG ĐÓ. Bảng TienDoCatChiTietCay vốn đã có cột HeSoQuyDoi riêng từng cây nên không
                cần đổi CSDL. Bỏ trống / nhập ≤ 0 -> máy chủ tự dùng lại hệ số của đơn. */''}
+          ${/* v9.42: mặc định nay lấy từ TÁCH DẢI nếu lệnh có tách — xem khối ghi chú heSoMacDinhCay. */''}
           <div class="form-row"><label>Hệ số (sửa được)</label>
-            <input type="number" min="0" step="0.001" class="cat-heso" value="${p.heSoQuyDoi || heSoQuyDoiDonHang}" title="Mặc định lấy từ Ra lệnh SX (${fmtNumber(heSoQuyDoiDonHang)}) — sửa được cho riêng dòng này"></div>
+            <input type="number" min="0" step="0.001" class="cat-heso" value="${p.heSoQuyDoi || heSoMacDinhCay}" title="Mặc định lấy từ ${escapeHtml(nguonHeSoMacDinh)} — sửa được cho riêng dòng này">
+            <div class="cat-heso-canhbao" style="font-size:11px;color:#c0392b;line-height:1.3;margin-top:2px;"></div></div>
           ${/* v6.01: cột giật cấp — ẩn/hiện theo ô tick "Có cắt giật cấp" (xem wireGiatCapToggle). */''}
           <div class="form-row gc-cell" style="${catCoGiatCap ? '' : 'display:none;'}"><label>Giật cấp (cái)</label><input type="number" min="0" class="cat-giatcap" value="${p.soCaiGiatCap || ''}"></div>
           <div class="form-row"><label>KG/mét đã dùng</label><input type="number" min="0" step="0.01" class="cat-kgmet" value="${p.kgMetSuDung || ''}"></div>
@@ -4554,9 +5093,26 @@ window.ModuleQLSX = (function () {
         // v6.01: SL cái = lớp × hệ số + GIẬT CẤP (giật cấp ghi thẳng bằng CÁI, không nhân hệ số).
         const oGC = rowEl.querySelector('.cat-giatcap');
         const giatCap = (catCoGiatCap && oGC) ? (Number(oGC.value) || 0) : 0;
-        // v6.08: hệ số lấy theo Ô CỦA DÒNG (sửa được); bỏ trống/≤0 thì dùng hệ số của đơn.
+        // v6.08: hệ số lấy theo Ô CỦA DÒNG (sửa được); bỏ trống/≤0 thì dùng hệ số mặc định.
         const oHS = rowEl.querySelector('.cat-heso');
-        const heSo = (oHS && Number(oHS.value) > 0) ? Number(oHS.value) : heSoQuyDoiDonHang;
+        const heSo = (oHS && Number(oHS.value) > 0) ? Number(oHS.value) : heSoMacDinhCay;
+        /* 🔴 v9.42 — CẢNH BÁO LỆCH, ngay tại dòng đang gõ.
+           Trước đây ràng buộc chỉ có MỘT CHIỀU: backend chặn khi lưu TÁCH DẢI (tổng hệ số các dải
+           phải bằng hệ số hiệu lực), nhưng KHÔNG có gì chặn chiều ngược. Đã tách 6+5=11 rồi sửa sổ
+           cắt thành 12 thì sổ cắt lưu bình thường, không báo gì, hai số nằm lệch cho tới lần sau có
+           người mở hộp thoại tách mới thấy đỏ — mà trong khoảng đó SL cắt (theo hệ số cây) và quy
+           đổi ri ở Đóng gói / Kho nhập (theo hệ số dải) đếm bằng hai thước khác nhau.
+           Nguyen xác nhận ri ở xưởng LUÔN đủ theo kế hoạch ⇒ lệch ở đây gần như chắc chắn là GÕ
+           NHẦM, nên câu cảnh báo nói thẳng như vậy. CẢNH BÁO, không chặn: khóa cứng là bịt mất đường
+           khai sự thật khi thực tế có khác. */
+        const oCB = rowEl.querySelector('.cat-heso-canhbao');
+        if (oCB) {
+          const lech = heSoTuTachDai > 0 && Math.abs(heSo - heSoTuTachDai) > 1e-9;
+          oCB.textContent = lech
+            ? `⚠️ Lệch với ${laTachMauLenh ? 'tách mẫu' : 'tách dải size'}: ${fmtNumber(heSoTuTachDai)}. `
+              + 'Kiểm lại — nhiều khả năng gõ nhầm. Để lệch thì số cắt và số đóng gói sẽ không khớp.'
+            : '';
+        }
         const cai = lop * heSo + giatCap;
         rowEl.querySelector('.cat-cai-val').textContent = fmtNumber(Math.round(cai * 100) / 100);
         sum += cai;
@@ -4617,6 +5173,11 @@ window.ModuleQLSX = (function () {
           if (el) el.textContent = fmtNumber(daGhi);
         };
         renderSoCatDaGhi(box, maDH, perm);
+        /* v9.26: KHÔNG vẽ khung Dải size ở đây nữa — khung nay nằm ngoài #pStageFields (xem
+           #daiSizeHost), nên innerHTML của nhánh async này không còn xóa được nó.
+           Lịch sử để không ai dựng lại: v8.79 đẩy MỌI lệnh có sơ đồ vào nhánh async này, `box.innerHTML`
+           sau await nuốt mất khung vẽ đồng bộ ⇒ "tách dải size biến mất"; v9.13 vá bằng cách vẽ lại ở
+           TỪNG nhánh — đúng nhưng mong manh, thêm một nhánh async là sót một chỗ. */
         return;
       }
       const catGroupState = {};
@@ -4673,9 +5234,12 @@ window.ModuleQLSX = (function () {
         soDoConLai.forEach(s => {
           if (String(s.ID) === String(curSoDoId)) return;
           // v6.01: sơ đồ không đang mở -> cộng từ bộ nhớ tạm, có kèm phần giật cấp.
-          // v6.08: dùng hệ số RIÊNG của dòng đã lưu trong bộ nhớ tạm (bỏ trống thì hệ số của đơn).
+          /* v6.08: dùng hệ số RIÊNG của dòng đã lưu trong bộ nhớ tạm (bỏ trống thì hệ số mặc định).
+             🔴 v9.42: PHẢI dùng cùng một `heSoMacDinhCay` với recalcCatBoxTotal — hai chỗ cùng tính
+             một con số mà lùi về hai mặc định khác nhau thì tổng của sơ đồ đang mở và tổng của sơ đồ
+             đã đóng lệch nhau, người dùng thấy số nhảy khi chuyển qua lại giữa các sơ đồ. */
           grand += catGroupState[s.ID].rows.reduce((sum, r) => {
-            const hs = Number(r.heSoQuyDoi) > 0 ? Number(r.heSoQuyDoi) : heSoQuyDoiDonHang;
+            const hs = Number(r.heSoQuyDoi) > 0 ? Number(r.heSoQuyDoi) : heSoMacDinhCay;
             return sum + (Number(r.soLuongLop) || 0) * hs + (catCoGiatCap ? (Number(r.soCaiGiatCap) || 0) : 0);
           }, 0);
         });
@@ -4806,6 +5370,7 @@ window.ModuleQLSX = (function () {
           <span id="catDangNhapInfo" style="margin-left:10px;"></span>
           <span id="catDaGhiInfo" style="margin-left:10px;color:#137333;"></span>
         </div>`;
+      // v9.26: khung Dải size nay ở ngoài #pStageFields (#daiSizeHost) — innerHTML ở trên không đụng tới.
       renderGroupArea(soDoConLai[0].ID);
       box.querySelector('#catSoDoPicker').addEventListener('change', (e) => {
         saveActiveGroupState();
@@ -4996,7 +5561,7 @@ window.ModuleQLSX = (function () {
       const colspan = coTachDai ? 5 : 4;
       return nhaGiaCongChiTietList.filter(n => String(n.HangMucGiaCongID) === String(hmId)).map(n => `<tr data-id="${n.ID}">
         <td>${escapeHtml(n.TenNha || '')}</td>
-        ${coTachDai ? `<td>${n.TenDai ? `<span style="color:#0d47a1;font-weight:600;">${escapeHtml(n.TenDai)}</span>` : '<span class="badge warn">chưa gắn dải</span>'}</td>` : ''}
+        ${coTachDai ? `<td>${n.TenDai ? `<span style="color:#0d47a1;font-weight:600;">${escapeHtml(n.TenDai)}</span>` : `<span class="badge warn">chưa gắn ${tuDaiThuong}</span>`}</td>` : ''}
         <td style="text-align:right;">${n.SoLuong != null ? fmtNumber(n.SoLuong) : ''}</td><td>${escapeHtml(n.GhiChu || '')}</td>
         <td><button type="button" class="btn small secondary ngc-edit" data-id="${n.ID}">Sửa</button> <button type="button" class="btn small danger ngc-del" data-id="${n.ID}">Xóa</button></td></tr>`).join('')
         || `<tr><td colspan="${colspan}" class="empty-hint">Chưa có nhà gia công cho hạng mục này</td></tr>`;
@@ -5004,7 +5569,7 @@ window.ModuleQLSX = (function () {
     function ngcAddRowHtml(hmId) {
       const idx = ++ngcAddRowIdx;
       const oDai = coTachDai
-        ? `<div><label>Dải size</label><select class="ngc-dai"><option value="">-- Chọn dải --</option>${
+        ? `<div><label>${tuDaiHoa}</label><select class="ngc-dai"><option value="">-- Chọn ${tuDaiThuong} --</option>${
             daiList.map(d => `<option value="${d.ID}">${escapeHtml(d.TenDai)} (hệ số ${fmtNumber(d.HeSo)})</option>`).join('')
           }</select></div>` : '';
       return `<div class="form-grid" style="grid-template-columns:${coTachDai ? '2fr 1.2fr 1fr 2fr auto' : '2fr 1fr 2fr auto'};gap:8px;align-items:end;margin-bottom:6px;" data-ngcaddrow data-idx="${idx}" data-hmid="${hmId}">
@@ -5059,7 +5624,7 @@ window.ModuleQLSX = (function () {
           <div style="font-weight:600;margin-bottom:4px;">${escapeHtml(hm.ten)} — Đơn giá: ${hm.coGia
             ? `${fmtNumber(hm.donGia || 0)} <span style="font-weight:normal;color:#5f6368;">(từ Kỹ thuật)</span>`
             : '<span class="badge warn">chưa khai</span> <span style="font-weight:normal;color:#5f6368;">— khai ở Kỹ thuật lúc nào cũng được, giá sẽ tự áp vào các dòng dưới đây</span>'}</div>
-          <table><thead><tr><th>Nhà gia công</th>${coTachDai ? '<th>Dải size</th>' : ''}<th>Số lượng</th><th>Ghi chú</th><th></th></tr></thead>
+          <table><thead><tr><th>Nhà gia công</th>${coTachDai ? `<th>${tuDaiHoa}</th>` : ''}<th>Số lượng</th><th>Ghi chú</th><th></th></tr></thead>
             <tbody>${ngcExistingRowsHtml(hm.id)}</tbody></table>
           <div class="ngc-addrows" data-hmid="${hm.id}" style="margin-top:6px;">${ngcAddRowHtml(hm.id)}</div>
           <button type="button" class="btn small secondary ngc-addrow-btn" data-hmid="${hm.id}">+ Thêm nhà</button>
@@ -5188,9 +5753,16 @@ window.ModuleQLSX = (function () {
     }
     function inTheAddRowHtml() {
       const idx = ++inTheAddIdx;
-      return `<div class="form-grid" style="grid-template-columns:2fr 1.6fr 1fr 1.6fr auto;gap:8px;align-items:end;margin-bottom:6px;" data-itaddrow data-idx="${idx}">
+      /* v9.13: lệnh đã tách dải size thì mỗi dòng giao in thêu mang MỘT dải — y hệt mẫu Giao gia
+         công (ngcAddRowHtml, v8.59 bước 5a). Lệnh không tách thì ô này không tồn tại, form y như cũ. */
+      const oDai = coTachDai
+        ? `<div><label>${tuDaiHoa}</label><select class="it-dai"><option value="">-- Chọn ${tuDaiThuong} --</option>${
+            daiList.map(d => `<option value="${d.ID}">${escapeHtml(d.TenDai)} (hệ số ${fmtNumber(d.HeSo)})</option>`).join('')
+          }</select></div>` : '';
+      return `<div class="form-grid" style="grid-template-columns:${coTachDai ? '2fr 1.4fr 1fr .9fr 1.3fr auto' : '2fr 1.6fr 1fr 1.6fr auto'};gap:8px;align-items:end;margin-bottom:6px;" data-itaddrow data-idx="${idx}">
         <div><label>Nhà in thêu (gõ để tìm)</label>${searchableSelectHtml('ita_' + idx, dm.nhaIn, 'NhaGiaCongID', n => n.TenNha)}</div>
         <div><label>Hạng mục in thêu</label><select class="it-hangmuc">${itHangMucOptionsHtml('')}</select></div>
+        ${oDai}
         <div><label>SL giao</label><input class="it-slgiao" type="number" min="0"></div>
         <div><label>Ghi chú</label><input class="it-ghichu"></div>
         <div><button type="button" class="btn small danger it-remove">X</button></div>
@@ -5201,11 +5773,15 @@ window.ModuleQLSX = (function () {
       inTheList = res.data.rows || [];
       inTheHangMucList = res.data.hangMucs || [];   // v6.01
       if (mode === 'nhan') {
-        box.innerHTML = `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Hạng mục in thêu</th><th>SL giao</th><th>SL nhận</th></tr></thead>
+        /* v9.13: cột Dải size (chỉ khi lệnh đã tách) — SL nhận của nhà in ghi theo TỪNG DẢI, khớp
+           với dòng giao. colspan bản cũ ghi "4" là SAI SẴN (bảng 5 cột) — sửa luôn cho đúng. */
+        box.innerHTML = `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Hạng mục in thêu</th>${coTachDai ? `<th>${tuDaiHoa}</th>` : ''}<th>SL giao</th><th>SL nhận</th></tr></thead>
           <tbody>${inTheList.map((n, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
-            <td>${escapeHtml(n.TenNha || '')}</td><td>${escapeHtml(n.HangMucInThe || '')}</td><td style="text-align:right;">${n.SoLuongGiao != null ? fmtNumber(n.SoLuongGiao) : ''}</td>
+            <td>${escapeHtml(n.TenNha || '')}</td><td>${escapeHtml(n.HangMucInThe || '')}</td>
+            ${coTachDai ? `<td>${n.TenDai ? escapeHtml(n.TenDai) : `<span class="badge" style="background:#fdecea;color:#c0392b;">chưa gắn ${tuDaiThuong}</span>`}</td>` : ''}
+            <td style="text-align:right;">${n.SoLuongGiao != null ? fmtNumber(n.SoLuongGiao) : ''}</td>
             <td><input type="number" min="0" class="it-slnhan" data-id="${n.ID}" value="${n.SoLuongNhan != null ? n.SoLuongNhan : ''}" style="width:90px;"></td></tr>`).join('')
-            || '<tr><td colspan="4" class="empty-hint">Chưa giao cho nhà in thêu nào (làm ở công đoạn "Giao in thêu").</td></tr>'}</tbody></table>
+            || `<tr><td colspan="${coTachDai ? 6 : 5}" class="empty-hint">Chưa giao cho nhà in thêu nào (làm ở công đoạn "Giao in thêu").</td></tr>`}</tbody></table>
           ${inTheList.length ? '<div style="margin-top:8px;"><button type="button" class="btn small" id="btnSaveItNhan">💾 Lưu số lượng nhận</button></div>' : ''}`;
         const btn = box.querySelector('#btnSaveItNhan');
         if (btn) btn.addEventListener('click', async () => {
@@ -5220,12 +5796,15 @@ window.ModuleQLSX = (function () {
       /* v6.01: cột Hạng mục in thêu ở dòng ĐÃ GIAO là ô CHỌN SỬA ĐƯỢC (lưu ngay qua
          PUT /inthe/:id/hangmuc) — các dòng giao từ trước v6.01 chưa có hạng mục mà bảng lương lại đọc
          cột này, nếu chỉ cho chọn lúc thêm mới thì phải xóa dòng rồi giao lại. */
-      box.innerHTML = `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Hạng mục in thêu</th><th>SL giao</th><th>SL nhận</th><th>Ghi chú</th><th></th></tr></thead>
+      box.innerHTML = `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Hạng mục in thêu</th>${coTachDai ? `<th>${tuDaiHoa}</th>` : ''}<th>SL giao</th><th>SL nhận</th><th>Ghi chú</th><th></th></tr></thead>
           <tbody>${inTheList.map((n, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(n.TenNha || '')}</td>
             <td><select class="it-hm-sua" data-id="${n.ID}" style="min-width:150px;">${itHangMucOptionsHtml(n.HangMucInThe || '')}</select></td>
+            ${/* v9.13: dòng giao từ TRƯỚC khi tách dải mang badge đỏ — muốn gắn dải thì xóa dòng và
+                 giao lại (không sửa tại chỗ, tránh gán nhầm dải cho số lượng đã chốt với nhà in). */''}
+            ${coTachDai ? `<td>${n.TenDai ? escapeHtml(n.TenDai) : `<span class="badge" style="background:#fdecea;color:#c0392b;">chưa gắn ${tuDaiThuong}</span>`}</td>` : ''}
             <td style="text-align:right;">${n.SoLuongGiao != null ? fmtNumber(n.SoLuongGiao) : ''}</td><td style="text-align:right;">${n.SoLuongNhan != null ? fmtNumber(n.SoLuongNhan) : ''}</td><td>${escapeHtml(n.GhiChu || '')}</td>
             <td><button type="button" class="btn small danger it-del" data-id="${n.ID}">Xóa</button></td></tr>`).join('')
-            || '<tr><td colspan="6" class="empty-hint">Chưa có nhà in thêu</td></tr>'}</tbody></table>
+            || `<tr><td colspan="${coTachDai ? 8 : 7}" class="empty-hint">Chưa có nhà in thêu</td></tr>`}</tbody></table>
         ${inTheHangMucList.length ? '' : '<div class="empty-hint" style="color:#b06000;">Đơn này chưa khai <b>Đơn giá in thêu</b> nên chưa có hạng mục để chọn — vào <b>Tài liệu kỹ thuật → Đơn giá in thêu</b> khai trước (bảng lương in thêu lấy đơn giá từ đó).</div>'}
         ${itCanhBaoGiaLechHtml()}
         ${inTheHangMucList.length ? `<div class="empty-hint" style="text-align:left;">Đơn có <b>${fmtNumber(inTheHangMucList.length)}</b> hạng mục in thêu. Mỗi dòng giao mang <b>một</b> hạng mục — giao nhiều hạng mục thì cần nhiều dòng.</div>` : ''}
@@ -5233,7 +5812,9 @@ window.ModuleQLSX = (function () {
         <button type="button" class="btn small secondary" id="btnAddItRow">+ Thêm nhà in thêu</button>
         ${/* v8.75: bày sẵn ĐỦ dòng cho mọi hạng mục — đơn nhiều hạng mục mà phải bấm thêm từng dòng
              rồi chọn lại từng ô là vừa lâu vừa dễ sót một hạng mục (sót thì lương thiếu đúng phần đó). */''}
-        ${inTheHangMucList.length > 1 ? `<button type="button" class="btn small secondary" id="btnAddItMoiHangMuc" title="Tạo sẵn mỗi hạng mục một dòng, chỉ cần chọn nhà in thêu và điền SL">⊞ Mỗi hạng mục một dòng (${fmtNumber(inTheHangMucList.length)})</button>` : ''}
+        ${/* v9.13: tính theo TỔ HỢP hạng mục × dải — lệnh 1 hạng mục nhưng tách 3 dải vẫn cần nút
+             này (3 dòng), điều kiện cũ ">1 hạng mục" làm nút biến mất đúng ca đó. */''}
+        ${inTheHangMucList.length * (coTachDai ? daiList.length : 1) > 1 ? `<button type="button" class="btn small secondary" id="btnAddItMoiHangMuc" title="Tạo sẵn mỗi hạng mục${coTachDai ? ' × mỗi dải size' : ''} một dòng, chỉ cần chọn nhà in thêu và điền SL">⊞ Mỗi hạng mục một dòng (${fmtNumber(inTheHangMucList.length * (coTachDai ? daiList.length : 1))})</button>` : ''}
         <div style="margin-top:8px;"><button type="button" class="btn small" id="btnSaveItGiao">💾 Lưu giao in thêu</button></div>`;
       box.querySelectorAll('.it-hm-sua').forEach(sel => sel.addEventListener('change', async () => {
         try {
@@ -5255,19 +5836,27 @@ window.ModuleQLSX = (function () {
       const bMoiHM = box.querySelector('#btnAddItMoiHangMuc');
       if (bMoiHM) bMoiHM.addEventListener('click', () => {
         const wrap = box.querySelector('#itAddRows');
-        const daCo = Array.from(wrap.querySelectorAll('[data-itaddrow] .it-hangmuc')).map(s => s.value);
-        inTheHangMucList.forEach(h => {
-          if (daCo.indexOf(h.Ten) !== -1) return;         // đã có dòng cho hạng mục này thì bỏ qua
+        /* v9.13: lệnh đã tách dải ⇒ bày sẵn HẠNG MỤC × DẢI (y hệt cách dongNhapList nở dòng ở
+           May/QC/ĐG/KN) — sót một tổ hợp là lương in thêu thiếu đúng phần đó. Khoá trùng = tên hạng
+           mục + dải. Lệnh không tách thì như cũ: mỗi hạng mục một dòng. */
+        const dsDaiNo = coTachDai ? daiList : [null];
+        const daCo = Array.from(wrap.querySelectorAll('[data-itaddrow]')).map(r =>
+          ((r.querySelector('.it-hangmuc') || {}).value || '') + '|' + ((r.querySelector('.it-dai') || {}).value || ''));
+        inTheHangMucList.forEach(h => dsDaiNo.forEach(dai => {
+          const khoa = h.Ten + '|' + (dai ? String(dai.ID) : '');
+          if (daCo.indexOf(khoa) !== -1) return;          // đã có dòng cho tổ hợp này thì bỏ qua
           wrap.insertAdjacentHTML('beforeend', inTheAddRowHtml());
           const moi = wrap.querySelector('[data-itaddrow]:last-child');
           const sel = moi.querySelector('.it-hangmuc');
           if (sel) sel.value = h.Ten;
+          const selDai = moi.querySelector('.it-dai');
+          if (selDai && dai) selDai.value = String(dai.ID);
           wireItAddRow(moi);
-        });
+        }));
         /* Dòng trống ĐẦU TIÊN (chưa chọn gì) gỡ đi cho gọn — nhưng chỉ khi đã sinh được dòng khác,
            không thì khu nhập trống trơn và không còn chỗ gõ. */
         const ds = Array.from(wrap.querySelectorAll('[data-itaddrow]'));
-        if (ds.length > inTheHangMucList.length) {
+        if (ds.length > inTheHangMucList.length * dsDaiNo.length) {
           const trong = ds.find(r => !(r.querySelector('.it-hangmuc') || {}).value
             && !(r.querySelector('.it-slgiao') || {}).value);
           if (trong) trong.remove();
@@ -5280,9 +5869,15 @@ window.ModuleQLSX = (function () {
       box.querySelector('#btnSaveItGiao').addEventListener('click', async () => {
         const rows = Array.from(box.querySelectorAll('#itAddRows > [data-itaddrow]')).map(r => ({
           nhaInId: getSearchableValue('ita_' + r.dataset.idx), soLuongGiao: r.querySelector('.it-slgiao').value || null, ghiChu: r.querySelector('.it-ghichu').value || null,
-          hangMucInThe: (r.querySelector('.it-hangmuc') && r.querySelector('.it-hangmuc').value) || null   // v6.01
+          hangMucInThe: (r.querySelector('.it-hangmuc') && r.querySelector('.it-hangmuc').value) || null,   // v6.01
+          daiSizeId: (r.querySelector('.it-dai') || {}).value || null   // v9.13: null khi lệnh không tách
         })).filter(r => r.nhaInId);
         if (!rows.length) { toast('Chưa chọn nhà in thêu nào.', 'error'); return; }
+        // v9.13: y hệt luật của Giao gia công — lệnh đã tách thì mỗi dòng phải mang một dải.
+        if (coTachDai && rows.some(r => !r.daiSizeId)) {
+          toast('Lệnh này đã tách dải size — mỗi dòng giao in thêu phải chọn đúng một dải.', 'error');
+          return;
+        }
         try { await apiPost(`/api/qlsx/orders/${maDH}/inthe`, { rows }); toast('Đã lưu giao in thêu.', 'success'); renderInTheBox(box, 'giao'); }
         catch (err) { toast(err.message, 'error'); }
       });
@@ -5451,7 +6046,7 @@ window.ModuleQLSX = (function () {
             if (checked.length > 2) { chk.checked = false; toast('Chỉ được chọn tối đa 2 người trải vải.', 'error'); }
           }));
         }
-        renderDaiSizeBar(box, maDH, perm, detail);   // v8.59: khai báo / sửa dải size của lệnh
+        // v9.26: bỏ renderDaiSizeBar ở đây — khung dải size/mẫu nay vẽ một lần vào #daiSizeHost.
         renderSoCatDaGhi(box, maDH, perm);   // v5.35: sổ cắt đã ghi + nút In; v5.96: + nút Sửa/thêm cây
       // v5.22 (muc 1.1): nhanh 'GNGC'/'NNGC' (ledger nhieu nha gia cong/nhieu lan giao-nhan) da bi XOA
       // khoi day - khong con la CongDoanSanXuat nua. (LICH SU - "2 tab doc lap Giao/Nhan nha gia cong"
@@ -5614,14 +6209,19 @@ window.ModuleQLSX = (function () {
            daNhapCuaDong() tự lùi về bản đồ theo màu cũ — số y hệt trước. */
         const daNhapCai = (ct, dai) => daNhapCuaDong('KN', ct, dai);
         const daNhapRiLe = (ct, dai) => {
-          const tong = daNhapCai(ct, dai);
+          /* v9.23: kiểu MẪU thì ô "Còn lại" ngay bên cạnh là phần còn lại CHUNG của cả màu, nên ô
+             "Đã nhập" cũng phải là số CHUNG — nếu không ba ô cạnh nhau không trừ ra nhau
+             (108 − 54 = 0 trên màn hình). Giống hệt cách oLuyKeHtml làm cho QC/Đóng gói. */
+          const tong = laTachMau ? daGhiCuaMau('KN', ct) : daNhapCai(ct, dai);
           const he = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
           if (!(he > 0)) return { ri: 0, cuaRi: 0, le: tong, tong };
           const ri = Math.trunc(tong / he);
           const cuaRi = ri * he;
           return { ri, cuaRi, le: tong - cuaRi, tong };
         };
-        const conLaiCua = (ct, dai) => Math.max(0, slCatCuaDong(ct, dai) - daNhapCai(ct, dai));
+        /* v9.23: ở kiểu MẪU đây là phần còn lại CHUNG của cả màu (hai mẫu ăn chung một bàn cắt) —
+           xem conLaiCuaDong. Ô "Còn lại" và data-conlai (cảnh báo khi gõ) đều dùng chung nó. */
+        const conLaiCua = (ct, dai) => conLaiCuaDong('KN', ct, dai);
         /* ==========================================================================================
            v8.49 — KHO NHẬP NHẬP GIỐNG ĐÓNG GÓI: "Ri" + "SL lẻ (cái)" + cột "Tổng (cái)" tự tính.
            v8.52 SỬA LẠI HỆ SỐ: 1 ri = **HeSoQuyDoi của lệnh** cái, KHÔNG phải TongSoLop.
@@ -5639,7 +6239,8 @@ window.ModuleQLSX = (function () {
            ========================================================================================== */
         box.innerHTML = `<div class="form-row"><label>Số lượng thực tế nhập kho theo màu — nhập số Ri + số lẻ; cột "Tổng (cái)" là số sẽ được lưu</label>
           <div class="empty-hint" style="text-align:left;">Nhập được <b>nhiều đợt</b>: mỗi lần Gửi là một đợt, các đợt <b>cộng dồn</b>. Ô nhập chỉ điền phần <b>nhập thêm lần này</b>, không điền lại số đã nhập.</div>
-          <div class="row-repeater">${dongNhapList().map(({ ct, dai }) => {
+          ${/* v9.33: lệnh đã tách thì mỗi dải/mẫu là một khối riêng (xem khoiTheoDai). */''}
+          <div class="row-repeater">${khoiTheoDai(({ ct, dai }) => {
             /* v8.52: hệ số Ri → cái là HeSoQuyDoi CỦA LỆNH (xem soLuongRiLe). TongSoLop là SỐ RI
                cắt được, không phải hệ số — trước đây dùng nhầm nó làm hệ số.
                v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
@@ -5652,7 +6253,7 @@ window.ModuleQLSX = (function () {
               : '<div class="readonly-fact">—</div>';
             const ghiChu = coHeSo
               ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${nhanHeSo(dai, ct)})`
-                + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
+                + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>${laTachMau ? ' (một bàn chung, không phải mỗi mẫu từng ấy)' : ''}` : '')
               : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
             return `
             <div class="row-item" style="grid-template-columns:190px 100px 110px 110px 120px 110px 170px 100px;">
@@ -5671,22 +6272,22 @@ window.ModuleQLSX = (function () {
                    Đóng gói. Bản v8.59 sửa hệ số theo dải ở mọi nơi NHƯNG BỎ SÓT ô này, nên nó vẫn
                    hiện TỔNG CẢ MÀU cho mọi dải (Nguyen phát hiện 2026-10-01).
                    Phải dùng slCatCuaDong(ct, dai) = số lớp × hệ số DẢI, đúng như Đóng gói. */''}
-              <div class="form-row"><label>SL tổng từ Cắt</label><div class="readonly-fact">${fmtNumber(slCatCuaDong(ct, dai))}</div></div>
+              <div class="form-row"><label>SL tổng từ Cắt${nhanChungMau}</label><div class="readonly-fact">${fmtNumber(slCatCuaDong(ct, dai))}</div></div>
               ${/* v8.53 (Nguyen chốt cách viết): "43 Ri (215 cái) + 3 cái lẻ" — GỌN TRONG MỘT Ô.
                    Ri và lẻ tách ngược từ tổng cái đang lưu (xem daNhapRiLe ở trên), KHÔNG nhân thêm
                    hệ số lần nào nữa. Hệ số đã nằm ở dòng ghi chú ngay dưới của đúng màu đó. */''}
-              <div class="form-row"><label>Đã nhập (lũy kế)</label><div class="readonly-fact">${
+              <div class="form-row"><label>Đã nhập (lũy kế)${nhanChungMau}</label><div class="readonly-fact">${
                 (() => {
-                  const x = daNhapRiLe(ct, dai);
+                  const x = daNhapRiLe(ct, dai);   // v9.23: ô này vẫn là RIÊNG của mẫu — đó là số đã nhập thật của dòng
                   if (!coHeSo) return `${fmtNumber(x.tong)} cái`;
                   const phanRi = `${fmtNumber(x.ri)} Ri <span style="color:#5f6368;font-weight:400;">(${fmtNumber(x.cuaRi)} cái)</span>`;
                   return x.le > 0 ? `${phanRi} + ${fmtNumber(x.le)} cái lẻ` : phanRi;
                 })()
               }</div></div>
-              <div class="form-row"><label>Còn lại</label><div class="readonly-fact" style="color:${conLaiCua(ct, dai) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct, dai))}</div></div>
+              <div class="form-row"><label>Còn lại${nhanChungMau}</label><div class="readonly-fact" style="color:${conLaiCua(ct, dai) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct, dai))}</div></div>
             </div>
             <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}</div>`;
-          }).join('') || '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>'}</div>
+          }, '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>')}</div>
           </div>
           ${/* v7.57: LUA CHON KET THUC. Chua nhap du so cat thi mac dinh don O LAI cong doan Kho nhap
                 de nhap tiep dot sau; tich o nay la ket thuc lenh (chuyen "Hoàn thành") DU CHUA DU —
@@ -5705,8 +6306,10 @@ window.ModuleQLSX = (function () {
         (() => {
           /* v8.53: số đã nhập ĐÃ là tổng CÁI, cộng thẳng — không nhân chia gì (xem daNhapCai).
              v8.59: cộng theo TỪNG DÒNG (màu × dải) để lệnh đã tách vẫn ra đúng tổng. */
-          const tongCat = dongNhapList().reduce((a, { ct, dai }) => a + slCatCuaDong(ct, dai), 0);
-          const tongDaNhap = dongNhapList().reduce((a, { ct, dai }) => a + daNhapCai(ct, dai), 0);
+          /* v9.23: gom theo MÀU (xem slCatCuaMau) — kiểu MẪU cộng thẳng mọi dòng là mốc sổ cắt
+             nhân đôi, lệch với chính backend đang đo theo màu. */
+          const tongCat = tongCatCuaLenh();
+          const tongDaNhap = tongDaGhiCuaLenh('KN');
           const con = Math.max(0, tongCat - tongDaNhap);
           const el = box.querySelector('#knKetThucGoiY');
           if (!el) return;
@@ -5746,10 +6349,10 @@ window.ModuleQLSX = (function () {
           const coSua = coQuyenSuaTienDo(), coXoa = coQuyenXoaTienDo();
           const soCot = 5 + (ngcNhanCoDai ? 1 : 0) + ((coSua || coXoa) ? 1 : 0);
           box.innerHTML = `<div class="form-row"><label>Nhận hàng gia công về (nhập SL nhận cho từng nhà đã giao ở công đoạn "Giao gia công")</label>
-            <table><thead><tr><th style="width:38px;">STT</th><th>Hạng mục</th><th>Nhà gia công</th>${ngcNhanCoDai ? '<th>Dải size</th>' : ''}<th>SL giao</th><th>SL nhận</th>${(coSua || coXoa) ? '<th style="width:120px;"></th>' : ''}</tr></thead>
+            <table><thead><tr><th style="width:38px;">STT</th><th>Hạng mục</th><th>Nhà gia công</th>${ngcNhanCoDai ? `<th>${tuDaiHoa}</th>` : ''}<th>SL giao</th><th>SL nhận</th>${(coSua || coXoa) ? '<th style="width:120px;"></th>' : ''}</tr></thead>
             <tbody>${nhaGiaCongChiTietList.map((n, __i) => `<tr data-id="${n.ID}"><td style="text-align:center;">${__i + 1}</td>
               <td>${escapeHtml(n.TenHangMuc || '')}</td><td>${escapeHtml(n.TenNha || '')}</td>
-              ${ngcNhanCoDai ? `<td>${n.TenDai ? escapeHtml(n.TenDai) : '<span class="badge warn">chưa gắn dải</span>'}</td>` : ''}
+              ${ngcNhanCoDai ? `<td>${n.TenDai ? escapeHtml(n.TenDai) : `<span class="badge warn">chưa gắn ${tuDaiThuong}</span>`}</td>` : ''}
               <td style="text-align:right;">${n.SoLuong != null ? fmtNumber(n.SoLuong) : ''}</td>
               <td><input type="number" min="0" class="ngc-nhan" data-id="${n.ID}" value="${n.SoLuongNhan != null ? n.SoLuongNhan : ''}" style="width:90px;"></td>
               ${(coSua || coXoa) ? `<td>${coSua ? `<button type="button" class="btn small secondary ngcn-edit" data-id="${n.ID}" title="Đổi nhà gia công / SL giao / ghi chú của dòng này">Sửa</button> ` : ''}${coXoa ? `<button type="button" class="btn small danger ngcn-del" data-id="${n.ID}" title="Bỏ dòng giao này">Xóa</button>` : ''}</td>` : ''}</tr>`).join('')
@@ -5856,13 +6459,42 @@ window.ModuleQLSX = (function () {
     // Doc gia tri THUC TE dang duoc chon tren select (khong dung truc tiep detail.CongDoanHienTaiID) -
     // phong truong hop don hang da "Hoàn thành" (CongDoanHienTaiID = null) thi trinh duyet tu chon option
     // dau tien, tranh lech giua dropdown hien thi va bo field duoc ve ben duoi.
-    renderStageFields(modal.querySelector('#pCongDoanSelect').value);
-    modal.querySelector('#pCongDoanSelect').addEventListener('change', (e) => renderStageFields(e.target.value));
+    /* v9.33 (Nguyen 2026-11-06: *"chức năng tách dải size tách mẫu CHỈ hiển thị ở công đoạn cắt.
+       hiện tại các công đoạn đều có"*) — thu lại đúng công đoạn Cắt.
+
+       Nhưng KHÔNG quay về cách cũ (vẽ bên trong nhánh CAT của renderStageFields): nhánh đó có mấy
+       đường async ghi đè `box.innerHTML`, nuốt mất khung — đó chính là họ lỗi "tách dải size biến
+       mất" kéo từ v8.79 tới v9.13, phải vá ba lần.
+       Cách giữ được cả hai: host `#daiSizeHost` vẫn nằm NGOÀI #pStageFields (không ai xóa được),
+       chỉ ĐỔ NỘI DUNG vào nó khi công đoạn đang chọn là Cắt, còn lại thì dọn sạch. */
+    const hostDai = modal.querySelector('#daiSizeHost');
+    /* 🔴 v9.38 — TÁCH DẢI SIZE Ở KỸ THUẬT, TÁCH MẪU Ở CẮT. Lịch sử di chuyển của khung này, ghi đủ
+       để lần sau không ai "sửa cho đúng" về chỗ cũ:
+         v9.26  mọi công đoạn   — "cắt xong sang May là biến mất"
+         v9.33  chỉ ở CẮT       — "tách trước khi trải, vì hệ số đã biết rồi"
+         v9.38  TÁCH ĐÔI        — Nguyen 2026-11-10: *"chỉ tách dải size ở công đoạn kỹ thuật, còn
+                tách mẫu vẫn ở công đoạn cắt vì tách mẫu thì tỷ lệ size giống nhau"*
+
+       Không phải đổi ý lần nữa mà là tách đúng theo bản chất hai việc:
+         · DẢI SIZE quyết định lúc làm sơ đồ và cần khai tỷ lệ vải ⇒ KỸ THUẬT ('KT')
+         · MẪU chia một bàn cắt cho hai biến thể, tỷ lệ vải như nhau, quyết lúc trải ⇒ CẮT ('CAT') */
+    function capNhatKhungDaiSize(stageId) {
+      if (!hostDai) return;   // không có host thì bỏ qua, đừng để cả form chết theo
+      const s = stageById.get(String(stageId));
+      const ma = s && s.MaCongDoan;
+      if (ma === 'KT') renderDaiSizeBar(hostDai, maDH, perm, detail, 'DAI');
+      else if (ma === 'CAT') renderDaiSizeBar(hostDai, maDH, perm, detail, 'MAU');
+      else hostDai.innerHTML = '';
+    }
+    const veTheoCongDoan = (stageId) => { capNhatKhungDaiSize(stageId); renderStageFields(stageId); };
+    veTheoCongDoan(modal.querySelector('#pCongDoanSelect').value);
+    modal.querySelector('#pCongDoanSelect').addEventListener('change', (e) => veTheoCongDoan(e.target.value));
     // v5.54: "Bổ sung sơ đồ" nhảy thẳng tới công đoạn Kỹ thuật (nếu công đoạn đó hiện trong dropdown của user).
     if (jumpStageCode) {
       const js = stages.find(s => s.MaCongDoan === jumpStageCode);
       const sel = modal.querySelector('#pCongDoanSelect');
-      if (js && sel) { sel.value = String(js.StageID); renderStageFields(sel.value); }
+      // v9.33: đi qua veTheoCongDoan để khung dải size cũng theo đúng công đoạn vừa nhảy tới.
+      if (js && sel) { sel.value = String(js.StageID); veTheoCongDoan(sel.value); }
     }
 
     modal.querySelector('#pForm').addEventListener('submit', async (e) => {
@@ -5983,13 +6615,28 @@ window.ModuleQLSX = (function () {
            v8.49: không còn phải tự nhân hệ số ở đây nữa — `payload.chiTietMau` vừa dựng ở trên ĐÃ là
            số CÁI thật, so thẳng với "còn lại" (cũng tính theo cái) là đúng. Trước đây khối này tự
            nhân LoaiRi theo ô "Đơn vị"; ô đó đã bỏ, giữ lại phép nhân cũ là cảnh báo sai. */
-        const vuot = payload.chiTietMau.map(m => {
-          // v8.59: khoá theo cả màu LẪN dải, không thì lệnh tách dải so nhầm "còn lại" của dải khác.
+        /* 🔴 v9.23: PHẢI GOM THEO MÀU khi lệnh tách MẪU. Hai mẫu ăn chung một bàn cắt nên `data-conlai`
+           của cả hai dòng là cùng MỘT con số chung (108). So từng dòng với nó thì gõ 108 cho mẫu 1 và
+           108 cho mẫu 2 đều "không vượt" ⇒ im lặng nhập 216 cái cho một bàn 108 cái, và đây là Kho
+           nhập nên tồn kho phồng thật. Khối cảnh báo của QC/Đóng gói (canhBaoVuotSoCat) đã gom; khối
+           này là bản RIÊNG của Kho nhập từ v7.56 nên phải gom lại một lần nữa ở đây. */
+        const gomKN = laTachMau;
+        const theoKhoaKN = new Map();
+        payload.chiTietMau.forEach(m => {
           const oTong = modal.querySelector(`.kn-tong[data-mausac="${m.mauSacId}"][data-dai="${m.daiSizeId || ''}"]`);
-          const conLai = Number(oTong && oTong.dataset.conlai) || 0;
-          const themCai = Number(m.soLuong) || 0;
-          return themCai > conLai ? { ten: (oTong && oTong.dataset.tenmau) || '', themCai, conLai } : null;
-        }).filter(Boolean);
+          // v8.59: khoá theo cả màu LẪN dải, không thì lệnh tách dải so nhầm "còn lại" của dải khác.
+          const khoa = gomKN ? String(m.mauSacId) : `${m.mauSacId}|${m.daiSizeId || ''}`;
+          const d = theoKhoaKN.get(khoa) || {
+            ten: gomKN
+              ? String((oTong && oTong.dataset.tenmau) || '').split(' · ')[0] + ` (cả ${daiList.length} mẫu)`
+              : ((oTong && oTong.dataset.tenmau) || ''),
+            conLai: Number(oTong && oTong.dataset.conlai) || 0,
+            themCai: 0
+          };
+          d.themCai += Number(m.soLuong) || 0;
+          theoKhoaKN.set(khoa, d);
+        });
+        const vuot = Array.from(theoKhoaKN.values()).filter(v => v.themCai > v.conLai);
         if (vuot.length && !confirm('Các màu sau nhập VƯỢT phần còn lại so với sổ cắt:\n\n'
           + vuot.map(v => `• ${v.ten}: nhập ${fmtNumber(v.themCai)} / còn lại ${fmtNumber(v.conLai)}`).join('\n')
           + '\n\nSố nhập kho sẽ lớn hơn số đã cắt. Vẫn ghi?')) return;

@@ -107,17 +107,10 @@ router.get('/thongtin', (req, res) => {
    TRẮNG CẢ TRANG CATALOGUE của khách — hỏng nặng hơn nhiều so với việc tạm thời chưa lọc được.
    Chưa có cột -> điều kiện rỗng -> chạy y như trước v6.71.
    ================================================================================================ */
-let __coCongKhaiMH = null;
-async function dieuKienCongKhaiMH(pool, biDanh) {
-  if (__coCongKhaiMH === null) {
-    try {
-      const r = (await pool.request().query(`SELECT COL_LENGTH('TheKhoHangHoa','CongKhai') AS c`)).recordset[0] || {};
-      __coCongKhaiMH = r.c != null;
-    } catch (e) { __coCongKhaiMH = false; }
-  }
-  // ISNULL(...,1): dòng dữ liệu cũ chưa kịp có giá trị thì vẫn coi là HIỆN, không tự dưng biến mất.
-  return __coCongKhaiMH ? ` AND ISNULL(${biDanh}.CongKhai, 1) = 1` : '';
-}
+/* v9.31: chuyển sang utils/dieuKienCongKhai.js — MỘT bản duy nhất cho catalogue, bot Zalo và bộ
+   băm ảnh. Trước đây chép ba nơi; sửa một nơi quên hai nơi kia là RÒ DỮ LIỆU, không phải lỗi
+   hiển thị. Giữ tên hàm cũ để mọi lời gọi bên dưới không phải đổi. */
+const { dieuKienCongKhaiMH, dieuKienCongKhaiDM } = require('../utils/dieuKienCongKhai');
 
 /* ================================================================================================
    v7.54 — SỬA LỖI: TẮT công khai của DANH MỤC thẻ kho mà catalogue VẪN hiện mã hàng của danh mục đó.
@@ -129,10 +122,113 @@ async function dieuKienCongKhaiMH(pool, biDanh) {
    `ISNULL(dm.CongKhai, 1) = 1`: mã hàng KHÔNG thuộc danh mục nào (TheKhoDanhMucID NULL) thì không bị
    danh mục nào tắt -> vẫn hiện. Đòi `dm.CongKhai = 1` sẽ làm mọi mã chưa gán danh mục biến mất khỏi
    catalogue — mất hàng mà không ai hiểu vì sao.
+   v9.31: thân hàm đã dời sang utils/dieuKienCongKhai.js (require ở trên) — giữ lại khối ghi chú này
+   vì nó là LÝ DO của luật, đừng xóa.
    ================================================================================================ */
-function dieuKienCongKhaiDM(biDanh) {
-  return ` AND ISNULL(${biDanh}.CongKhai, 1) = 1`;
+
+/* ================================================================================================
+   v9.25 — TRA MỘT MÃ (cho bot Zalo OA, và dùng được luôn trên web)
+
+     GET /api/public/tracuu?q=<mã hàng | mã vạch | cả câu khách nhắn>
+
+   Nguyen 2026-11-05: *"khi chát có mã hàng hoặc hình ảnh thì có thể check được tồn kho được luôn"*.
+   Route này là PHẦN RUỘT — webhook Zalo (làm sau, cần App ID/Secret) chỉ gọi lại đúng nó.
+
+   🔴 Trả về ĐÚNG mức catalogue: tên hàng, ảnh, giá bán, TÊN các màu còn hàng. KHÔNG có số tồn,
+   KHÔNG có mã vạch, KHÔNG có ID nội bộ — xem khối luật ở đầu utils/traCuuHangCongKhai.js.
+
+   🔴 CHỐNG DÒ: đây là cửa cho người lạ gõ thử mã hàng loạt. Giới hạn theo IP; quá thì 429 chứ không
+   im lặng trả rỗng (im lặng thì người dò không biết mà người dùng thật cũng không hiểu vì sao hỏng).
+   ================================================================================================ */
+const { traCuuTheoChuoi } = require('../utils/traCuuHangCongKhai');
+
+const TRACUU_CUA_SO_MS = 60 * 1000;
+const TRACUU_TOI_DA = 30;                 // 30 lần/phút/IP — người thật gõ tay không tới mức đó
+const __traCuuDem = new Map();            // ip -> { moc, soLan }
+function quaNhanh(ip) {
+  const bayGio = Date.now();
+  const o = __traCuuDem.get(ip);
+  if (!o || (bayGio - o.moc) > TRACUU_CUA_SO_MS) { __traCuuDem.set(ip, { moc: bayGio, soLan: 1 }); return false; }
+  o.soLan++;
+  if (__traCuuDem.size > 5000) __traCuuDem.clear();   // chặn Map phình vô hạn vì IP lạ
+  return o.soLan > TRACUU_TOI_DA;
 }
+
+router.get('/tracuu', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.status(400).json({ success: false, message: 'Thiếu mã cần tra.' });
+    if (q.length > 200) return res.status(400).json({ success: false, message: 'Nội dung quá dài.' });
+    if (quaNhanh(req.ip || 'khong-ro'))
+      return res.status(429).json({ success: false, message: 'Bạn tra quá nhanh, thử lại sau một phút.' });
+
+    const pool = await getPool();
+    const kq = await traCuuTheoChuoi(pool, q, { dieuKienCongKhaiMH, dieuKienCongKhaiDM, layHangDangGiu });
+    res.json({ success: true, data: kq });
+  } catch (err) {
+    console.error('[public tracuu] ', err);
+    res.status(500).json({ success: false, message: 'Lỗi khi tra mã.' });
+  }
+});
+
+/* ================================================================================================
+   v9.28 — TRA BẰNG ẢNH:  POST /api/public/tracuu-anh   (multipart, trường `anh`)
+
+   Thang bốn bước, RẺ → ĐẮT, dừng ngay khi chắc (Nguyen 2026-11-06: khách gửi cả ba kiểu ảnh):
+     ① mã vạch / QR trên tem   -> docMaTuAnh (@zxing)      — chắc nhất, ra thẳng mã
+     ② (chưa làm) OCR mã chữ trên tem                      — xem PRD, bật sau khi đo ①
+     ③ ảnh lấy lại từ catalogue/Zalo -> dHash               — ảnh nén/đổi cỡ vẫn khớp
+     ④ không chắc -> trả ỨNG VIÊN cho khách bấm chọn, CẤM đoán
+
+   🔴 Trả về cùng dạng với /tracuu để bot chỉ phải viết một bộ câu trả lời, và cũng chịu CHUNG luật
+   hiển thị: không số tồn, không mã vạch, mã không công khai coi như không tồn tại.
+   ================================================================================================ */
+const multer = require('multer');
+const { timTheoAnh } = require('../utils/anhHashSanPham');
+const { docMaTuAnh } = require('../utils/docMaTuAnh');
+const { layThongTinCongKhai } = require('../utils/traCuuHangCongKhai');
+
+/* Giữ ảnh trong BỘ NHỚ, không ghi xuống đĩa: ảnh người lạ gửi vào mà nằm lại trong uploads/ là nằm
+   trên một thư mục ĐANG ĐƯỢC PHỤC VỤ CÔNG KHAI (xem laDuongDanCong trong server.js). */
+const nhanAnh = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
+
+router.post('/tracuu-anh', nhanAnh.single('anh'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer || !req.file.buffer.length)
+      return res.status(400).json({ success: false, message: 'Chưa có ảnh.' });
+    if (quaNhanh(req.ip || 'khong-ro'))
+      return res.status(429).json({ success: false, message: 'Bạn gửi quá nhanh, thử lại sau một phút.' });
+
+    const pool = await getPool();
+    const pt = { dieuKienCongKhaiMH, dieuKienCongKhaiDM, layHangDangGiu };
+
+    // ① Mã vạch / QR trên tem — nếu đọc được thì tra y như khách gõ tay mã đó.
+    const doc = await docMaTuAnh(req.file.buffer);
+    if (doc.ma) {
+      const kq = await traCuuTheoChuoi(pool, doc.ma, pt);
+      if (kq.items.length) return res.json({ success: true, data: Object.assign({}, kq, { duong: 'ma-vach', maDocDuoc: doc.ma }) });
+      /* Đọc được mã nhưng không ra hàng: mã của sản phẩm không công khai, hoặc hết hàng. KHÔNG nói
+         "đọc được mã X nhưng không có" — nói vậy là xác nhận mã đó có thật. Rơi tiếp xuống ③. */
+    }
+
+    // ③ dHash — ảnh khách lấy lại từ catalogue/Zalo.
+    const theoAnh = await timTheoAnh(pool, req.file.buffer, pt);
+    if (theoAnh.kieu === 'khong')
+      return res.json({ success: true, data: { trangThai: 'khong', items: [], duong: 'anh', thuVienMaVach: !!doc.coThuVien } });
+
+    const items = await layThongTinCongKhai(pool, theoAnh.dsUngVien.map(x => x.maHangID), pt);
+    if (!items.length)
+      return res.json({ success: true, data: { trangThai: 'khong', items: [], duong: 'anh', thuVienMaVach: !!doc.coThuVien } });
+
+    /* ④ Chỉ nhận là "thay" khi dHash CHẮC và sau khi lọc công khai còn đúng một mã. Ảnh khách tự
+       chụp ngoài đời luôn có một tấm "gần nhất" trong kho — chọn bừa là trả tồn của mã KHÁC. */
+    const trangThai = (theoAnh.kieu === 'chac' && items.length === 1) ? 'thay' : 'nhieu';
+    res.json({ success: true, data: { trangThai, items, duong: 'anh', thuVienMaVach: !!doc.coThuVien } });
+  } catch (err) {
+    console.error('[public tracuu-anh] ', err);
+    res.status(500).json({ success: false, message: 'Lỗi khi tra ảnh.' });
+  }
+});
 
 router.get('/danhmuc', async (req, res) => {
   try {

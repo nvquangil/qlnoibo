@@ -2,7 +2,7 @@
 window.ModuleCongNo = (function () {
   let activeTab = 'phieuthu';
   let container, currentUser;
-  let dm = { khachHang: [], ncc: [], nhaGiaCong: [], taiKhoan: [], nganHang: [] };
+  let dm = { khachHang: [], ncc: [], nhaGiaCong: [], taiKhoan: [], nganHang: [], nhanVien: [] };
 
   function getTabs() {
     return [
@@ -26,15 +26,19 @@ window.ModuleCongNo = (function () {
 
     // Danh mục dùng chung cho mọi tab (tải lại mỗi lần render để không hiện danh mục cũ).
     try {
-      const [kh, ncc, ngc, tk, nh] = await Promise.all([
+      const [kh, ncc, ngc, tk, nh, nv] = await Promise.all([
         apiGet('/api/danhmuc/khachhang').catch(() => ({ data: [] })),
         apiGet('/api/danhmuc/nhacungcap').catch(() => ({ data: [] })),
         apiGet('/api/danhmuc/nhagiacong').catch(() => ({ data: [] })),
         apiGet('/api/congno/taikhoan').catch(() => ({ data: [] })),
-        apiGet('/api/congno/taikhoannganhang').catch(() => ({ data: [] }))   // v6.24
+        apiGet('/api/congno/taikhoannganhang').catch(() => ({ data: [] })),   // v6.24
+        /* v9.32: lấy qua CHÍNH phân hệ Công nợ, KHÔNG qua /api/danhmuc/nhanvien — endpoint đó gác
+           bằng quyền DANHMUC mà người lập phiếu chi thường không có ⇒ danh sách rỗng, không chọn
+           được ai và chẳng báo gì (bài học v9.27). */
+        apiGet('/api/congno/nhanvien').catch(() => ({ data: [] }))
       ]);
       dm = { khachHang: kh.data || [], ncc: ncc.data || [], nhaGiaCong: ngc.data || [],
-             taiKhoan: tk.data || [], nganHang: nh.data || [] };
+             taiKhoan: tk.data || [], nganHang: nh.data || [], nhanVien: nv.data || [] };
     } catch (e) { /* vẫn render được, chỉ thiếu dropdown */ }
 
     if (activeTab === 'phieuthu') return renderPhieuThu(perm);
@@ -89,6 +93,100 @@ window.ModuleCongNo = (function () {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     }).catch(err => toast('Xuất Excel lỗi: ' + err.message, 'error'));
+  }
+
+  /* ================================================================================================
+     v9.17 — KỲ NHANH dùng chung cho CẢ phân hệ Công nợ (Nguyen 2026-11-04: "các chức năng ở trong
+     tạo thêm lọc theo ngày đến ngày, chọn tháng, quý năm").
+     Một ô <select> liệt kê 12 tháng + 8 quý + 4 năm gần nhất; chọn một kỳ là HAI Ô từ ngày / đến
+     ngày tự điền rồi áp dụng luôn (bấm hộ nút Lọc/Xem nếu màn có). Không thay hai ô ngày — ai cần
+     khoảng lẻ vẫn gõ tay như cũ.
+     ⚠️ Ngày dựng bằng số LOCAL (giờ VN), KHÔNG toISOString() — bài học cũ: toISOString lùi 1 ngày
+     với giờ VN. dsKyNhanh() là hàm THUẦN (nhận Date) để bộ tự kiểm chạy ca thật được. */
+  function dsKyNhanh(nay) {
+    const d2 = n => String(n).padStart(2, '0');
+    const iso = (y, m, d) => `${y}-${d2(m)}-${d2(d)}`;
+    const cuoiThang = (y, m) => new Date(y, m, 0).getDate();   // m 1-based: new Date(y, m, 0) = ngày cuối tháng m
+    const ds = { thang: [], quy: [], nam: [] };
+    const y0 = nay.getFullYear(), m0 = nay.getMonth() + 1;
+    for (let i = 0; i < 12; i++) {
+      let m = m0 - i, y = y0;
+      while (m <= 0) { m += 12; y--; }
+      ds.thang.push({ nhan: `Tháng ${m}/${y}`, tu: iso(y, m, 1), den: iso(y, m, cuoiThang(y, m)) });
+    }
+    const q0 = Math.floor((m0 - 1) / 3);
+    for (let i = 0; i < 8; i++) {
+      let q = q0 - i, y = y0;
+      while (q < 0) { q += 4; y--; }
+      const mDau = q * 3 + 1;
+      ds.quy.push({ nhan: `Quý ${q + 1}/${y}`, tu: iso(y, mDau, 1), den: iso(y, mDau + 2, cuoiThang(y, mDau + 2)) });
+    }
+    for (let i = 0; i < 4; i++) ds.nam.push({ nhan: `Năm ${y0 - i}`, tu: iso(y0 - i, 1, 1), den: iso(y0 - i, 12, 31) });
+    return ds;
+  }
+  function oKyNhanhHtml(id) {
+    const ds = dsKyNhanh(new Date());
+    const op = x => `<option value="${x.tu}|${x.den}">${x.nhan}</option>`;
+    return `<select id="${id}" style="width:auto;" title="Chọn tháng / quý / năm — hai ô từ ngày, đến ngày tự điền theo kỳ đã chọn">
+      <option value="">⏱ Tháng/Quý/Năm…</option>
+      <optgroup label="Tháng">${ds.thang.map(op).join('')}</optgroup>
+      <optgroup label="Quý">${ds.quy.map(op).join('')}</optgroup>
+      <optgroup label="Năm">${ds.nam.map(op).join('')}</optgroup>
+    </select>`;
+  }
+  /* goc = modal hoặc body chứa các ô; apDung(tu, den) tùy chọn — màn có nút Lọc/Xem thì truyền hàm
+     bấm hộ, khối chỉ-điền-ô (Sổ chi tiết xuất file) thì bỏ trống. */
+  function ganKyNhanh(goc, selId, tuId, denId, apDung) {
+    const sel = goc.querySelector('#' + selId);
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      if (!sel.value) return;
+      const [tu, den] = sel.value.split('|');
+      const oTu = goc.querySelector('#' + tuId), oDen = goc.querySelector('#' + denId);
+      if (oTu) oTu.value = tu;
+      if (oDen) oDen.value = den;
+      if (apDung) apDung(tu, den);
+    });
+  }
+  /* Lọc một dòng theo kỳ. Ngày từ API là chuỗi ISO — lấy 10 ký tự đầu, ĐÚNG quy ước sẵn có của file
+     này (form sửa phiếu vẫn làm String(row.NgayThu).slice(0, 10)). Hàm THUẦN cho bộ kiểm.
+     Dòng không có ngày: coi là NGOÀI kỳ khi đang lọc (phiếu nào cũng bắt buộc có ngày nên thực tế
+     không gặp; chọn ẩn để tổng-theo-lọc không cộng thứ không thuộc kỳ nào). */
+  function trongKy(ngay, ky) {
+    if (!ky || (!ky.tu && !ky.den)) return true;
+    const n = String(ngay || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(n)) return false;
+    if (ky.tu && n < ky.tu) return false;
+    if (ky.den && n > ky.den) return false;
+    return true;
+  }
+  /* Kỳ đang lọc của BA danh sách chứng từ — nhớ theo phiên (đổi tab rồi quay lại vẫn giữ, CRUD xong
+     render lại vẫn giữ). Số TỔNG trên toolbar tính từ đúng các dòng lọc ra — yêu cầu "số tổng biến
+     động theo lọc". */
+  const kyLocDS = { thu: { tu: '', den: '' }, chi: { tu: '', den: '' }, dc: { tu: '', den: '' } };
+  function khoiLocNgayHtml(pre, ky) {
+    return `${oKyNhanhHtml(pre + 'KyNhanh')}
+      <input type="date" id="${pre}Tu" value="${ky.tu}" style="width:auto;" title="Lọc từ ngày">
+      <span style="font-size:12px;color:#5f6368;">đến</span>
+      <input type="date" id="${pre}Den" value="${ky.den}" style="width:auto;" title="Lọc đến ngày">
+      ${(ky.tu || ky.den) ? `<button class="btn small secondary" id="${pre}BoLoc" title="Bỏ lọc ngày">✖</button>` : ''}`;
+  }
+  /* Nối dây cho một danh sách: đổi ô ngày / chọn kỳ nhanh / bấm ✖ là ghi vào kyLocDS rồi VẼ LẠI TAB
+     (vẽ lại chứ không ẩn dòng — ô tìm của common.js cũng ẩn/hiện dòng, hai bộ lọc cùng sờ
+     style.display là giẫm nhau; vẽ lại thì tổng toolbar, ô tìm, sắp xếp đều sạch từ đầu). */
+  function ganLocNgay(body, pre, khoa, veLai) {
+    const apDung = (tu, den) => {
+      if (tu && den && tu > den) { toast('Từ ngày phải nhỏ hơn hoặc bằng đến ngày.', 'error'); return; }
+      kyLocDS[khoa] = { tu: tu || '', den: den || '' };
+      veLai();
+    };
+    ganKyNhanh(body, pre + 'KyNhanh', pre + 'Tu', pre + 'Den', apDung);
+    const oTu = body.querySelector('#' + pre + 'Tu'), oDen = body.querySelector('#' + pre + 'Den');
+    const doiTay = () => apDung(oTu.value || '', oDen.value || '');
+    if (oTu) oTu.addEventListener('change', doiTay);
+    if (oDen) oDen.addEventListener('change', doiTay);
+    const nutBo = body.querySelector('#' + pre + 'BoLoc');
+    if (nutBo) nutBo.addEventListener('click', () => apDung('', ''));
   }
 
   /* v6.47: BẤM TIÊU ĐỀ CỘT ĐỂ SẮP XẾP.
@@ -217,10 +315,17 @@ window.ModuleCongNo = (function () {
     const body = document.getElementById('cnBody');
     const res = await apiGet('/api/congno/phieuthu');
     const rows = res.data || [];
-    const tong = rows.reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
+    /* v9.17: lọc ngày + kỳ nhanh. TỔNG và số phiếu tính từ ĐÚNG các dòng lọc ra (yêu cầu "số tổng
+       biến động theo lọc"); bảng cũng chỉ vẽ các dòng đó. Bộ lọc nhớ trong kyLocDS — xóa/sửa phiếu
+       xong render lại vẫn giữ kỳ đang xem. */
+    const kyThu = kyLocDS.thu;
+    const coLocThu = !!(kyThu.tu || kyThu.den);
+    const rowsLoc = rows.filter(r => trongKy(r.NgayThu, kyThu));
+    const tong = rowsLoc.reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
+        ${khoiLocNgayHtml('pt', kyThu)}
         ${perm.canCreate ? '<button class="btn" id="btnAddThu">+ Tạo phiếu thu</button>' : ''}
         ${/* v7.95: CHUYỂN QUỸ NỘI BỘ. Đặt ở đây (tab Phiếu thu) vì cặp phiếu do backend sinh ra lấy
              PHIẾU THU làm vế chủ — xóa phiếu thu là mất cả cặp, còn vế chi thì không xóa/sửa lẻ được.
@@ -229,14 +334,14 @@ window.ModuleCongNo = (function () {
         ${/* v7.32: xuất chi tiết PHIẾU THU ra Excel. Dùng CHUNG route /api/congno/export của công nợ
              (chỉ khác tham số) nên định dạng file, đầu trang, kẻ bảng đồng nhất với các file kia. */''}
         <button class="btn small secondary" id="btnXuatThu">⬇️ Xuất Excel</button>
-        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã thu: <b>${fmtTien(tong)}</b> đ · ${rows.length} phiếu · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã thu${coLocThu ? ' <b style="color:#e65100;">(đang lọc ngày)</b>' : ''}: <b>${fmtTien(tong)}</b> đ · ${rowsLoc.length}${coLocThu ? '/' + rows.length : ''} phiếu · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
       ${/* v7.83: cột PHIẾU CHI KÈM — chỉ có giá trị với phiếu thu hình thức "Chuyển thẳng" (v6.54:
            khách trả tiền nhưng chuyển thẳng cho NCC / trả hộ chi phí, backend tự sinh phiếu chi
            cùng số tiền). Phiếu thu bình thường thì ô này trống, KHÔNG hiện gạch ngang giả cho có. */''}
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Người/Khách nộp</th><th>Phiếu bán hàng</th><th>Tài khoản</th>
         <th>Số tiền</th><th>Hình thức</th><th>Phiếu chi kèm</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
+      <tbody>${rowsLoc.map(r => `<tr>
         ${/* v6.56: bấm số phiếu -> popup chi tiết (có nút In luôn). */''}
         <td><a href="javascript:void(0)" class="act-ct-xem" data-loai="PT" data-id="${r.PhieuThuID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td><td>${fmtDate(r.NgayThu)}</td>
         ${/* v7.95: phiếu của cặp chuyển quỹ nhìn giống phiếu thu "Khác" bình thường — phải có nhãn
@@ -251,10 +356,13 @@ window.ModuleCongNo = (function () {
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         <td><button class="btn small secondary act-in" data-id="${r.PhieuThuID}" title="In phiếu thu">🖨️</button>
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuThuID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuThuID}">Xóa</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có phiếu thu nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || `<tr><td colspan="11" class="empty-hint">${coLocThu ? 'Không có phiếu thu nào trong kỳ đang lọc' : 'Chưa có phiếu thu nào'}</td></tr>`}</tbody></table>`;
     wireTableSearch(body);
+    ganLocNgay(body, 'pt', 'thu', () => renderPhieuThu(perm));   // v9.17
     body.querySelector('#btnXuatThu').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=phieuthu', 'phieu_thu.xlsx'));
+    // v9.17: file xuất là TOÀN BỘ phiếu (route /export chưa nhận kỳ) — nói rõ khi đang lọc.
+    if (coLocThu) body.querySelector('#btnXuatThu').title = 'Xuất TOÀN BỘ phiếu thu — KHÔNG áp lọc ngày đang chọn';
     const btn = body.querySelector('#btnAddThu');
     if (btn) btn.addEventListener('click', () => formPhieuThu(null, perm));
     const btnCQ = body.querySelector('#btnChuyenQuy');   // v7.95
@@ -522,18 +630,23 @@ window.ModuleCongNo = (function () {
     const body = document.getElementById('cnBody');
     const res = await apiGet('/api/congno/phieuchi');
     const rows = res.data || [];
-    const tong = rows.reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
-    const tongCPKD = rows.filter(r => r.TinhChiPhiKD).reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
+    // v9.17: lọc ngày + kỳ nhanh — TỔNG và tổng CPKD tính từ đúng các dòng lọc ra. Xem renderPhieuThu.
+    const kyChi = kyLocDS.chi;
+    const coLocChi = !!(kyChi.tu || kyChi.den);
+    const rowsLoc = rows.filter(r => trongKy(r.NgayChi, kyChi));
+    const tong = rowsLoc.reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
+    const tongCPKD = rowsLoc.filter(r => r.TinhChiPhiKD).reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
+        ${khoiLocNgayHtml('pc', kyChi)}
         ${perm.canCreate ? '<button class="btn" id="btnAddChi">+ Tạo phiếu chi</button>' : ''}
         <button class="btn small secondary" id="btnXuatChi">⬇️ Xuất Excel</button>
-        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã chi: <b>${fmtTien(tong)}</b> đ (trong đó tính chi phí KD: <b>${fmtTien(tongCPKD)}</b> đ) · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng đã chi${coLocChi ? ' <b style="color:#e65100;">(đang lọc ngày)</b>' : ''}: <b>${fmtTien(tong)}</b> đ (trong đó tính chi phí KD: <b>${fmtTien(tongCPKD)}</b> đ) · ${rowsLoc.length}${coLocChi ? '/' + rows.length : ''} phiếu · Số phiếu tiếp theo: <b>${escapeHtml(res.soPhieuTiepTheo || '')}</b></span>
       </div>
       <table><thead><tr><th>Số phiếu</th><th>Ngày</th><th>Đối tượng nhận</th><th>Tài khoản</th><th>Tính CPKD</th>
         <th>Số tiền</th><th>Hình thức</th><th>Phiếu thu kèm</th><th>Diễn giải</th><th>Người tạo</th><th style="width:160px">Thao tác</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
+      <tbody>${rowsLoc.map(r => `<tr>
         ${/* v6.56: bấm số phiếu -> popup chi tiết (có nút In luôn). */''}
         <td><a href="javascript:void(0)" class="act-ct-xem" data-loai="PC" data-id="${r.PhieuChiID}"><b>${escapeHtml(r.SoPhieu)}</b></a></td><td>${fmtDate(r.NgayChi)}</td>
         <td>${escapeHtml(r.TenNCC || r.TenNhaGiaCong || r.TenDoiTuong || '')}<div style="font-size:11px;color:#5f6368;">${escapeHtml(r.LoaiDoiTuong || '')}</div></td>
@@ -547,10 +660,12 @@ window.ModuleCongNo = (function () {
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         <td><button class="btn small secondary act-in" data-id="${r.PhieuChiID}" title="In phiếu chi">🖨️</button>
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuChiID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuChiID}">Xóa</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="11" class="empty-hint">Chưa có phiếu chi nào</td></tr>'}</tbody></table>`;
+      </tr>`).join('') || `<tr><td colspan="11" class="empty-hint">${coLocChi ? 'Không có phiếu chi nào trong kỳ đang lọc' : 'Chưa có phiếu chi nào'}</td></tr>`}</tbody></table>`;
     wireTableSearch(body);
+    ganLocNgay(body, 'pc', 'chi', () => renderPhieuChi(perm));   // v9.17
     body.querySelector('#btnXuatChi').addEventListener('click', () =>
       taiFile('/api/congno/export?loai=phieuchi', 'phieu_chi.xlsx'));
+    if (coLocChi) body.querySelector('#btnXuatChi').title = 'Xuất TOÀN BỘ phiếu chi — KHÔNG áp lọc ngày đang chọn';
     const btn = body.querySelector('#btnAddChi');
     if (btn) btn.addEventListener('click', () => formPhieuChi(null, perm));
     body.querySelectorAll('.act-in').forEach(b => b.addEventListener('click', () =>
@@ -585,6 +700,33 @@ window.ModuleCongNo = (function () {
             <div class="empty-hint" style="margin-top:2px;">Chọn NCC thì tiền này mới trừ vào <b>công nợ nhà cung cấp</b>.</div></div>
           <div class="form-row" id="oNGC"><label>Nhà gia công / in thêu</label>
             <select name="nhaGiaCongId"><option value="">-- không chọn --</option>${opt(dm.nhaGiaCong, 'NhaGiaCongID', 'TenNha', isEdit ? row.NhaGiaCongID : '')}</select></div>
+          ${/* v9.32 (Nguyen): chi cho nhân viên -> chọn đúng người, và nếu là TẠM ỨNG thì tự trừ vào
+                bảng lương. Tháng trừ mặc định theo ngày chi nhưng sửa được (ứng cuối tháng 11 có thể
+                muốn trừ lương tháng 12). */''}
+          <div class="form-row" id="oNV"><label>Nhân viên *</label>
+            <select name="nhanVienId" id="chiNV"><option value="">-- chọn nhân viên --</option>${
+              (dm.nhanVien || []).map(n => `<option value="${n.NhanVienID}" ${isEdit && String(row.NhanVienID) === String(n.NhanVienID) ? 'selected' : ''}>${escapeHtml((n.MaNhanVien ? n.MaNhanVien + ' — ' : '') + n.HoTen + (n.BoPhan ? ' (' + n.BoPhan + ')' : ''))}</option>`).join('')
+            }</select>
+            ${(dm.nhanVien || []).length ? '' : '<div class="empty-hint" style="margin-top:2px;color:#c0392b;">Không tải được danh sách nhân viên — thiếu quyền hoặc máy chủ chưa chạy migration_v886.</div>'}</div>
+          <div class="form-row" id="oLoaiNV"><label>Loại chi</label>
+            <select name="loaiChiNV" id="chiLoaiNV">
+              ${/* 🔴 "Khác" đứng ĐẦU để nó là mặc định khi tạo mới. Lựa chọn duy nhất động tới tiền
+                    lương không được là lựa chọn mặc định — gõ nhanh rồi bấm Lưu là trừ oan lương
+                    người ta. Khớp luôn với fail-safe của backend (giá trị lạ ⇒ 'Khac'). */''}
+              ${[['Khac', 'Khác (không trừ lương)'], ['TamUng', '⚠️ Tạm ứng — TRỪ vào lương tháng'],
+                 ['HoanUng', 'Hoàn ứng / trả lại tiền NV đã bỏ ra'],
+                 ['CongTacPhi', 'Công tác phí'], ['ThuongTienMat', 'Thưởng tiền mặt']]
+                .map(([v, t]) => `<option value="${v}" ${(isEdit ? (row.LoaiChiNV || 'Khac') : 'Khac') === v ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+            <div class="empty-hint" style="margin-top:2px;">Chỉ <b>Tạm ứng</b> mới bị trừ vào lương. Các loại khác là chi phí bình thường.</div></div>
+          <div class="form-row" id="oTruLuong"><label>Trừ vào lương tháng</label>
+            <div style="display:flex;gap:6px;">
+              <select name="truLuongThang" id="chiTLThang" style="flex:1;">${
+                Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${m}">Tháng ${m}</option>`).join('')
+              }</select>
+              <input type="number" name="truLuongNam" id="chiTLNam" min="2000" max="2100" style="width:90px;">
+            </div>
+            <div class="empty-hint" style="margin-top:2px;">Mặc định theo ngày chi. Bảng lương tháng này sẽ tự cộng số tạm ứng — <b>không phải gõ tay</b>.</div></div>
           <div class="form-row"><label>Tên đối tượng nhận</label><input name="tenDoiTuong" id="chiTen" value="${escapeHtml(isEdit ? (row.TenDoiTuong || '') : '')}"></div>
           <div class="form-row"><label>Tài khoản chi (quyết định có tính chi phí KD)</label>
             ${oTaiKhoanHtml('Chi', isEdit ? row.TaiKhoanID : '')}</div>
@@ -605,16 +747,48 @@ window.ModuleCongNo = (function () {
     const dongBoO = () => {
       const l = modal.querySelector('#chiLoai').value;
       const oNCC = modal.querySelector('#oNCC'), oNGC = modal.querySelector('#oNGC');
+      const oNV = modal.querySelector('#oNV'), oLoaiNV = modal.querySelector('#oLoaiNV'), oTL = modal.querySelector('#oTruLuong');
       oNCC.style.display = l === 'NhaCungCap' ? '' : 'none';
       oNGC.style.display = l === 'NhaGiaCong' ? '' : 'none';
       if (l !== 'NhaCungCap') oNCC.querySelector('select').value = '';
       if (l !== 'NhaGiaCong') oNGC.querySelector('select').value = '';
+      // v9.32: ba ô của nhánh nhân viên
+      const laNV = l === 'NhanVien';
+      oNV.style.display = laNV ? '' : 'none';
+      oLoaiNV.style.display = laNV ? '' : 'none';
+      if (!laNV) modal.querySelector('#chiNV').value = '';
+      /* Ô "trừ vào lương tháng" CHỈ có nghĩa với tạm ứng — hiện lúc khác là mời người ta hiểu nhầm
+         rằng công tác phí cũng bị trừ lương. */
+      oTL.style.display = (laNV && modal.querySelector('#chiLoaiNV').value === 'TamUng') ? '' : 'none';
     };
     modal.querySelector('#chiLoai').addEventListener('change', dongBoO);
+    modal.querySelector('#chiLoaiNV').addEventListener('change', dongBoO);
+    /* Tháng trừ lương mặc định = tháng của NGÀY CHI, và đổi theo khi người dùng đổi ngày — chừng nào
+       họ chưa tự chọn tháng khác (chạm vào rồi thì tôn trọng lựa chọn của họ). */
+    let nguoiDungTuChonThang = isEdit && row.TruLuongThang != null;
+    const datThangTheoNgay = () => {
+      if (nguoiDungTuChonThang) return;
+      const d = new Date(modal.querySelector('[name="ngay"]').value || Date.now());
+      if (isNaN(d.getTime())) return;
+      modal.querySelector('#chiTLThang').value = String(d.getMonth() + 1);
+      modal.querySelector('#chiTLNam').value = String(d.getFullYear());
+    };
+    if (isEdit && row.TruLuongThang != null) {
+      modal.querySelector('#chiTLThang').value = String(row.TruLuongThang);
+      modal.querySelector('#chiTLNam').value = String(row.TruLuongNam || new Date().getFullYear());
+    } else datThangTheoNgay();
+    modal.querySelector('[name="ngay"]').addEventListener('change', datThangTheoNgay);
+    modal.querySelector('#chiTLThang').addEventListener('change', () => { nguoiDungTuChonThang = true; });
+    modal.querySelector('#chiTLNam').addEventListener('change', () => { nguoiDungTuChonThang = true; });
     dongBoO();
     modal.querySelector('#chiNCC').addEventListener('change', (e) => {
       const n = dm.ncc.find(x => String(x.NCC_ID) === e.target.value);
       if (n) modal.querySelector('#chiTen').value = n.TenNCC;
+    });
+    // Chọn nhân viên thì điền luôn "Tên đối tượng nhận" — phiếu in ra phải có tên người nhận tiền.
+    modal.querySelector('#chiNV').addEventListener('change', (e) => {
+      const n = (dm.nhanVien || []).find(x => String(x.NhanVienID) === e.target.value);
+      if (n) modal.querySelector('#chiTen').value = n.HoTen;
     });
     modal.querySelector('#fChi').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -624,8 +798,20 @@ window.ModuleCongNo = (function () {
         nccId: fd.get('nccId') || null, nhaGiaCongId: fd.get('nhaGiaCongId') || null,
         tenDoiTuong: fd.get('tenDoiTuong'), taiKhoanId: fd.get('taiKhoanId') || null,
         soTien: fd.get('soTien'), hinhThuc: fd.get('hinhThuc'), dienGiai: fd.get('dienGiai') || null,
-        taiKhoanNHID: fd.get('taiKhoanNHID') || null
+        taiKhoanNHID: fd.get('taiKhoanNHID') || null,
+        // v9.32: backend tự NULL hóa khi không phải chi cho nhân viên, đây chỉ là lớp gửi đi.
+        nhanVienId: fd.get('nhanVienId') || null, loaiChiNV: fd.get('loaiChiNV') || null,
+        truLuongThang: fd.get('truLuongThang') || null, truLuongNam: fd.get('truLuongNam') || null
       };
+      if (payload.loaiDoiTuong === 'NhanVien' && !payload.nhanVienId) {
+        toast('Chi cho nhân viên thì phải chọn nhân viên.', 'error'); return;
+      }
+      /* Nói TRƯỚC khi lưu, không phải sau: tạm ứng là trừ vào tiền người ta nhận. */
+      if (payload.loaiDoiTuong === 'NhanVien' && payload.loaiChiNV === 'TamUng') {
+        const nv = (dm.nhanVien || []).find(x => String(x.NhanVienID) === String(payload.nhanVienId));
+        if (!confirm(`Tạm ứng ${fmtNumber(Number(payload.soTien) || 0)}đ cho ${nv ? nv.HoTen : 'nhân viên này'}.\n\n`
+          + `Số này sẽ TRỪ vào bảng lương tháng ${payload.truLuongThang}/${payload.truLuongNam}. Đồng ý?`)) return;
+      }
       try {
         if (isEdit) await apiPut('/api/congno/phieuchi/' + row.PhieuChiID, payload);
         else await apiPost('/api/congno/phieuchi', payload);
@@ -733,6 +919,7 @@ window.ModuleCongNo = (function () {
            người dùng chọn kỳ rồi chờ bảng đổi — mà bảng không liên quan gì tới nó (Nguyen 2026-10-12). */''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:#f8f9fa;border-radius:6px;">
         <span style="font-size:12px;color:#5f6368;">Lọc kỳ:</span>
+        ${oKyNhanhHtml('ctKyNhanh') /* v9.17: chọn tháng/quý/năm là lọc luôn */}
         <input type="date" id="ctTuNgay" value="${d.tuNgay || ''}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="ctDenNgay" value="${d.denNgay || ''}" style="width:auto;">
@@ -749,7 +936,9 @@ window.ModuleCongNo = (function () {
            trả mẫu thì Phiếu nhập lại ghi âm để triệt tiêu. */''}
       <tbody>${(d.rows || []).map(r => `<tr ${Number(r.LaHangMau) === 1 ? 'style="background:#fffbe6;"' : ''}>
         <td>${fmtDate(r.Ngay)}</td>
-        <td>${escapeHtml(r.Loai)}${Number(r.LaHangMau) === 1 ? '<div><span class="badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591;">Gửi mẫu</span></div>' : ''}</td>
+        ${/* v9.10: dùng chung nhanGuiMau() với bản in + sổ chi tiết — trước đây badge viết tay riêng
+             ở đây nên bản in không có gì, đúng kiểu "sửa một màn quên bản in". */''}
+        <td>${escapeHtml(r.Loai)}${nhanGuiMau(r)}</td>
         <td>${oSoPhieu(r)}</td>
         <td style="text-align:right;">${Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''}</td>
         <td style="text-align:right;">${Number(r.ThanhToan) ? fmtNumber(r.ThanhToan) : ''}</td>
@@ -782,6 +971,7 @@ window.ModuleCongNo = (function () {
     /* v8.87: Lọc = mở lại chính sổ này với kỳ mới. Không lọc tại chỗ trên mảng đang có, vì còn phải
        lấy DƯ ĐẦU KỲ — số đó nằm ở các dòng TRƯỚC kỳ, tức là những dòng không có trong mảng này. */
     const locKy = (tu, den) => soChiTietKH(khach, { tu, den }, true);
+    ganKyNhanh(modal, 'ctKyNhanh', 'ctTuNgay', 'ctDenNgay', locKy);   // v9.17
     modal.querySelector('#btnLocKy').addEventListener('click', () => {
       const tu = modal.querySelector('#ctTuNgay').value || '';
       const den = modal.querySelector('#ctDenNgay').value || '';
@@ -823,6 +1013,25 @@ window.ModuleCongNo = (function () {
      Thứ tự giữ nguyên mới-nhất-trên-đầu như màn hình; có ghi chú để người đọc biết cột lũy kế phải
      đọc từ dưới lên (giống file Excel).
      ================================================================================================ */
+  /* ================================================================================================
+     v9.10 — NHÃN "GỬI MẪU" DÙNG CHUNG cho MỌI nơi hiện dòng chứng từ công nợ.
+
+     Nguyen 2026-10-30: *"sổ công nợ và chi tiết công nợ những phiếu mẫu thêm cờ gửi mẫu"*.
+     Từ v7.59 chỉ BẢNG TRÊN MÀN HÌNH có nhãn; bản IN (thứ khách ký) và bản Excel thì không — vì mọi
+     chỗ "map lại từng field" ở backend đều làm rớt `LaHangMau`. Nay một hàm, bốn nơi gọi.
+
+     🔴 BẢN IN KHÔNG ĐƯỢC CHỈ DỰA VÀO MÀU NỀN — trình duyệt mặc định TẮT in nền (background graphics),
+     nên dòng nền vàng `#fffbe6` của màn hình in ra là TRẮNG TRƠN. Nhãn phải là CHỮ CÓ VIỀN để đọc
+     được cả khi in đen trắng. Viền dùng `#ad6800` (đậm) thay cho `#ffd591` của bản cũ chính vì thế.
+     `print-color-adjust:exact` chỉ là lớp tăng cường — máy nào cho in nền thì đẹp hơn, không có thì
+     vẫn đọc được chữ.
+     ================================================================================================ */
+  const nhanGuiMau = (r) => (Number(r && r.LaHangMau) === 1
+    ? '<div><span style="display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;'
+      + 'font-weight:700;line-height:1.5;background:#fff7e6;color:#ad6800;border:1px solid #ad6800;'
+      + '-webkit-print-color-adjust:exact;print-color-adjust:exact;">Gửi mẫu</span></div>'
+    : '');
+
   function inSoCongNo(opt) {
     const cot = opt.cot || [];
     const rows = opt.rows || [];
@@ -871,7 +1080,7 @@ window.ModuleCongNo = (function () {
      mới-nhất-trên-đầu (v7.79). Cộng dồn cả cột lũy kế là vô nghĩa. */
   const COT_SO_1CHIEU = (rows, nhan) => [
     { nhan: 'Ngày', rong: '78px', o: r => fmtDate(r.Ngay) },
-    { nhan: 'Loại', o: r => escapeHtml(r.Loai || '') },
+    { nhan: 'Loại', o: r => escapeHtml(r.Loai || '') + nhanGuiMau(r) },
     { nhan: (nhan && nhan.soPhieu) || 'Số phiếu', o: r => escapeHtml(r.SoPhieu || '') },
     { nhan: 'Phát sinh', phai: true, o: r => (Number(r.PhatSinh) ? fmtNumber(r.PhatSinh) : ''),
       tong: () => fmtNumber(rows.reduce((s, r) => s + (Number(r.PhatSinh) || 0), 0)) },
@@ -884,7 +1093,7 @@ window.ModuleCongNo = (function () {
   const COT_SO_2CHIEU = (d) => [
     { nhan: 'Ngày', rong: '78px', o: r => fmtDate(r.Ngay) },
     { nhan: 'Chiều', rong: '72px', o: r => (r.Ben === 'ThuVe' ? 'Bán / thu' : 'Mua / chi') },
-    { nhan: 'Loại chứng từ', o: r => escapeHtml(r.Loai || '') },
+    { nhan: 'Loại chứng từ', o: r => escapeHtml(r.Loai || '') + nhanGuiMau(r) },
     { nhan: 'Số phiếu', o: r => escapeHtml(r.SoPhieu || '') },
     { nhan: 'Phải thu', phai: true, o: r => (Number(r.PhaiThu) ? fmtNumber(r.PhaiThu) : ''),
       tong: () => fmtNumber(d.phaiThu) },
@@ -932,7 +1141,9 @@ window.ModuleCongNo = (function () {
         <td>${r.Ben === 'ThuVe'
           ? '<span class="badge" style="background:#fdecea;color:#c0392b;">Bán / thu</span>'
           : '<span class="badge" style="background:#e8f0fe;color:#1565c0;">Mua / chi</span>'}</td>
-        <td>${escapeHtml(r.Loai || '')}</td>
+        ${/* v9.10: sổ 2 chiều cũng phải có cờ Gửi mẫu — bản in đã có, thiếu ở đây là người duyệt
+             số trên màn không thấy cờ mà in ra lại thấy, đúng kiểu hai bản đọc lệch nhau. */''}
+        <td>${escapeHtml(r.Loai || '')}${nhanGuiMau(r)}</td>
         <td>${oSoPhieu(r)}</td>
         <td style="text-align:right;">${Number(r.PhaiThu) ? fmtNumber(r.PhaiThu) : ''}</td>
         <td style="text-align:right;">${Number(r.PhaiTra) ? fmtNumber(r.PhaiTra) : ''}</td>
@@ -996,6 +1207,7 @@ window.ModuleCongNo = (function () {
     return `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 0;padding-top:8px;border-top:1px solid #e0e0e0;">
         <span style="font-size:12px;color:#5f6368;">Sổ chi tiết (có dòng hàng) — kỳ:</span>
+        ${oKyNhanhHtml('soKyNhanh') /* v9.17: chỉ ĐIỀN hai ô — khối này có hai nút hành động (Xem/Xuất), không tự bấm hộ */}
         <input type="date" id="soTuNgay" value="${tu}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="soDenNgay" value="${den}" style="width:auto;">
@@ -1017,6 +1229,7 @@ window.ModuleCongNo = (function () {
     return { tu, den };
   }
   function noiDayXuatSo(modal, duong, tenFile) {
+    ganKyNhanh(modal, 'soKyNhanh', 'soTuNgay', 'soDenNgay', null);   // v9.17: điền ô, người dùng tự bấm Xem/Xuất
     const nutXuat = modal.querySelector('#btnXuatSo');
     if (nutXuat) nutXuat.addEventListener('click', () => {
       const k = kyDangChon(modal);
@@ -1075,11 +1288,16 @@ window.ModuleCongNo = (function () {
     const tenDT = escapeHtml(d.tenDoiTuong || '');
 
     const thanDong = (d.dong || []).map(r => {
+      // v9.10: nhãn Gửi mẫu đặt ở cột DIỄN GIẢI — cột rộng nhất, badge không bị vỡ dòng như ở cột
+      // "Số" (rộng 74px). Hàm soKeToanHtml dùng chung cho CẢ xem trên màn hình LẪN bản in/PDF nên
+      // sửa một chỗ là cả hai cùng có.
+      // ⚠️ Chỗ này là THÂN hàm map, KHÔNG phải bên trong template literal — comment kiểu chèn vào
+      // chuỗi (dấu đô la + ngoặc nhọn) đặt ở đây là SyntaxError, đã làm sập máy thật ở v8.06.
       const cha = `<tr>
         <td style="text-align:center;">${escapeHtml(r.Ma || '')}</td>
         <td>${fmtDate(r.Ngay)}</td>
         <td>${escapeHtml(r.SoPhieu || '')}</td>
-        <td>${escapeHtml(r.DienGiai || '')}</td>
+        <td>${escapeHtml(r.DienGiai || '')}${nhanGuiMau(r)}</td>
         <td></td><td></td><td></td><td></td>
         <td style="text-align:right;">${tien(r.No)}</td>
         <td style="text-align:right;">${tien(r.Co)}</td></tr>`;
@@ -1358,6 +1576,7 @@ window.ModuleCongNo = (function () {
       <div style="margin-bottom:8px;">${dongSo}</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:#f8f9fa;border-radius:6px;">
         <span style="font-size:12px;color:#5f6368;">Lọc kỳ:</span>
+        ${oKyNhanhHtml('ctKyNhanh') /* v9.17 */}
         <input type="date" id="ctTuNgay" value="${d.tuNgay || ''}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="ctDenNgay" value="${d.denNgay || ''}" style="width:auto;">
@@ -1387,6 +1606,7 @@ window.ModuleCongNo = (function () {
     modal.querySelector('#btnDong').addEventListener('click', closeModal);
 
     const locKy = (tu, den) => soChiTietNCC(nccId, { tu, den }, true);
+    ganKyNhanh(modal, 'ctKyNhanh', 'ctTuNgay', 'ctDenNgay', locKy);   // v9.17
     modal.querySelector('#btnLocKy').addEventListener('click', () => {
       const tu = modal.querySelector('#ctTuNgay').value || '';
       const den = modal.querySelector('#ctDenNgay').value || '';
@@ -1519,6 +1739,7 @@ window.ModuleCongNo = (function () {
       <h3>Sổ công nợ nhà gia công / in thêu: ${escapeHtml(d.tenNha || '')}</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
         <span style="font-size:12px;color:#5f6368;">Kỳ:</span>
+        ${oKyNhanhHtml('gcKyNhanh') /* v9.17 */}
         <input type="date" id="gcTuNgay" value="${ky.tu || ''}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="gcDenNgay" value="${ky.den || ''}" style="width:auto;">
@@ -1546,6 +1767,7 @@ window.ModuleCongNo = (function () {
       const k = kyMoi();
       if (k) soChiTietGiaCong(nhaId, k);
     });
+    ganKyNhanh(modal, 'gcKyNhanh', 'gcTuNgay', 'gcDenNgay', (tu, den) => soChiTietGiaCong(nhaId, { tu, den }));   // v9.17
     modal.querySelector('#btnGCCaKy').addEventListener('click', () => soChiTietGiaCong(nhaId, {}));
 
     /* In ĐÚNG bảng đang xem (gỡ thẻ <a> để bản in không có link xanh gạch chân). */
@@ -1570,15 +1792,23 @@ window.ModuleCongNo = (function () {
   async function renderDieuChinh(perm) {
     const body = document.getElementById('cnBody');
     const rows = (await apiGet('/api/congno/dieuchinh')).data || [];
+    /* v9.17: lọc ngày + kỳ nhanh. Màn này trước không có số tổng — thêm luôn (tính từ dòng đang
+       lọc): dương = tăng nợ, âm = giảm nợ nên tổng là CỘNG GỘP có dấu. */
+    const kyDC = kyLocDS.dc;
+    const coLocDC = !!(kyDC.tu || kyDC.den);
+    const rowsLoc = rows.filter(r => trongKy(r.Ngay, kyDC));
+    const tongDC = rowsLoc.reduce((s, r) => s + (Number(r.SoTien) || 0), 0);
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
+        ${khoiLocNgayHtml('dc', kyDC)}
         ${perm.canCreate ? '<button class="btn" id="btnAdd">+ Thêm điều chỉnh</button>' : ''}
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Cộng gộp${coLocDC ? ' <b style="color:#e65100;">(đang lọc ngày)</b>' : ''}: <b style="color:${tongDC < 0 ? '#137333' : '#c0392b'};">${fmtNumber(tongDC)}</b> đ · ${rowsLoc.length}${coLocDC ? '/' + rows.length : ''} dòng</span>
       </div>
       <div class="empty-hint" style="text-align:left;">Dùng cho các khoản KHÔNG tự tính được: <b>nợ đầu kỳ</b>, tiền <b>gia công / in thêu</b>, giảm giá, bù trừ...
         Số tiền <b>dương = tăng nợ</b>, <b>âm = giảm nợ</b>.</div>
       <table><thead><tr><th>Ngày</th><th>Loại</th><th>Đối tượng</th><th>Số tiền</th><th>Diễn giải</th><th>Người tạo</th><th style="width:80px">Thao tác</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
+      <tbody>${rowsLoc.map(r => `<tr>
         ${/* v7.53: 3 loại — tra bảng thay vì if/else lồng, thêm loại thứ tư sau này chỉ sửa 1 chỗ. */''}
         <td>${fmtDate(r.Ngay)}</td><td>${({ KhachHang: 'Khách hàng', NhaCungCap: 'Nhà cung cấp', NhaGiaCong: 'Nhà gia công / in thêu' })[r.LoaiDoiTuong] || escapeHtml(r.LoaiDoiTuong || '')}</td>
         ${/* v6.69: KHÁCH HÀNG phải hiện ĐÚNG CHUỖI TenDoiTuong đã lưu trên bút toán.
@@ -1595,8 +1825,9 @@ window.ModuleCongNo = (function () {
         <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         ${/* v6.45: thêm nút Sửa — trước chỉ có Xóa, gõ sai 1 con số là phải xóa rồi nhập lại. */''}
         <td>${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.ID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.ID}">Xóa</button>` : ''}</td></tr>`).join('')
-        || '<tr><td colspan="7" class="empty-hint">Chưa có điều chỉnh nào</td></tr>'}</tbody></table>`;
+        || `<tr><td colspan="7" class="empty-hint">${coLocDC ? 'Không có điều chỉnh nào trong kỳ đang lọc' : 'Chưa có điều chỉnh nào'}</td></tr>`}</tbody></table>`;
     wireTableSearch(body);
+    ganLocNgay(body, 'dc', 'dc', () => renderDieuChinh(perm));   // v9.17
     const btn = body.querySelector('#btnAdd');
     if (btn) btn.addEventListener('click', () => formDieuChinh(perm));
     body.querySelectorAll('.act-sua').forEach(b => b.addEventListener('click', () => {
@@ -1785,6 +2016,7 @@ window.ModuleCongNo = (function () {
       <h3>Sổ quỹ: ${escapeHtml(d.ten)}</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
         <span style="font-size:12px;color:#5f6368;">Kỳ:</span>
+        ${oKyNhanhHtml('qKyNhanh') /* v9.17 */}
         <input type="date" id="qTuNgay" value="${vTu}" style="width:auto;">
         <span style="font-size:12px;color:#5f6368;">đến</span>
         <input type="date" id="qDenNgay" value="${vDen}" style="width:auto;">
@@ -1812,6 +2044,8 @@ window.ModuleCongNo = (function () {
       const k = kyMoi();
       if (k) soChiTietQuy(loai, id, k).catch(err => toast(err.message, 'error'));
     });
+    ganKyNhanh(modal, 'qKyNhanh', 'qTuNgay', 'qDenNgay',
+      (tu, den) => soChiTietQuy(loai, id, { tu, den }).catch(err => toast(err.message, 'error')));   // v9.17
     modal.querySelector('#btnQuyCaKy').addEventListener('click', () =>
       soChiTietQuy(loai, id, {}).catch(err => toast(err.message, 'error')));
     modal.querySelector('#btnInQuy').addEventListener('click', () => {

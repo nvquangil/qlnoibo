@@ -50,8 +50,10 @@ const CN = 'nhaplai';   // ChucNang KHOHANG/nhaplai - PHAI trung key tab o front
    "da tra / con lai" nay. De moi noi tu viet cau SQL la chac chan troi khoi nhau. Cho nay giu
    nguyen ten va chu ky ham nen phan con lai cua file khong phai sua gi.
    ================================================================================================ */
-const layDongDaBan = (pool, tenKhach, phieuBHID) =>
-  __layDongDaBan(pool, sql, { tenKhach, phieuBHID });
+/* v9.21: + boPhieuNLID — bỏ CHÍNH phiếu đang sửa ra khỏi phép "đã trả" (xem ghi chú trong util).
+   Chỉ truyền khi SỬA; tạo mới phải để trống, kẻo mở đường trả vượt. */
+const layDongDaBan = (pool, tenKhach, phieuBHID, boPhieuNLID) =>
+  __layDongDaBan(pool, sql, { tenKhach, phieuBHID, boPhieuNLID });
 
 /* ---------- danh sach khach da tung mua (de chon o form) ---------- */
 router.get('/khach', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
@@ -87,14 +89,16 @@ router.get('/phieuxuat/:id/dong', requireAuth, requirePermission('KHOHANG', 'vie
   const p = (await pool.request().input('id', sql.Int, req.params.id)
     .query('SELECT TenKhach FROM PhieuBanHang WHERE PhieuBHID=@id')).recordset[0];
   if (!p) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu xuất.' });
-  res.json({ success: true, data: await layDongDaBan(pool, p.TenKhach, Number(req.params.id)) });
+  // v9.21: form SỬA truyền ?boPhieuNLID= — không thì chính các dòng của phiếu đang sửa bị lọc mất
+  // (ConTraCai = 0) và form sửa mở ra trống trơn.
+  res.json({ success: true, data: await layDongDaBan(pool, p.TenKhach, Number(req.params.id), req.query.boPhieuNLID || null) });
 });
 
 /* ---------- TU TIM MA HANG trong pham vi da ban cho khach do ----------
    Van la "khoa cung theo phieu xuat": khong go duoc ma khach chua mua, gia lay tu chinh dong ban do. */
 router.get('/timmahang', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
-  const ds = await layDongDaBan(pool, req.query.tenKhach, null);
+  const ds = await layDongDaBan(pool, req.query.tenKhach, null, req.query.boPhieuNLID || null);   // v9.21
   const q = String(req.query.q || '').trim().toLowerCase();
   const loc = q ? ds.filter(r => (String(r.MaHang || '') + ' ' + String(r.TenHang || '') + ' ' + String(r.TenMau || ''))
     .toLowerCase().includes(q)) : ds;
@@ -336,8 +340,10 @@ async function chuanBiPhieu(pool, b) {
   const dongVao = Array.isArray(b.dong) ? b.dong.filter(d => d && d.phieuBHChiTietID) : [];
   if (!dongVao.length) return { loi: 'Phiếu chưa có dòng hàng nào. Chọn phiếu xuất rồi tích các mã cần nhập lại.' };
 
-  // Nguon su that duy nhat cho gia + so con tra duoc
-  const daBan = await layDongDaBan(pool, tenKhach, null);
+  /* Nguon su that duy nhat cho gia + so con tra duoc.
+     v9.21: b.boPhieuNLID = phieu dang SUA (bo khoi phep "da tra"). POST /phieu ep null truoc khi goi
+     vao day — xem ghi chu o do. */
+  const daBan = await layDongDaBan(pool, tenKhach, null, b.boPhieuNLID || null);
   const banTheoID = new Map(daBan.map(r => [Number(r.PhieuBHChiTietID), r]));
 
   const dong = [];
@@ -413,7 +419,8 @@ async function chuanBiPhieu(pool, b) {
 }
 
 /* ---------- XEM TRUOC so tien (form goi de hien tong truoc khi luu) ---------- */
-router.post('/tinhthu', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
+// v9.11: ép kiểm 'view' — xem trước số tiền, chuanBiPhieu() không ghi gì. Xem middleware/auth.js.
+router.post('/tinhthu', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN, 'view'), async (req, res) => {
   const pool = await getPool();
   const kq = await chuanBiPhieu(pool, req.body || {});
   if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
@@ -426,7 +433,10 @@ router.post('/tinhthu', requireAuth, requirePermission('KHOHANG', 'view'), requi
 router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const user = req.session.user;
-  const b = req.body || {};
+  /* v9.21: ÉP boPhieuNLID = null khi TẠO MỚI. Cờ đó chỉ có nghĩa lúc SỬA (bỏ chính phiếu đang sửa
+     khỏi phép "đã trả"); client gửi kèm lúc tạo — vô tình hay cố ý — là bỏ qua phần đã trả của một
+     phiếu khác ⇒ trả vượt số đã bán, tồn tăng khống. Chặn ngay ở đây, không tin body. */
+  const b = Object.assign({}, req.body || {}, { boPhieuNLID: null });
   const kq = await chuanBiPhieu(pool, b);
   if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
   const { dong, tong } = kq;
@@ -507,9 +517,118 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
   }
 });
 
-/* ---------- HUY phieu: TRU lai ton da hoan + khong con tru cong no ----------
-   Khong cho SUA phieu nhap lai: gia da khoa cung theo phieu xuat nen "sua" thuc chat chi la doi so
-   luong -> huy roi lap lai vua ro rang vua khong sinh duong sua ton thu hai. */
+/* ================================================================================================
+   SUA PHIEU NHAP LAI  (v9.21 — Nguyen 2026-11-05: "phieu nhap lai hang hoa hien tai khong sua duoc,
+   thay doi thanh sua duoc")
+
+   ⚠️ DAY LA DAO MOT QUYET DINH CO CHU DICH cua v6.66. Ghi chu cu: "Khong cho SUA phieu nhap lai: gia
+   da khoa cung theo phieu xuat nen sua thuc chat chi la doi so luong -> huy roi lap lai vua ro rang
+   vua khong sinh duong sua ton thu hai." Nguyen yeu cau tuong minh nen mo duong sua, va de KHONG
+   sinh "duong sua ton thu hai" thi route nay dung LAI dung hai manh ghep cua Huy va Tao:
+       truLaiTon()  (hoan het ton cua ban cu)  ->  xoa chi tiet  ->  ghi lai y het POST /phieu
+   KHONG viet phep cong tru ton moi o day. Gia VAN khoa cung theo phieu xuat (chuanBiPhieu), nguoi
+   dung chi doi duoc: ngay, ly do, ghi chu, va SO LUONG tung dong.
+
+   🔴 BA DIEU KIEN AN TOAN:
+     1. Phieu DA HUY khong sua duoc — ton da tra lai roi, sua tiep la phai ghi ton lan nua, roi.
+        Muon dung lai thi lap phieu moi.
+     2. chuanBiPhieu chay voi boPhieuNLID = chinh phieu nay, nen phan "da tra" cua chinh no khong
+        tu chan minh (xem util dongDaBanChoKhach.js).
+     3. GIU NGUYEN SoPhieu + NguoiTaoID + NgayTao. Sua khong phai la lap phieu moi.
+   ================================================================================================ */
+router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', CN), async (req, res) => {
+  const pool = await getPool();
+  const id = Number(req.params.id);
+  const cu = (await pool.request().input('id', sql.Int, id)
+    .query('SELECT * FROM PhieuNhapLai WHERE PhieuNLID=@id')).recordset[0];
+  if (!cu) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập lại.' });
+  if (cu.TrangThai === 'Đã hủy') {
+    return res.status(400).json({ success: false,
+      message: 'Phiếu này ĐÃ HỦY nên không sửa được — tồn kho và công nợ đã trả về như trước khi lập. Muốn dùng lại thì lập phiếu nhập lại mới.' });
+  }
+  /* v9.21 + rà chéo: ép CẢ HAI thứ, không tin body.
+       · boPhieuNLID = chính phiếu này (điều kiện an toàn 2);
+       · tenKhach = KHÁCH CŨ của phiếu. Form đã khóa ô khách, nhưng khóa ở giao diện không phải là
+         chặn: một request thủ công đổi được phiếu sang khách khác ⇒ công nợ NHẢY GIỮA HAI KHÁCH
+         (phiếu trừ nợ của người này biến thành trừ nợ người kia). Đổi khách = hủy phiếu, lập mới. */
+  const b = Object.assign({}, req.body || {}, { boPhieuNLID: id, tenKhach: cu.TenKhach });
+  const kq = await chuanBiPhieu(pool, b);
+  if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
+  const { dong, tong } = kq;
+
+  // Giống POST: phiếu có gắn phiếu bán gốc thì lấy KhachHangID từ chính phiếu đó (v8.10).
+  let khachHangIdMoi = b.khachHangId ? Number(b.khachHangId) : null;
+  if (!khachHangIdMoi && tong.phieuBHID) {
+    const rKH = await pool.request().input('id', sql.Int, tong.phieuBHID)
+      .query('SELECT KhachHangID FROM PhieuBanHang WHERE PhieuBHID = @id');
+    khachHangIdMoi = (rKH.recordset[0] && rKH.recordset[0].KhachHangID) || null;
+  }
+
+  const tran = new sql.Transaction(pool);
+  await tran.begin();
+  try {
+    // Hoàn hết tồn của bản CŨ (dùng chung với Hủy/Xóa). Nhãn 'sửa phiếu' để câu lỗi "không đủ tồn"
+    // nói đúng việc người dùng đang làm — rà chéo bắt: trước đó nó ghi "trả lại" giữa lúc đang Sửa.
+    await truLaiTon(pool, tran, id, 'sửa phiếu');
+    await new sql.Request(tran).input('id', sql.Int, id)
+      .query('DELETE FROM PhieuNhapLaiChiTiet WHERE PhieuNLID=@id');
+    await new sql.Request(tran)
+      .input('id', sql.Int, id)
+      .input('NgayNhap', sql.Date, b.ngayNhap || cu.NgayNhap)
+      .input('KhachHangID', sql.Int, khachHangIdMoi)
+      .input('TenKhach', sql.NVarChar, String(b.tenKhach).trim())
+      .input('SDT', sql.NVarChar, b.sdt || null)
+      .input('DiaChi', sql.NVarChar, b.diaChi || null)
+      .input('PhieuBHID', sql.Int, tong.phieuBHID || null)
+      .input('CKNPP', sql.Decimal(5, 2), tong.ckNPP)
+      .input('VAT', sql.Decimal(5, 2), tong.vat)
+      .input('TongTienHang', sql.Decimal(18, 2), tong.tongTienHang)
+      .input('TienCKNPP', sql.Decimal(18, 2), tong.tienCKNPP)
+      .input('TienTruocVAT', sql.Decimal(18, 2), tong.tienTruocVAT)
+      .input('TienVAT', sql.Decimal(18, 2), tong.tienVAT)
+      .input('TongThanhToan', sql.Decimal(18, 2), tong.tongThanhToan)
+      .input('TongSLCai', sql.Int, tong.tongSLCai)
+      .input('LyDo', sql.NVarChar, b.lyDo || null)
+      .input('GhiChu', sql.NVarChar, b.ghiChu || null)
+      .query(`UPDATE PhieuNhapLai SET NgayNhap=@NgayNhap, KhachHangID=@KhachHangID, TenKhach=@TenKhach,
+                SDT=@SDT, DiaChi=@DiaChi, PhieuBHID=@PhieuBHID, PhanTramCKNPP=@CKNPP, PhanTramVAT=@VAT,
+                TongTienHang=@TongTienHang, TienCKNPP=@TienCKNPP, TienTruocVAT=@TienTruocVAT,
+                TienVAT=@TienVAT, TongThanhToan=@TongThanhToan, TongSLCai=@TongSLCai,
+                LyDo=@LyDo, GhiChu=@GhiChu
+              WHERE PhieuNLID=@id`);
+
+    for (const d of dong) {
+      await new sql.Request(tran)
+        .input('PhieuNLID', sql.Int, id)
+        .input('MaHangID', sql.Int, d.maHangId)
+        .input('MauSacID', sql.Int, d.mauSacId)
+        .input('SoLuong', sql.Decimal(14, 2), d.soLuong)
+        .input('DonVi', sql.NVarChar, d.donVi)
+        .input('SoLuongCai', sql.Int, d.soCai)
+        .input('SoLuongQuyDoi', sql.Decimal(14, 2), d.soLuongQuyDoi)
+        .input('DonViQuyDoi', sql.NVarChar, d.donViQuyDoi)
+        .input('GiaBanLe', sql.Decimal(14, 2), d.giaBanLe)
+        .input('CKShop', sql.Decimal(5, 2), d.ckShop)
+        .input('GiaBan', sql.Decimal(14, 2), d.giaBan)
+        .input('ThanhTien', sql.Decimal(18, 2), d.thanhTien)
+        .input('BCT', sql.Int, d.phieuBHChiTietID)
+        .input('GhiChu', sql.NVarChar, d.ghiChu)
+        .query(`INSERT INTO PhieuNhapLaiChiTiet (PhieuNLID, MaHangID, MauSacID, SoLuong, DonVi, SoLuongCai,
+                  SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, PhieuBHChiTietID, GhiChu)
+                VALUES (@PhieuNLID, @MaHangID, @MauSacID, @SoLuong, @DonVi, @SoLuongCai,
+                  @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @BCT, @GhiChu)`);
+      if (d.mauSacId) await ghiXuatKho(pool, tran, d.maHangId, d.mauSacId, -d.slChinh, null, 'nhaplai');
+    }
+    await tran.commit();
+    res.json({ success: true, data: { phieuNLID: id, soPhieu: cu.SoPhieu, tongThanhToan: tong.tongThanhToan } });
+  } catch (err) {
+    try { await tran.rollback(); } catch (e) { /* transaction co the da ket thuc */ }
+    console.error('[nhaplai PUT /phieu/:id] ', err);
+    res.status(400).json({ success: false, message: 'Lỗi khi sửa phiếu nhập lại (đã quay lui, phiếu giữ nguyên như trước): ' + err.message });
+  }
+});
+
+/* ---------- HUY phieu: TRU lai ton da hoan + khong con tru cong no ---------- */
 router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const h = (await pool.request().input('id', sql.Int, req.params.id)
@@ -531,8 +650,10 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
   }
 });
 
-/* TRU lai so da hoan khi huy/xoa. Dung chung boi Huy va Xoa nen 2 duong khong the lech nhau. */
-async function truLaiTon(pool, tran, id) {
+/* TRU lai so da hoan khi huy/xoa/SUA. Dung chung boi ca ba nen khong the lech nhau.
+   `viec` (v9.21): chu hien trong cau loi "khong du ton kho" — nguoi dung bam Sua ma doc thay
+   "tra lai" thi khong hieu minh dang lam gi (bai hoc: cau chu phai khop viec dang lam). */
+async function truLaiTon(pool, tran, id, viec) {
   const ct = (await new sql.Request(tran).input('id', sql.Int, id).query(`
     SELECT ct.MaHangID, ct.MauSacID, ct.SoLuongCai, h.LoaiRi, h.DonViCoBan, h.DonViQuyDoi, h.MaHang
     FROM PhieuNhapLaiChiTiet ct JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
@@ -542,7 +663,7 @@ async function truLaiTon(pool, tran, id) {
     const heSo = so(d.LoaiRi) || 1;
     const slChinh = donViChinhLaGop(d) ? Math.round(so(d.SoLuongCai) / heSo) : Math.round(so(d.SoLuongCai));
     if (slChinh > 0) await ghiXuatKho(pool, tran, d.MaHangID, d.MauSacID, slChinh,
-      `${d.MaHang} trả lại ${slChinh} ${d.DonViCoBan || 'Cái'}`, 'nhaplai');
+      `${d.MaHang} ${viec || 'trả lại'} ${slChinh} ${d.DonViCoBan || 'Cái'}`, 'nhaplai');
   }
 }
 

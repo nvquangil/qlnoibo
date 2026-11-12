@@ -244,7 +244,10 @@ window.ModuleKhoHang = (function () {
   // viết tay ở đây vì openTaiKhoanKhachForm không đi qua bộ field-descriptor chung.
   async function openTaiKhoanKhachForm(row, perm) {
     const isEdit = !!row;
-    const dsKhachHang = (await apiGet('/api/danhmuc/khachhang')).data || [];
+    /* v9.11: `.catch` cho khớp các chỗ khác trong chính file này (đều đã có). Người bán hàng không
+       được cấp phân hệ Danh mục thì form này ném lỗi giữa chừng; suy biến êm hơn: ô liên kết khách
+       hàng rỗng, phần còn lại của form vẫn dùng được. Cùng bệnh "mượn route phân hệ khác" (v9.11). */
+    const dsKhachHang = (await apiGet('/api/danhmuc/khachhang').catch(() => ({ data: [] }))).data || [];
     const khOptions = ['<option value="">— Không liên kết —</option>']
       .concat(dsKhachHang.map(k => `<option value="${k.KhachHangID}" ${row && String(row.KhachHangID) === String(k.KhachHangID) ? 'selected' : ''}>${escapeHtml(k.TenKhachHang)}</option>`))
       .join('');
@@ -3244,29 +3247,28 @@ window.ModuleKhoHang = (function () {
     }));
   }
 
-  /* v8.37: GỐC TÍNH nay là GIÁ SAU CK SHOP (= Giá bán × (1 − CK_SHOP%), backend tính sẵn trong SQL
-     và vẫn trả về dưới tên GiaAloha). Nguyen chốt bằng ví dụ số THẬT (2026-09-24):
-       "giá bán 100.000, CK shop 33% thành còn 67.000 điền vào cột giá trước thuế của aloha,
-        thuế 8%, giá sau thuế = 67000 + 67000*8%"
-     →  Trước VAT = GiaAloha             (67.000)
-        Sau VAT   = GiaAloha × (1+%VAT)  (72.360)
+  /* v9.16: GỐC TÍNH là GIÁ BÁN của thẻ kho (backend trả về dưới tên GiaAloha, nay = h.GiaBan),
+     và Giá bán là giá ĐÃ GỒM THUẾ. Nguyen 2026-11-04: "lấy cột giá bán đưa vào cột giá sau thuế,
+     tự chia giá trước thuế" — chốt qua hỏi đáp ví dụ số: "Giá bán 100.000 (bỏ CK shop)":
+       Sau VAT   = GiaAloha              (100.000)
+       Trước VAT = GiaAloha ÷ (1+%VAT)   (92.593 với VAT 8%)
+     CK shop 33% KHÔNG còn trong báo giá (bỏ cách tính v8.37).
 
-     ⚠️ ĐẢO CHIỀU so với v6.62 — và đó là ĐÚNG, không phải lỗi cộng thuế hai lần tái phát:
-     v6.62 lấy GIÁ BÁN LẺ (đã gồm thuế, bán cho người tiêu dùng) nên phải CHIA xuống; ở đây lấy
-     GIÁ SAU CK SHOP — là giá bán buôn CHƯA thuế theo định nghĩa của Nguyen — nên NHÂN lên.
-     Gốc tính khác nhau thì chiều tính khác nhau. Đừng "sửa lại cho giống v6.62".
-     Trước đây coi giá lấy vào là giá TRƯỚC thuế rồi nhân lên -> báo giá gửi khách bị cộng thuế
-     HAI LẦN (giá 108.000 đã gồm 8% thành 116.640).
+     🔴 LỊCH SỬ BA LẦN ĐỔI CHIỀU — đừng tự ý "sửa lại cho giống" bản nào:
+       v6.62 gốc Giá bán (đã gồm thuế)        → CHIA xuống
+       v8.37 gốc giá sau CK shop (chưa thuế)  → NHÂN lên  (ví dụ 67.000/72.360)
+       v9.16 gốc Giá bán (đã gồm thuế)        → CHIA xuống (ví dụ 100.000/92.593)
+     Mỗi lần đều là yêu cầu tường minh của Nguyen kèm ví dụ số; muốn đổi tiếp phải có ví dụ số mới.
      PhanTramVAT lưu dạng PHÂN SỐ (0.08 = 8%) — khác Thẻ kho lưu 20 = 20%, đừng chép công thức qua lại.
-     Dùng chung cho modal xem, bản in và Excel để 3 nơi không lệch nhau. */
+     Dùng chung cho modal xem + bản in; cột Excel tính ở backend /baogia/:id/export — PHẢI KHỚP nhau. */
   function baoGiaSauVat(it) {
-    const vat = Number(it.PhanTramVAT) || 0;
     const gia = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-    return gia != null ? gia * (1 + vat) : null;   // v8.37: giá sau CK shop CỘNG thuế lên
+    return gia;   // v9.16: Giá bán CHÍNH LÀ giá sau thuế
   }
   function baoGiaTruocVat(it) {
+    const vat = Number(it.PhanTramVAT) || 0;
     const gia = it.GiaAloha != null ? Number(it.GiaAloha) : null;
-    return gia;   // v8.37: giá sau CK shop CHÍNH LÀ giá trước thuế
+    return gia != null ? gia / (1 + vat) : null;   // v9.16: CHIA ngược ra giá trước thuế
   }
 
   // v5.18 (muc 2.1.1): modal "Xem" 1 bao gia - header (Ten bao gia/Ngay tao/Ten Cty SX-NK/Ma+Ten NCC/Ghi
@@ -3336,10 +3338,10 @@ window.ModuleKhoHang = (function () {
     return gt.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
   }
   function candRowHtml(c, prefill) {
-    /* v8.37: GiaAloha nay là GIÁ SAU CK SHOP (backend tính từ Giá bán × (1 − CK_SHOP%), xem
-       SQL_GIA_ALOHA trong khohang.js) -> ghi rõ nhãn để không ai tưởng đây là Giá bán. */
+    /* v9.16: GiaAloha = GIÁ BÁN của thẻ kho (xem SQL_GIA_ALOHA trong khohang.js) và là giá SAU
+       thuế trên báo giá — nhãn nói rõ để không ai tưởng còn là giá sau CK của v8.37. */
     const gia = c.GiaAloha != null
-      ? `<span style="color:#5f6368;" title="Giá sau CK shop — dùng làm giá TRƯỚC thuế trên báo giá">(sau CK: ${fmtNumber(c.GiaAloha)}đ)</span>`
+      ? `<span style="color:#5f6368;" title="Giá bán của thẻ kho — là giá SAU thuế trên báo giá; giá trước thuế = chia (1+VAT)">(giá bán: ${fmtNumber(c.GiaAloha)}đ)</span>`
       : '<span style="color:#c0392b;">(chưa có Giá bán)</span>';
     const checked = !!prefill;
     const vatValue = prefill && prefill.PhanTramVAT != null ? Math.round(Number(prefill.PhanTramVAT) * 10000) / 100 : 8;
@@ -3390,6 +3392,15 @@ window.ModuleKhoHang = (function () {
           <div class="form-row" style="margin-bottom:0;"><label>Loại hàng</label>
             <select id="bgLocLoai"><option value="">-- Tất cả loại hàng --</option>${optLoc(candidates, 'TenNhom')}</select></div>
         </div>
+        ${/* v9.16 — Nguyen: "thêm chức năng chọn tất cả khi tạo báo giá". Tác động CHỈ các dòng
+             ĐANG HIỆN sau bộ lọc (cùng luật với cmChonHet của màn Chuyển danh mục v8.24 — lọc còn
+             3 mã mà tích cả 800 mã là tai nạn). type="button" BẮT BUỘC: nút trần trong <form> mặc
+             định là submit, bấm "chọn tất cả" mà lưu luôn báo giá là hỏng. Kèm nút bỏ chọn — tích
+             nhầm hàng trăm mã mà phải bỏ tay từng ô thì coi như không có tính năng. */''}
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+          <button type="button" class="btn small secondary" id="bgChonHet">☑️ Chọn tất cả (dòng đang hiện)</button>
+          <button type="button" class="btn small secondary" id="bgBoChonHet">☐ Bỏ chọn (dòng đang hiện)</button>
+        </div>
         <div class="empty-hint" id="bgDemHien" style="margin-bottom:6px;"></div>
         <div id="bgCandList" style="max-height:320px;overflow:auto;border:1px solid #dcdfe3;border-radius:4px;">
           ${candidates.map(c => candRowHtml(c, existingItemsByMaHangId.get(String(c.MaHangID)))).join('') || '<div class="empty-hint" style="padding:10px;">Không còn mã hàng nào để báo giá — tất cả đã có trong báo giá khác.</div>'}
@@ -3437,6 +3448,21 @@ window.ModuleKhoHang = (function () {
     if (selLoai) selLoai.addEventListener('change', apDungLoc);
     modal.querySelectorAll('.bg-chk').forEach(chk => chk.addEventListener('change', apDungLoc));
     apDungLoc();
+
+    /* v9.16: chọn/bỏ chọn hàng loạt — CHỈ dòng đang hiện (tôn trọng cả ba bộ lọc). Phải tự bật/tắt
+       ô %VAT theo đúng luật của handler từng ô (ô VAT chỉ sửa được khi dòng đã tích); gọi lại
+       apDungLoc() để dòng đếm "đã tích đang bị ẩn" cập nhật. Giá trị %VAT của từng dòng GIỮ NGUYÊN
+       (mặc định 8 hoặc số đã nhập) — chọn tất cả không được xóa số người dùng đã gõ. */
+    function datChonDongDangHien(chon) {
+      modal.querySelectorAll('.bg-cand-row').forEach(row => {
+        if (row.style.display === 'none') return;
+        row.querySelector('.bg-chk').checked = chon;
+        row.querySelector('.bg-vat').disabled = !chon;
+      });
+      apDungLoc();
+    }
+    modal.querySelector('#bgChonHet').addEventListener('click', () => datChonDongDangHien(true));
+    modal.querySelector('#bgBoChonHet').addEventListener('click', () => datChonDongDangHien(false));
 
     modal.querySelector('#bgForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3883,8 +3909,10 @@ window.ModuleKhoHang = (function () {
         <div><b>Khách hàng:</b> ${escapeHtml(h.TenKhach)}</div>
         <div><b>SĐT:</b> ${escapeHtml(h.SDT || '')}</div>
         <div><b>Địa chỉ:</b> ${escapeHtml(h.DiaChi || '')}</div>
-        <div><b>Người lập:</b> ${escapeHtml(h.NguoiTao || '')}</div>
+        ${/* v9.46: ai lập, lúc nào; nếu đã sửa/hủy thì ai sửa, lúc nào (NguoiSua/SuaLuc = NULL khi chưa). */''}
+        <div><b>Người lập:</b> ${escapeHtml(h.NguoiTao || '')}${h.TaoLuc ? ` <span style="color:#5f6368;">(${fmtLucPhieu(h.TaoLuc)})</span>` : ''}</div>
         <div><b>Đã thu:</b> ${fmtTien(h.DaThu)} / ${fmtTien(h.TongThanhToan)} đ</div>
+        ${h.SuaLuc ? `<div style="grid-column:1/-1;color:#b06000;"><b>Sửa lần cuối:</b> ${escapeHtml(h.NguoiSua || '')} (${fmtLucPhieu(h.SuaLuc)})</div>` : ''}
       </div>
       <div style="max-height:50vh;overflow:auto;margin-top:8px;">${bangChiTietBanHangHtml(d.chiTiet, h)}
         <div style="margin-top:6px;">Số tiền bằng chữ: <i>${escapeHtml(docSoTienBangChu(h.TongThanhToan))}</i></div>
@@ -4146,11 +4174,24 @@ window.ModuleKhoHang = (function () {
       ${bangChiTietBanHangHtml(ct, h, true)}
       <p style="margin:8px 0;"><b>Số tiền bằng chữ:</b> ${escapeHtml(docSoTienBangChu(h.TongThanhToan))}</p>
       ${khoiCongNoHtml(h)}
+      ${/* v9.46 (Nguyen 11/11): dưới ô "Người làm phiếu" in TÊN người lập (user đăng nhập lúc lập) và
+           GIỜ + NGÀY lập đầu tiên; phiếu đã sửa/hủy thì thêm dòng "Sửa lần cuối: ai, lúc nào" ở chân
+           phiếu — người cầm bản in biết đây là bản sau sửa, không phải bản ký ban đầu. */''}
       <div class="p-sign" style="display:flex;justify-content:space-between;margin-top:26px;text-align:center;">
         <div style="flex:1;"><div class="line">Khách hàng</div></div>
         <div style="flex:1;"><div class="line">Thủ kho</div></div>
-        <div style="flex:1;"><div class="line">Người làm phiếu</div></div>
-      </div>`, { extraStyle: styleIn, logo: true });
+        <div style="flex:1;"><div class="line">Người làm phiếu</div>
+          ${/* .p-sign .line = 60px trống phía TRÊN gạch (chỗ ký) rồi mới tới nhãn — nên tên + giờ nằm
+               ngay DƯỚI nhãn, không cần chừa thêm chỗ ký. */''}
+          ${h.NguoiTao || h.TaoLuc ? `<div style="font-size:11px;margin-top:2px;">${escapeHtml(h.NguoiTao || '')}${h.TaoLuc ? `<br><span style="color:#444;">Lập lúc ${escapeHtml(fmtLucPhieu(h.TaoLuc))}</span>` : ''}</div>` : ''}
+        </div>
+      </div>
+      ${h.SuaLuc ? `<div style="font-size:11px;color:#444;margin-top:10px;text-align:right;"><i>Sửa lần cuối: ${escapeHtml(h.NguoiSua || '')} — ${escapeHtml(fmtLucPhieu(h.SuaLuc))}</i></div>` : ''}`, { extraStyle: styleIn, logo: true });
+  }
+  /* 'yyyy-mm-dd hh:mi' (CONVERT 120 từ máy chủ, giờ VN đúng, không qua Date) -> 'hh:mi ngày dd/mm/yyyy'. */
+  function fmtLucPhieu(s) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(s || ''));
+    return m ? `${m[4]}:${m[5]} ngày ${m[3]}/${m[2]}/${m[1]}` : String(s || '');
   }
 
   /* ---------- Chọn đơn khách đặt để chuyển sang phiếu bán hàng ---------- */

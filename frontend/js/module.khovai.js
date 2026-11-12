@@ -612,13 +612,15 @@ window.ModuleKhoVai = (function () {
     const { lines } = detail.data;
     let rowCount = 0;
     // v5.80: bảng thật, cùng bố cục với form Tạo phiếu nhập + thêm cột Mã cây (chỉ xem).
-    // v8.96: + cột Ảnh (10 cột).
+    // v8.96: + cột Ảnh. v9.36: + cột Phí VC (11 cột).
+    // 🔴 Số <col> PHẢI bằng số <th> của HEAD_SUA. Thiếu một cái là cột cuối ăn nhầm width của nút X
+    //    (42px) — ô nhập phí bị bóp còn 42px. Rà chéo bắt được.
     const COLS_SUA = `<colgroup>
-      <col style="width:15%"><col style="width:21%"><col style="width:21%"><col style="width:96px"><col style="width:7%"><col style="width:6%">
-      <col style="width:8%"><col style="width:7%"><col style="width:8%"><col style="width:42px">
+      <col style="width:14%"><col style="width:19%"><col style="width:19%"><col style="width:96px"><col style="width:7%"><col style="width:6%">
+      <col style="width:8%"><col style="width:7%"><col style="width:8%"><col style="width:8%"><col style="width:42px">
     </colgroup>`;
     const HEAD_SUA = `<thead><tr>
-      <th>Mã cây</th><th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
+      <th>Mã cây</th><th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th title="Chỉ cộng vào GIÁ THÀNH sản phẩm, KHÔNG vào công nợ nhà cung cấp. Bỏ trống thì lấy đơn giá đã khai ở Danh mục nhà cung cấp.">Phí VC</th><th></th>
     </tr></thead>`;
     function rowTemplate(line) {
       rowCount++;
@@ -642,6 +644,9 @@ window.ModuleKhoVai = (function () {
         <td class="col-so"><input class="r-kg" type="number" step="0.01" min="${locked ? line.DaXuat : 0}" value="${line ? line.KGNhap : ''}"${locked ? ` title="Không giảm dưới số đã dùng: ${fmtNumber(line.DaXuat)}"` : ''}></td>
         <td class="col-so"><input class="r-met" type="number" step="0.01" min="0" value="${line && line.SoMet != null ? line.SoMet : ''}"></td>
         <td class="col-so col-gia"><input class="r-gia" type="number" step="0.01" min="0" value="${line && line.DonGiaNhap != null ? line.DonGiaNhap : ''}"></td>
+        ${/* v9.36: PHẢI điền sẵn giá trị cũ. Để trống là mỗi lần sửa phiếu phí bị coi như "không khai"
+             rồi ghi đè bằng đơn giá của NCC — đổi giá thành của cây đã nhập mà không ai bấm gì. */''}
+        <td class="col-so col-gia"><input class="r-phivc" type="number" step="0.01" min="0" value="${line && line.PhiVanChuyenDonGia != null ? line.PhiVanChuyenDonGia : ''}" placeholder="theo NCC"></td>
         <td class="col-nut"><button type="button" class="btn small danger r-remove" ${locked ? 'disabled title="Đã phát sinh giao dịch khác, không xóa được dòng này"' : ''}>X</button></td>
       </tr>`;
     }
@@ -691,18 +696,23 @@ window.ModuleKhoVai = (function () {
         loaiVaiId: r.querySelector('.r-loai').value, mauSacId: r.querySelector('.r-mau').value,
         khoVaiThucTe: r.querySelector('.r-kho').value || null, gsm: r.querySelector('.r-gsm').value || null,
         kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value || null, donGiaNhap: r.querySelector('.r-gia').value || null,
+        // v9.36: gửi NGUYÊN giá trị ô (kể cả '' và '0'). `|| null` ở đây sẽ biến số 0 thành null —
+        // mà 0 là "cố ý không có cước", khác hẳn "bỏ trống để lấy theo NCC".
+        phiVanChuyenDonGia: r.querySelector('.r-phivc').value,
         anhCay: (r.querySelector('.r-anh') || {}).value || ''   // v8.96: '' = cố ý xóa ảnh (backend: không gửi khóa thì mới giữ)
       }));
       if (canhBaoThieuSoLuong(editLines, 'kgNhap', 'soMet', 'KG nhập')) return;   // v5.89
       try {
-        await apiPut('/api/khovai/nhap/' + row.PhieuNhapID, {
+        const kq = await apiPut('/api/khovai/nhap/' + row.PhieuNhapID, {
           ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId') || null, soHoaDon: fd.get('soHoaDon'),
           ngayHoaDon: fd.get('ngayHoaDon') || null, ghiChu: fd.get('ghiChu'),
           donViTinhGia: fd.get('donViTinhGia') || 'Kg',   // v7.62: đổi ô này là đổi luôn số nợ NCC của phiếu
 
           lines: editLines
         });
-        closeModal(); toast('Đã lưu.', 'success'); render(container, currentUser);
+        closeModal(); toast('Đã lưu.', 'success');
+        if (kq && kq.phiVCLyDo) toast('Phí vận chuyển: ' + kq.phiVCLyDo, 'error');   // v9.36
+        render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
     });
   }
@@ -715,13 +725,14 @@ window.ModuleKhoVai = (function () {
     let rowCount = 0;
     /* v5.80: BẢNG THẬT — 1 hàng tiêu đề + các dòng chỉ có ô nhập. Bề rộng cột do <colgroup> quyết
        định: Loại vải + Màu rộng nhất (tên dài), các cột SỐ hẹp. */
-    // v8.96: + cột Ảnh (9 cột).
+    // v8.96: + cột Ảnh. v9.36: + cột Phí VC (10 cột).
+    // 🔴 Số <col> PHẢI bằng số <th> của HEAD_NHAP — xem ghi chú ở COLS_SUA.
     const COLS_NHAP = `<colgroup>
-      <col style="width:24%"><col style="width:24%"><col style="width:96px"><col style="width:8%"><col style="width:7%">
-      <col style="width:9%"><col style="width:8%"><col style="width:9%"><col style="width:42px">
+      <col style="width:22%"><col style="width:22%"><col style="width:96px"><col style="width:8%"><col style="width:7%">
+      <col style="width:9%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:42px">
     </colgroup>`;
     const HEAD_NHAP = `<thead><tr>
-      <th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th></th>
+      <th>Loại vải *</th><th>Màu *</th><th>Ảnh</th><th>Khổ vải</th><th>GSM</th><th>KG nhập</th><th>Số mét</th><th>Đơn giá</th><th title="Chỉ cộng vào GIÁ THÀNH sản phẩm, KHÔNG vào công nợ nhà cung cấp. Bỏ trống thì lấy đơn giá đã khai ở Danh mục nhà cung cấp.">Phí VC</th><th></th>
     </tr></thead>`;
     function rowTemplate() {
       rowCount++;
@@ -737,6 +748,9 @@ window.ModuleKhoVai = (function () {
         <td class="col-so"><input class="r-kg" type="number" step="0.01" min="0"></td>
         <td class="col-so"><input class="r-met" type="number" step="0.01" min="0"></td>
         <td class="col-so col-gia"><input class="r-gia" type="number" step="0.01" min="0"></td>
+        ${/* v9.36: bỏ trống = lấy đơn giá vận chuyển đã khai ở Danh mục NCC (chỉ khi ĐƠN VỊ khớp
+             "Đơn giá tính theo" của phiếu). Gõ 0 = cố ý không có cước, backend tôn trọng số 0. */''}
+        <td class="col-so col-gia"><input class="r-phivc" type="number" step="0.01" min="0" placeholder="theo NCC"></td>
         <td class="col-nut"><button type="button" class="btn small danger r-remove" title="Xóa dòng">X</button></td>
       </tr>`;
     }
@@ -784,6 +798,7 @@ window.ModuleKhoVai = (function () {
         loaiVaiId: r.querySelector('.r-loai').value, mauSacId: r.querySelector('.r-mau').value,
         khoVaiThucTe: r.querySelector('.r-kho').value, gsm: r.querySelector('.r-gsm').value,
         kgNhap: r.querySelector('.r-kg').value, soMet: r.querySelector('.r-met').value, donGiaNhap: r.querySelector('.r-gia').value,
+        phiVanChuyenDonGia: r.querySelector('.r-phivc').value,   // v9.36
         anhCay: (r.querySelector('.r-anh') || {}).value || ''   // v8.96: chỉ URL đã upload; file đang chọn không lưu nháp được
       }));
       return { ngayNhap: fd.get('ngayNhap'), nccId: fd.get('nccId'), soHoaDon: fd.get('soHoaDon'), ngayHoaDon: fd.get('ngayHoaDon'), ghiChu: fd.get('ghiChu'),
@@ -811,6 +826,7 @@ window.ModuleKhoVai = (function () {
         r.querySelector('.r-kg').value = d.kgNhap || '';
         r.querySelector('.r-met').value = d.soMet || '';
         r.querySelector('.r-gia').value = d.donGiaNhap || '';
+        r.querySelector('.r-phivc').value = d.phiVanChuyenDonGia == null ? '' : d.phiVanChuyenDonGia;   // v9.36
         if (d.anhCay) {   // v8.96
           r.querySelector('.r-anh').value = d.anhCay;
           r.querySelector('.r-anh-xem').innerHTML = anhMauThuNhoHtml(d.anhCay, 32);
@@ -845,6 +861,7 @@ window.ModuleKhoVai = (function () {
         gsm: r.querySelector('.r-gsm').value || null, kgNhap: r.querySelector('.r-kg').value,
         soMet: r.querySelector('.r-met').value || null,
         donGiaNhap: r.querySelector('.r-gia').value || null,
+        phiVanChuyenDonGia: r.querySelector('.r-phivc').value,   // v9.36: gửi nguyên ô, KHÔNG `|| null`
         anhCay: (r.querySelector('.r-anh') || {}).value || null   // v8.96
       }));
       if (canhBaoThieuSoLuong(rolls, 'kgNhap', 'soMet', 'KG nhập')) return;   // v5.89
@@ -854,6 +871,9 @@ window.ModuleKhoVai = (function () {
           rolls });
         clearDraft(DRAFT_KEY);
         toast('Đã nhập kho.', 'success');
+        // v9.36: không tự áp được phí của NCC (lệch đơn vị / NCC chưa khai) thì PHẢI nói ra —
+        // im lặng là người dùng tưởng đã có phí mà cây thật ra = 0, giá thành thiếu cước.
+        if (res && res.data && res.data.phiVCLyDo) toast('Phí vận chuyển: ' + res.data.phiVCLyDo, 'error');
         closeModal();
         await render(container, currentUser); // ve lai danh sach phieu
         openNhapDetailModal(res.data.phieuNhapId); // mo luon phieu vua tao de xem/in

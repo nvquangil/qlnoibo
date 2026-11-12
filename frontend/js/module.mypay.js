@@ -49,17 +49,32 @@ window.ModuleMyPay = (function () {
     const r = (cn.rows || [])[0];
     const tongMay = (may.rows || []).reduce((s, x) => s + num(x.ThanhTien), 0);
     const line = (k, v, bold) => `<div style="display:flex;justify-content:space-between;padding:3px 0;${bold ? 'font-weight:700;border-top:1px solid #ddd;margin-top:4px;padding-top:6px;' : ''}"><span>${k}</span><span>${v}</span></div>`;
+    // Dòng chỉ hiện khi có số — phiếu của nhân viên không nên đầy dòng 0.
+    const lineNeu = (k, v) => (num(v) ? line(k, money(v)) : '');
+    /* v9.45 — cùng cách đọc với phiếu lương ở màn kế toán (module.payroll.js buildLuongCongNhatNVBody):
+       · Thuế TNCN nay được TÍNH nhưng chỉ TRỪ khi cấu hình bật (cờ ThueDaTru) — bản cũ in cứng "−thuế"
+         nên các dòng cộng lại KHÔNG ra thực lĩnh, nhân viên đi hỏi kế toán (rà chéo v9.45 bắt được).
+       · Thêm dòng Điều chỉnh (± có lý do) — thiếu nó thì −200k của Ngọc lại thành con số không giải thích.
+       · "Công" tách phép ra: r.Cong GỒM cả phép (không lương). */
+    const coV890 = r && r.KieuLuong != null;
     container.innerHTML = periodBar() + `
       <h3>Lương công nhật — Tháng ${selThang}/${selNam}</h3>
       ${r ? `<div style="max-width:460px;border:1px solid #e0e0e0;border-radius:8px;padding:12px 16px;">
-        ${line('Công thực tế', num(r.Cong))}
-        ${line('Lương cơ bản', money(r.LuongCoBan))}
+        ${coV890
+          ? line('Công hưởng lương' + (num(r.CongThuViec) ? ' (thử việc ' + num(r.CongThuViec) + ')' : ''), num(r.CongThuViec) + num(r.CongChinhThuc))
+            + (num(r.SoPhep) ? line('Ngày phép (không lương)', num(r.SoPhep)) : '')
+            + (r.KieuLuong === 'Ngay' ? line('Đơn giá ngày', money(r.DonGiaNgay)) : line('Lương cơ bản', money(r.LuongCoBan)))
+          : line('Công thực tế', num(r.Cong)) + line('Lương cơ bản', money(r.LuongCoBan))}
         ${line('Lương ngày công', money(r.LuongNgayCong))}
-        ${line('Phụ cấp (ăn ca + trang phục)', money(r.TnMienThue))}
-        ${line('TN chịu thuế', money(r.TnChiuThue))}
-        ${line('Trừ bảo hiểm (10.5%)', '-' + money(r.TongBH))}
-        ${line('Thuế TNCN', '-' + money(r.ThueTNCN))}
-        ${line('Tạm ứng', '-' + money(r.TamUng))}
+        ${lineNeu(`Tăng ca (${num(r.GioOT)} giờ)`, r.TangCa)}
+        ${lineNeu(r.KieuThuong === 'SanPham' ? 'Thưởng theo sản phẩm' : 'Thưởng KPI', r.Thuong)}
+        ${lineNeu('Phụ cấp ăn ca', r.PcAnCa)}${lineNeu('Phụ cấp trang phục', r.PcTrangPhuc)}
+        ${lineNeu('Phụ cấp xăng xe', r.PcXangXe)}${lineNeu('Phụ cấp điện thoại', r.PcDienThoai)}
+        ${lineNeu('Phụ cấp chức vụ', r.PcChucVu)}${lineNeu('Chuyên cần', r.ChuyenCan)}
+        ${num(r.TongBH) ? line('Trừ bảo hiểm (10,5%)', '-' + money(r.TongBH)) : ''}
+        ${num(r.ThueTNCN) ? (r.ThueDaTru ? line('Thuế TNCN', '-' + money(r.ThueTNCN)) : line('Thuế TNCN (tính để xem, chưa trừ)', money(r.ThueTNCN))) : ''}
+        ${num(r.TamUng) ? line('Tạm ứng', '-' + money(r.TamUng)) : ''}
+        ${num(r.DieuChinh) ? line('Điều chỉnh' + (r.LyDoDieuChinh ? ' — ' + escapeHtml(r.LyDoDieuChinh) : ''), (num(r.DieuChinh) > 0 ? '+' : '') + money(r.DieuChinh)) : ''}
         ${line('THỰC LĨNH', money(r.ThucLinh), true)}
       </div>` : `<div class="empty-hint">Chưa có bảng lương công nhật tháng này (chưa chốt/tính).</div>`}
       <h3 style="margin-top:18px;">Lương khoán may — Tháng ${selThang}/${selNam}</h3>

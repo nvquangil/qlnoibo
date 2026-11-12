@@ -54,6 +54,12 @@ async function coCotMauChot(pool) {
      opts.chiHangMau : true  -> CHI cac phieu co LaHangMau = 1 (chua chay migration thi tra rong,
                                 dung hon la tra ca dong hang ban that ra so "hang mau").
      opts.chiConGiu  : true  -> bo cac dong da tra HET (ConTraCai = 0). Loc SAU khi tinh, o JS.
+     opts.boPhieuNLID: v9.21 — BO phieu nhap lai nay ra khoi phep tinh "DA TRA".
+                       🔴 CHI dung khi dang SUA chinh phieu do. Phieu dang sua da tra 3 cai; neu van
+                       dem 3 cai do la "da tra" thi ConTraCai = 0 va moi lan sua deu bi chan "tra
+                       vuot" du chi doi 3 -> 2, VA form sua mo ra TRONG TRON (dong bi loc het).
+                       ⚠️ TUYET DOI khong truyen khi TAO MOI (POST /phieu) — lam vay la mo duong tra
+                       vuot so da ban. POST da ep boPhieuNLID = null, dung go.
    ================================================================================================ */
 async function layDongDaBan(pool, sql, opts) {
   const o = opts || {};
@@ -66,6 +72,7 @@ async function layDongDaBan(pool, sql, opts) {
   if (tenKhach) rq.input('ten', sql.NVarChar, tenKhach);
   if (o.phieuBHID) rq.input('pid', sql.Int, Number(o.phieuBHID));
   if (o.maHangID) rq.input('mh', sql.Int, Number(o.maHangID));
+  if (o.boPhieuNLID) rq.input('bonl', sql.Int, Number(o.boPhieuNLID));   // v9.21
 
   const rs = (await rq.query(`
     SELECT ct.ID AS PhieuBHChiTietID, ct.PhieuBHID, p.SoPhieu, p.NgayBan, p.TenKhach,
@@ -80,7 +87,8 @@ async function layDongDaBan(pool, sql, opts) {
            ms.TenMau,
            ISNULL((SELECT SUM(nl.SoLuongCai) FROM PhieuNhapLaiChiTiet nl
                    JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
-                   WHERE nl.PhieuBHChiTietID = ct.ID AND np.TrangThai <> N'Đã hủy'), 0) AS DaTraCai
+                   WHERE nl.PhieuBHChiTietID = ct.ID AND np.TrangThai <> N'Đã hủy'
+                     ${o.boPhieuNLID ? 'AND np.PhieuNLID <> @bonl' : ''}), 0) AS DaTraCai
     FROM PhieuBanHangChiTiet ct
     JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
     JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID

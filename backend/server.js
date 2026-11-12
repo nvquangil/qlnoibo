@@ -30,10 +30,20 @@ const uploadRoutes = require('./routes/upload');
 const anhRoutes = require('./routes/anh');   // v6.07: ảnh xem trước cỡ nhỏ (thumbnail) tạo theo yêu cầu
 const notificationRoutes = require('./routes/notifications');
 const publicRoutes = require('./routes/public');
+const zaloRoutes = require('./routes/zalo');   // v9.30: webhook Zalo OA (tự xác thực chữ ký)
+const saoLuuRoutes = require('./routes/saoluu');   // v9.37: sao lưu CSDL tự động
 
 const app = express();
 
-app.use(express.json({ limit: '5mb' }));
+/* v9.30: giữ lại THÂN YÊU CẦU THÔ cho webhook Zalo — chữ ký của Zalo ký trên chuỗi JSON NGUYÊN BẢN,
+   mà express.json() parse xong là mất bản gốc (khoảng trắng, thứ tự khóa khác đi ⇒ ký lại không
+   khớp). Chỉ giữ cho ĐÚNG đường dẫn webhook, không ôm thêm bộ nhớ cho mọi request khác. */
+app.use(express.json({
+  limit: '5mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl && req.originalUrl.indexOf('/api/zalo/webhook') === 0) req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 /* v5.66.1: khi máy chủ nằm sau proxy/tunnel (Cloudflare Tunnel, nginx, IIS ARR...) thì bật
@@ -124,6 +134,11 @@ function duocPhepCongKhai(duong) {
     || duong === '/js/catalogue.js'
     || duong === '/favicon.ico'
     || duong.startsWith('/api/public/')
+    /* v9.30: Zalo gọi webhook từ internet, qua Cloudflare Tunnel vào ĐÚNG cổng công khai này.
+       🔴 CHỈ đúng một đường dẫn `/api/zalo/webhook` — KHÔNG mở cả `/api/zalo/` vì `/api/zalo/trangthai`
+       phải ở lại cổng nội bộ. Bản thân route webhook tự XÁC THỰC CHỮ KÝ của Zalo (routes/zalo.js),
+       nên mở ở đây không có nghĩa là ai gọi cũng làm được gì. */
+    || duong === '/api/zalo/webhook'
     || duong.startsWith('/css/')
     || duong.startsWith('/icons/')
     || duong.startsWith('/uploads/')       // ảnh sản phẩm (ảnh gốc) — xem cảnh báo ở trên
@@ -177,6 +192,10 @@ app.use('/api/payroll', payrollRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/public', publicRoutes);   // khong qua requireAuth - dung cho catalogue.html cong khai
+/* v9.30: KHONG qua requireAuth — nguoi goi la ZALO, khong phai nhan vien. Thay vao do route tu
+   XAC THUC CHU KY cua Zalo (routes/zalo.js). Chi /api/zalo/webhook duoc mo o cong cong khai. */
+app.use('/api/zalo', zaloRoutes);
+app.use('/api/saoluu', saoLuuRoutes);   // v9.37: sao lưu CSDL tự động + nút "Sao lưu ngay" (chỉ Admin)
 
 // Phuc vu frontend tinh (single deployable app)
 const frontendDir = path.join(__dirname, '..', 'frontend');
@@ -268,3 +287,14 @@ if (httpsOptions) {
 
 // Bat canh bao tre han tu dong (chay ngam trong tien trinh nay). Neu khong muon, comment dong duoi.
 try { require('./utils/checkOverdue').schedule(); } catch (e) { console.warn('Không bật được lịch cảnh báo:', e.message); }
+
+/* ================================================================================================
+   v9.37 — LỊCH SAO LƯU CSDL.
+   Nguyen 2026-11-10: *"không quan tâm SQL, tự cấu hình backup trên phần mềm và có nút backup"*.
+   Lịch nằm Ở ĐÂY chứ không ở SQL Server Agent — xem khối ghi chú đầu utils/saoLuuCSDL.js.
+
+   🔴 try/catch TOÀN BỘ: một lần sao lưu hỏng TUYỆT ĐỐI không được làm sập phần mềm của cả xưởng.
+   `chayMotLan()` tự nó đã không bao giờ ném, nhưng bọc thêm một lớp vì đây là mã chạy nền.
+   ================================================================================================ */
+try { require('./utils/lichSaoLuu').khoiDong(); }
+catch (e) { console.error('[saoluu] KHÔNG bật được lịch sao lưu: ' + (e && e.message)); }

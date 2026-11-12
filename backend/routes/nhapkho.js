@@ -41,6 +41,8 @@ const { napGiaVonTuMaHang } = require('../utils/giaNhapHangHoa');
 const { napGiaVonTuLenhSX, loiNhanGiaVon } = require('../utils/giaVonLenhSX');
 // v9.09: SL da lap phieu nhap kho cua tung lenh, QUY VE CAI — de biet lenh nao da nhap xong.
 // ⚠️ KHONG tu cong SoLuongChinh o day: don vi chinh cua ma hang co the la Ri. Xem ghi chu trong file.
+// (v9.15 tung import them QUY_VE_CAI cho guard xoa phieu — SAI va da bo: guard so voi
+//  vw_TonTheoMau.TonCai, cot nay luu theo DON VI CHINH nen hai ve phai cung SoLuongChinh tho.)
 const { slPhieuNhapTheoDon } = require('../utils/slNhapKhoChungTu');
 
 const router = express.Router();
@@ -481,12 +483,31 @@ async function timHoacTaoMau(pool, tran, d) {
    Ma quan kho theo Ri ma bi gan LoaiRi = 1 thi MOI phep quy doi ton kho ve sau deu sai gap LoaiRi
    lan, va khong co gi bao loi. Nay bat khai ro tren dong phieu.
    ================================================================================================ */
-async function timHoacTaoMaHang(pool, tran, d) {
+async function timHoacTaoMaHang(pool, tran, d, loai) {
   const rq = () => (tran ? new sql.Request(tran) : pool.request());
+  /* v9.15 — Nguyen 2026-11-03: "làm phiếu nhập kho chọn TỪ SẢN XUẤT và gắn lệnh SX nhưng ở thẻ kho
+     hàng hóa, cột Nguồn hàng vẫn gắn cờ hàng ngoài."
+     Cột "Nguồn hàng" = TheKhoHangHoa.LoaiHang ('NhaSanXuat'/'DatNgoai' — xem oNguonHangHtml trong
+     module.khohang.js). Trước đây chỗ tạo MÃ MỚI dưới kia đọc d.loaiHang, nhưng form phiếu nhập
+     KHÔNG CÓ ô nào gửi trường đó ⇒ mọi mã sinh từ phiếu nhập — kể cả phiếu TỪ SẢN XUẤT — đều thành
+     'DatNgoai'. Nay LOẠI PHIẾU quyết định:
+       - phiếu SanXuat ⇒ mã MỚI mang 'NhaSanXuat';
+       - mã ĐÃ CÓ đang 'DatNgoai' được NÂNG lên 'NhaSanXuat' (MỘT CHIỀU — phiếu NCC không hạ ngược:
+         mã vừa mua ngoài vừa tự may thì nguồn gốc vẫn là nhà SX; cần hạ thì sửa ở form Thẻ kho).
+     ⚠️ Không phá luật v6.99 ("phiếu nhập không sửa mã đã có"): luật đó chặn GIÁ TRỊ MẶC ĐỊNH của form
+     (ĐVT/tỷ lệ) ghi đè âm thầm; ở đây tín hiệu là LOẠI PHIẾU người dùng chủ động chọn, chỉ đụng đúng
+     một cột NHÃN (không ai tính tồn/giá theo LoaiHang), và cùng kiểu với ngoại lệ TenHoaDon v7.46.
+     UPDATE nằm trong transaction của phiếu — lưu phiếu thất bại thì cờ cũng quay lui theo. */
+  const nangLenNhaSX = async (maHangID) => {
+    if (loai !== 'SanXuat') return;
+    await rq().input('id', sql.Int, maHangID).query(
+      `UPDATE TheKhoHangHoa SET LoaiHang = N'NhaSanXuat'
+        WHERE MaHangID = @id AND ISNULL(LoaiHang, N'') <> N'NhaSanXuat'`);
+  };
   if (d.maHangId) {
     const h = (await rq().input('id', sql.Int, d.maHangId)
       .query('SELECT MaHangID, MaHang, LoaiRi, DonViCoBan, DonViQuyDoi FROM TheKhoHangHoa WHERE MaHangID=@id')).recordset[0];
-    if (h) return h;
+    if (h) { await nangLenNhaSX(h.MaHangID); return h; }
   }
   const ma = String(d.maHang || '').trim().toUpperCase();
   if (!ma) throw new Error('Dòng hàng chưa có mã hàng.');
@@ -505,6 +526,7 @@ async function timHoacTaoMaHang(pool, tran, d) {
         .input('TenHoaDon', sql.NVarChar, tenHD)
         .query('UPDATE TheKhoHangHoa SET TenHoaDon = @TenHoaDon WHERE MaHangID = @id');
     }
+    await nangLenNhaSX(co.MaHangID);   // v9.15: phiếu SX ⇒ nguồn hàng là Nhà SX (một chiều)
     return co;
   }
 
@@ -531,7 +553,9 @@ async function timHoacTaoMaHang(pool, tran, d) {
     .input('NhomSanPhamID', sql.Int, d.nhomSanPhamId || null)
     .input('DonViCoBan', sql.NVarChar, dvChinh)
     .input('DonViQuyDoi', sql.NVarChar, dvQuyDoi)
-    .input('LoaiHang', sql.NVarChar, d.loaiHang === 'NhaSanXuat' ? 'NhaSanXuat' : 'DatNgoai')
+    /* v9.15: loại phiếu quyết định nguồn hàng của MÃ MỚI — xem ghi chú dài đầu hàm. d.loaiHang giữ
+       lại cho tương thích (hiện không form nào gửi). */
+    .input('LoaiHang', sql.NVarChar, (loai === 'SanXuat' || d.loaiHang === 'NhaSanXuat') ? 'NhaSanXuat' : 'DatNgoai')
     .input('MaBarcode', sql.NVarChar, String(d.maBarcode || '').trim() || null)
     .query(`INSERT INTO TheKhoHangHoa (MaHang, TenHang, GiaBan, LoaiRi, TheKhoDanhMucID, NhomSanPhamID,
               DonViCoBan, DonViQuyDoi, LoaiHang, MaBarcode${coTenHD ? ', TenHoaDon' : ''})
@@ -543,7 +567,7 @@ async function timHoacTaoMaHang(pool, tran, d) {
 
 /* Chuan hoa 1 dong hang cua phieu -> ban ghi san sang INSERT. */
 async function chuanDong(pool, tran, d, loai) {
-  const mh = await timHoacTaoMaHang(pool, tran, d);
+  const mh = await timHoacTaoMaHang(pool, tran, d, loai);   // v9.15: loại phiếu quyết định Nguồn hàng
   /* ⚠️ v6.99 — PHIEU NHAP KHO KHONG BAO GIO SUA MOT MA HANG DA CO.
      v6.98 tung cho "dong khai" ghi de thong tin cap ma hang (Gia ban / DVT / ty le / Barcode...).
      Nguy hiem: 2 o DVT va ty le tren form LUON co gia tri mac dinh, nen chi can lap phieu cho mot ma
@@ -894,18 +918,20 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
    dung CHUNG voi Danh muc hang hoa (routes/danhmuc.js). Mot ban duy nhat, khong sao chep. */
 
 /* ================================================================================================
-   XOA PHIEU NHAP KHO — XOA LUON MA HANG NEU CHUA XUAT BAN (v6.92)
+   XOA PHIEU NHAP KHO — XOA LUON MA HANG NEU KHONG CON GI THAM CHIEU (v6.92, doi luat chan v9.15)
 
-   Quy tac (nguoi dung chot):
-     - Ma hang CHUA co phieu xuat  -> xoa phieu VA xoa luon ma hang khoi danh muc.
-     - Ma hang DA co phieu xuat    -> KHONG cho xoa; phai huy phieu xuat truoc.
+   Quy tac (nguoi dung chot 2026-11-03, thay luat v6.92):
+     - Xoa phieu lam TON cua mot (ma, mau) bi AM (da ban/xuat vuot phan nhap con lai) -> KHONG cho xoa.
+     - Nguoc lai -> xoa phieu; ma nao khong con rang buoc nao thi xoa luon khoi danh muc.
+   (Luat cu "ma da co phieu xuat la khoa moi phieu nhap cua ma" chan oan phieu NHAP THEM cua ma cu.)
 
    ⚠️ CHAN TRUOC, XOA SAU: kiem tra het roi moi mo transaction. Neu xoa phieu truoc roi moi phat hien
-   con phieu ban hang thi phai quay lui — ma quay lui giua chuoi DELETE nhieu bang la cho de sinh loi
+   ton am thi phai quay lui — ma quay lui giua chuoi DELETE nhieu bang la cho de sinh loi
    nhat. Chan truoc thi truong hop that bai khong he dong vao du lieu.
 
-   ⚠️ Ma hang duoc GIU LAI (khong xoa) khi con bat ky rang buoc nao khac, ke ca phieu nhap kho KHAC:
-   xoa mot trong hai phieu nhap cua cung mot ma khong duoc keo mat ca ma hang.
+   ⚠️ Ma hang duoc GIU LAI (khong xoa) khi con bat ky rang buoc nao khac (phieu ban hang, phieu nhap
+   kho KHAC...): xoa mot trong hai phieu nhap cua cung mot ma khong duoc keo mat ca ma hang —
+   noiDangDungMaHang (utils/maHangThamChieu.js) quyet dinh, khong lien quan guard so luong o tren.
    ================================================================================================ */
 router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
@@ -921,21 +947,55 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
     JOIN TheKhoHangHoa hh ON hh.MaHangID = ct.MaHangID
     WHERE ct.PhieuNKID = @id`)).recordset;
 
-  /* ---- BUOC 1: CHAN neu ma hang da co PHIEU XUAT (phieu ban hang) chua huy ---- */
-  const vuongXuat = [];
-  for (const m of maTrenPhieu) {
-    const bh = (await pool.request().input('mh', sql.Int, m.MaHangID).query(`
-      SELECT DISTINCT p.SoPhieu
-      FROM PhieuBanHangChiTiet ct
-      JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
-      WHERE ct.MaHangID = @mh AND p.TrangThai <> N'Đã hủy'`)).recordset.map(x => x.SoPhieu);
-    if (bh.length) vuongXuat.push({ ma: m.MaHang, phieu: bh });
+  /* ---- BUOC 1 (v9.15 — DOI LUAT): chan theo SO LUONG (ton sau xoa), khong theo MA HANG nua ----
+     Nguyen 2026-11-03 (NK260316): "phieu nhap kho moi nhap them cho ma hang CU khong xoa duoc —
+     dang rang buoc ca ma hang. Doi: neu xoa phieu SL nhieu hon phieu ban hang thi moi canh bao."
+     Luat cu: ma co BAT KY phieu ban chua huy nao la khoa MOI phieu nhap cua ma do — nhap them mot
+     phieu nham roi khong go ra duoc nua.
+     Luat moi: chi chan khi XOA XONG co (ma, mau) bi TON AM — tuc phan da ban/xuat vuot phan nhap
+     con lai, so lieu khong con duong nao dung.
+
+     🔴 VI SAO SO VOI TON (vw_TonTheoMau.TonCai) CHU KHONG TU CONG "nhap tu phieu − da ban":
+     ton that co NHIEU nguon hon phieu nhap kho — the kho tay (NhapCai: hang cu nhap ton ban dau
+     toan di duong nay), phieu nhap lai (hang khach tra)... Tu cong thieu nguon la CHAN OAN dung
+     kieu loi dang sua. View da la cong thuc ton duy nhat ca he thong tin (Ban hang dung TonCai).
+     🔴 DON VI — TEN COT NOI DOI: TonCai TEN la "Cai" nhung LUU THEO DON VI CHINH cua ma (co the
+     la RI): vw_NhapKhoTuPhieu = SUM(SoLuongChinh) THO (CAI_DAT_DAY_DU.sql ~7906), banhang.js tru
+     ton bang slChinh (ghi chu ~55: "NhapCai/XuatCai luu theo DON VI CHINH, KHONG phai Cai"). Nen
+     ve gop cua phieu nay cung phai la SUM(SoLuongChinh) THO — DUNG quy ve cai bang QUY_VE_CAI:
+     do la so hai don vi khac nhau, ma quan theo Ri bi chan oan gap <he so> lan (v9.15 suyt dinh
+     luc viet, ra soat cheo bat). Cau bao in kem DonViCoBan cua ma cho khoi hieu nham.
+     - Phieu DA HUY: dong gop cua no da nam ngoai TonCai ⇒ xoa khong doi ton, khong kiem (kiem la
+       tru hai lan, chan oan).
+     - Huy phieu (PUT /huy) von KHONG co guard tu v6.91 (ton am soi bang utils/kiem_ton_am.js) —
+       do la duong thoat co y cho nguoi that su muon bo phieu bat chap ton am. DELETE giu guard
+       vi xoa keo theo lien ket gia von va co the xoa ca ma hang o buoc 2. */
+  let vuongTonAm = [];
+  if (h.TrangThai !== 'Đã hủy') {
+    vuongTonAm = (await pool.request().input('p', sql.Int, phieuId).query(`
+      SELECT hh.MaHang, hh.DonViCoBan, ISNULL(ms.TenMau, N'?') AS TenMau,
+             ISNULL(t.TonCai, 0) AS TonCai, gop.GopSL
+      FROM (SELECT ct.MaHangID, ct.MauSacID, SUM(ct.SoLuongChinh) AS GopSL
+            FROM PhieuNhapKhoHangChiTiet ct
+            WHERE ct.PhieuNKID = @p
+            GROUP BY ct.MaHangID, ct.MauSacID) gop
+      JOIN TheKhoHangHoa hh ON hh.MaHangID = gop.MaHangID
+      LEFT JOIN vw_TonTheoMau t ON t.MaHangID = gop.MaHangID AND t.MauSacID = gop.MauSacID
+      LEFT JOIN MauSac ms ON ms.MauSacID = gop.MauSacID
+      WHERE gop.GopSL > 0 AND ISNULL(t.TonCai, 0) - gop.GopSL < 0
+      ORDER BY hh.MaHang, TenMau`)).recordset;
   }
-  if (vuongXuat.length) {
+  if (vuongTonAm.length) {
     return res.status(400).json({
       success: false,
-      message: 'KHÔNG xóa được phiếu ' + h.SoPhieu + ' — hàng đã xuất bán. Phải HỦY phiếu bán hàng trước:\n'
-        + vuongXuat.map(v => '• ' + v.ma + ': ' + v.phieu.join(', ')).join('\n')
+      message: 'KHÔNG xóa được phiếu ' + h.SoPhieu + ' — xóa xong thì TỒN BỊ ÂM (đã bán/xuất nhiều hơn phần nhập còn lại):\n'
+        + vuongTonAm.map(v => {
+            const dv = String(v.DonViCoBan || '').trim() || 'cái';
+            return '• ' + v.MaHang + ' — ' + v.TenMau + ': tồn hiện ' + (Number(v.TonCai) || 0)
+              + ' ' + dv + ', phiếu này góp ' + (Number(v.GopSL) || 0) + ' ' + dv + ' ⇒ còn '
+              + ((Number(v.TonCai) || 0) - (Number(v.GopSL) || 0)) + ' ' + dv;
+          }).join('\n')
+        + '\nHủy / giảm phiếu bán hàng của các mã trên trước, hoặc dùng HỦY phiếu (giữ lại phiếu, tồn tự trừ) thay vì XÓA.'
     });
   }
 

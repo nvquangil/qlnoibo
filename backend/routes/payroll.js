@@ -12,6 +12,11 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const multer = require('multer');
 const XLSX = require('xlsx');
 const upload = multer({ storage: multer.memoryStorage() });   // v5.37: import file chấm công (fallback khi máy không kéo được)
+/* v9.32: tạm ứng của bảng lương = TỔNG PHIẾU CHI loại 'TamUng' của tháng — xem khối ghi chú dài
+   trong utils/tamUngNhanVien.js về lý do KHÔNG ghi thẳng vào BangLuongChiTiet. */
+const { tongTamUngTheoThang, chiTietTamUng } = require('../utils/tamUngNhanVien');
+/* v9.45: bộ tính công nhật mới, thuần túy, viết từ bảng lương THỰC TẾ T10/2026 — xem đầu file util. */
+const { tinhLuongV945, gomChamCong } = require('../utils/luongCongNhat');
 
 const router = express.Router();
 const nn = (v) => (v === '' || v === undefined ? null : v);
@@ -73,7 +78,18 @@ router.put('/config', requireAuth, requirePermission('PAYROLL', 'edit'), require
         GiamTruBanThan=@GiamTruBanThan,GiamTruNPT=@GiamTruNPT,GioChuanNgay=@GioChuanNgay,HsTangCaThuong=@HsTangCaThuong,
         HsTangCaChuNhat=@HsTangCaChuNhat,HsTangCaLeTet=@HsTangCaLeTet,PcCaDem=@PcCaDem,PcTangCaDem=@PcTangCaDem,
         NgayTraLuong=@NgayTraLuong,UpdatedAt=SYSDATETIME() WHERE ID=1`);
-    res.json({ success: true });
+    /* v9.45: bốn tham số mới (migration_v890) — UPDATE riêng, chỉ khi cột đã có, để màn Cấu hình vẫn
+       lưu được các mục cũ trên máy chưa chạy migration. Không cache kết quả probe (quy tắc coCot…V890). */
+    const coV890 = (await pool.request().query("SELECT COL_LENGTH('CauHinhLuong','TruThueTNCN') AS c")).recordset[0].c != null;
+    if (coV890 && (b.truThueTNCN !== undefined || b.tyLeThuViec !== undefined || b.lamTronThucLinh !== undefined || b.diMuonChamChuocPhut !== undefined)) {
+      await pool.request()
+        .input('TruThue', sql.Bit, b.truThueTNCN === true || b.truThueTNCN === 1 || b.truThueTNCN === '1' ? 1 : 0)
+        .input('TyLeTV', sql.Decimal(5, 2), Math.min(100, Math.max(0, dec(b.tyLeThuViec, 85))))
+        .input('LamTron', sql.Int, Math.max(1, Math.round(dec(b.lamTronThucLinh, 1000))))
+        .input('ChamChuoc', sql.Int, Math.max(0, Math.round(dec(b.diMuonChamChuocPhut, 5))))
+        .query('UPDATE CauHinhLuong SET TruThueTNCN=@TruThue, TyLeThuViec=@TyLeTV, LamTronThucLinh=@LamTron, DiMuonChamChuocPhut=@ChamChuoc, UpdatedAt=SYSDATETIME() WHERE ID=1');
+    }
+    res.json({ success: true, data: { coV890 } });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 
@@ -257,8 +273,38 @@ router.post('/maychamcong/:id/keodulieu', requireAuth, requirePermission('PAYROL
   }
 });
 
+/* ================================================================================================
+   v9.11 — DANH SACH NHAN VIEN CHO MAN CHAM CONG
+
+   🔴 LOI THAT Nguyen bao 2026-10-31: tai khoan `huongns` co DU quyen Quan ly nhan su + Tinh luong
+   (ghi de rieng, tick het Xem/Them/Sua/Xoa) va DU het chuc nang PAYROLL, nhung bam "Tải NV từ máy"
+   van bao "khong co quyen thuc hien thao tac nay". Vi man Cham cong di MUON
+   `GET /api/danhmuc/nhanvien` — route cua PHAN HE DANH MUC. Tai khoan do khong duoc cap Danh muc
+   (o "Ghi de rieng" cua Danh muc khong tick) nen requirePermission('DANHMUC','view') chan.
+
+   Bat nguoi lam cham cong phai co quyen DANH MUC la sai ve nghiep vu: danh muc con chua khach hang,
+   nha cung cap, ma hang, mau sac... Cham cong chi can TEN va MA cua nhan vien.
+
+   Nen route rieng nay tra dung BON cot man cham cong dung — khong kem luong, khong kem so CCCD hay
+   bat ky thong tin nhan su nhay cam nao. Cap quyen HEP HON han ban cu, khong phai noi rong.
+   ⚠️ KHONG loc trang thai nghi viec: giu Y HET tap du lieu cua /api/danhmuc/nhanvien de khong lam
+   mat dong nao dang hien, vi nhan vien da nghi van con ban ghi cham cong cu can doi chieu.
+   ================================================================================================ */
+router.get('/nhanvien', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rs = (await pool.request().query(
+      'SELECT NhanVienID, MaNhanVien, HoTen, MaChamCong FROM NhanVien ORDER BY HoTen')).recordset;
+    res.json({ success: true, data: rs });
+  } catch (err) {
+    console.error('[payroll /nhanvien] ', err.message);
+    res.status(500).json({ success: false, message: 'Lỗi đọc danh sách nhân viên: ' + err.message });
+  }
+});
+
 // v5.59: KIỂM TRA KẾT NỐI nhanh (chỉ Hikvision — ZKTeco dùng luôn nút "Tải NV từ máy").
-router.post('/maychamcong/:id/test', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+// v9.11: ép kiểm 'view' — route POST này CHỈ ping máy, không ghi gì. Xem ghi chú ở middleware/auth.js.
+router.post('/maychamcong/:id/test', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong', 'view'), async (req, res) => {
   try {
     const pool = await getPool();
     const may = (await pool.request().input('id', sql.Int, parseInt(req.params.id, 10)).query('SELECT * FROM MayChamCong WHERE MayChamCongID=@id')).recordset[0];
@@ -276,7 +322,15 @@ router.post('/maychamcong/:id/test', requireAuth, requirePermission('PAYROLL', '
 });
 
 // v5.37: "Tải nhân viên từ máy" (getUsers) - lấy danh sách người đã đăng ký trên máy để MAP sang NhanVien.
-router.post('/maychamcong/:id/nhanvien-tumay', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong'), async (req, res) => {
+/* v9.11 — ÉP 'view'. Route CHỈ ĐỌC máy, không ghi một dòng nào, và đã khai requirePermission
+   (...,'view') — nhưng requireChucNang suy hành động TỪ HTTP METHOD, POST => 'edit', nên người chỉ
+   được XEM tab Chấm công bị chặn. Ép 'view' cho khớp đúng việc route làm.
+   Việc GHI nằm ở route /maychamcong/mapnhanvien bên dưới — chỗ đó mới đáng đòi quyền sửa.
+   ⚠️ ĐỪNG nhầm: đây là một lỗi thiết kế TÌM THẤY DỌC ĐƯỜNG, **KHÔNG** phải nguyên nhân ca
+   "Tải NV từ máy" của Nguyen (2026-10-31). Thủ phạm ca đó là màn Chấm công đi mượn
+   `GET /api/danhmuc/nhanvien` — xem ghi chú dài ở route `GET /nhanvien` phía trên. Lỗi ở route này
+   còn bị `catch` rỗng của frontend nuốt, không bao giờ hiện ra màn hình. */
+router.post('/maychamcong/:id/nhanvien-tumay', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'chamcong', 'view'), async (req, res) => {
   const pool = await getPool();
   const may = (await pool.request().input('id', sql.Int, parseInt(req.params.id, 10)).query('SELECT * FROM MayChamCong WHERE MayChamCongID=@id')).recordset[0];
   if (!may) return res.status(404).json({ success: false, message: 'Không tìm thấy máy chấm công.' });
@@ -933,29 +987,21 @@ router.post('/chamcong/ngay', requireAuth, requirePermission('PAYROLL', 'edit'),
 //   phu cap chia theo cong; TN mien thue = an ca + trang phuc; TN chiu thue = luong ngay cong +
 //   xang xe + dien thoai + thuong; BH NLD = LuongCB * (8+1.5+1)%; giam tru ban than + NPT;
 //   thue TNCN theo bieu bac; Thuc linh = TN chiu thue - BH - thue + TN mien thue - tam ung.
-function tinhLuongCongNhat(e, cfg, congChuan, brackets) {
-  const luongCB = Number(e.LuongCoBan) || 0;
-  const cong = Number(e.Cong) || 0;
-  const cc = congChuan > 0 ? congChuan : 26;
-  const tyLe = cong / cc;                                  // ty le cong / cong chuan (de chia phu cap)
-  const luongNgayCong = round0(luongCB * tyLe);
-  const pcAnCa = round0((Number(e.PhuCapAnCa) || 0) * tyLe);
-  const pcTrangPhuc = round0((Number(e.PhuCapTrangPhuc) || 0) * tyLe);
-  const pcXangXe = round0((Number(e.PhuCapXangXe) || 0) * tyLe);
-  const pcDienThoai = round0((Number(e.PhuCapDienThoai) || 0) * tyLe);
-  const thuong = 0;                                        // thuong doanh thu: nhap sau (Phase khac)
-  const tnMienThue = pcAnCa + pcTrangPhuc;                 // an ca + trang phuc = mien thue
-  const tnChiuThue = luongNgayCong + pcXangXe + pcDienThoai + thuong;
-  const bhxh = round0(luongCB * Number(cfg.BhxhNld) / 100);
-  const bhyt = round0(luongCB * Number(cfg.BhytNld) / 100);
-  const bhtn = round0(luongCB * Number(cfg.BhtnNld) / 100);
-  const tongBH = bhxh + bhyt + bhtn;
-  const giamTruBanThan = Number(cfg.GiamTruBanThan) || 0;
-  const giamTruNPT = (Number(cfg.GiamTruNPT) || 0) * (Number(e.SoNguoiPhuThuoc) || 0);
-  const tnTinhThue = Math.max(0, tnChiuThue - tongBH - giamTruBanThan - giamTruNPT);
-  const thue = calcThueTNCN(tnTinhThue, brackets);
-  const thucLinh = round0(tnChiuThue - tongBH - thue + tnMienThue);   // tam ung = 0 luc tinh
-  return { luongCB, cong, luongNgayCong, pcAnCa, pcTrangPhuc, pcXangXe, pcDienThoai, thuong, tnMienThue, tnChiuThue, bhxh, bhyt, bhtn, tongBH, giamTruBanThan, giamTruNPT, tnTinhThue, thue, thucLinh };
+/* v9.45: bộ tính v6.1 (`tinhLuongCongNhat`) ĐÃ GỠ — nó chép từ luong.xlsm tháng 7 và SAI MÔ HÌNH so
+   với bảng lương thực tế (có thuế + giảm trừ mà thực tế không áp; thiếu thử việc/KPI/chức vụ/chuyên
+   cần; OT không cộng). Thay bằng `tinhLuongV945` ở utils/luongCongNhat.js — thuần túy, có bộ kiểm chạy
+   thật trên 47 dòng của bảng T10/2026. */
+
+/* Dò cột v890 trên HopDongLaoDong — KHÔNG cache (bài học v9.35: cache sống qua migration). Có cột
+   `KieuLuong` là có cả bộ. Chưa migration thì các cột mới đọc NULL ⇒ bộ tính lùi về 'Thang', không BH,
+   không thưởng — vẫn chạy, nhưng màn hình phải nói "chưa chạy migration_v890". */
+async function coCotHopDongV890(pool) {
+  const r = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','KieuLuong') AS c")).recordset[0] || {};
+  return r.c != null;
+}
+async function coBang(pool, ten) {
+  const r = (await pool.request().input('t', sql.NVarChar, ten).query('SELECT OBJECT_ID(@t) AS o')).recordset[0] || {};
+  return r.o != null;
 }
 
 // Tinh & luu bang luong cong nhat cho 1 thang (ghi de snapshot chi tiet).
@@ -964,18 +1010,81 @@ router.post('/bangluong/tinh', requireAuth, requirePermission('PAYROLL', 'edit')
     const pool = await getPool();
     const nam = parseInt(req.body.nam, 10), thang = parseInt(req.body.thang, 10);
     if (!nam || !thang) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng.' });
+    /* 🔴 v9.32 — CHẶN TÍNH LẠI KHI ĐÃ CHỐT, Ở MÁY CHỦ.
+       Màn hình vốn chỉ GIẤU nút khi đã chốt (module.payroll.js), và câu xác nhận lúc chốt hứa
+       "sau khi chốt sẽ không tính lại được" — nhưng máy chủ chưa bao giờ chặn: một tab mở từ trước
+       lúc chốt vẫn còn nút. Trước v9.32 lỗ này tương đối lành (tính lại ra cùng số). Nay đầu vào
+       tiền nằm ở phân hệ KHÁC: kế toán công nợ sửa/xóa một phiếu chi tạm ứng, rồi ai đó bên nhân sự
+       bấm Tính lương lại ⇒ bảng lương ĐÃ CHỐT đổi tiền, hai người không biết nhau đang làm gì. */
+    const dcHeader = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang)
+      .query(`SELECT TrangThai FROM BangLuong WHERE Nam=@n AND Thang=@t AND Loai=N'CongNhat'`)).recordset[0];
+    if (dcHeader && String(dcHeader.TrangThai || '').trim() === 'Đã chốt')
+      return res.status(400).json({ success: false,
+        message: `Bảng lương tháng ${thang}/${nam} ĐÃ CHỐT nên không tính lại được. `
+          + 'Muốn sửa thì bỏ chốt trước — và nhớ là tính lại sẽ lấy số tạm ứng MỚI NHẤT từ phiếu chi.' });
     const cfg = await getConfig(pool);
     const congChuan = await getCongChuan(pool, nam, thang);
     const brackets = await getBrackets(pool);
-    // Nhan vien dang lam + hop dong hieu luc gan nhat + tong cong thang.
-    const emps = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
+    const coV890 = await coCotHopDongV890(pool);
+    const coV882 = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','QuyKPI') AS c")).recordset[0].c != null;
+    const coBLv890 = (await pool.request().query("SELECT COL_LENGTH('BangLuongChiTiet','KieuLuong') AS c")).recordset[0].c != null;
+    const cuoiThang = `${nam}-${String(thang).padStart(2, '0')}-${new Date(nam, thang, 0).getDate()}`;
+
+    /* ================================================================================================
+       v9.45 — HỢP ĐỒNG LÀ NGUỒN THÔNG SỐ LƯƠNG (Nguyen: "ký hợp đồng có lựa chọn theo KPI hay theo SP").
+       Lấy hợp đồng Hiệu lực có TuNgay ≤ cuối tháng, mới nhất. KHÔNG CÓ HỢP ĐỒNG = KHÔNG TÍNH — liệt kê
+       riêng để nhân sự thấy ai còn thiếu, thay vì chèn một dòng toàn số 0 vào bảng lương (bản v6.1 làm
+       thế, và dòng 0 đồng trông như "người này không có lương" chứ không phải "chưa khai").
+       Cột v890 chưa có (chưa migration) ⇒ CAST NULL để câu SQL vẫn chạy.
+       ================================================================================================ */
+    const cotV890 = coV890
+      ? 'hd.KieuLuong, hd.DonGiaNgay, hd.MucDongBH, hd.LuongCoDinhThang, CONVERT(varchar(10), hd.NgayHetThuViec, 23) AS NgayHetThuViec, hd.KieuThuong'
+      : "CAST(NULL AS NVARCHAR(10)) AS KieuLuong, CAST(NULL AS DECIMAL(14,2)) AS DonGiaNgay, CAST(NULL AS DECIMAL(14,2)) AS MucDongBH, CAST(NULL AS DECIMAL(14,2)) AS LuongCoDinhThang, CAST(NULL AS varchar(10)) AS NgayHetThuViec, CAST(NULL AS NVARCHAR(10)) AS KieuThuong";
+    const dauThang = `${nam}-${String(thang).padStart(2, '0')}-01`;
+    const cotV882 = coV882
+      ? 'hd.PhuCapChucVu, hd.PhuCapChuyenCan, hd.QuyKPI, hd.SoCongXangXe, hd.SoCongAnTrua, hd.TyLeThuViec'
+      : 'CAST(NULL AS DECIMAL(14,2)) AS PhuCapChucVu, CAST(NULL AS DECIMAL(14,2)) AS PhuCapChuyenCan, CAST(NULL AS DECIMAL(14,2)) AS QuyKPI, CAST(NULL AS DECIMAL(6,2)) AS SoCongXangXe, CAST(NULL AS DECIMAL(6,2)) AS SoCongAnTrua, CAST(NULL AS DECIMAL(5,2)) AS TyLeThuViec';
+    const emps = (await pool.request().input('cuoi', sql.VarChar(10), cuoiThang).query(`
       SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, ISNULL(nv.SoNguoiPhuThuoc,0) AS SoNguoiPhuThuoc,
-        hd.LuongCoBan, hd.PhuCapAnCa, hd.PhuCapTrangPhuc, hd.PhuCapXangXe, hd.PhuCapDienThoai,
-        (SELECT ISNULL(SUM(SoCong),0) FROM ChamCongNgay cc WHERE cc.NhanVienID=nv.NhanVienID AND YEAR(cc.Ngay)=@n AND MONTH(cc.Ngay)=@t) AS Cong
+        hd.HopDongID, hd.LuongCoBan, hd.PhuCapAnCa, hd.PhuCapTrangPhuc, hd.PhuCapXangXe, hd.PhuCapDienThoai,
+        CONVERT(varchar(10), hd.DenNgay, 23) AS DenNgay,
+        ${cotV882}, ${cotV890}
       FROM NhanVien nv
-      OUTER APPLY (SELECT TOP 1 * FROM HopDongLaoDong h WHERE h.NhanVienID=nv.NhanVienID AND h.TrangThai=N'Hiệu lực' ORDER BY h.TuNgay DESC) hd
-      WHERE nv.TrangThaiLaoDong <> N'Đã nghỉ việc'
+      OUTER APPLY (SELECT TOP 1 * FROM HopDongLaoDong h
+                   WHERE h.NhanVienID=nv.NhanVienID AND h.TrangThai=N'Hiệu lực'
+                     AND (h.TuNgay IS NULL OR h.TuNgay <= @cuoi)
+                   ORDER BY h.TuNgay DESC, h.HopDongID DESC) hd
+      ${/* ISNULL: NULL <> N'…' là UNKNOWN ⇒ người chưa khai trạng thái sẽ bị LOẠI mà không vào cả danh
+           sách "thiếu hợp đồng" — biến mất không dấu vết (rà chéo v9.45). */''}
+      WHERE ISNULL(nv.TrangThaiLaoDong, N'') <> N'Đã nghỉ việc'
       ORDER BY nv.HoTen`)).recordset;
+    const coHopDong = emps.filter(e => e.HopDongID != null);
+    const thieuHopDong = emps.filter(e => e.HopDongID == null).map(e => ({ NhanVienID: e.NhanVienID, MaNhanVien: e.MaNhanVien, HoTen: e.HoTen }));
+
+    /* Chấm công cả tháng, MỘT truy vấn. Ngày và giờ lấy dạng CHUỖI (CONVERT) — driver useUTC=true làm
+       Date lệch +7 nếu đọc getDate()/getHours(); xem ghi chú ở /chamcong/:id/excel. */
+    const ccRows = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
+      SELECT NhanVienID, CONVERT(varchar(10), Ngay, 23) AS ngay, MaCham AS maCham, SoCong AS soCong,
+             CONVERT(varchar(5), GioVao, 108) AS gioVao,
+             ISNULL(GioTangCaThuong,0)+ISNULL(GioTangCaChuNhat,0)+ISNULL(GioTangCaLeTet,0) AS gioOT
+      FROM ChamCongNgay WHERE YEAR(Ngay)=@n AND MONTH(Ngay)=@t`)).recordset;
+    const ccTheoNV = new Map();
+    ccRows.forEach(r => { if (!ccTheoNV.has(r.NhanVienID)) ccTheoNV.set(r.NhanVienID, []); ccTheoNV.get(r.NhanVienID).push(r); });
+    const { chung: cfgCCChung, theoNhanVien: cfgCCTheoNV } = await getCfgChamCongTheoNhom(pool);
+
+    /* KPI tháng + thưởng theo sản phẩm (bảng mới v890 — chưa có thì coi như trống). */
+    const kpiMap = new Map(), spMap = new Map();
+    if (await coBang(pool, 'DanhGiaKPI')) {
+      (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang)
+        .query('SELECT NhanVienID, DiemKPI, TienGhiDe FROM DanhGiaKPI WHERE Nam=@n AND Thang=@t')).recordset
+        .forEach(r => kpiMap.set(r.NhanVienID, r));
+    }
+    if (await coBang(pool, 'ThuongSanPhamThang')) {
+      (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang)
+        .query('SELECT NhanVienID, SUM(SoLuong*DonGia) AS Tien FROM ThuongSanPhamThang WHERE Nam=@n AND Thang=@t GROUP BY NhanVienID')).recordset
+        .forEach(r => spMap.set(r.NhanVienID, Number(r.Tien) || 0));
+    }
+
     // Upsert header
     await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).input('u', sql.Int, req.session.user.userId)
       .query(`MERGE BangLuong AS t USING (SELECT @n AS Nam,@t AS Thang) AS s ON t.Nam=s.Nam AND t.Thang=s.Thang AND t.Loai=N'CongNhat'
@@ -984,20 +1093,81 @@ router.post('/bangluong/tinh', requireAuth, requirePermission('PAYROLL', 'edit')
     const header = (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang)
       .query(`SELECT BangLuongID FROM BangLuong WHERE Nam=@n AND Thang=@t AND Loai=N'CongNhat'`)).recordset[0];
     const blId = header.BangLuongID;
-    await pool.request().input('id', sql.Int, blId).query('DELETE FROM BangLuongChiTiet WHERE BangLuongID=@id');
-    for (const e of emps) {
-      const c = tinhLuongCongNhat(e, cfg, congChuan, brackets);
-      await pool.request().input('BangLuongID', sql.Int, blId).input('NhanVienID', sql.Int, e.NhanVienID)
+
+    /* 🔴 v9.45 — GIỮ ĐIỀU CHỈNH TAY QUA LẦN TÍNH LẠI. Dòng DELETE dưới xóa sạch chi tiết; điều chỉnh
+       (+/− có lý do, ví dụ Ngọc −200k nghỉ không phép) là số kế toán gõ, tính lại mà mất là cùng một họ
+       lỗi với tạm ứng trước v9.32. Đọc ra trước, ghi lại sau. */
+    const dieuChinhCu = new Map();
+    if (coBLv890) {
+      (await pool.request().input('id', sql.Int, blId)
+        .query('SELECT NhanVienID, DieuChinh, LyDoDieuChinh FROM BangLuongChiTiet WHERE BangLuongID=@id')).recordset
+        .forEach(r => dieuChinhCu.set(r.NhanVienID, { dieuChinh: Number(r.DieuChinh) || 0, lyDo: r.LyDoDieuChinh || null }));
+    }
+    /* 🔴 v9.32 — TẠM ỨNG LẤY TỪ PHIẾU CHI, KHÔNG PHẢI SỐ GÕ TAY. Tính bao nhiêu lần cũng ra một số. */
+    const tamUngMap = await tongTamUngTheoThang(pool, nam, thang);
+
+    /* DELETE + vòng INSERT trong MỘT giao dịch: lỗi giữa chừng (tràn decimal, mất kết nối) mà không có
+       giao dịch thì bảng lương mất sạch dòng cũ, chỉ còn một phần dòng mới — bảng rác đang hiện trên
+       màn (rà chéo v9.45). Mẫu `new sql.Request(tran)` theo dms.js. */
+    const tran = new sql.Transaction(pool);
+    await tran.begin();
+    const canhBao = [];
+    try {
+    await new sql.Request(tran).input('id', sql.Int, blId).query('DELETE FROM BangLuongChiTiet WHERE BangLuongID=@id');
+    for (const e of coHopDong) {
+      const cfgCC = cfgCCTheoNV.get(e.NhanVienID) || cfgCCChung;
+      const g = gomChamCong(ccTheoNV.get(e.NhanVienID) || [], e.NgayHetThuViec, cfgCC && cfgCC.gioVao, cfg.DiMuonChamChuocPhut);
+      const kpi = kpiMap.get(e.NhanVienID);
+      const dc = dieuChinhCu.get(e.NhanVienID) || { dieuChinh: 0, lyDo: null };
+      const inp = Object.assign({}, e, g, {
+        conThuViec: !!(e.NgayHetThuViec && String(e.NgayHetThuViec) >= cuoiThang),
+        diemKPI: kpi ? kpi.DiemKPI : null,
+        tienKPIGhiDe: kpi && kpi.TienGhiDe != null ? kpi.TienGhiDe : null,
+        thuongSanPham: spMap.get(e.NhanVienID) || 0,
+        tamUng: Number(tamUngMap.get(Number(e.NhanVienID))) || 0,
+        dieuChinh: dc.dieuChinh
+      });
+      const c = tinhLuongV945(inp, cfg, congChuan, brackets);
+      if (c.chuaDanhGiaKPI) canhBao.push(`${e.HoTen}: hợp đồng thưởng theo KPI nhưng tháng này CHƯA chấm điểm — đang tính 0.`);
+      /* Hợp đồng còn "Hiệu lực" nhưng DenNgay đã qua trước đầu tháng: vẫn dùng (đổi nguồn im lặng là tệ
+         hơn), nhưng phải nói — "quên đổi trạng thái" là chuyện thường ở xưởng đông người. */
+      if (e.DenNgay && String(e.DenNgay) < dauThang) canhBao.push(`${e.HoTen}: hợp đồng đang dùng đã HẾT HẠN ${String(e.DenNgay).split('-').reverse().join('/')} nhưng còn trạng thái Hiệu lực — kiểm lại ở Nhân sự → Hợp đồng.`);
+      if (c.kieuLuong === 'Ngay' && !(Number(e.DonGiaNgay) > 0)) canhBao.push(`${e.HoTen}: lương NGÀY nhưng hợp đồng chưa khai đơn giá ngày — lương = 0.`);
+      if (c.kieuLuong === 'Thang' && !(Number(e.LuongCoBan) > 0) && !(Number(e.LuongCoDinhThang) > 0)) canhBao.push(`${e.HoTen}: hợp đồng chưa khai lương cơ bản — lương = 0.`);
+
+      const rq = new sql.Request(tran).input('BangLuongID', sql.Int, blId).input('NhanVienID', sql.Int, e.NhanVienID)
         .input('Cong', sql.Decimal(6, 2), c.cong).input('LuongCoBan', sql.Decimal(14, 2), c.luongCB).input('LuongNgayCong', sql.Decimal(14, 2), c.luongNgayCong)
         .input('PcAnCa', sql.Decimal(14, 2), c.pcAnCa).input('PcTrangPhuc', sql.Decimal(14, 2), c.pcTrangPhuc).input('PcXangXe', sql.Decimal(14, 2), c.pcXangXe).input('PcDienThoai', sql.Decimal(14, 2), c.pcDienThoai)
-        .input('TangCa', sql.Decimal(14, 2), 0).input('Thuong', sql.Decimal(14, 2), c.thuong).input('TnMienThue', sql.Decimal(14, 2), c.tnMienThue).input('TnChiuThue', sql.Decimal(14, 2), c.tnChiuThue)
+        .input('TangCa', sql.Decimal(14, 2), c.tangCa).input('Thuong', sql.Decimal(14, 2), c.thuong).input('TnMienThue', sql.Decimal(14, 2), c.tnMienThue).input('TnChiuThue', sql.Decimal(14, 2), c.tnChiuThue)
         .input('BhxhNld', sql.Decimal(14, 2), c.bhxh).input('BhytNld', sql.Decimal(14, 2), c.bhyt).input('BhtnNld', sql.Decimal(14, 2), c.bhtn).input('TongBH', sql.Decimal(14, 2), c.tongBH)
         .input('GiamTruBanThan', sql.Decimal(14, 2), c.giamTruBanThan).input('GiamTruNPT', sql.Decimal(14, 2), c.giamTruNPT).input('TnTinhThue', sql.Decimal(14, 2), c.tnTinhThue)
-        .input('ThueTNCN', sql.Decimal(14, 2), c.thue).input('TamUng', sql.Decimal(14, 2), 0).input('ThucLinh', sql.Decimal(14, 2), c.thucLinh)
-        .query(`INSERT INTO BangLuongChiTiet (BangLuongID,NhanVienID,Cong,LuongCoBan,LuongNgayCong,PcAnCa,PcTrangPhuc,PcXangXe,PcDienThoai,TangCa,Thuong,TnMienThue,TnChiuThue,BhxhNld,BhytNld,BhtnNld,TongBH,GiamTruBanThan,GiamTruNPT,TnTinhThue,ThueTNCN,TamUng,ThucLinh)
-          VALUES (@BangLuongID,@NhanVienID,@Cong,@LuongCoBan,@LuongNgayCong,@PcAnCa,@PcTrangPhuc,@PcXangXe,@PcDienThoai,@TangCa,@Thuong,@TnMienThue,@TnChiuThue,@BhxhNld,@BhytNld,@BhtnNld,@TongBH,@GiamTruBanThan,@GiamTruNPT,@TnTinhThue,@ThueTNCN,@TamUng,@ThucLinh)`);
+        .input('ThueTNCN', sql.Decimal(14, 2), c.thue).input('TamUng', sql.Decimal(14, 2), c.tamUng).input('ThucLinh', sql.Decimal(14, 2), c.thucLinh);
+      let cotThem = '', giaTriThem = '';
+      if (coBLv890) {
+        rq.input('KieuLuong', sql.NVarChar(10), c.kieuLuong).input('DonGiaNgay', sql.Decimal(14, 2), c.donGiaNgay)
+          .input('CongThuViec', sql.Decimal(6, 2), c.congThuViec).input('CongChinhThuc', sql.Decimal(6, 2), c.congChinhThuc + c.congLe)
+          .input('SoPhep', sql.Decimal(6, 2), c.soPhep).input('SoNgayMuon', sql.Int, c.soNgayMuon)
+          .input('GioOT', sql.Decimal(7, 2), c.gioOT).input('DonGiaGioOT', sql.Decimal(14, 2), c.donGiaGioOT)
+          .input('PcChucVu', sql.Decimal(14, 2), c.pcChucVu).input('ChuyenCan', sql.Decimal(14, 2), c.chuyenCan)
+          .input('DieuChinh', sql.Decimal(14, 2), c.dieuChinh).input('LyDoDieuChinh', sql.NVarChar(255), dc.lyDo)
+          .input('MucDongBH', sql.Decimal(14, 2), c.mucDongBH).input('DiemKPI', sql.Decimal(5, 2), c.diemKPI)
+          .input('KieuThuong', sql.NVarChar(10), c.kieuThuong || null).input('ThueDaTru', sql.Bit, c.thueDaTru ? 1 : 0);
+        cotThem = ',KieuLuong,DonGiaNgay,CongThuViec,CongChinhThuc,SoPhep,SoNgayMuon,GioOT,DonGiaGioOT,PcChucVu,ChuyenCan,DieuChinh,LyDoDieuChinh,MucDongBH,DiemKPI,KieuThuong,ThueDaTru';
+        giaTriThem = ',@KieuLuong,@DonGiaNgay,@CongThuViec,@CongChinhThuc,@SoPhep,@SoNgayMuon,@GioOT,@DonGiaGioOT,@PcChucVu,@ChuyenCan,@DieuChinh,@LyDoDieuChinh,@MucDongBH,@DiemKPI,@KieuThuong,@ThueDaTru';
+      }
+      await rq.query(`INSERT INTO BangLuongChiTiet (BangLuongID,NhanVienID,Cong,LuongCoBan,LuongNgayCong,PcAnCa,PcTrangPhuc,PcXangXe,PcDienThoai,TangCa,Thuong,TnMienThue,TnChiuThue,BhxhNld,BhytNld,BhtnNld,TongBH,GiamTruBanThan,GiamTruNPT,TnTinhThue,ThueTNCN,TamUng,ThucLinh${cotThem})
+          VALUES (@BangLuongID,@NhanVienID,@Cong,@LuongCoBan,@LuongNgayCong,@PcAnCa,@PcTrangPhuc,@PcXangXe,@PcDienThoai,@TangCa,@Thuong,@TnMienThue,@TnChiuThue,@BhxhNld,@BhytNld,@BhtnNld,@TongBH,@GiamTruBanThan,@GiamTruNPT,@TnTinhThue,@ThueTNCN,@TamUng,@ThucLinh${giaTriThem})`);
     }
-    res.json({ success: true, data: { bangLuongID: blId, soNhanVien: emps.length } });
+    await tran.commit();
+    } catch (eTran) {
+      try { await tran.rollback(); } catch (_) { /* đã rollback sẵn khi kết nối rơi */ }
+      throw eTran;
+    }
+    /* Không có cột v890: KieuLuong null ⇒ ai cũng tính kiểu THÁNG; MucDongBH null ⇒ không BH; KieuThuong
+       null ⇒ không thưởng; không tách thử việc; châm chước đi muộn lấy mặc định 5 phút. Chức vụ / chuyên
+       cần / xăng (cột v8.82) VẪN tính. */
+    if (!coV890) canhBao.unshift('🔴 Máy chủ CHƯA chạy migration_v890.sql: mọi người đang tính theo kiểu lương THÁNG, không BH, không thưởng KPI/SP, không tách thử việc; các cột mới KHÔNG được lưu. Chạy migration rồi tính lại.');
+    res.json({ success: true, data: { bangLuongID: blId, soNhanVien: coHopDong.length, thieuHopDong, canhBao, truThue: !!cfg.TruThueTNCN } });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 
@@ -1022,15 +1192,137 @@ router.get('/bangluong', requireAuth, requirePermission('PAYROLL', 'view'), requ
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
 
-// Sua tam ung 1 dong -> tinh lai thuc linh cua dong do.
+/* v9.45 — SỬA ĐIỀU CHỈNH (+/−) CỦA MỘT DÒNG, BẮT BUỘC CÓ LÝ DO.
+   Bảng T10 có Ngọc bị trừ 200k "nghỉ nhiều không xin phép" — trừ thẳng vào Thành tiền, không cột,
+   tháng sau không ai biết vì sao số không khớp công thức. Nay: cột riêng + lý do, và `POST /tinh`
+   GIỮ nó qua lần tính lại (xem khối ghi chú ở đó).
+   🔴 Tạm ứng vẫn KHÔNG sửa tay ở đây (v9.32) — nguồn là phiếu chi. */
 router.put('/bangluong/chitiet/:id', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'luongcongnhat'), async (req, res) => {
   try {
     const pool = await getPool();
-    const tamUng = Number(req.body.tamUng) || 0;
-    await pool.request().input('id', sql.Int, parseInt(req.params.id, 10)).input('tu', sql.Decimal(14, 2), tamUng)
-      .query(`UPDATE BangLuongChiTiet SET TamUng=@tu,
-        ThucLinh = ROUND(TnChiuThue - TongBH - ThueTNCN + TnMienThue - @tu, 0) WHERE ID=@id`);
+    const b = req.body || {};
+    if (b.tamUng !== undefined) {
+      return res.status(400).json({ success: false,
+        message: 'Tạm ứng nay lấy tự động từ phiếu chi (Công nợ → Phiếu chi → Chi cho: Nhân viên → loại Tạm ứng). '
+          + 'Sửa số ở phiếu chi rồi bấm Tính lương lại.' });
+    }
+    const coCot = (await pool.request().query("SELECT COL_LENGTH('BangLuongChiTiet','DieuChinh') AS c")).recordset[0].c != null;
+    if (!coCot) return res.status(400).json({ success: false, message: 'Chưa chạy migration_v890.sql nên chưa có cột Điều chỉnh.' });
+    const id = parseInt(req.params.id, 10);
+    const dieuChinh = Math.round(Number(b.dieuChinh) || 0);
+    const lyDo = String(b.lyDoDieuChinh || '').trim();
+    if (dieuChinh !== 0 && !lyDo) return res.status(400).json({ success: false, message: 'Điều chỉnh khác 0 thì PHẢI ghi lý do.' });
+    const ct = (await pool.request().input('id', sql.Int, id).query(`
+      SELECT ct.*, bl.TrangThai FROM BangLuongChiTiet ct JOIN BangLuong bl ON bl.BangLuongID=ct.BangLuongID WHERE ct.ID=@id`)).recordset[0];
+    if (!ct) return res.status(404).json({ success: false, message: 'Không tìm thấy dòng lương.' });
+    if (String(ct.TrangThai || '').trim() === 'Đã chốt') return res.status(400).json({ success: false, message: 'Bảng lương đã chốt — bỏ chốt trước khi sửa.' });
+    /* Tính lại thực lĩnh TỪ CÁC CỘT ĐÃ LƯU, cùng công thức với bộ tính — không gọi lại bộ tính vì
+       thiếu dữ liệu chấm công ở đây; mọi khoản khác không đổi nên chỉ dịch đúng phần chênh. */
+    const cfg = await getConfig(pool);
+    const lamTron = Number(cfg.LamTronThucLinh) > 0 ? Number(cfg.LamTronThucLinh) : 1;
+    const thueDaTru = ct.ThueDaTru ? Number(ct.ThueTNCN) || 0 : 0;
+    const tho = (Number(ct.TnChiuThue) || 0) + (Number(ct.TnMienThue) || 0) - (Number(ct.TongBH) || 0) - thueDaTru - (Number(ct.TamUng) || 0) + dieuChinh;
+    const thucLinh = Math.round(tho / lamTron) * lamTron;
+    await pool.request().input('id', sql.Int, id).input('dc', sql.Decimal(14, 2), dieuChinh)
+      .input('ly', sql.NVarChar(255), lyDo || null).input('tl', sql.Decimal(14, 2), thucLinh)
+      .query('UPDATE BangLuongChiTiet SET DieuChinh=@dc, LyDoDieuChinh=@ly, ThucLinh=@tl WHERE ID=@id');
+    res.json({ success: true, data: { thucLinh } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* ================================================================================================
+   v9.45 — ĐÁNH GIÁ KPI THÁNG + THƯỞNG THEO SẢN PHẨM (Nguyen 11/11: "thêm chức năng đánh giá KPI
+   từng người", "theo sản phẩm: tên, đơn giá, số lượng = thành tiền", "người có thể nhiều SP, mỗi SP
+   một đơn giá").
+   Quyền: chức năng 'kpi' (ChucNang mới trong migration_v890).
+   ================================================================================================ */
+router.get('/kpi', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'kpi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nam = parseInt(req.query.nam, 10), thang = parseInt(req.query.thang, 10);
+    if (!nam || !thang) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng.' });
+    if (!(await coCotHopDongV890(pool))) return res.status(400).json({ success: false, message: 'Chưa chạy migration_v890.sql.' });
+    const cuoiThang = `${nam}-${String(thang).padStart(2, '0')}-${new Date(nam, thang, 0).getDate()}`;
+    /* Chỉ người có hợp đồng khai KieuThuong — người không có thưởng thì không có gì để chấm. */
+    const ds = (await pool.request().input('cuoi', sql.VarChar(10), cuoiThang).input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
+      SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, hd.HopDongID, hd.KieuThuong, hd.QuyKPI,
+             k.DiemKPI, k.TienGhiDe, k.NhanXet
+      FROM NhanVien nv
+      OUTER APPLY (SELECT TOP 1 * FROM HopDongLaoDong h WHERE h.NhanVienID=nv.NhanVienID AND h.TrangThai=N'Hiệu lực'
+                   AND (h.TuNgay IS NULL OR h.TuNgay <= @cuoi) ORDER BY h.TuNgay DESC, h.HopDongID DESC) hd
+      LEFT JOIN DanhGiaKPI k ON k.NhanVienID=nv.NhanVienID AND k.Nam=@n AND k.Thang=@t
+      WHERE ISNULL(nv.TrangThaiLaoDong, N'') <> N'Đã nghỉ việc' AND hd.KieuThuong IS NOT NULL
+      ORDER BY nv.HoTen`)).recordset;
+    const hdIds = ds.filter(r => r.KieuThuong === 'SanPham').map(r => r.HopDongID);
+    const dmSP = new Map();
+    if (hdIds.length) {
+      (await pool.request().query(`SELECT HopDongID, TenSanPham, DonGia FROM HopDongSanPham WHERE HopDongID IN (${hdIds.join(',')}) ORDER BY ThuTu, ID`)).recordset
+        .forEach(r => { if (!dmSP.has(r.HopDongID)) dmSP.set(r.HopDongID, []); dmSP.get(r.HopDongID).push(r); });
+    }
+    const spThang = new Map();
+    (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang)
+      .query('SELECT ID, NhanVienID, TenSanPham, DonGia, SoLuong, ThanhTien, GhiChu FROM ThuongSanPhamThang WHERE Nam=@n AND Thang=@t ORDER BY ID')).recordset
+      .forEach(r => { if (!spThang.has(r.NhanVienID)) spThang.set(r.NhanVienID, []); spThang.get(r.NhanVienID).push(r); });
+    ds.forEach(r => { r.danhMucSanPham = dmSP.get(r.HopDongID) || []; r.sanPhamThang = spThang.get(r.NhanVienID) || []; });
+    res.json({ success: true, data: { nam, thang, rows: ds } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+router.put('/kpi/diem', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'kpi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const b = req.body || {};
+    const nam = parseInt(b.nam, 10), thang = parseInt(b.thang, 10), nv = parseInt(b.nhanVienId, 10);
+    if (!nam || !thang || !nv) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng/nhân viên.' });
+    const diem = Math.max(0, Math.min(100, Number(b.diemKPI) || 0));
+    const ghiDe = b.tienGhiDe === '' || b.tienGhiDe == null ? null : Math.round(Number(b.tienGhiDe) || 0);
+    await pool.request().input('nv', sql.Int, nv).input('n', sql.Int, nam).input('t', sql.Int, thang)
+      .input('d', sql.Decimal(5, 2), diem).input('g', sql.Decimal(14, 2), ghiDe)
+      .input('nx', sql.NVarChar(500), nn(b.nhanXet)).input('u', sql.Int, req.session.user.userId)
+      .query(`MERGE DanhGiaKPI AS t USING (SELECT @nv AS NhanVienID, @n AS Nam, @t AS Thang) AS s
+              ON t.NhanVienID=s.NhanVienID AND t.Nam=s.Nam AND t.Thang=s.Thang
+              WHEN MATCHED THEN UPDATE SET DiemKPI=@d, TienGhiDe=@g, NhanXet=@nx, NguoiDanhGiaID=@u, UpdatedAt=SYSDATETIME()
+              WHEN NOT MATCHED THEN INSERT (NhanVienID,Nam,Thang,DiemKPI,TienGhiDe,NhanXet,NguoiDanhGiaID) VALUES (@nv,@n,@t,@d,@g,@nx,@u);`);
     res.json({ success: true });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* Thưởng theo sản phẩm: ghi lại TOÀN BỘ dòng của một người trong tháng (xóa hết rồi chèn) — bảng tháng
+   của một người chỉ vài dòng, cách này không lệch trạng thái giữa màn hình và CSDL. */
+router.put('/kpi/sanpham', requireAuth, requirePermission('PAYROLL', 'edit'), requireChucNang('PAYROLL', 'kpi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const b = req.body || {};
+    const nam = parseInt(b.nam, 10), thang = parseInt(b.thang, 10), nv = parseInt(b.nhanVienId, 10);
+    if (!nam || !thang || !nv) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng/nhân viên.' });
+    const ds = Array.isArray(b.rows) ? b.rows : [];
+    await pool.request().input('nv', sql.Int, nv).input('n', sql.Int, nam).input('t', sql.Int, thang)
+      .query('DELETE FROM ThuongSanPhamThang WHERE NhanVienID=@nv AND Nam=@n AND Thang=@t');
+    let tong = 0;
+    for (const r of ds) {
+      const ten = String(r.tenSanPham || '').trim();
+      const sl = Number(r.soLuong) || 0, dg = Number(r.donGia) || 0;
+      if (!ten || sl <= 0) continue;
+      tong += sl * dg;
+      await pool.request().input('nv', sql.Int, nv).input('n', sql.Int, nam).input('t', sql.Int, thang)
+        .input('ten', sql.NVarChar(150), ten).input('dg', sql.Decimal(14, 2), dg).input('sl', sql.Decimal(12, 2), sl)
+        .input('gc', sql.NVarChar(255), nn(r.ghiChu))
+        .query('INSERT INTO ThuongSanPhamThang (NhanVienID,Nam,Thang,TenSanPham,DonGia,SoLuong,GhiChu) VALUES (@nv,@n,@t,@ten,@dg,@sl,@gc)');
+    }
+    res.json({ success: true, data: { tong: Math.round(tong) } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* v9.32 — XEM TỪNG PHIẾU tạo nên con số tạm ứng của một nhân viên trong tháng.
+   🔴 Bắt buộc phải có: "tự tính" mà không soi được từng phiếu thì với kế toán nó là hộp đen, và khi
+   nhân viên thắc mắc "sao trừ tôi ngần này" thì không ai trả lời được. */
+router.get('/bangluong/tamung/:nhanVienId', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luongcongnhat'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nam = parseInt(req.query.nam, 10), thang = parseInt(req.query.thang, 10);
+    if (!nam || !thang) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng.' });
+    const rows = await chiTietTamUng(pool, parseInt(req.params.nhanVienId, 10), nam, thang);
+    res.json({ success: true, data: { rows, tong: rows.reduce((s, r) => s + Number(r.SoTien || 0), 0) } });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 
@@ -1072,14 +1364,27 @@ router.get('/bangluong/excel', requireAuth, requirePermission('PAYROLL', 'view')
     if (!data) return res.status(404).json({ success: false, message: 'Chưa có bảng lương tháng này.' });
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`Luong T${thang}-${nam}`);
-    ws.mergeCells('A1', 'X1'); ws.getCell('A1').value = `BẢNG LƯƠNG CÔNG NHẬT — THÁNG ${thang}/${nam}`;
+    /* v9.45: cột theo bảng thực tế (sheet 2 T10/2026) — kiểu lương, thử việc/chính thức, phép, OT,
+       KPI, chức vụ, chuyên cần, điều chỉnh có lý do. Thuế vẫn hiện; cột "Thuế đã trừ" nói nó có vào
+       thực lĩnh hay không. */
+    ws.mergeCells('A1', 'AB1'); ws.getCell('A1').value = `BẢNG LƯƠNG CÔNG NHẬT — THÁNG ${thang}/${nam}`;
     ws.getCell('A1').font = { bold: true, size: 14 }; ws.getCell('A1').alignment = { horizontal: 'center' };
-    const head = ['STT', 'Mã NV', 'Họ và tên', 'Công', 'Lương CB', 'Lương ngày công', 'Ăn ca', 'Trang phục', 'Xăng xe', 'Điện thoại', 'Thưởng', 'TN miễn thuế', 'TN chịu thuế', 'BHXH', 'BHYT', 'BHTN', 'Tổng BH', 'Giảm trừ BT', 'Giảm trừ NPT', 'TN tính thuế', 'Thuế TNCN', 'Tạm ứng', 'Thực lĩnh'];
+    const head = ['STT', 'Mã NV', 'Họ và tên', 'Kiểu', 'Công TV', 'Công CT (gồm lễ)', 'Phép', 'Muộn', 'Lương CB / Đơn giá ngày', 'Lương',
+      'Giờ OT', 'Tiền OT', 'Điểm KPI', 'Thưởng KPI/SP', 'Xăng xe', 'Chức vụ', 'Chuyên cần', 'Ăn ca', 'Trang phục', 'Điện thoại',
+      'Mức đóng BH', 'BH 10,5%', 'Thuế TNCN', 'Thuế đã trừ', 'Tạm ứng', 'Điều chỉnh', 'Lý do', 'Thực lĩnh'];
     ws.addRow([]); const hr = ws.addRow(head); hr.font = { bold: true }; hr.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8EEF7' } }; c.border = { bottom: { style: 'thin' } }; });
-    data.rows.forEach((r, i) => ws.addRow([i + 1, r.MaNhanVien, r.HoTen, Number(r.Cong), Number(r.LuongCoBan), Number(r.LuongNgayCong), Number(r.PcAnCa), Number(r.PcTrangPhuc), Number(r.PcXangXe), Number(r.PcDienThoai), Number(r.Thuong), Number(r.TnMienThue), Number(r.TnChiuThue), Number(r.BhxhNld), Number(r.BhytNld), Number(r.BhtnNld), Number(r.TongBH), Number(r.GiamTruBanThan), Number(r.GiamTruNPT), Number(r.TnTinhThue), Number(r.ThueTNCN), Number(r.TamUng), Number(r.ThucLinh)]));
-    const tong = data.rows.reduce((s, r) => s + Number(r.ThucLinh), 0);
-    const tr = ws.addRow(['', '', 'TỔNG CỘNG', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', tong]); tr.font = { bold: true };
-    ws.columns.forEach((c, i) => { c.numFmt = i >= 3 ? '#,##0' : undefined; c.width = i === 2 ? 22 : 12; });
+    const N = (v) => Number(v) || 0;
+    data.rows.forEach((r, i) => ws.addRow([i + 1, r.MaNhanVien, r.HoTen,
+      r.KieuLuong === 'Ngay' ? 'Ngày' : 'Tháng', N(r.CongThuViec), N(r.CongChinhThuc), N(r.SoPhep), N(r.SoNgayMuon),
+      r.KieuLuong === 'Ngay' ? N(r.DonGiaNgay) : N(r.LuongCoBan), N(r.LuongNgayCong),
+      N(r.GioOT), N(r.TangCa), r.DiemKPI == null ? '' : N(r.DiemKPI), N(r.Thuong), N(r.PcXangXe), N(r.PcChucVu), N(r.ChuyenCan),
+      N(r.PcAnCa), N(r.PcTrangPhuc), N(r.PcDienThoai),
+      N(r.MucDongBH), N(r.TongBH), N(r.ThueTNCN), r.ThueDaTru ? 'Có' : 'Không', N(r.TamUng), N(r.DieuChinh), r.LyDoDieuChinh || '', N(r.ThucLinh)]));
+    const tong = data.rows.reduce((s, r) => s + N(r.ThucLinh), 0);
+    const tongTU = data.rows.reduce((s, r) => s + N(r.TamUng), 0);
+    const trRow = new Array(head.length).fill(''); trRow[2] = 'TỔNG CỘNG'; trRow[24] = tongTU; trRow[27] = tong;
+    const tr = ws.addRow(trRow); tr.font = { bold: true };
+    ws.columns.forEach((c, i) => { c.numFmt = (i >= 4 && i !== 23 && i !== 26) ? '#,##0.##' : undefined; c.width = i === 2 ? 24 : (i === 26 ? 28 : 12); });
     const buf = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="BangLuong_T${thang}_${nam}.xlsx"`);
@@ -1208,8 +1513,17 @@ router.get('/bangluong/ck', requireAuth, requirePermission('PAYROLL', 'view'), r
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Sheet 1');
     ws.addRow(['Txn Reference\nSố tham chiếu', 'Amount (VND)\nSố tiền chuyển', 'Beneficiary Name\nTên người nhận', 'Account Number\nTài khoản nhận', 'Remarks\nNội dung', 'Ben Bank\nNgân hàng chuyển', 'Province\nĐịa bàn', 'Branch\nChi nhánh', 'Validation\nKiểm tra']).font = { bold: true };
+    /* 🔴 v9.32 — AI BỊ LOẠI KHỎI FILE CK THÌ PHẢI NÓI RA.
+       Dòng `ThucLinh <= 0` bị bỏ khỏi file ngân hàng. Trước đây hiếm (tạm ứng luôn = 0 lúc tính);
+       nay tạm ứng tự chảy vào nên ứng quá lương là ÂM, và người đó biến mất khỏi file mà kế toán
+       không hề biết — up lên ngân hàng xong mới phát hiện có người không nhận được gì. */
+    const biLoai = [];
     data.rows.forEach((r, i) => {
-      if (!(Number(r.ThucLinh) > 0)) return; // bo qua dong 0d
+      if (!(Number(r.ThucLinh) > 0)) {
+        biLoai.push(`${r.MaNhanVien || ''} ${r.HoTen} (${Number(r.ThucLinh) < 0 ? 'ÂM ' : ''}${Number(r.ThucLinh).toLocaleString('vi-VN')}đ`
+          + `${Number(r.TamUng) > 0 ? ', đã ứng ' + Number(r.TamUng).toLocaleString('vi-VN') + 'đ' : ''})`);
+        return;
+      }
       ws.addRow([
         'REF' + String(i + 1).padStart(4, '0'),
         Number(r.ThucLinh),
@@ -1220,6 +1534,14 @@ router.get('/bangluong/ck', requireAuth, requirePermission('PAYROLL', 'view'), r
         '', '', ''
       ]);
     });
+    /* Ghi ngay trong file, dưới bảng — kế toán mở file là thấy, không phải đi tìm ở đâu khác. */
+    if (biLoai.length) {
+      ws.addRow([]);
+      const d = ws.addRow(['⚠️ KHÔNG CHUYỂN KHOẢN ' + biLoai.length + ' người (thực lĩnh <= 0, thường do tạm ứng nhiều hơn lương):']);
+      d.font = { bold: true, color: { argb: 'FFC00000' } };
+      biLoai.forEach(x => ws.addRow(['', x]));
+      ws.addRow(['', 'Kiểm lại ở Công nợ → Phiếu chi (loại Tạm ứng) trước khi gửi ngân hàng.']);
+    }
     ws.getColumn(1).width = 16; ws.getColumn(2).width = 16; ws.getColumn(2).numFmt = '#,##0';
     ws.getColumn(3).width = 26; ws.getColumn(4).width = 20; ws.getColumn(6).width = 28;
     const buf = await wb.xlsx.writeBuffer();
@@ -1347,7 +1669,7 @@ router.get('/luongmay/cuatoi', requireAuth, async (req, res) => {
    Ly do: SO CONG NO NHA GIA CONG (routes/congno.js) phai dung DUNG con so cua bang luong. Giu ban thu
    hai la Bang luong va So cong no ra HAI CON SO cho cung mot viec ma khong ai biet ben nao dung.
    Doc ghi chu dau file util TRUOC KHI SUA cong thuc (moc "SL NHAN", bay nhieu-ban-don-gia). */
-const { loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy } = require('../utils/luongGiaCongInThe');
+const { loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha, APPLY_NGAY_QC, OUTER_APPLY_NGAY_QC, bieuThucNgayKy } = require('../utils/luongGiaCongInThe');
 const loadGiaCong = (pool, nam, thang) => __loadGiaCong(pool, sql, { nam, thang });
 const loadInThe = (pool, nam, thang) => __loadInThe(pool, sql, { nam, thang });
 router.get('/giacong-inthe', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luonggcinthe'), async (req, res) => {
@@ -1435,18 +1757,22 @@ async function getCauHinhLuongCat(pool) {
 }
 
 // Danh sách SƠ ĐỒ đã cắt THUỘC KỲ + tiền từng sơ đồ.
-/* v9.02 — GẮN ĐIỀU KIỆN QC (Nguyen 2026-10-24, xem ghi chú ở loadLuongLaDongGoi). Trước v9.02 quỹ cắt
-   tháng = mọi sổ cắt ghi trong tháng, không nhìn QC.
-     · Lệnh CHƯA QC: sổ cắt không vào quỹ (CROSS APPLY).
-     · Kỳ của một sổ cắt = tháng MUỘN HƠN giữa ngày cắt và ngày QC đầu. Cắt luôn trước QC nên thực
-       chất = THÁNG QC: sổ cắt tháng 9 của lệnh QC tháng 10 nằm trong quỹ tháng 10 (như khoán may v8.61).
-   ⚠️ HỆ QUẢ CỐ Ý: quỹ tháng theo kỳ QC nhưng GIỜ CÔNG chia quỹ vẫn là giờ chấm công của tháng đó
-   (loadGioCongCat). Tiền của lệnh cắt T9/QC T10 chia cho người làm giờ T10 — tổng tiền không mất,
-   chỉ dịch tháng; Nguyen đã chọn phương án này thay vì giữ tháng cắt (sẽ mất tiền khi T9 đã chốt). */
+/* v9.18 — BỎ ĐIỀU KIỆN QC CHO RIÊNG QUỸ CẮT (Nguyen 2026-11-04: "sửa lại lương bộ phận cắt —
+   tính theo ngày cập nhật tiến độ trong tháng"; chốt qua hỏi đáp: "Bỏ hẳn chờ QC", phạm vi CHỈ
+   bảng Lương trải vải cắt):
+     · Kỳ của một sổ cắt = THÁNG GHI SỔ CẮT (td.NgayGhiNhan) — cắt tháng nào ăn quỹ tháng đó.
+     · Lệnh CHƯA QC vẫn vào quỹ. Cột NgayQC giữ lại CHỈ ĐỂ HIỂN THỊ (OUTER_APPLY_NGAY_QC — bản
+       OUTER không gate; trống = lệnh chưa QC).
+   ⚠️ BA BẢNG CÒN LẠI (khoán may, GC/in thêu, là/đóng gói) GIỮ NGUYÊN luật v9.02 chờ QC — đây là
+   ngoại lệ có chủ đích cho mỗi bộ phận cắt, đừng "đồng bộ cho giống nhau" chiều nào.
+   Lịch sử: trước v9.02 quỹ cắt vốn tính theo tháng ghi (y như bây giờ); v9.02 chuyển sang chờ QC
+   kỳ-tháng-muộn-hơn (quỹ T8 85,6tr→22,4tr, T9 48,9tr→73,2tr); v9.18 quay về theo tháng ghi —
+   quỹ các tháng đổi lại, đối chiếu bằng database/kiem_tra_v918_quy_cat_theo_thang.sql TRƯỚC khi
+   tin bảng lương; tháng đã trả theo số v9.02 thì xử lý nghiệp vụ, không truy thu tự động.
+   GIỜ CÔNG chia quỹ vẫn theo tháng chấm công (loadGioCongCat) — không đổi. */
 async function loadSoDoCat(pool, nam, thang, donGia) {
-  const ngayKy = bieuThucNgayKy('td.NgayGhiNhan');
   return (await pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang).input('g', sql.Decimal(18, 4), donGia).query(`
-    SELECT td.TienDoID, td.NgayGhiNhan, td.SttSoCat, td.SoDoID, qc.NgayQC, ${ngayKy} AS NgayKy,
+    SELECT td.TienDoID, td.NgayGhiNhan, td.SttSoCat, td.SoDoID, qc.NgayQC, td.NgayGhiNhan AS NgayKy,
            d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham,
            ISNULL(td.MetSoDoDai, sd.MetSoDoDai) AS MetSoDoDai,
            ISNULL(td.KhoVaiSoDo, sd.KhoVaiSoDo) AS KhoVaiSoDo,
@@ -1458,16 +1784,25 @@ async function loadSoDoCat(pool, nam, thang, donGia) {
            nvc.HoTen AS NhanVienCat,
            ISNULL(STUFF((SELECT ', ' + nv2.HoTen FROM TienDoTraiVai tv
                          JOIN NhanVien nv2 ON nv2.NhanVienID = tv.NhanVienID
-                         WHERE tv.TienDoID = td.TienDoID FOR XML PATH('')), 1, 2, ''), nvt.HoTen) AS NhanVienTraiVai
+                         WHERE tv.TienDoID = td.TienDoID FOR XML PATH('')), 1, 2, ''), nvt.HoTen) AS NhanVienTraiVai,
+           /* v9.20: ID người cắt + danh sách ID người trải vải — để phiếu lương của MỘT nhân viên
+              lọc ra đúng bàn cắt người đó tham gia. 🔴 Lọc theo ID, KHÔNG theo tên: hai người trùng
+              họ tên là phiếu lương hiện nhầm bàn của nhau mà không ai biết.
+              Lùi về td.NhanVienTraiVaiID y như cột tên ở trên (bàn ghi trước khi có bảng
+              TienDoTraiVai nhiều người). */
+           td.NhanVienCatID,
+           ISNULL(STUFF((SELECT ',' + CAST(tv.NhanVienID AS NVARCHAR(20)) FROM TienDoTraiVai tv
+                         WHERE tv.TienDoID = td.TienDoID FOR XML PATH('')), 1, 1, ''),
+                  CAST(td.NhanVienTraiVaiID AS NVARCHAR(20))) AS NhanVienTraiVaiIDs
     FROM TienDoSanXuat td
     JOIN CongDoanSanXuat c ON c.StageID = td.StageID
     JOIN DonHangSanXuat d ON d.DonHangID = td.DonHangID
     LEFT JOIN DonHangChiTietSoDo sd ON sd.ID = td.SoDoID
     LEFT JOIN NhanVien nvc ON nvc.NhanVienID = td.NhanVienCatID
     LEFT JOIN NhanVien nvt ON nvt.NhanVienID = td.NhanVienTraiVaiID
-    ${APPLY_NGAY_QC('td')}
-    WHERE c.MaCongDoan = 'CAT' AND qc.NgayQC IS NOT NULL
-      AND YEAR(${ngayKy})=@n AND MONTH(${ngayKy})=@t
+    ${OUTER_APPLY_NGAY_QC('td')}
+    WHERE c.MaCongDoan = 'CAT'
+      AND YEAR(td.NgayGhiNhan)=@n AND MONTH(td.NgayGhiNhan)=@t
       AND EXISTS (SELECT 1 FROM TienDoCatChiTietCay cay WHERE cay.TienDoID = td.TienDoID)
     ORDER BY d.MaDH, td.TienDoID`)).recordset;
 }
@@ -1488,6 +1823,24 @@ async function loadGioCongCat(pool, nam, thang) {
     ORDER BY nv.HoTen`)).recordset;
 }
 
+/* v9.19 — NGAY CAT cua mot LENH tren bang "Ban cat theo lenh san xuat" (Nguyen 2026-11-04:
+   "doi ten cot ngay QC thanh ngay cat, cap nhat theo ngay ghi tien do").
+   Mot lenh co NHIEU so do, moi so do ghi mot ngay khac nhau => gop thanh KHOANG dau–cuoi; cung mot
+   ngay thi hien MOT ngay. KHONG lay dai dien mot ngay (vd ngay dau) roi im lang: nguoi xem se tuong
+   ca lenh cat trong dung ngay do. Ham THUAN de bo tu kiem chay duoc ca dong du lieu that. */
+const ddmmyyyy = (d) => {
+  if (!d) return '';
+  const x = new Date(d);
+  if (isNaN(x.getTime())) return '';
+  return `${String(x.getDate()).padStart(2, '0')}/${String(x.getMonth() + 1).padStart(2, '0')}/${x.getFullYear()}`;
+};
+function chuoiNgayCat(o) {
+  const a = ddmmyyyy(o && o.NgayCatDau), b = ddmmyyyy(o && o.NgayCatCuoi);
+  if (!a && !b) return '';
+  if (!a || !b || a === b) return a || b;
+  return a + ' – ' + b;
+}
+
 function tongHopLuongCat(soDo, nhanVien) {
   // Gộp theo lệnh SX (mỗi lệnh có bao nhiêu sơ đồ + tổng tiền).
   const theoDon = [];
@@ -1495,13 +1848,26 @@ function tongHopLuongCat(soDo, nhanVien) {
   soDo.forEach(s => {
     const k = s.DonHangID;
     if (!map[k]) {
-      // v9.02: NgayQC cua lenh (moi so do cua cung lenh co cung NgayQC) de man hinh noi ro vi sao lenh o ky nay.
-      map[k] = { DonHangID: k, MaDH: s.MaDH, MaSanPham: s.MaSanPham, TenSanPham: s.TenSanPham, NgayQC: s.NgayQC || null, SoSoDo: 0, TongLop: 0, ThanhTien: 0 };
+      /* v9.02: NgayQC cua lenh (moi so do cua cung lenh co cung NgayQC) — tu v9.18 chi con la thong
+         tin tham khao (quy khong cho QC nua).
+         v9.19: + NgayCatDau/NgayCatCuoi (MIN/MAX ngay ghi so cat) cho cot "Ngay cat"; + MaRap gop
+         tu cac so do cua lenh — route con doi chieu them voi maRapTheoDon() (nguon Ky thuat day du). */
+      map[k] = { DonHangID: k, MaDH: s.MaDH, MaSanPham: s.MaSanPham, TenSanPham: s.TenSanPham, NgayQC: s.NgayQC || null,
+                 NgayCatDau: null, NgayCatCuoi: null, MaRap: '', SoSoDo: 0, TongLop: 0, ThanhTien: 0 };
       theoDon.push(map[k]);
     }
     map[k].SoSoDo += 1;
     map[k].TongLop += Number(s.TongLop) || 0;
     map[k].ThanhTien += Number(s.ThanhTien) || 0;
+    const ng = s.NgayGhiNhan ? new Date(s.NgayGhiNhan) : null;
+    if (ng && !isNaN(ng.getTime())) {
+      if (!map[k].NgayCatDau || ng < new Date(map[k].NgayCatDau)) map[k].NgayCatDau = s.NgayGhiNhan;
+      if (!map[k].NgayCatCuoi || ng > new Date(map[k].NgayCatCuoi)) map[k].NgayCatCuoi = s.NgayGhiNhan;
+    }
+    const mr = String(s.MaRap || '').trim();
+    if (mr && !map[k].MaRap.split(', ').filter(Boolean).includes(mr)) {
+      map[k].MaRap = map[k].MaRap ? map[k].MaRap + ', ' + mr : mr;
+    }
   });
   const quy = soDo.reduce((t, s) => t + (Number(s.ThanhTien) || 0), 0);
   const tongGio = nhanVien.reduce((t, n) => t + (Number(n.TongGioLam) || 0), 0);
@@ -1516,6 +1882,23 @@ function tongHopLuongCat(soDo, nhanVien) {
   return { theoDon, quy, tongGio, donGiaGio, nhanVien: rowsNV, tongLuong, chenhLech: tongLuong - quy };
 }
 
+/* v9.19 — MÃ RẬP của lệnh trên bảng "Bàn cắt theo lệnh sản xuất" (Nguyen: "sửa mã hàng thành mã
+   rập, điền mã rập từ công đoạn kỹ thuật sang").
+   🔴 Mã rập nằm ở HAI nơi, cả hai đều do Kỹ thuật gõ: DonHangChiTietSoDo.MaRap (bảng Sơ đồ) và
+   TienDoSanXuat.MaRap (ghi tiến độ Kỹ thuật) — đọc MỘT nguồn là trống oan, đã vấp hai lần (v6.06,
+   v7.67). Dùng CHUNG utils/maRapCuaDon.js, KHÔNG chép tay câu SQL lần thứ ba.
+   Lùi về mã rập gộp từ các sơ đồ trong kỳ (tongHopLuongCat đã gom) khi util không trả gì. */
+const { maRapTheoDon } = require('../utils/maRapCuaDon');
+/* ⚠️ THỨ TỰ ƯU TIÊN (rà chéo v9.19 chỉ ra): mã rập của CÁC SƠ ĐỒ ĐÃ CẮT TRONG KỲ đi TRƯỚC
+   (tongHopLuongCat đã gom), chỉ khi trống mới lùi về mã rập của CẢ LỆNH (util, mọi sơ đồ + mọi lần
+   ghi tiến độ KT). Lấy ngược lại thì lệnh cắt dở nhiều tháng hiện "Số sơ đồ: 2" mà cột Mã rập ra
+   đủ 5 mã của cả lệnh — người đối chiếu tưởng thiếu sơ đồ. */
+async function ganMaRapChoLenh(pool, theoDon) {
+  const mr = await maRapTheoDon(pool);   // tự nuốt lỗi, trả {} — không chặn bảng lương
+  (theoDon || []).forEach(o => { o.MaRap = o.MaRap || mr[o.DonHangID] || ''; });
+  return theoDon;
+}
+
 router.get('/luongtraivaicat', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luongtraivaicat'), async (req, res) => {
   try {
     const pool = await getPool();
@@ -1525,7 +1908,70 @@ router.get('/luongtraivaicat', requireAuth, requirePermission('PAYROLL', 'view')
     const soDo = await loadSoDoCat(pool, nam, thang, cfg.donGia);
     const nvRaw = await loadGioCongCat(pool, nam, thang);
     const th = tongHopLuongCat(soDo, nvRaw);
+    await ganMaRapChoLenh(pool, th.theoDon);   // v9.19
     res.json({ success: true, data: Object.assign({ nam, thang, donGia: cfg.donGia, soDo }, th) });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+
+/* v9.19 — XUẤT EXCEL lương trải vải cắt (Nguyen: "thêm chức năng xuất excel").
+   BA sheet đúng ba bảng đang xem trên màn, cùng một bộ số (gọi lại chính các loader của route GET
+   ở trên — không viết câu SQL thứ hai, kẻo file Excel và màn hình ra hai con số). */
+router.get('/luongtraivaicat/excel', requireAuth, requirePermission('PAYROLL', 'view'), requireChucNang('PAYROLL', 'luongtraivaicat'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nam = parseInt(req.query.nam, 10) || new Date().getFullYear();
+    const thang = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+    const cfg = await getCauHinhLuongCat(pool);
+    const soDo = await loadSoDoCat(pool, nam, thang, cfg.donGia);
+    const nvRaw = await loadGioCongCat(pool, nam, thang);
+    const th = tongHopLuongCat(soDo, nvRaw);
+    await ganMaRapChoLenh(pool, th.theoDon);
+    const maRapTheoLenh = {};
+    (th.theoDon || []).forEach(o => { maRapTheoLenh[o.DonHangID] = o.MaRap || ''; });
+
+    const wb = new ExcelJS.Workbook();
+    const dauTrang = (ws, tieuDe, soCot) => {
+      ws.mergeCells(1, 1, 1, soCot);
+      ws.getCell('A1').value = tieuDe;
+      ws.getCell('A1').font = { bold: true, size: 14 };
+      ws.getCell('A1').alignment = { horizontal: 'center' };
+      ws.addRow([]);
+    };
+
+    // Sheet 1 — bảng lương nhân viên bộ phận Cắt
+    const ws1 = wb.addWorksheet(`Luong NV cat T${thang}-${nam}`);
+    dauTrang(ws1, `BẢNG LƯƠNG NHÂN VIÊN BỘ PHẬN CẮT — THÁNG ${thang}/${nam}`, 6);
+    ws1.addRow(['Mã NV', 'Họ tên', 'Giờ công', 'Hệ số', 'Lương 1 giờ', 'Lương khoán tháng']).font = { bold: true };
+    (th.nhanVien || []).forEach(n => ws1.addRow([n.MaNhanVien || '', n.HoTen || '', Number(n.TongGioLam) || 0,
+      Number(n.HeSoLuong) || 0, Number(th.donGiaGio) || 0, Number(n.ThanhTien) || 0]));
+    ws1.addRow(['', 'TỔNG', Number(th.tongGio) || 0, '', '', Number(th.tongLuong) || 0]).font = { bold: true };
+    ws1.columns.forEach((c, i) => { c.width = i === 1 ? 26 : 15; if (i >= 2) c.numFmt = '#,##0.##'; });
+
+    // Sheet 2 — bàn cắt theo lệnh sản xuất (đúng cột của màn: Mã rập + Ngày cắt — v9.19)
+    const ws2 = wb.addWorksheet(`Ban cat theo lenh`);
+    dauTrang(ws2, `BÀN CẮT THEO LỆNH SẢN XUẤT — THÁNG ${thang}/${nam}`, 7);
+    ws2.addRow(['Mã ĐH', 'Mã rập', 'Tên sản phẩm', 'Ngày cắt', 'Số sơ đồ', 'Tổng lớp', 'Thành tiền']).font = { bold: true };
+    (th.theoDon || []).forEach(o => ws2.addRow([o.MaDH || '', o.MaRap || '', o.TenSanPham || '', chuoiNgayCat(o),
+      Number(o.SoSoDo) || 0, Number(o.TongLop) || 0, Number(o.ThanhTien) || 0]));
+    ws2.addRow(['', '', 'TỔNG BÀN CẮT', '', (soDo || []).length, '', Number(th.quy) || 0]).font = { bold: true };
+    ws2.columns.forEach((c, i) => { c.width = i === 2 ? 30 : (i === 3 ? 22 : 16); if (i >= 4) c.numFmt = '#,##0.##'; });
+
+    // Sheet 3 — chi tiết từng sơ đồ
+    const ws3 = wb.addWorksheet(`Chi tiet so do`);
+    dauTrang(ws3, `CHI TIẾT SƠ ĐỒ ĐÃ CẮT — THÁNG ${thang}/${nam}`, 10);
+    ws3.addRow(['Mã ĐH', 'Mã rập', 'Ngày cắt', 'STT sổ cắt', 'Mét sơ đồ', 'Khổ vải', 'Tổng lớp', 'Người trải vải', 'Người cắt', 'Thành tiền']).font = { bold: true };
+    (soDo || []).forEach(s => ws3.addRow([s.MaDH || '', String(s.MaRap || '').trim() || maRapTheoLenh[s.DonHangID] || '',
+      ddmmyyyy(s.NgayGhiNhan), s.SttSoCat != null ? String(s.SttSoCat) : '',
+      Number(s.MetSoDoDai) || 0, Number(s.KhoVaiSoDo) || 0, Number(s.TongLop) || 0,
+      s.NhanVienTraiVai || '', s.NhanVienCat || '', Number(s.ThanhTien) || 0]));
+    ws3.addRow(['', '', '', '', '', '', '', '', 'TỔNG', Number(th.quy) || 0]).font = { bold: true };
+    ws3.columns.forEach((c, i) => { c.width = (i === 7 || i === 8) ? 24 : 16; if (i >= 4 && i <= 6) c.numFmt = '#,##0.##'; });
+    ws3.getColumn(10).numFmt = '#,##0';
+
+    const buf = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="LuongTraiVaiCat_T${thang}_${nam}.xlsx"`);
+    res.end(Buffer.from(buf));
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
 

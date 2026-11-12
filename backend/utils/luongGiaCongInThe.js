@@ -62,6 +62,19 @@ const APPLY_NGAY_QC = (bd) => `
                          OR UPPER(LTRIM(RTRIM(ISNULL(c2.TenCongDoan, N'')))) = N'QC')
                  HAVING COUNT(*) > 0) qc`;
 
+/* v9.18 — ban OUTER cua khoi tren, CHI DE HIEN THI cot NgayQC (quy cat: Nguyen 2026-11-04 bo cho QC,
+   nhung cot Ngay QC tren man van huu ich de biet lenh da QC chua — trong = chua QC).
+   🔴 KHONG BAO GIO dung lam GATE: OUTER APPLY + MIN() khong GROUP BY luon tra DUNG MOT dong
+   (NgayQC NULL khi chua co QC) nen KHONG loai dong nao — chinh la cai bay CROSS APPLY cua v8.61;
+   o day la CHU DICH vi dong chua QC VAN PHAI hien. Gate that van la APPLY_NGAY_QC ben tren. */
+const OUTER_APPLY_NGAY_QC = (bd) => `
+    OUTER APPLY (SELECT MIN(q.NgayGhiNhan) AS NgayQC
+                   FROM TienDoSanXuat q
+                   JOIN CongDoanSanXuat c2 ON c2.StageID = q.StageID
+                  WHERE q.DonHangID = ${bd}.DonHangID
+                    AND (UPPER(LTRIM(RTRIM(ISNULL(c2.MaCongDoan, N'')))) = N'QC'
+                         OR UPPER(LTRIM(RTRIM(ISNULL(c2.TenCongDoan, N'')))) = N'QC')) qc`;
+
 /* v9.02 — NGAY KY cua mot dong ghi cong doan = ngay MUON HON giua ngay ghi cong doan va ngay QC dau.
    Nguyen chot 2026-10-24 (ra soat "tat ca cac lenh SX khi QC ghi nhan moi tinh luong"):
    "Thang muon hon giua ngay ghi va ngay QC dau". Ly do: tien KHONG BAO GIO roi vao thang da chot —
@@ -165,4 +178,4 @@ function tongHopTheoNha(rows) {
 
 // v9.02: export APPLY_NGAY_QC + bieuThucNgayKy de payroll.js (la/dong goi, trai vai cat) dung CHUNG
 // mot cach tim ngay QC — khong chep tay khoi CROSS APPLY lan thu ba.
-module.exports = { loadGiaCong, loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy };
+module.exports = { loadGiaCong, loadInThe, tongHopTheoNha, APPLY_NGAY_QC, OUTER_APPLY_NGAY_QC, bieuThucNgayKy };

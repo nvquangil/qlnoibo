@@ -783,6 +783,8 @@ window.ModuleHRM = (function () {
         ['Lương cơ bản', money(h.LuongCoBan) + ' đ'], ['Hệ số lương', h.HeSoLuong],
         ['Phụ cấp ăn ca', money(h.PhuCapAnCa) + ' đ'], ['Phụ cấp trang phục', money(h.PhuCapTrangPhuc) + ' đ'],
         ['Phụ cấp xăng xe', money(h.PhuCapXangXe) + ' đ'], ['Phụ cấp điện thoại', money(h.PhuCapDienThoai) + ' đ'],
+        // v9.35: hiện ở màn xem, không thì phải mở form sửa mới biết hợp đồng này khai nội dung gì.
+        ['Nội dung công việc (mục 1.5)', h.NoiDungCongViec],
         ['Ghi chú', h.GhiChu]
       ]
     },
@@ -832,7 +834,10 @@ window.ModuleHRM = (function () {
       <p class="p-meta">${escapeHtml(nv.HoTen || '')}${nv.MaNhanVien ? ' · ' + escapeHtml(nv.MaNhanVien) : ''}</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;font-size:14px;">
         ${dong.map(([k, v]) => `<div style="display:flex;gap:8px;">
-          <b style="min-width:150px;color:#5f6368;">${escapeHtml(k)}:</b><span>${escapeHtml(String(v))}</span></div>`).join('')}
+          ${/* v9.35: pre-wrap để ô nhiều dòng (Nội dung công việc, Ghi chú) hiện ĐÚNG như lúc gõ.
+                Không có nó thì màn Xem dồn 4 dòng thành một dòng dài trong khi bản in lại xuống
+                dòng đúng — hai chỗ khác nhau làm người dùng tưởng dữ liệu hỏng. */''}
+          <b style="min-width:150px;color:#5f6368;">${escapeHtml(k)}:</b><span style="white-space:pre-wrap;">${escapeHtml(String(v))}</span></div>`).join('')}
       </div>
       ${item.FileDinhKem ? `<div style="margin-top:10px;">
           📎 <a href="${urlXemHR(item.FileDinhKem)}" target="_blank" rel="noopener">Xem bản scan đính kèm</a>
@@ -863,7 +868,8 @@ window.ModuleHRM = (function () {
         <td>${escapeHtml(h.SoHopDong || '')}</td>
         <td>${escapeHtml(h.HoTen || '')} <span style="color:#5f6368;">(${escapeHtml(h.MaNhanVien || '')})</span></td>
         <td>${escapeHtml(h.LoaiHopDong || '')}</td><td>${fmtDate(h.TuNgay)}</td><td>${h.DenNgay ? fmtDate(h.DenNgay) : '—'}</td>
-        <td style="text-align:right;">${money(h.LuongCoBan)}</td><td>${escapeHtml(h.TrangThai || '')}</td>
+        ${/* v9.45: kiểu Ngày thì hiện đơn giá ngày — nhìn danh sách biết ngay ai tính theo gì */''}
+        <td style="text-align:right;">${h.KieuLuong === 'Ngay' ? `${money(h.DonGiaNgay)} <span style="color:#5f6368;font-size:11px;">/ngày</span>` : money(h.LuongCoBan)}${h.KieuThuong ? ` <span style="color:#5f6368;font-size:11px;">(${h.KieuThuong === 'KPI' ? 'KPI' : 'SP'})</span>` : ''}</td><td>${escapeHtml(h.TrangThai || '')}</td>
         <td>
           <button class="btn small secondary act-print" data-id="${h.HopDongID}">🖨 In</button>
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${h.HopDongID}">Sửa</button>` : ''}
@@ -899,9 +905,8 @@ window.ModuleHRM = (function () {
         ${f('Phụ cấp xăng xe', `<input type="number" id="f_xang" value="${h.PhuCapXangXe != null ? h.PhuCapXangXe : ''}">`)}
         ${f('Phụ cấp điện thoại', `<input type="number" id="f_dt" value="${h.PhuCapDienThoai != null ? h.PhuCapDienThoai : ''}">`)}
         ${/* v8.82 — các ô dưới đây phục vụ IN theo đúng mẫu hợp đồng của công ty.
-             ⚠️ Chuyên cần / chức vụ / KPI CHỈ ĐỂ IN: payroll.js không cộng chúng vào bảng lương
-             (xem ghi chú đầu migration_v877). Nói rõ ngay trên form để không ai tưởng khai vào là
-             tự tính lương. */''}
+             v9.45 — từ bản này chuyên cần / chức vụ / quỹ KPI / số công xăng xe / tỷ lệ thử việc
+             CÓ ĐƯỢC TÍNH vào bảng lương công nhật (utils/luongCongNhat.js), không còn "chỉ để in". */''}
         ${f('Ngày ký hợp đồng', `<input type="date" id="f_ngayKy" value="${dInput(h.NgayKy)}">`)}
         ${f('Quản lý trực tiếp', `<input id="f_qltt" value="${escapeHtml(h.QuanLyTrucTiep || '')}" placeholder="Ghi trên HĐ thử việc">`)}
         ${f('Phụ cấp chuyên cần', `<input type="number" id="f_chuyencan" value="${h.PhuCapChuyenCan != null ? h.PhuCapChuyenCan : ''}">`)}
@@ -909,19 +914,69 @@ window.ModuleHRM = (function () {
         ${f('Quỹ KPI tối đa / tháng', `<input type="number" id="f_kpi" value="${h.QuyKPI != null ? h.QuyKPI : ''}">`)}
         ${f('Số công chuẩn — xăng xe', `<input type="number" step="0.5" id="f_congxang" value="${h.SoCongXangXe != null ? h.SoCongXangXe : ''}" placeholder="VD: 26">`)}
         ${f('Số công chuẩn — ăn trưa', `<input type="number" step="0.5" id="f_congan" value="${h.SoCongAnTrua != null ? h.SoCongAnTrua : ''}" placeholder="VD: 26">`)}
-        ${f('Tỷ lệ lương thử việc (%)', `<input type="number" step="0.01" id="f_tlthuviec" value="${h.TyLeThuViec != null ? h.TyLeThuViec : (h.HopDongID ? '' : 85)}" placeholder="85">`)}
+        ${f('Tỷ lệ lương thử việc (%)', `<input type="number" step="0.01" id="f_tlthuviec" value="${h.TyLeThuViec != null ? h.TyLeThuViec : (h.HopDongID ? '' : 85)}" placeholder="Trống = theo Cấu hình lương (85)">`)}
         ${oFileVanBanHtml(h.FileDinhKem)}
       </div>
-      <div class="empty-hint" style="margin-top:-4px;">Chuyên cần / chức vụ / KPI hiện <b>chỉ dùng để in hợp đồng</b> — bảng lương chưa tự cộng các khoản này.</div>
+      ${/* v9.45 (migration_v890) — THÔNG SỐ TÍNH LƯƠNG CÔNG NHẬT. Từ bản này bảng lương công nhật lấy
+           MỌI tham số từ hợp đồng hiệu lực (Nguyen 11/11 chốt): kiểu lương Ngày/Tháng, đơn giá ngày,
+           mức đóng BH riêng, lương cố định, ngày hết thử việc, kiểu thưởng KPI/SP + danh mục SP.
+           Máy chưa chạy migration_v890 thì h.KieuLuong === undefined ở bản sửa -> vẫn hiện khối (bản
+           thêm mới cũng undefined) nhưng máy chủ sẽ bỏ qua các trường này; ghi rõ ở dòng gợi ý. */''}
+      <fieldset style="border:1px solid #c5d8f5;border-radius:8px;padding:10px 14px;margin-top:10px;"><legend style="font-weight:600;color:#1a73e8;">Thông số tính lương công nhật (v9.45)</legend>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;">
+          ${f('Kiểu lương *', `<select id="f_kieuluong"><option value="Thang" ${h.KieuLuong !== 'Ngay' ? 'selected' : ''}>Tháng — lương CB ÷ công chuẩn × công</option><option value="Ngay" ${h.KieuLuong === 'Ngay' ? 'selected' : ''}>Ngày — đơn giá ngày × công</option></select>`)}
+          ${f('Đơn giá ngày (đ) — kiểu Ngày', `<input type="number" id="f_dongiangay" step="1000" value="${h.DonGiaNgay != null ? h.DonGiaNgay : ''}" placeholder="VD: 300000">`)}
+          ${f('Mức đóng BHXH (đ/tháng, trống = không đóng)', `<input type="number" id="f_mucdongbh" step="1000" value="${h.MucDongBH != null ? h.MucDongBH : ''}" placeholder="VD: 5000000">`)}
+          ${f('Lương cố định / tháng (đ) — không theo công', `<input type="number" id="f_luongcodinh" step="1000" value="${h.LuongCoDinhThang != null ? h.LuongCoDinhThang : ''}" placeholder="Trống = tính theo công">`)}
+          ${f('Ngày hết thử việc (trống = không thử việc)', `<input type="date" id="f_nghetthuviec" value="${dInput(h.NgayHetThuViec)}">`)}
+          ${f('Kiểu thưởng', `<select id="f_kieuthuong"><option value="" ${!h.KieuThuong ? 'selected' : ''}>Không</option><option value="KPI" ${h.KieuThuong === 'KPI' ? 'selected' : ''}>Theo KPI (quỹ KPI × điểm/100)</option><option value="SanPham" ${h.KieuThuong === 'SanPham' ? 'selected' : ''}>Theo sản phẩm (SL × đơn giá)</option></select>`)}
+        </div>
+        <div id="spKhung" style="margin-top:8px;${h.KieuThuong === 'SanPham' ? '' : 'display:none;'}">
+          <div style="font-weight:600;margin-bottom:4px;">Danh mục sản phẩm & đơn giá (một người nhiều SP, mỗi SP một đơn giá)</div>
+          <table style="font-size:13px;"><thead><tr><th>Tên sản phẩm</th><th style="width:140px;">Đơn giá (đ)</th><th style="width:40px;"></th></tr></thead>
+            <tbody id="spBody">${(h.sanPham || []).map(x => `<tr><td><input type="text" class="hd-sp-ten" maxlength="150" value="${escapeHtml(x.TenSanPham || '')}" style="width:100%;"></td><td><input type="number" class="hd-sp-dg" step="1000" value="${x.DonGia != null ? x.DonGia : ''}" style="width:130px;"></td><td><button type="button" class="btn small secondary hd-sp-xoa">✕</button></td></tr>`).join('')}</tbody></table>
+          <button type="button" class="btn small secondary" id="spThem" style="margin-top:4px;">＋ Thêm sản phẩm</button>
+        </div>
+        <div class="empty-hint" style="text-align:left;margin-top:6px;">Bảng lương công nhật lấy <b>toàn bộ</b> thông số ở đây (kể cả chuyên cần, chức vụ, xăng xe, quỹ KPI phía trên) — người <b>không có hợp đồng hiệu lực thì không có trong bảng lương</b>. Thử việc: các ngày trước <i>Ngày hết thử việc</i> nhân tỷ lệ thử việc. BH = 10,5% × mức đóng BHXH.${h.HopDongID && h.KieuLuong === undefined ? ' <b style="color:#c0392b;">Máy chủ chưa chạy migration_v890 — khối này chưa lưu được.</b>' : ''}</div>
+        ${/* Hợp đồng MỚI thì không biết máy chủ đã có cột chưa (h = {}); máy chủ sẽ trả canhBao sau khi lưu
+             nếu thiếu migration — toast đỏ, không nuốt im lặng. KHÔNG đặt dấu backtick trong comment này. */''}
+      </fieldset>
+      ${/* v9.35 (Nguyen 2026-11-09): mỗi người một nội dung công việc riêng, in vào ĐÚNG mục 1.5.
+           Để NGOÀI lưới 2 cột và dùng textarea nhiều dòng vì đây là đoạn văn, không phải một giá trị.
+           Để TRỐNG thì bản in giữ nguyên văn điều khoản 1.5 cũ — nói rõ trong dòng gợi ý, kẻo người
+           dùng tưởng bỏ trống là mục 1.5 biến mất khỏi hợp đồng. */''}
+      ${f('Nội dung công việc — in vào mục 1.5 của hợp đồng',
+        `<textarea id="f_ndcv" rows="4" placeholder="VD: Vận hành máy may công nghiệp 1 kim; kiểm tra chất lượng đường may; bảo dưỡng máy theo ca.">${escapeHtml(h.NoiDungCongViec || '')}</textarea>`)}
+      <div class="empty-hint" style="margin-top:-4px;">Để trống thì mục 1.5 in <b>nguyên văn điều khoản chung</b> như trước (theo chức danh + bản mô tả công việc).</div>
       ${f('Ghi chú', `<textarea id="f_gc" rows="2">${escapeHtml(h.GhiChu || '')}</textarea>`)}
       <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Hủy</button><button type="submit" class="btn">Lưu</button></div>
       </form>`;
     const modal = openModal(html);
     modal.querySelector('#btnCancel').addEventListener('click', closeModal);
     wireOFileVanBan(modal);   // v8.80
+    // v9.45: khung danh mục SP chỉ hiện khi kiểu thưởng = Sản phẩm; thêm/bỏ dòng.
+    const spKhung = modal.querySelector('#spKhung'), spBody = modal.querySelector('#spBody');
+    const wireSpRow = (tr) => tr.querySelector('.hd-sp-xoa').addEventListener('click', () => tr.remove());
+    spBody.querySelectorAll('tr').forEach(wireSpRow);
+    modal.querySelector('#f_kieuthuong').addEventListener('change', (e) => { spKhung.style.display = e.target.value === 'SanPham' ? '' : 'none'; });
+    modal.querySelector('#spThem').addEventListener('click', () => {
+      spBody.insertAdjacentHTML('beforeend', '<tr><td><input type="text" class="hd-sp-ten" maxlength="150" style="width:100%;" placeholder="VD: Áo thun"></td><td><input type="number" class="hd-sp-dg" step="1000" style="width:130px;" placeholder="đ/cái"></td><td><button type="button" class="btn small secondary hd-sp-xoa">✕</button></td></tr>');
+      wireSpRow(spBody.lastElementChild); spBody.lastElementChild.querySelector('.hd-sp-ten').focus();
+    });
     modal.querySelector('#hdForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      const kieuLuong = val(modal, 'f_kieuluong'), kieuThuong = val(modal, 'f_kieuthuong');
+      const sanPham = [...spBody.querySelectorAll('tr')].map(tr => ({ tenSanPham: tr.querySelector('.hd-sp-ten').value.trim(), donGia: Number(tr.querySelector('.hd-sp-dg').value) || 0 })).filter(x => x.tenSanPham);
+      if (kieuLuong === 'Ngay' && !(Number(val(modal, 'f_dongiangay')) > 0) && !(Number(val(modal, 'f_luongcodinh')) > 0)) { toast('Kiểu lương NGÀY thì phải khai đơn giá ngày.', 'error'); return; }
+      if (kieuLuong === 'Thang' && !(Number(val(modal, 'f_luong')) > 0) && !(Number(val(modal, 'f_luongcodinh')) > 0)) { toast('Kiểu lương THÁNG thì phải khai lương cơ bản (hoặc lương cố định).', 'error'); return; }
+      if (kieuThuong === 'SanPham' && !sanPham.length && !confirm('Thưởng theo sản phẩm nhưng chưa khai sản phẩm nào — tháng nào cũng phải gõ tay tên + đơn giá. Vẫn lưu?')) return;
+      // Đổi khỏi "Sản phẩm" thì máy chủ XÓA danh mục SP của hợp đồng — hỏi trước, đừng xóa im lặng.
+      if (kieuThuong !== 'SanPham' && (h.sanPham || []).length && !confirm(`Kiểu thưởng không còn là "Sản phẩm" — ${(h.sanPham || []).length} sản phẩm đã khai sẽ bị XÓA khỏi hợp đồng. Tiếp tục?`)) return;
       const payload = {
+        // v9.45 — thông số tính lương công nhật (migration_v890)
+        kieuLuong, donGiaNgay: val(modal, 'f_dongiangay'), mucDongBH: val(modal, 'f_mucdongbh'),
+        luongCoDinhThang: val(modal, 'f_luongcodinh'), ngayHetThuViec: val(modal, 'f_nghetthuviec'),
+        kieuThuong: kieuThuong || null, sanPham: kieuThuong === 'SanPham' ? sanPham : [],
         nhanVienId: id ? h.NhanVienID : val(modal, 'f_nv'), soHopDong: val(modal, 'f_so'), loaiHopDong: val(modal, 'f_loai'),
         trangThai: val(modal, 'f_tt'), tuNgay: val(modal, 'f_tu'), denNgay: val(modal, 'f_den'), chucVu: val(modal, 'f_cv'),
         noiLamViec: val(modal, 'f_nlv'), luongCoBan: val(modal, 'f_luong'), heSoLuong: val(modal, 'f_heso'),
@@ -932,12 +987,16 @@ window.ModuleHRM = (function () {
         ngayKy: val(modal, 'f_ngayKy'), quanLyTrucTiep: val(modal, 'f_qltt'),
         phuCapChuyenCan: val(modal, 'f_chuyencan'), phuCapChucVu: val(modal, 'f_chucvu_pc'),
         quyKPI: val(modal, 'f_kpi'), soCongXangXe: val(modal, 'f_congxang'),
-        soCongAnTrua: val(modal, 'f_congan'), tyLeThuViec: val(modal, 'f_tlthuviec')
+        soCongAnTrua: val(modal, 'f_congan'), tyLeThuViec: val(modal, 'f_tlthuviec'),
+        // v9.35 — nội dung công việc in vào mục 1.5
+        noiDungCongViec: val(modal, 'f_ndcv')
       };
       if (!payload.nhanVienId) { toast('Chọn nhân viên.', 'error'); return; }
       try {
-        if (id) await apiPut('/api/hrm/hopdong/' + id, payload); else await apiPost('/api/hrm/hopdong', payload);
-        closeModal(); toast('Đã lưu hợp đồng.', 'success');
+        const kq = id ? await apiPut('/api/hrm/hopdong/' + id, payload) : await apiPost('/api/hrm/hopdong', payload);
+        closeModal();
+        // v9.45: máy chủ chưa chạy migration_v890 thì thông số lương KHÔNG được lưu — phải nói, không nuốt.
+        if (kq && kq.canhBao) toast(kq.canhBao, 'error'); else toast('Đã lưu hợp đồng.', 'success');
         if (activeTab === 'hopdong') renderHopDong(); else closeModal();
       } catch (err) { toast(err.message, 'error'); }
     });
@@ -991,8 +1050,12 @@ window.ModuleHRM = (function () {
     if (!h) return;
     const nv = nvCuaHoSo(h);
     const laThuViec = String(h.LoaiHopDong || '') === 'Thử việc';
-    inVanBan(laThuViec ? 'HDLD_THUVIEC' : 'HDLD_CHINHTHUC', bienChoHopDong(h, nv),
-      (laThuViec ? 'Hop dong thu viec - ' : 'Hop dong lao dong - ') + (h.SoHopDong || h.HoTen || ''));
+    // v9.35: truyền mã mẫu vào để mục 1.5 lùi về ĐÚNG câu gốc của mẫu đó khi bỏ trống.
+    const maMau = laThuViec ? 'HDLD_THUVIEC' : 'HDLD_CHINHTHUC';
+    inVanBan(maMau, bienChoHopDong(h, nv, maMau),
+      (laThuViec ? 'Hop dong thu viec - ' : 'Hop dong lao dong - ') + (h.SoHopDong || h.HoTen || ''),
+      // v9.35: mẫu đã sửa mà thiếu chỗ cắm thì phải BÁO, đừng in ra câu cũ rồi im (xem inVanBan).
+      ['NoiDungCongViec']);
   }
 
   /* Ghép bản ghi nhân viên đầy đủ (từ refs) với tên/mã nằm sẵn trên chính phiếu.
@@ -1355,10 +1418,32 @@ window.ModuleHRM = (function () {
     return [...thay].filter(t => !dsBienHopLe.includes(t));
   }
 
-  async function inVanBan(maMau, bien, tieuDeFile) {
+  /* ================================================================================================
+     v9.35 — `canCoBien`: TÊN CÁC BIẾN MÀ NGƯỜI DÙNG GÕ TAY, mẫu đang dùng BẮT BUỘC phải có chỗ cắm.
+
+     🔴 Lỗ do rà chéo bắt được. `layMau()` ưu tiên bản người dùng đã sửa trong CSDL hơn MAU_GOC. Ai
+     đã sửa mẫu HĐLĐ TRƯỚC v9.35 thì bản của họ còn câu 1.5 CỨNG, không có {{NoiDungCongViec}} ⇒
+     nhân sự gõ nội dung công việc, bấm Lưu (CSDL có thật), màn Xem hiện đúng — rồi BẢN IN RA VẪN
+     CÂU CŨ. Không lỗi, không ai phát hiện, mà đây là văn bản pháp lý đem đi ký.
+
+     Vẫn CHO IN (câu 1.5 cũ là điều khoản hoàn chỉnh, chặn in thì không ký được hợp đồng nào), nhưng
+     NÓI THẲNG ra là nội dung vừa gõ không được in và phải sửa mẫu ở đâu. Theo đúng luật
+     feedback_qlnoibo_an_nut_khong_noi_ly_do: thà nói lý do còn hơn hỏng im lặng.
+     ================================================================================================ */
+  async function inVanBan(maMau, bien, tieuDeFile, canCoBien) {
     await napMauDaSua();
     const mau = layMau(maMau);
     if (!mau) { toast('Không tìm thấy mẫu "' + maMau + '".', 'error'); return; }
+    (canCoBien || []).forEach(ten => {
+      /* Chỉ cảnh báo khi biến đó THỰC SỰ đang mang chữ người dùng gõ — mẫu cũ không có chỗ cắm mà
+         hợp đồng cũng để trống thì không có gì mất, đừng làm phiền. */
+      const coChu = bien && bien[ten] != null && String(bien[ten]).trim() !== '';
+      if (coChu && String(mau).indexOf('{{' + ten + '}}') < 0) {
+        toast('Mẫu "' + maMau + '" đang dùng là BẢN ĐÃ SỬA và chưa có chỗ cắm {{' + ten + '}} — '
+          + 'nội dung bạn nhập sẽ KHÔNG in ra. Vào tab "Mẫu văn bản", chèn {{' + ten + '}} vào mục '
+          + 'tương ứng, hoặc bấm "Mẫu gốc" để lấy lại mẫu chuẩn.', 'error');
+      }
+    });
     printHtml(tieuDeFile, wrapA4(thayBien(mau, bien)), IN_VAN_BAN);
   }
 
@@ -1391,10 +1476,34 @@ window.ModuleHRM = (function () {
       SoSoBHXH: ch(nv.SoSoBHXH, 15)
     };
   }
-  function bienChoHopDong(h, nv) {
+  /* ================================================================================================
+     v9.35 — MỤC 1.5 "NỘI DUNG CÔNG VIỆC" THÀNH BIẾN NHẬP TAY.
+
+     Nguyen 2026-11-09: *"mỗi người 1 nội dung cụ thể khác nhau"*. Trước bản này câu 1.5 là TEXT CỨNG
+     trong MAU_GOC, giống hệt nhau ở mọi hợp đồng.
+
+     🔴 ĐỂ TRỐNG PHẢI LÙI VỀ ĐÚNG CÂU CŨ, không được in dấu chấm hay chuỗi rỗng: 1.5 là một điều
+     khoản pháp lý hoàn chỉnh, in ra chỗ trống là làm hợp đồng THIẾU điều khoản. Và hai mẫu có câu
+     1.5 KHÁC NHAU (chính thức dài hơn thử việc) nên fallback phải theo đúng mẫu đang in — nếu dùng
+     chung một câu thì hợp đồng thử việc cũ in ra khác bản đã ký trước đây.
+     ================================================================================================ */
+  const NDCV_MAC_DINH = {
+    HDLD_CHINHTHUC: 'thực hiện công việc theo chức danh nêu trên, Bản mô tả công việc (nếu có), tiêu chuẩn kỹ thuật/quy trình liên quan và các phân công hợp pháp, hợp lý, có liên quan đến phạm vi công việc.',
+    HDLD_THUVIEC: 'theo chức danh nêu trên, Bản mô tả công việc và các phân công hợp pháp, hợp lý trong phạm vi công việc.'
+  };
+  /* `maMau` quyết định câu lùi về. Mặc định là mẫu chính thức để BIEN_THEO_MAU (gọi với ({},{}))
+     vẫn sinh ra khóa NoiDungCongViec, nhờ đó màn sửa mẫu có nút chèn {{NoiDungCongViec}}. */
+  function bienChoHopDong(h, nv, maMau) {
     const khongThoiHan = String(h.LoaiHopDong || '') === 'Không xác định thời hạn';
     const tyLe = h.TyLeThuViec != null && h.TyLeThuViec !== '' ? Number(h.TyLeThuViec) : 85;
+    /* Người dùng gõ tay rồi chèn thẳng vào trang in ⇒ PHẢI escapeHtml, giống NoiDungThayDoi.
+       Xuống dòng trong textarea được giữ bằng <br> — không thì cả đoạn dính thành một dòng. */
+    const ndcvGoc = String(h.NoiDungCongViec || '').trim();
+    const ndcv = ndcvGoc
+      ? escapeHtml(ndcvGoc).replace(/\r?\n/g, '<br>')
+      : (NDCV_MAC_DINH[maMau] || NDCV_MAC_DINH.HDLD_CHINHTHUC);
     return Object.assign({}, bienCongTy(), bienNhanVien(nv), {
+      NoiDungCongViec: ndcv,
       SoHopDong: ch(h.SoHopDong, 6),
       LoaiHopDong: escapeHtml(h.LoaiHopDong || ''),
       NgayThangNamKy: dongNgayThang(h.NgayKy),
@@ -1534,7 +1643,7 @@ window.ModuleHRM = (function () {
         <p style="margin:0 0 2px;">1.2. Chức danh/công việc: {{ChucVu}}</p>
         <p style="margin:0 0 2px;">1.3. Bộ phận: {{BoPhan}}</p>
         <p style="margin:0 0 2px;">1.4. Địa điểm làm việc chính: {{NoiLamViec}}; địa điểm khác chỉ áp dụng khi hai bên thỏa thuận hoặc thuộc trường hợp pháp luật cho phép.</p>
-        <p style="margin:0 0 10px;">1.5. Nội dung công việc: thực hiện công việc theo chức danh nêu trên, Bản mô tả công việc (nếu có), tiêu chuẩn kỹ thuật/quy trình liên quan và các phân công hợp pháp, hợp lý, có liên quan đến phạm vi công việc.</p>
+        <p style="margin:0 0 10px;">1.5. Nội dung công việc: {{NoiDungCongViec}}</p>
 
         <p><b>Điều 2. Thời giờ làm việc và thời giờ nghỉ ngơi</b></p>
         <p style="margin:0 0 2px;">2.1. Thời giờ làm việc bình thường của khối văn phòng/quản lý: 08 giờ/ngày, 48 giờ/tuần, từ thứ Hai đến thứ Bảy; buổi sáng 08:00-12:00, buổi chiều 13:30-17:30; nghỉ trưa 12:00-13:30 và không tính vào thời giờ làm việc bình thường. Chủ nhật là ngày nghỉ hằng tuần, trừ trường hợp Công ty tổ chức làm thêm giờ hoặc bố trí lịch làm việc hợp pháp khác theo quy định.</p>
@@ -1617,7 +1726,7 @@ window.ModuleHRM = (function () {
         <p style="margin:0 0 2px;">1.2. Bộ phận: {{BoPhan}}. Quản lý trực tiếp: {{QuanLyTrucTiep}}</p>
         <p style="margin:0 0 2px;">1.3. Địa điểm làm việc: {{NoiLamViec}}; địa điểm khác chỉ áp dụng khi có thỏa thuận hoặc pháp luật cho phép.</p>
         <p style="margin:0 0 2px;">1.4. Thời gian thử việc: {{SoNgayThuViec}} ngày, từ ngày {{TuNgay}} đến hết ngày {{DenNgay}}.</p>
-        <p style="margin:0 0 10px;">1.5. Nội dung công việc: theo chức danh nêu trên, Bản mô tả công việc và các phân công hợp pháp, hợp lý trong phạm vi công việc.</p>
+        <p style="margin:0 0 10px;">1.5. Nội dung công việc: {{NoiDungCongViec}}</p>
 
         <p><b>Điều 2. Thời giờ làm việc, nghỉ ngơi và điều kiện làm việc</b></p>
         <p style="margin:0 0 2px;">2.1. Lịch làm việc: sáng từ 08:00-12:00 và chiều từ 13:30-17:30. Làm việc từ thứ 2 đến thứ 7, nghỉ chủ nhật hằng tuần, nghỉ lễ/Tết và các chế độ nghỉ khác thực hiện theo Nội quy lao động, lịch làm việc của Công ty và pháp luật.</p>

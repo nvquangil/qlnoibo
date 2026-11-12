@@ -157,10 +157,12 @@
     hop.querySelectorAll('.nk-xoa').forEach(b => b.onclick = async () => {
       /* v6.92: nói RÕ là mã hàng cũng bị xóa. Người dùng tưởng chỉ xóa phiếu rồi mất luôn mã hàng
          trong danh mục là chuyện không thể hoàn tác — phải cảnh báo trước khi bấm, không phải báo sau. */
+      /* v9.15: đổi câu theo luật mới của backend — không còn "mã đã xuất bán là khóa" nữa;
+         chỉ chặn khi xóa xong tồn (mã, màu) bị ÂM. Câu cũ để lại là người dùng tưởng vẫn luật cũ. */
       if (!confirm('XÓA HẲN phiếu nhập kho này? Không khôi phục được.\n\n'
         + 'Mã hàng trên phiếu cũng bị XÓA KHỎI DANH MỤC nếu chưa phát sinh gì khác.\n'
-        + 'Mã đã xuất bán thì không xóa được — phải hủy phiếu bán hàng trước.')) return;
-      /* ⚠️ try/catch: apiDelete NÉM LỖI khi máy chủ trả 4xx (vd "phải hủy phiếu bán hàng trước"),
+        + 'Nếu xóa xong mà tồn của mã/màu nào bị ÂM (đã bán/xuất vượt phần nhập còn lại) thì máy sẽ chặn và nói rõ.')) return;
+      /* ⚠️ try/catch: apiDelete NÉM LỖI khi máy chủ trả 4xx (vd câu chặn tồn âm),
          không trả {success:false}. Thiếu chỗ này là handler văng, người dùng bấm Xóa không thấy gì. */
       try {
         const kq = await apiDelete(`/api/nhapkho/phieu/${b.dataset.id}`);

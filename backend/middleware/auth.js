@@ -60,17 +60,53 @@ function actionFromMethod(method) {
   return 'edit'; // POST, PUT, PATCH
 }
 
-function requireChucNang(moduleCode, maChucNang) {
+/* v9.11 — chi CO DUNG BA hanh dong trong chucNangPerm: canView / canEdit / canDelete
+   (xem loadUserContext.js). Go nham mot gia tri khac — de nhat la 'create', vi requirePermission
+   viet ngay ben canh CO 'create' — se sinh key 'canCreate', ma key do KHONG TON TAI => `undefined
+   === false` la false => **gate bien mat hoan toan, khong log, khong bao**. Mo toang quyen trong im
+   lang la thu nguy hiem nhat o file nay, nen chan tai cho: gia tri la thi bo qua, lui ve suy theo
+   method (hanh vi cu, an toan hon) va ghi console cho con biet.
+   KHONG `throw` — se no ngay luc dang ky route, tuc sap server luc khoi dong, ma du an nay khong co
+   ban chay thu de phat hien. */
+const HANH_DONG_HOP_LE = ['view', 'edit', 'delete'];
+function chuanHoaHanhDong(hanhDong, method, oDau) {
+  if (hanhDong == null) return actionFromMethod(method);
+  if (HANH_DONG_HOP_LE.indexOf(hanhDong) !== -1) return hanhDong;
+  console.error('[auth] hanh dong khong hop le "' + hanhDong + '" tai ' + oDau
+    + ' — chi nhan: ' + HANH_DONG_HOP_LE.join(' / ') + '. Tam lui ve suy theo HTTP method.');
+  return actionFromMethod(method);
+}
+
+/* v9.11 — THAM SO THU BA `hanhDong` (tuy chon): ep hanh dong can kiem, thay vi suy tu HTTP method.
+   ------------------------------------------------------------------------------------------------
+   🔴 VI SAO PHAI CO: co nhung route CHI DOC nhung bat buoc phai la POST (gui tham so phuc tap, hoac
+   goi thiet bi ngoai). Vi actionFromMethod() quy POST = 'edit', nhung route do am tham doi quyen
+   SUA du khong ghi gi — mau thuan ngay voi dong requirePermission(..., 'view') viet ngay ben canh.
+   Nguoi dung duoc cap XEM o tab do bam nut la an 403 "khong co quyen sua", trong khi ho (va ca
+   quan tri) deu tin la "da du quyen". Ca mẫu: nut "Tải NV từ máy" o Cham cong (Nguyen bao 2026-10-31).
+
+   Bo trong tham so nay => HANH VI Y HET TRUOC (suy tu method) => ~200 cho goi san khong doi gi.
+   Chi truyen 'view' cho route THUC SU khong ghi gi. Route co ghi (ke ca ghi gian tiep nhu gui email)
+   thi DUNG truyen — de no doi quyen sua la dung.
+
+   Kem: cau tu choi nay GOI TEN chuc nang (vd "PAYROLL/chamcong"). Ban cu chi noi "o chuc nang nay",
+   nguoi dung khong biet thieu gi ma quan tri cung khong biet bat o dau — dung kieu loi
+   "khong noi ly do" da ghi trong feedback_qlnoibo_an_nut_khong_noi_ly_do. */
+function requireChucNang(moduleCode, maChucNang, hanhDong) {
   return (req, res, next) => {
     const user = req.session && req.session.user;
     if (!user) return res.status(401).json({ success: false, message: 'Chưa đăng nhập.' });
     if (user.isAdmin) return next();
     const cn = (user.chucNangPerm && user.chucNangPerm[moduleCode + ':' + maChucNang]) || null;
     if (!cn) return next(); // khong co dong cau hinh rieng -> mac dinh duoc phep (an toan)
-    const action = actionFromMethod(req.method);
+    const action = chuanHoaHanhDong(hanhDong, req.method, moduleCode + '/' + maChucNang);
     const key = 'can' + action.charAt(0).toUpperCase() + action.slice(1); // canView/canEdit/canDelete
     if (cn[key] === false) {
-      return res.status(403).json({ success: false, message: 'Tài khoản của bạn không có quyền ' + (action === 'view' ? 'xem' : action === 'delete' ? 'xóa' : 'sửa') + ' ở chức năng này.' });
+      return res.status(403).json({
+        success: false,
+        message: 'Tài khoản của bạn không có quyền ' + (action === 'view' ? 'xem' : action === 'delete' ? 'xóa' : 'sửa')
+               + ' ở chức năng "' + moduleCode + '/' + maChucNang + '". Nhờ quản trị bật quyền đó cho tài khoản này.'
+      });
     }
     next();
   };
@@ -79,18 +115,24 @@ function requireChucNang(moduleCode, maChucNang) {
 // v5.52: cho qua nếu ÍT NHẤT 1 trong các chức năng cho phép (thiếu dòng cấu hình = mặc định cho phép).
 // Dùng cho route DÙNG CHUNG nhiều chức năng, vd /orders/:maDH/phukien vừa là "Chỉ định NPL" (chidinhnpl)
 // vừa là công đoạn "Phụ kiện" trong Ghi tiến độ (tiendo).
-function requireChucNangAny(moduleCode, maChucNangs) {
+// v9.11: nhan them `hanhDong` tuy chon, y het requireChucNang o tren — de hai ham khong lech luat.
+function requireChucNangAny(moduleCode, maChucNangs, hanhDong) {
   return (req, res, next) => {
     const user = req.session && req.session.user;
     if (!user) return res.status(401).json({ success: false, message: 'Chưa đăng nhập.' });
     if (user.isAdmin) return next();
-    const action = actionFromMethod(req.method);
+    const action = chuanHoaHanhDong(hanhDong, req.method, moduleCode + '/[' + (maChucNangs || []).join('|') + ']');
     const key = 'can' + action.charAt(0).toUpperCase() + action.slice(1);
     const ok = (maChucNangs || []).some(mcn => {
       const cn = (user.chucNangPerm && user.chucNangPerm[moduleCode + ':' + mcn]) || null;
       return !cn || cn[key] !== false;
     });
-    if (!ok) return res.status(403).json({ success: false, message: 'Tài khoản của bạn không có quyền thao tác ở chức năng này.' });
+    if (!ok) return res.status(403).json({
+      success: false,
+      message: 'Tài khoản của bạn không có quyền ' + (action === 'view' ? 'xem' : action === 'delete' ? 'xóa' : 'sửa')
+             + ' ở bất kỳ chức năng nào trong: ' + (maChucNangs || []).map(m => moduleCode + '/' + m).join(', ')
+             + '. Nhờ quản trị bật một trong số đó.'
+    });
     next();
   };
 }

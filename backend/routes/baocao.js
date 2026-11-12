@@ -43,6 +43,12 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const nhapLai = require('../utils/nhapLaiHangHoa');
 const { mapGiaNhap } = require('../utils/giaNhapHangHoa');   // v7.88: dùng chung với Danh mục hàng hóa
 const { CT_LOAI, docChungTu } = require('../utils/chungTu');  // v8.77: bấm số phiếu -> xem chứng từ
+/* 🔴 v9.36: mục B "Phải trả NCC" trước đây viết tay công thức tiền vải và BỎ QUA cờ DonViTinhGia
+   (có từ v7.62) ⇒ bỏ sót toàn bộ vải mua theo MÉT, trong khi màn Công nợ NCC lại tính đúng. Nay
+   dùng CHUNG bieuThucTienCay(). ĐỪNG viết tay lại lần nữa.
+   ⚠️ "Giá trị tồn kho vải" (CTE `gia` trong baocao TonVai) CÒN sai cùng kiểu nhưng CỐ Ý CHƯA SỬA —
+   lý do đầy đủ ở ngay khối ghi chú của CTE đó. */
+const { bieuThucTienCay } = require('../utils/tienVaiNhap');
 
 const router = express.Router();
 
@@ -330,7 +336,21 @@ async function baoCaoTonVai(pool, ky) {
     ),
     gia AS (
       /* Mau so CHI dem cay DA khai gia — neu dem ca cay chua khai gia thi don gia BQ bi keo xuong,
-         gia tri ton bao thieu (bug cung kieu tung gap o ben phu kien). */
+         gia tri ton bao thieu (bug cung kieu tung gap o ben phu kien).
+
+         🔴 v9.36 — CO Y GIU NGUYEN, DUNG "SUA CHO DONG BO". DOC TRUOC KHI DONG VAO.
+         Dung la hai dong duoi viet tay KGNhap nhan DonGiaNhap va BO QUA co PhieuNhapVai.DonViTinhGia
+         (co tu v7.62), nen vai mua theo MET bi dinh gia 0. Ban v9.36 da thu sua bang
+         bieuThucSoLuongTinhTien() va RA SOAT CHEO BAT DUOC LA SAI HON:
+           - TU SO doi sang met thi MAU SO cung thanh met, DonGiaBQ thanh dong/MET;
+           - nhung tonCuoiKG o CTE nhap/xuat LUON la KG (chi doc KGNhap/KGXuat);
+           - nen dong GiaTriTon = tonCuoiKG nhan DonGiaBQ thanh "KG nhan dong/met" — SAI, va sai ca
+             o truong hop HIEN DANG DUNG (cay khai ca KG lan met tren phieu tinh theo met).
+         Neu chi doi TU SO con giu MAU SO la KGNhap thi cay chi-khai-met gop TIEN vao tu so ma gop 0
+         vao mau so, DonGiaBQ phong len — con te hon.
+         Sua dung cho nay doi hoi quy doi met sang kg (can GSM + kho vai) hoac them han cot
+         GiaTriTonMet — la viec RIENG, phai doi chieu so truoc/sau. KHONG gop vao mot dot da dung
+         toi gia thanh. Nguyen 2026-11-09 da duoc bao: con so nay van thieu phan vai mua theo met. */
       SELECT VaiID, SUM(CASE WHEN ISNULL(DonGiaNhap,0) > 0 THEN KGNhap * DonGiaNhap ELSE 0 END) AS TienNhap,
              SUM(CASE WHEN ISNULL(DonGiaNhap,0) > 0 THEN KGNhap ELSE 0 END) AS KGNhapTong
       FROM VaiCay GROUP BY VaiID
@@ -648,7 +668,13 @@ async function baoCaoTaiChinh(pool, ky) {
     : '0';
   const phaiTra = (await rqKy(pool, ky).query(`
     SELECT
-      ${coGiaVai ? `(SELECT ISNULL(SUM(vc.KGNhap * ISNULL(vc.DonGiaNhap,0)),0)
+      ${/* 🔴 v9.36 — SUA SAI. Ban cu viet tay `vc.KGNhap * DonGiaNhap`, BO QUA co DonViTinhGia (v7.62)
+            ⇒ muc B "Phai tra NCC" cua bao cao tai chinh BO SOT toan bo vai mua theo MET, trong khi
+            man Cong no NCC (dung bieuThucTienCay) tinh DUNG. Hai con so lech nhau tu v7.62 toi gio.
+            Nay dung CHUNG bieuThucTienCay() — dung mot ban cong thuc.
+            ⚠️ TUYET DOI KHONG cong phi van chuyen vao day: day la TIEN PHAI TRA NCC, phi tra cho nha
+            xe khong phai no cua NCC. Xem khoi ghi chu v9.36 o utils/tienVaiNhap.js. */''}
+      ${coGiaVai ? `(SELECT ISNULL(SUM(${await bieuThucTienCay(pool, 'vc', 'pn')}),0)
           FROM PhieuNhapVai pn JOIN VaiCay vc ON vc.PhieuNhapID = pn.PhieuNhapID
           WHERE pn.NCC_ID IS NOT NULL AND pn.NgayNhap <= @den)` : '0'} AS NhapVai,
       ${coGiaPK ? `(SELECT ISNULL(SUM(ct.SoLuong * ISNULL(ct.DonGia,0)),0)

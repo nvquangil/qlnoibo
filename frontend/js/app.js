@@ -25,7 +25,13 @@ const MODULES = [
   { code: 'PAYROLL', label: 'Tính lương', icon: '💰', mod: window.ModulePayroll },
   { code: 'MYPAY', label: 'Bảng lương của tôi', icon: '🧾', mod: window.ModuleMyPay },
   { code: 'DANHMUC', label: 'Danh mục', icon: '📋', mod: window.ModuleDanhMuc },
-  { code: 'USERS', label: 'Quản lý User', icon: '👤', mod: window.ModuleUsers }
+  { code: 'USERS', label: 'Quản lý User', icon: '👤', mod: window.ModuleUsers },
+  /* v9.39 — SAO LƯU CSDL. Nguyen 2026-11-10: *"làm riêng hẳn 1 chức năng backup"*.
+     🔴 CỐ Ý KHÔNG có dòng trong bảng `Modules` ⇒ không ai được cấp quyền xem ⇒ bộ lọc ngay dưới
+     (`isAdmin || permissions[code].canView`) chỉ cho ADMIN thấy. Không cần migration, và cũng
+     không nên phân quyền lắt nhắt: file .bak chứa TOÀN BỘ dữ liệu công ty. Backend
+     (routes/saoluu.js) chặn độc lập bằng `isAdmin` — màn hình ẩn mà máy chủ hở thì vẫn thủng. */
+  { code: 'SAOLUU', label: 'Sao lưu dữ liệu', icon: '💾', mod: window.ModuleSaoLuu }
 ];
 
 let currentUser = null;

@@ -12,6 +12,19 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const { maRapCuaDon } = require('../utils/maRapCuaDon');   // v7.67: mã rập gộp 2 nguồn (Sơ đồ + Ghi tiến độ)
 const cayThanhPham = require('../utils/cayThanhPham');     // v8.93: luật sơ đồ Chính/Phối
 
+/* v9.14: no ten dai "2-7" thanh danh sach size ['2','3','4','5','6','7'].
+   Chi nhan dang "so - so" (cho phep khoang trang va cac loai gach ngang), tang dan, toi da 30 size
+   — ten dai kieu chu ("XS-XL") tra null de noi goi biet duong lui ve mac dinh cu. */
+function noDaiThanhSize(tenDai) {
+  const m = String(tenDai == null ? '' : tenDai).trim().match(/^(\d{1,3})\s*[-–—]\s*(\d{1,3})$/);
+  if (!m) return null;
+  const a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+  if (!(b > a) || (b - a) > 30) return null;
+  const ra = [];
+  for (let i = a; i <= b; i++) ra.push(String(i));
+  return ra;
+}
+
 const router = express.Router();
 const CN = (action) => [requireAuth, requirePermission('QLSX', action), requireChucNang('QLSX', 'bangkebtp')];
 
@@ -160,11 +173,50 @@ router.get('/:maDH', requireAuth, requirePermission('QLSX', 'view'), async (req,
       }
     } catch (e) { console.error('[bangke] lấy cột size từ Thông số đo lỗi (bỏ qua):', e.message); }
 
+    /* v9.14b — Thông số đo nay có NHIỀU BẢN theo TenPhieu (vd bản "THÔNG SỐ KỸ THUẬT"). Câu trên
+       quét MỌI bản của lệnh, nên lệnh có 2 bản cùng khai SIZE 2..7 sẽ ra cột TRÙNG LẶP
+       (SIZE 2, SIZE 3, ..., SIZE 2, SIZE 3, ...). Khử trùng GIỮ THỨ TỰ xuất hiện đầu tiên. */
+    sizeCols = sizeCols.filter((s, i) => sizeCols.indexOf(s) === i);
+
+    /* v9.14 — Nguyen 2026-11-03: "một số lệnh khi tải từ sổ cắt về lại ra size mặc định S,M,L —
+       mà lệnh đó công đoạn cắt là 2-7". Những lệnh đó KHÔNG khai Thông số đo nên rơi về mặc định
+       cứng S/M/L của form. Nguồn size thứ hai: DẢI SIZE của lệnh (DonHangDaiSize, khai ở công đoạn
+       Cắt) — tên dải "2-7" NỞ thành các cột 2,3,4,5,6,7; nhiều dải thì nối theo ThuTu ("2-7"+"8-12"
+       = 2..12). Thông số đo vẫn THẮNG khi có (nó là khai báo size tường minh của lệnh).
+       Dè chừng: chỉ nở khi MỌI dải đều có dạng "số-số" hợp lý; có dải đặt tên chữ ("XS-XL", "bé"...)
+       thì giữ nguyên fallback S/M/L — thà như cũ còn hơn bịa cột sai. */
+    let sizeColsNguon = sizeCols.length ? 'tsd' : '';
+    if (!sizeCols.length) {
+      try {
+        const dsDai = (await pool.request().input('id', sql.Int, order.DonHangID).query(
+          'SELECT TenDai FROM DonHangDaiSize WHERE DonHangID=@id ORDER BY ISNULL(ThuTu, 999), ID')).recordset;
+        if (dsDai.length) {
+          const no = dsDai.map(d => noDaiThanhSize(d.TenDai));
+          if (no.every(x => Array.isArray(x) && x.length)) {
+            const gop = [];
+            no.forEach(ds => ds.forEach(s => { if (gop.indexOf(s) === -1) gop.push(s); }));
+            sizeCols = gop;
+            sizeColsNguon = 'dai';
+          }
+        }
+      } catch (e) { console.error('[bangke] lấy size từ dải size lỗi (bỏ qua — máy chưa chạy migration_v859 cũng rơi vào đây):', e.message); }
+    }
+
+    /* v9.14c — Nguyen (ảnh sổ cắt DH2610119, dòng "Size: 2-7"): nguồn thứ BA là Ô SIZE CỦA LỆNH
+       (DonHangSanXuat.Size, khai ở Ra lệnh SX — sổ cắt chỉ hiển thị lại). Lệnh đã điền ô này thì
+       KHÔNG cần thao tác gì thêm: "2-7" nở thành cột 2..7 y như dải. Giá trị không nở được
+       ("9M - 4Y", chữ, bỏ trống) ⇒ giữ nguyên đường cũ. Dải vẫn đứng trên vì nó là khai báo có
+       chủ đích ở Cắt kèm hệ số; ô Size chỉ là chữ tham khảo trên lệnh. */
+    if (!sizeCols.length) {
+      const noTuSize = noDaiThanhSize(order.Size);
+      if (noTuSize) { sizeCols = noTuSize; sizeColsNguon = 'size'; }
+    }
+
     /* v5.53 → v7.67: bản cũ ở đây CHỈ đọc DonHangChiTietSoDo nên mã rập mà Kỹ thuật khai lúc Ghi tiến
        độ (TienDoSanXuat.MaRap) không hiện trên bảng kê. Dùng chung utils/maRapCuaDon.js. */
     const maRap = await maRapCuaDon(pool, sql, order.DonHangID);
 
-    res.json({ success: true, order: { MaDH: order.MaDH, TenSanPham: order.TenSanPham, MaSanPham: order.MaSanPham, AnhSanPham: order.AnhSanPham, MaRap: maRap }, data: parseData(bk), prefill, sizeCols });
+    res.json({ success: true, order: { MaDH: order.MaDH, TenSanPham: order.TenSanPham, MaSanPham: order.MaSanPham, AnhSanPham: order.AnhSanPham, MaRap: maRap }, data: parseData(bk), prefill, sizeCols, sizeColsNguon });
   } catch (err) { console.error('[bangke] GET /:maDH', err); res.status(500).json({ success: false, message: 'Lỗi tải bảng kê: ' + err.message }); }
 });
 

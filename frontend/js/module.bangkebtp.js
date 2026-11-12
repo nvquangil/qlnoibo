@@ -107,6 +107,20 @@ window.ModuleBangKeBTP = (function () {
     const res = await apiGet('/api/bangke/' + encodeURIComponent(maDH) + '?ten=' + encodeURIComponent(tenPhieu));
     const order = res.order, data = res.data, prefill = res.prefill || [];
     const sizeCols = Array.isArray(res.sizeCols) ? res.sizeCols : [];   // v5.44.5: cột size từ Thông số đo
+    /* v9.14: sizeCols nay có HAI nguồn — 'tsd' (Thông số đo, như cũ) hoặc 'dai' (tên dải size của
+       lệnh nở ra, vd "2-7" → 2..7). Nhãn nút phải nói đúng nguồn, không thì người dùng tưởng lệnh
+       có Thông số đo trong khi nó chưa khai. */
+    const sizeColsNguon = res.sizeColsNguon || (sizeCols.length ? 'tsd' : '');
+    const nhanNguonSize = sizeColsNguon === 'dai' ? 'Dải size (công đoạn Cắt)'
+      : sizeColsNguon === 'size' ? 'ô Size của lệnh'   // v9.14c: DonHangSanXuat.Size, vd "2-7" trên sổ cắt
+      : 'Thông số đo';
+    /* v9.14b — Nguyen: "xử lý 100% các lệnh lấy từ thông số kỹ thuật". Bản bảng kê ĐÃ LƯU giữ cột
+       của nó (đúng chủ trương không tự chữa quá khứ) — nhưng khi cột đã lưu LỆCH với Thông số đo /
+       dải hiện tại thì phải NÓI RA ngay trên form, kèm đường một-nút để đồng bộ. Trước đây lệch mà
+       im lặng nên người dùng tưởng hệ thống "không lấy từ thông số kỹ thuật". */
+    const colsDaLuu = (data && Array.isArray(data.cols)) ? data.cols : [];
+    const colsLechNguon = sizeCols.length > 0 && colsDaLuu.length > 0
+      && JSON.stringify(colsDaLuu.map(c => String(c).trim())) !== JSON.stringify(sizeCols.map(c => String(c).trim()));
     const mauList = (await apiGet('/api/bangke/mau/list').catch(() => ({ data: [] }))).data || [];   // v5.44.6: danh sách mẫu để CHỌN khi Áp mẫu. v5.56: KHÔNG để lỗi API phụ này chặn việc mở form.
     // Nếu đơn CHƯA có bảng kê -> cột size TỰ NHẢY từ Thông số đo (nếu có), không thì mặc định S/M/L.
     const state = (data && Array.isArray(data.cols) && data.cols.length)
@@ -130,12 +144,15 @@ window.ModuleBangKeBTP = (function () {
         </div>
         <div class="toolbar" style="margin:8px 0;">
           ${perm.canEdit ? `<button type="button" class="btn small secondary" id="btnDienMau" title="Gộp TẤT CẢ sổ cắt của lệnh này, chỉ tính cây VẢI CHÍNH">↧ Điền màu từ Cắt (tất cả sổ)</button>
-          ${sizeCols.length ? '<button type="button" class="btn small secondary" id="btnSizeTsd">↧ Cột size từ Thông số đo</button>' : ''}
+          ${sizeCols.length ? `<button type="button" class="btn small secondary" id="btnSizeTsd">↧ Cột size từ ${nhanNguonSize}</button>` : ''}
           <button type="button" class="btn small secondary" id="btnAddSize">+ Thêm size (cột)</button>
           ${mauList.length ? `<select id="bkMauSelect" style="max-width:220px;"><option value="">-- Chọn mẫu (cột size) --</option>${mauList.map(m => `<option value="${m.ID}">${escapeHtml(m.TenMau)}</option>`).join('')}</select> <button type="button" class="btn small secondary" id="btnApMau">📁 Áp mẫu</button>` : ''}` : ''}
         </div>
         ${/* v5.81: class bang-cuon đặt lại --top0/--tabs-h/--bar-h = 0 -> tiêu đề bảng dính ĐÚNG đỉnh
               vùng cuộn này, không bị đẩy xuống đè lên dòng đầu (xem style.css). */''}
+        ${colsLechNguon ? `<div class="empty-hint" style="text-align:left;color:#b06000;background:#fff7e6;border:1px solid #ffd591;border-radius:6px;padding:6px 10px;margin-bottom:6px;">
+          ⚠️ Cột size của bản này (<b>${colsDaLuu.map(escapeHtml).join(', ')}</b>) đang <b>KHÁC</b> ${escapeHtml(nhanNguonSize)} hiện tại (<b>${sizeCols.map(escapeHtml).join(', ')}</b>).
+          Bấm <b>↧ Cột size từ ${escapeHtml(nhanNguonSize)}</b> để đồng bộ — giá trị cũ dồn theo VỊ TRÍ, nên sau đó bấm lại <b>↧ Điền màu từ Cắt</b> rồi Lưu.</div>` : ''}
         <div id="bkGrid" class="bang-cuon"></div>
         <div class="modal-actions">
           ${perm.canEdit ? '<button type="button" class="btn secondary" id="btnLuuMau">Lưu thành mẫu</button><button type="button" class="btn secondary" id="btnQlMauBtp">Quản lý mẫu</button>' : ''}
@@ -203,7 +220,7 @@ window.ModuleBangKeBTP = (function () {
       syncGrid();
       state.cols = sizeCols.slice();
       state.rows.forEach(r => { r.values = state.cols.map((c, i) => (r.values[i] != null ? r.values[i] : '')); });
-      renderGrid(); toast('Đã lấy cột size từ Thông số đo.', 'success');
+      renderGrid(); toast('Đã lấy cột size từ ' + nhanNguonSize + '.', 'success');
     });
     modal.querySelector('#btnApMau')?.addEventListener('click', async () => {
       const sel = modal.querySelector('#bkMauSelect');   // v5.44.6: chọn mẫu từ dropdown (bỏ prompt ID)

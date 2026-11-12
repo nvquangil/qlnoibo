@@ -754,12 +754,35 @@ router.get('/hangmau/export', requireAuth, requirePermission('KHOHANG', 'view'),
     res.end();
   });
 
+/* v9.46 (migration_v891) — cot NguoiSuaID / UpdatedAt tren PhieuBanHang. Do MOI LAN, KHONG cache
+   (quy tac coCot…V890): chay migration sau pm2 restart van ghi duoc ngay, khong can restart lai. */
+async function coCotSuaPhieuBH(pool) {
+  const r = (await pool.request().query("SELECT COL_LENGTH('PhieuBanHang','NguoiSuaID') AS a, COL_LENGTH('PhieuBanHang','UpdatedAt') AS b")).recordset[0] || {};
+  return r.a != null && r.b != null;
+}
+/* Dau vet SUA / HUY: ai + luc nao. Goi TRONG giao dich cua PUT va /huy. Chua co cot thi bo qua im
+   lang — phieu van luu, chi thieu dau vet (migration_v891 bo sung). */
+async function ghiDauVetSuaPhieuBH(pool, tran, phieuBHID, userId) {
+  if (!(await coCotSuaPhieuBH(pool))) return false;
+  await new sql.Request(tran).input('p', sql.Int, phieuBHID).input('u', sql.Int, userId || null)
+    .query('UPDATE PhieuBanHang SET NguoiSuaID = @u, UpdatedAt = SYSDATETIME() WHERE PhieuBHID = @p');
+  return true;
+}
+
 router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
+  /* v9.46 — Nguyen 11/11: "thêm giờ, ngày tháng lập đầu tiên để dưới người làm phiếu, tên người làm
+     phiếu theo tên user đăng nhập. Nếu sửa ghi rõ, ngày sửa cuối cùng".
+     Gio/ngay tra ve dang CHUOI 'yyyy-mm-dd hh:mi' (CONVERT 120): driver useUTC=true, de Date thi man
+     hinh VN hien lech +7 gio (bai hoc payroll.js /chamcong/:id/excel). TaoLuc = CreatedAt (co tu v668);
+     NguoiSua/SuaLuc = NULL khi chua tung sua hoac chua chay migration_v891. */
+  const coSua = await coCotSuaPhieuBH(pool);
   const header = (await pool.request().input('id', sql.Int, req.params.id).query(`
-    SELECT p.*, u.HoTen AS NguoiTao,
+    SELECT p.*, u.HoTen AS NguoiTao, CONVERT(varchar(16), p.CreatedAt, 120) AS TaoLuc,
+           ${coSua ? 'us.HoTen AS NguoiSua, CONVERT(varchar(16), p.UpdatedAt, 120) AS SuaLuc' : 'CAST(NULL AS NVARCHAR(100)) AS NguoiSua, CAST(NULL AS varchar(16)) AS SuaLuc'},
            ISNULL((SELECT SUM(t.SoTien) FROM PhieuThu t WHERE t.PhieuBHID = p.PhieuBHID), 0) AS DaThu
     FROM PhieuBanHang p LEFT JOIN Users u ON u.UserID = p.NguoiTaoID
+    ${coSua ? 'LEFT JOIN Users us ON us.UserID = p.NguoiSuaID' : ''}
     WHERE p.PhieuBHID = @id`)).recordset[0];
   if (!header) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu bán hàng.' });
   /* ⚠️ v8.70.3 — ROUTE NAY LA NGUON DU LIEU CUA CA MAN XEM PHIEU LAN BAN IN.
@@ -1531,6 +1554,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
                 TienVAT=@TienVAT, TongThanhToan=@TongThanhToan, TongSLCai=@TongSLCai, GhiChu=@GhiChu
                 ${coMau ? ', LaHangMau=@LaHangMau' : ''}
               WHERE PhieuBHID=@id`);
+    await ghiDauVetSuaPhieuBH(pool, tran, p.PhieuBHID, (req.session.user || {}).userId);   // v9.46: ai sửa, lúc nào
     await ghiChiTietPhieu(pool, tran, p.PhieuBHID, dong, coDonIDs,
       { tenKhach: b.tenKhach, khachHangId: b.khachHangId || null, nguoiTaoID: (req.session.user || {}).userId });   // v7.22
     await ghiShopNVKD(pool, tran, p.PhieuBHID, b);              // v7.24
@@ -1607,6 +1631,7 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
     }
     await new sql.Request(tran).input('id', sql.Int, req.params.id)
       .query(`UPDATE PhieuBanHang SET TrangThai = N'Đã hủy' WHERE PhieuBHID = @id`);
+    await ghiDauVetSuaPhieuBH(pool, tran, parseInt(req.params.id, 10), (req.session.user || {}).userId);   // v9.46: hủy cũng là sửa — ai, lúc nào
     await tran.commit();
     res.json({ success: true });
   } catch (err) {

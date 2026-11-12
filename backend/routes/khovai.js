@@ -9,7 +9,9 @@ const { conHangSQL, conHang, capNhatTrangThaiCay: capNhatTrangThaiCayDungChung }
 /* v7.61: MOT ban cong thuc "tien cua mot cay vai" — dung CHUNG voi routes/congno.js. Tong tien tren
    phieu nhap PHAI bang dung so ma cong no NCC ghi no cho chinh phieu do. */
 const { bieuThucTienCay, coCotDonViTinhGia, chuanDonViTinhGia,
-        coCotDonGiaTra, chuanDonGiaTra } = require('../utils/tienVaiNhap');   // v8.91
+        coCotDonGiaTra, chuanDonGiaTra,                                       // v8.91
+        coCotPhiVanChuyen, coCotPhiVCNhaCungCap, phiVCTheoNCC,
+        chuanPhiVC } = require('../utils/tienVaiNhap');                        // v9.36
 const { coCotAnhMau, coCotAnhCay, bieuThucAnhCay, ganAnhMauTheoVai, ganAnhTheoCay } = require('../utils/anhMau');   // v8.94 / v8.96
 const net = require('net'); // v5.45: gửi lệnh in tem tới máy in mạng qua socket raw (cổng 9100).
 const fs = require('fs');   // v5.45.7: kiểm tra file font khi render tem thành ảnh.
@@ -595,6 +597,32 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
     }
     kiemAnhCayHopLe(rolls);   // nem loi -> catch ben duoi tra 400
 
+    /* ============================================================================================
+       v9.36 — PHI VAN CHUYEN CUA TUNG CAY.
+       Uu tien: so frontend GUI LEN (nguoi dung sua tay tren phieu) > don gia khai o danh muc NCC.
+       Don gia cua NCC chi ap duoc khi DON VI KHOP voi DonViTinhGia cua phieu — xem phiVCTheoNCC().
+       🔴 Ghi BAN CHUP vao VaiCay: doi gia o danh muc NCC sau nay KHONG duoc hoi to cay da nhap.
+       ============================================================================================ */
+    const coPhiVC = await coCotPhiVanChuyen(pool);
+    if (!coPhiVC && rolls.some(r => r && Number(r.phiVanChuyenDonGia) > 0)) {
+      return res.status(400).json({ success: false,
+        message: 'Chưa chạy migration_v888 nên chưa lưu được phí vận chuyển. Bỏ phí hoặc chạy migration rồi pm2 restart.' });
+    }
+    /* 🔴 Cờ RIÊNG cho bảng NhaCungCap: migration chạy dở (VaiCay có cột, NhaCungCap chưa) mà dùng
+       chung một cờ là câu SELECT dưới ném "Invalid column name" ⇒ KHÔNG lập được phiếu nhập nào. */
+    let phiNCC = { donGia: 0, lyDo: '' };
+    if (coPhiVC && nccId && await coCotPhiVCNhaCungCap(pool)) {
+      const rn = (await pool.request().input('id', sql.Int, nccId)
+        .query('SELECT PhiVanChuyenDonGia, PhiVanChuyenDVT FROM NhaCungCap WHERE NCC_ID = @id')).recordset[0];
+      if (rn) phiNCC = phiVCTheoNCC(rn, req.body.donViTinhGia);
+    }
+    /* Ô trống = "không khai tay" -> lấy của NCC. Số 0 gõ tay thì TÔN TRỌNG (chuyến đó không mất
+       cước) — khác hẳn với để trống. Dùng chung chuanPhiVC() cho cả ba đường ghi. */
+    const phiCuaDong = (roll) => {
+      const v = chuanPhiVC(roll && roll.phiVanChuyenDonGia);
+      return v === undefined ? (phiNCC.donGia > 0 ? phiNCC.donGia : null) : v;
+    };
+
     // v5.4: them NgayHoaDon (khac Ngay nhap - khop yeu cau mau_phieu.docx "Ngay hoa don: nhap tay").
     const phieuResult = await pool.request()
       .input('NgayNhap', sql.Date, ngayNhap)
@@ -655,11 +683,16 @@ router.post('/nhap', requireAuth, requirePermission('KHOVAI', 'create'), require
         .input('NgayNhap', sql.Date, ngayNhap)
         .input('DonGiaNhap', sql.Decimal(14, 2), roll.donGiaNhap || null)
         .input('AnhCay', sql.NVarChar(500), chuanAnhCay(roll.anhCay))
-        .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCayNhap ? ', AnhCay' : ''})
-                VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCayNhap ? ', @AnhCay' : ''})`);
+        // v9.36: BẢN CHỤP đơn giá phí vận chuyển của cây này (xem khối ghi chú phía trên)
+        .input('PhiVanChuyenDonGia', sql.Decimal(14, 2), coPhiVC ? phiCuaDong(roll) : null)
+        .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCayNhap ? ', AnhCay' : ''}${coPhiVC ? ', PhiVanChuyenDonGia' : ''})
+                VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCayNhap ? ', @AnhCay' : ''}${coPhiVC ? ', @PhiVanChuyenDonGia' : ''})`);
       created.push({ maCay, maVai, kgNhap: kg, qrUrl });
     }
-    res.json({ success: true, data: { phieuNhapId, rolls: created } });
+    /* v9.36: NÓI RA khi không tự áp được phí của NCC (lệch đơn vị / NCC chưa khai). Nuốt im lặng là
+       người dùng khai phí ở danh mục NCC, nhập hàng, tưởng đã có phí mà thực ra cây = 0 — giá thành
+       thiếu cước mà không một dòng cảnh báo. Rà chéo bắt được. */
+    res.json({ success: true, data: { phieuNhapId, rolls: created, phiVCLyDo: phiNCC.lyDo || '' } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi nhập kho: ' + err.message });
@@ -710,8 +743,12 @@ router.get('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'view'), requir
   // v5.3 (muc 3): them LoaiVaiID/MauSacID (de dien san dropdown luc Sua) + CoPhatSinh (da xuat kho/
   // giao vai SX/kiem ke chua - de frontend khoa doi loai vai/mau, giong dieu kien backend PUT ap dung).
   const coAnhCayDoc = await coCotAnhCay(pool);   // v8.96
+  const coPhiVCDoc = await coCotPhiVanChuyen(pool);   // v9.36
   const linesResult = await pool.request().input('id', sql.Int, id).query(`
     SELECT v.CayID, v.MaCay, v.KGNhap, v.SoMet, v.KhoVaiThucTe, ISNULL(v.KhoVaiThucTe, dv.KhoVai) AS KhoVai, v.GSM, v.DonGiaNhap, v.QRCode, v.TrangThai, v.ViTriKho,
+           ${/* v9.36: trả về để form SỬA điền sẵn ô phí — quên là mỗi lần sửa phiếu phí bị xóa trắng.
+                Chưa chạy migration thì trả NULL, form hiện ô trống, không gãy câu SQL. */''}
+           ${coPhiVCDoc ? 'v.PhiVanChuyenDonGia' : 'CAST(NULL AS DECIMAL(14,2)) AS PhiVanChuyenDonGia'},
            ${/* v8.96: AnhCay = anh RIENG cua cay (de form Sua dien san o anh); AnhMau = anh HIEN
                 (cay thang, lui ve mau) cho popup xem/ban in — cung ten truong voi moi man khac. */''}
            ${coAnhCayDoc ? 'v.AnhCay' : 'CAST(NULL AS NVARCHAR(500)) AS AnhCay'},
@@ -755,6 +792,47 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
       return res.status(400).json({ success: false, message: 'Chưa chạy migration_v883 nên chưa lưu được ảnh cây vải.' });
     }
     if (Array.isArray(lines)) kiemAnhCayHopLe(lines);
+
+    /* v9.36 — phí vận chuyển ở nhánh SỬA. Cùng luật với nhánh tạo mới: số form gửi lên thắng, bỏ
+       trống thì lấy đơn giá của NCC (chỉ khi ĐƠN VỊ KHỚP với phiếu). */
+    const coPhiVCSua = await coCotPhiVanChuyen(pool);
+    if (!coPhiVCSua && Array.isArray(lines) && lines.some(l => l && Number(l.phiVanChuyenDonGia) > 0)) {
+      return res.status(400).json({ success: false,
+        message: 'Chưa chạy migration_v888 nên chưa lưu được phí vận chuyển.' });
+    }
+    let phiNCCSua = { donGia: 0, lyDo: '' };
+    if (coPhiVCSua && nccId && await coCotPhiVCNhaCungCap(pool)) {
+      const rn = (await pool.request().input('id', sql.Int, nccId)
+        .query('SELECT PhiVanChuyenDonGia, PhiVanChuyenDVT FROM NhaCungCap WHERE NCC_ID = @id')).recordset[0];
+      if (rn) phiNCCSua = phiVCTheoNCC(rn, req.body.donViTinhGia);
+    }
+    const phiCuaDongSua = (line) => {
+      const v = chuanPhiVC(line && line.phiVanChuyenDonGia);
+      return v === undefined ? (phiNCCSua.donGia > 0 ? phiNCCSua.donGia : null) : v;
+    };
+
+    /* 🔴 ĐỔI ĐƠN VỊ TÍNH GIÁ CỦA PHIẾU SAU KHI ĐÃ KHAI PHÍ = SAI GIÁ THÀNH LẶNG LẼ.
+       `VaiCay.PhiVanChuyenDonGia` là bản chụp THEO ĐƠN VỊ CỦA PHIẾU lúc nhập. Đổi phiếu từ Kg sang
+       Met thì phí 2.000đ/kg bị nhân với số MÉT ở tinhGiaThanh — sai theo tỉ lệ mét/kg (thường 2-4
+       lần). `DonGiaNhap` cũng dính chuyện này từ v7.62, nhưng đó là số người dùng TỰ GÕ nên họ có
+       lý do để rà lại; phí thì TỰ ÁP nên không ai nghĩ tới. Chặn bằng 409 + nói rõ phải làm gì.
+       Rà chéo bắt được. */
+    if (coPhiVCSua && await coCotDonViTinhGia(pool)) {
+      const cu = (await pool.request().input('id', sql.Int, id)
+        .query(`SELECT p.DonViTinhGia,
+                       (SELECT COUNT(*) FROM VaiCay v
+                         WHERE v.PhieuNhapID = p.PhieuNhapID AND v.PhiVanChuyenDonGia IS NOT NULL) AS SoCayCoPhi
+                  FROM PhieuNhapVai p WHERE p.PhieuNhapID = @id`)).recordset[0];
+      const dvtCu = chuanDonViTinhGia(cu && cu.DonViTinhGia);
+      const dvtMoi = chuanDonViTinhGia(req.body.donViTinhGia);
+      if (cu && Number(cu.SoCayCoPhi) > 0 && dvtCu !== dvtMoi) {
+        return res.status(409).json({ success: false,
+          message: `Phiếu này có ${cu.SoCayCoPhi} cây đã khai phí vận chuyển theo `
+            + `${dvtCu === 'Met' ? 'MÉT' : 'KG'}. Đổi "Đơn giá tính theo" sang `
+            + `${dvtMoi === 'Met' ? 'MÉT' : 'KG'} sẽ làm giá thành sai theo đúng tỉ lệ mét/kg. `
+            + 'Xóa trắng ô Phí VC của các cây đó (hoặc khai lại theo đơn vị mới) rồi đổi.' });
+      }
+    }
 
     await pool.request()
       .input('id', sql.Int, id)
@@ -836,6 +914,17 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
             rqCay.input('AnhCay', sql.NVarChar(500), coGui('anhCay') ? chuanAnhCay(line.anhCay) : null);
             phanChung.push(dat('AnhCay', 'anhCay'));
           }
+          /* v9.36: phí vận chuyển — CÙNG luật `coGui`. Form cũ nằm trong cache trình duyệt không
+             biết khóa này, không gửi thì GIỮ NGUYÊN phí đã khai; gửi '' là cố ý xóa. Ghi đè mù là
+             mỗi lần ai đó sửa phiếu bằng bản cũ sẽ xóa sạch phí của cả phiếu — đúng lỗi v6.58 với
+             ViTriKho, lần đó mất dữ liệu nhập tồn từ Excel không lấy lại được. */
+          if (coPhiVCSua) {
+            /* Dùng CHUNG phiCuaDongSua() với hai đường kia: ô trống thì lùi về đơn giá NCC, số âm /
+               chuỗi rác về null (phí âm làm GIẢM giá thành — min="0" trên form chỉ chặn đường UI). */
+            rqCay.input('PhiVanChuyenDonGia', sql.Decimal(14, 2),
+              coGui('phiVanChuyenDonGia') ? phiCuaDongSua(line) : null);
+            phanChung.push(dat('PhiVanChuyenDonGia', 'phiVanChuyenDonGia'));
+          }
           if (coPhatSinh) {
             await rqCay.query(`UPDATE VaiCay SET ${phanChung.join(', ')} WHERE CayID=@id`);
           } else {
@@ -863,13 +952,16 @@ router.put('/nhap/:id', requireAuth, requirePermission('KHOVAI', 'edit'), requir
             .input('ViTriKho', sql.NVarChar, line.viTriKho || null).input('NgayNhap', sql.Date, ngayNhap)
             .input('DonGiaNhap', sql.Decimal(14, 2), line.donGiaNhap || null)
             .input('AnhCay', sql.NVarChar(500), chuanAnhCay(line.anhCay))   // v8.96
-            .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCaySua ? ', AnhCay' : ''})
-                    VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCaySua ? ', @AnhCay' : ''})`);
+            // v9.36: cây THÊM VÀO phiếu đang sửa cũng phải mang phí, không thì phiếu có cây có phí
+            // cây không — giá thành của cùng một lô lệch nhau mà không ai hiểu vì sao.
+            .input('PhiVanChuyenDonGia', sql.Decimal(14, 2), coPhiVCSua ? phiCuaDongSua(line) : null)
+            .query(`INSERT INTO VaiCay (MaCay, PhieuNhapID, VaiID, KhoVaiThucTe, GSM, KGNhap, SoMet, QRCode, ViTriKho, NgayNhap, DonGiaNhap${coAnhCaySua ? ', AnhCay' : ''}${coPhiVCSua ? ', PhiVanChuyenDonGia' : ''})
+                    VALUES (@MaCay, @PhieuNhapID, @VaiID, @KhoVaiThucTe, @GSM, @KGNhap, @SoMet, @QRCode, @ViTriKho, @NgayNhap, @DonGiaNhap${coAnhCaySua ? ', @AnhCay' : ''}${coPhiVCSua ? ', @PhiVanChuyenDonGia' : ''})`);
         }
       }
     }
 
-    res.json({ success: true });
+    res.json({ success: true, phiVCLyDo: phiNCCSua.lyDo || '' });   // v9.36: xem ghi chú ở POST /nhap
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi cập nhật phiếu nhập: ' + err.message });

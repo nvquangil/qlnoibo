@@ -8,7 +8,9 @@
      1. Khoan may          payroll.js loadLuongKhoanMay      — QC tu v8.61 (CROSS APPLY + loc qc.NgayQC)
      2. Gia cong / in theu utils/luongGiaCongInThe.js        — QC tu v8.61 (APPLY_NGAY_QC + dieuKienKy)
      3. La / Dong goi      payroll.js loadLuongLaDongGoi     — v9.02 (APPLY_NGAY_QC + bieuThucNgayKy)
-     4. Trai vai cat       payroll.js loadSoDoCat            — v9.02 (APPLY_NGAY_QC + bieuThucNgayKy)
+     4. Trai vai cat       payroll.js loadSoDoCat            — ⚠️ v9.18 BO CHO QC (Nguyen 2026-11-04):
+        ky = THANG GHI SO CAT, lenh chua QC van vao quy; NgayQC chi hien thi (OUTER_APPLY_NGAY_QC).
+        NGOAI LE CO CHU DICH cho rieng bo phan cat — dung "dong bo lai cho giong ba bang kia".
    Cong no nha gia cong (congno.js) dung util so 2 -> cung so voi bang luong.
 
    Chay:  node backend\utils\kiem_luong_theo_qc.js   (tu thu muc goc QLNoiBo)
@@ -49,7 +51,11 @@ kiem(/const APPLY_NGAY_QC = \(bd\) => `\s*CROSS APPLY \(SELECT MIN\(q\.NgayGhiNh
 kiem(/\n\s*HAVING COUNT\(\*\) > 0\) qc`;/.test(sUtil),
   '🔴 APPLY_NGAY_QC co HAVING COUNT(*) > 0 — thu CHINH lam nen cong "chua QC thi loai"');
 kiem(/const bieuThucNgayKy = \(cot\) => `CASE WHEN qc\.NgayQC > \$\{cot\} THEN qc\.NgayQC ELSE \$\{cot\} END`;/.test(sUtil), 'bieuThucNgayKy = ngay MUON HON giua ngay ghi va ngay QC');
-kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy \};/.test(sUtil), 'export du APPLY_NGAY_QC + bieuThucNgayKy');
+kiem(/module\.exports = \{ loadGiaCong, loadInThe, tongHopTheoNha, APPLY_NGAY_QC, OUTER_APPLY_NGAY_QC, bieuThucNgayKy \};/.test(sUtil), 'export du APPLY_NGAY_QC + OUTER_APPLY_NGAY_QC + bieuThucNgayKy');
+/* v9.18: ban OUTER chi de HIEN THI — phai la OUTER APPLY va KHONG co HAVING (khong gate). */
+const khoiOuter = sUtil.slice(sUtil.indexOf('const OUTER_APPLY_NGAY_QC'), sUtil.indexOf('qc`;', sUtil.indexOf('const OUTER_APPLY_NGAY_QC')) + 4);
+kiem(/OUTER APPLY \(SELECT MIN\(q\.NgayGhiNhan\) AS NgayQC/.test(khoiOuter) && !/HAVING/.test(khoiOuter),
+  'v9.18: OUTER_APPLY_NGAY_QC la OUTER + khong HAVING (hien thi, khong gate)');
 const fnGC = catKhoi(sUtil, 'async function loadGiaCong', '{', '}'), fnIT = catKhoi(sUtil, 'async function loadInThe', '{', '}');
 kiem(/\$\{APPLY_NGAY_QC\('ct'\)\}/.test(fnGC) && /\$\{dieuKienKy\(null, ky\)\}/.test(fnGC), '2a. gia cong: APPLY QC + loc ky theo qc.NgayQC (v8.61 giu nguyen)');
 kiem(/\$\{APPLY_NGAY_QC\('it'\)\}/.test(fnIT) && /\$\{dieuKienKy\(null, ky\)\}/.test(fnIT), '2b. in theu: APPLY QC + loc ky theo qc.NgayQC (v8.61 giu nguyen)');
@@ -62,8 +68,8 @@ kiem(/loadGiaCong\(pool, sql\)/.test(sCongNo) && /loadInThe\(pool, sql\)/.test(s
   'congno.js goi khong truyen ky (luy ke) — tu v9.02 lenh chua QC bi loai khoi so cong no');
 
 console.log('\n=== 2. payroll.js — bon loader ===');
-kiem(/const \{ loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha, APPLY_NGAY_QC, bieuThucNgayKy \} = require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sPay),
-  'payroll.js import APPLY_NGAY_QC + bieuThucNgayKy tu util');
+kiem(/const \{ loadGiaCong: __loadGiaCong, loadInThe: __loadInThe, tongHopTheoNha, APPLY_NGAY_QC, OUTER_APPLY_NGAY_QC, bieuThucNgayKy \} = require\('\.\.\/utils\/luongGiaCongInThe'\)/.test(sPay),
+  'payroll.js import APPLY_NGAY_QC + OUTER_APPLY_NGAY_QC + bieuThucNgayKy tu util');
 const fnMay = catKhoi(sPay, 'async function loadLuongKhoanMay', '{', '}');
 kiem(/\$\{APPLY_NGAY_QC\('td'\)\}/.test(fnMay), '1. khoan may: dung CHUNG APPLY_NGAY_QC (khong con ban chep tay)');
 kiem(/WHERE qc\.NgayQC IS NOT NULL/.test(fnMay), '1. khoan may: lenh chua QC bi loai (IS NOT NULL)');
@@ -77,20 +83,26 @@ kiem(/WHERE c\.MaCongDoan IN \('LA','DG'\) AND qc\.NgayQC IS NOT NULL/.test(fnDG
 kiem(/AND YEAR\(\$\{ngayKy\}\)=@n AND MONTH\(\$\{ngayKy\}\)=@t/.test(fnDG), '3. la/dong goi: loc ky theo ngayKy (khong con theo td.NgayGhiNhan tran)');
 kiem(/qc\.NgayQC, \$\{ngayKy\} AS NgayKy/.test(fnDG), '3. la/dong goi: tra NgayQC + NgayKy cho man hinh');
 kiem(!/YEAR\(td\.NgayGhiNhan\)=@n/.test(fnDG), '3. la/dong goi: KHONG con loc tran YEAR(td.NgayGhiNhan)');
+/* ⚠️ v9.18 DAO CHIEU muc 4 — CO CHU DICH (Nguyen 2026-11-04 bo cho QC cho rieng quy cat).
+   Cac phep duoi day KHANG DINH trai vai cat KHONG con gate QC; ba bang kia van phai gate. */
 const fnCat = catKhoi(sPay, 'async function loadSoDoCat', '{', '}');
-kiem(/const ngayKy = bieuThucNgayKy\('td\.NgayGhiNhan'\);/.test(fnCat), '4. trai vai cat: ngayKy = bieuThucNgayKy(td.NgayGhiNhan)');
-kiem(/\$\{APPLY_NGAY_QC\('td'\)\}/.test(fnCat), '4. trai vai cat: APPLY_NGAY_QC(td)');
-kiem(/WHERE c\.MaCongDoan = 'CAT' AND qc\.NgayQC IS NOT NULL/.test(fnCat), '4. trai vai cat: so cat cua lenh chua QC khong vao quy (IS NOT NULL)');
-kiem(/AND YEAR\(\$\{ngayKy\}\)=@n AND MONTH\(\$\{ngayKy\}\)=@t/.test(fnCat), '4. trai vai cat: loc ky theo ngayKy');
-kiem(/qc\.NgayQC, \$\{ngayKy\} AS NgayKy/.test(fnCat), '4. trai vai cat: tra NgayQC + NgayKy');
-kiem(!/YEAR\(td\.NgayGhiNhan\)=@n/.test(fnCat), '4. trai vai cat: KHONG con loc tran YEAR(td.NgayGhiNhan)');
+kiem(!/bieuThucNgayKy/.test(fnCat), '4. trai vai cat v9.18: KHONG con dung bieuThucNgayKy (ky = thang ghi so cat)');
+kiem(/\$\{OUTER_APPLY_NGAY_QC\('td'\)\}/.test(fnCat) && !/\$\{APPLY_NGAY_QC\('td'\)\}/.test(fnCat),
+  '4. trai vai cat v9.18: NgayQC hien thi bang OUTER_APPLY (khong gate), het CROSS APPLY');
+kiem(/WHERE c\.MaCongDoan = 'CAT'\n/.test(fnCat) && !/qc\.NgayQC IS NOT NULL/.test(fnCat),
+  '4. trai vai cat v9.18: lenh chua QC VAN vao quy (het IS NOT NULL)');
+kiem(/AND YEAR\(td\.NgayGhiNhan\)=@n AND MONTH\(td\.NgayGhiNhan\)=@t/.test(fnCat),
+  '4. trai vai cat v9.18: loc ky TRAN theo thang ghi so cat — CO CHU DICH');
+kiem(/qc\.NgayQC, td\.NgayGhiNhan AS NgayKy/.test(fnCat), '4. trai vai cat: van tra NgayQC (hien thi) + NgayKy = ngay ghi');
 const fnTH = catKhoi(sPay, 'function tongHopLuongCat', '{', '}');
 kiem(/NgayQC: s\.NgayQC \|\| null/.test(fnTH), '4. tongHopLuongCat: moi lenh mang NgayQC');
 /* Gio cong chia quy van theo thang (co y — xem ghi chu loadSoDoCat). */
 const fnGio = catKhoi(sPay, 'async function loadGioCongCat', '{', '}');
 kiem(/YEAR\(cc\.Ngay\)=@n AND MONTH\(cc\.Ngay\)=@t/.test(fnGio), '4. gio cong cat van theo thang cham cong (co y)');
-/* Khong con loader nao theo lenh ma loc tran theo NgayGhiNhan: dem so lan "YEAR(td.NgayGhiNhan)" trong ca file. */
-kiem((sPay.match(/YEAR\(td\.NgayGhiNhan\)/g) || []).length === 0, 'payroll.js: khong con cho nao loc tran YEAR(td.NgayGhiNhan)');
+/* v9.18: cho loc tran DUY NHAT duoc phep la loadSoDoCat (ngoai le co chu dich). Dem ca file = 1
+   va phai nam trong fnCat — xuat hien cho thu hai la co loader khac bi "dong bo nham" theo cat. */
+kiem((sPay.match(/YEAR\(td\.NgayGhiNhan\)/g) || []).length === 1 && /YEAR\(td\.NgayGhiNhan\)=@n/.test(fnCat),
+  'payroll.js: loc tran YEAR(td.NgayGhiNhan) dung MOT cho duy nhat = loadSoDoCat (v9.18)');
 
 console.log('\n=== 3. frontend module.payroll.js ===');
 const fnLDG = catKhoi(sFe, 'async function renderLuongLaDongGoi', '{', '}');
@@ -102,11 +114,21 @@ kiem(/<th>Ngày QC<\/th>/.test(fnLDGIn) && /colspan="12"/.test(fnLDGIn) && /<td 
 const fnLDGNV = catKhoi(sFe, 'function buildLaDgNVBody', '{', '}');
 kiem(/<th>Ngày QC<\/th>/.test(fnLDGNV) && /colspan="10" style="text-align:center;"/.test(fnLDGNV) && /<td colspan="8" style="text-align:right;">TỔNG<\/td>/.test(fnLDGNV), 'la/dong goi: phieu luong NV 10 cot, TONG colspan 8');
 const fnCatUI = catKhoi(sFe, 'async function renderLuongTraiVaiCat', '{', '}');
-kiem(/<th>Tên sản phẩm<\/th><th>Ngày QC<\/th>/.test(fnCatUI) && /\$\{fmtDate\(o\.NgayQC\)\}/.test(fnCatUI), 'trai vai cat: bang theo lenh co cot Ngay QC');
+/* v9.19 (Nguyen 2026-11-04): bang "Ban cat theo lenh" doi cot "Ma hang"->"Ma rap", "Ngay QC"->"Ngay cat".
+   Phep kiem doi theo — CO CHU DICH; cot Ngay QC o BANG CHI TIET SO DO van giu (hai phep duoi). */
+kiem(/<th>Mã rập<\/th><th>Tên sản phẩm<\/th><th>Ngày cắt<\/th>/.test(fnCatUI)
+       && /\$\{escapeHtml\(o\.MaRap \|\| ''\)\}/.test(fnCatUI) && /\$\{escapeHtml\(khoangNgayCat\(o\)\)\}/.test(fnCatUI),
+  'trai vai cat v9.19: bang theo lenh dung cot Ma rap + Ngay cat (het Ma hang / Ngay QC)');
+kiem(!/\$\{escapeHtml\(o\.MaSanPham \|\| ''\)\}/.test(fnCatUI) && !/\$\{fmtDate\(o\.NgayQC\)\}/.test(fnCatUI),
+  'trai vai cat v9.19: khong con ve o.MaSanPham / o.NgayQC o bang theo lenh');
 kiem(/colspan="8" class="empty-hint"/.test(fnCatUI) && /<td colspan="4" style="text-align:right;">TỔNG BÀN CẮT<\/td>/.test(fnCatUI), 'trai vai cat: dong rong colspan 8, tfoot TONG colspan 4 (8 cot)');
-kiem(/Chỉ tính sổ cắt của lệnh đã ghi tiến độ QC/.test(fnCatUI), 'trai vai cat: ghi chu noi ro dieu kien QC');
+kiem(/Quỹ tháng = mọi sổ cắt GHI trong tháng — không chờ QC/.test(fnCatUI)
+       && !/Chỉ tính sổ cắt của lệnh đã ghi tiến độ QC/.test(fnCatUI),
+  'trai vai cat v9.18: ghi chu noi luat MOI (khong cho QC), het cau luat cu');
 const fnQuy = catKhoi(sFe, 'function buildLuongCatQuyBody', '{', '}');
-kiem(/<th>Ngày cắt<\/th><th>Ngày QC<\/th>/.test(fnQuy) && /<td colspan="7">Lệnh SX/.test(fnQuy) && /colspan="9" style="text-align:center;"/.test(fnQuy) && /<td colspan="6" style="text-align:right;">TỔNG BÀN CẮT:/.test(fnQuy),
+/* v9.20: nhan dong TONG nay doi theo nhanh (ca quy / rieng mot nhan vien) nen phep kiem chi con
+   bam vao COLSPAN + chu "TỔNG BÀN" — ghim ca cau "TỔNG BÀN CẮT:" la do oan moi lan doi nhan. */
+kiem(/<th>Ngày cắt<\/th><th>Ngày QC<\/th>/.test(fnQuy) && /<td colspan="7">Lệnh SX/.test(fnQuy) && /colspan="9" style="text-align:center;"/.test(fnQuy) && /<td colspan="6" style="text-align:right;">[^<]*TỔNG BÀN/.test(fnQuy),
   'trai vai cat: ban in quy 9 cot (dong lenh colspan 7, rong 9, TONG colspan 6)');
 const fnDon = catKhoi(sFe, 'function openLuongCatDonDetail', '{', '}');
 kiem(/<th>Ngày cắt<\/th><th>Ngày QC<\/th>/.test(fnDon) && /<td colspan="10" style="text-align:right;">TỔNG<\/td>/.test(fnDon), 'trai vai cat: chi tiet lenh 12 cot, TONG colspan 10');

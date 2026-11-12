@@ -94,6 +94,29 @@ router.use('/nhacungcap', buildCrudRouter({
     /* v7.81: đối tác vừa mua vừa bán — trỏ tới đúng dòng trong Danh mục khách hàng để xem công nợ
        2 chiều. Để trống = nhà cung cấp thuần tuý. Xem migration_v696.sql. */
     { name: 'KhachHangID', sqlType: sql.Int, tuyChon: true },
+    /* ============================================================================================
+       v9.36 — ĐƠN GIÁ VẬN CHUYỂN CỦA NHÀ CUNG CẤP (migration_v888).
+
+       Nguyen 2026-11-09: *"mỗi NCC giá vận chuyển khác nhau"* — khai MỘT LẦN ở đây, lập phiếu nhập
+       vải thì hệ thống tự áp cho từng cây (vẫn sửa tay được trên phiếu).
+
+       🔴 Đây CHỈ là giá trị MẶC ĐỊNH để tự điền. Số thật dùng cho giá thành là bản chụp ở
+       `VaiCay.PhiVanChuyenDonGia`. Sửa đơn giá ở đây KHÔNG hồi tố những cây đã nhập — cố ý, kế toán
+       không chấp nhận hồi tố giá vốn.
+       🔴 Phí này KHÔNG vào công nợ NCC (tiền cước trả nhà xe, không phải nợ NCC). Xem khối ghi chú
+       v9.36 ở utils/tienVaiNhap.js.
+       `PhiVanChuyenDVT` chỉ nhận 'Kg' / 'Met' / NULL (CK_NhaCungCap_PhiVCDVT) — phải TRÙNG
+       `DonViTinhGia` của phiếu thì mới tự áp được, lệch đơn vị thì form báo và để nhập tay.
+
+       🔴 `khongGuiThiGiu` BẮT BUỘC (rà chéo bắt được): máy nào còn `module.danhmuc.js` bản cũ trong
+       cache sẽ PUT lên body KHÔNG có hai khóa này ⇒ crudFactory ghi NULL ⇒ đơn giá vận chuyển của
+       NCC đó mất sạch, im lặng, và từ đó mọi phiếu nhập mới không còn tự áp phí. Đúng bài học
+       AnhMau ở v8.94 ngay đầu file này.
+       🔴 `rongThanhNull` cho cột DVT: ô chọn có mục "— chưa khai —" với value rỗng, mà chuỗi rỗng
+       vi phạm CK_NhaCungCap_PhiVCDVT ⇒ bấm Lưu là lỗi ràng buộc ⇒ chết cả màn danh mục NCC.
+       ============================================================================================ */
+    { name: 'PhiVanChuyenDonGia', sqlType: sql.Decimal(14, 2), tuyChon: true, khongGuiThiGiu: true },
+    { name: 'PhiVanChuyenDVT', sqlType: sql.NVarChar(10), tuyChon: true, khongGuiThiGiu: true, rongThanhNull: true },
     { name: 'GhiChu', sqlType: sql.NVarChar }
   ]
 }));

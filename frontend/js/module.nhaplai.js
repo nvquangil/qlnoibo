@@ -129,6 +129,12 @@
               <td>
                 <button class="btn small secondary nl-xem" data-id="${r.PhieuNLID}">Xem</button>
                 <button class="btn small secondary nl-xls" data-id="${r.PhieuNLID}">Excel</button>
+                ${/* v9.21: nút Sửa. Phiếu ĐÃ HỦY không sửa được (tồn đã trả lại) — hiện nút ở trạng
+                     thái KHÓA kèm lý do thay vì giấu đi, theo luật v9.04 (ẩn nút = người dùng không
+                     biết vì sao không làm được). */''}
+                ${perm.canEdit ? (r.TrangThai === 'Đã hủy'
+                  ? '<button class="btn small secondary" disabled title="Phiếu đã hủy — tồn kho và công nợ đã trả về như trước. Muốn dùng lại thì lập phiếu mới.">Sửa</button>'
+                  : `<button class="btn small secondary nl-sua" data-id="${r.PhieuNLID}">Sửa</button>`) : ''}
                 ${perm.canEdit && r.TrangThai !== 'Đã hủy' ? `<button class="btn small warn nl-huy" data-id="${r.PhieuNLID}">Hủy</button>` : ''}
                 ${perm.canDelete ? `<button class="btn small danger nl-xoa" data-id="${r.PhieuNLID}">Xóa</button>` : ''}
               </td>
@@ -150,6 +156,9 @@
       xemPhieu(b.dataset.id).catch(err => toast(err.message, 'error'));
     });
     hop.querySelectorAll('.nl-xls').forEach(b => b.onclick = () => taiFile(`/api/nhaplai/phieu/${b.dataset.id}/export`, 'PhieuNhapLai.xlsx'));
+    // v9.21: openForm là hàm async gọi API ngay dòng đầu — .catch kẻo bấm Sửa "không có gì xảy ra".
+    hop.querySelectorAll('.nl-sua').forEach(b => b.onclick = () =>
+      openForm(b.dataset.id).catch(err => toast(err.message, 'error')));
     /* v9.06: bọc try/catch — apiPut/apiDelete THROW khi backend từ chối (vd phiếu đã hủy rồi),
        không bắt là nút Hủy/Xóa câm. Nhánh `kq.success ? ...` cũ là mã chết: ném trước khi trả về. */
     hop.querySelectorAll('.nl-huy').forEach(b => b.onclick = async () => {
@@ -170,20 +179,46 @@
     });
   }
 
+  /* v9.22 — hàm THUẦN để bộ tự kiểm chạy được trên dữ liệu thật (luật: kiểm HÀNH VI, đừng so chuỗi).
+     `chiMaTrongPhieu` = true ⇒ chỉ giữ các dòng có khóa trong `khoaGiu` (các mã đang/đã có trên
+     phiếu đang sửa); false ⇒ trả nguyên danh sách (chế độ lập mới, hoặc đã tích "Thêm mã khác"). */
+  function locDongTheoCheDo(dsTat, khoaGiu, chiMaTrongPhieu) {
+    if (!chiMaTrongPhieu) return dsTat;
+    return (dsTat || []).filter(r => khoaGiu && khoaGiu.has(Number(r.PhieuBHChiTietID)));
+  }
+
   /* ================================================================================================
      FORM LAP PHIEU
      ================================================================================================ */
-  async function openForm() {
+  /* v9.21 — MỘT form cho cả LẬP và SỬA (Nguyen 2026-11-05: "phiếu nhập lại hàng hóa hiện tại không
+     sửa được, thay đổi thành sửa được"). Truyền `suaId` là vào chế độ sửa.
+     Một form chứ không phải hai: giá khóa cứng, luật chặn trả vượt và cách tính tổng đều do backend
+     quyết, nên hai form rời chỉ tạo đường trôi khỏi nhau (bài học "một nghiệp vụ = một luồng").
+     ⚠️ Mọi lời gọi API lấy dòng/tính tiền ở chế độ sửa phải kèm `boPhieuNLID` — nếu thiếu, chính các
+     dòng của phiếu đang sửa bị coi là "đã trả hết" và biến mất khỏi form. */
+  async function openForm(suaId) {
+    const sua = !!suaId;
+    let pCu = null, ctCu = [];
+    if (sua) {
+      const kqP = await apiGet('/api/nhaplai/phieu/' + suaId);
+      pCu = (kqP.data || {}).header || null;
+      ctCu = (kqP.data || {}).chiTiet || [];
+      if (!pCu) { toast('Không tìm thấy phiếu nhập lại.', 'error'); return; }
+      if (pCu.TrangThai === 'Đã hủy') {
+        toast('Phiếu đã hủy nên không sửa được — tồn kho và công nợ đã trả về như trước. Hãy lập phiếu nhập lại mới.', 'error', 8000);
+        return;
+      }
+    }
     const dsKhach = (await apiGet('/api/nhaplai/khach')).data || [];
     if (!dsKhach.length) {
       toast('Chưa có phiếu bán hàng nào nên chưa có gì để nhập lại.', 'error');
       return;
     }
-    const soPhieu = (await apiGet('/api/nhaplai/next-sophieu')).data || '';
-    const homNay = homNayISO();
+    const soPhieu = sua ? (pCu.SoPhieu || '') : ((await apiGet('/api/nhaplai/next-sophieu')).data || '');
+    const homNay = sua ? String(pCu.NgayNhap || '').slice(0, 10) : homNayISO();
 
     openModal(`
-      <div class="modal-head"><h3>Lập phiếu nhập lại — hàng khách trả</h3></div>
+      <div class="modal-head"><h3>${sua ? 'Sửa phiếu nhập lại ' + escapeHtml(soPhieu) : 'Lập phiếu nhập lại — hàng khách trả'}</h3></div>
       <div class="modal-body">
         <!-- v6.66.1: DAU PHIEU DUNG BANG KE 2 COT nhan/gia tri thay vi cac khoi div roi - nhin
              giong to phieu giay, doc theo hang de doi chieu, khong bi troi cot khi man hep. -->
@@ -196,11 +231,17 @@
           </tr>
           <tr>
             <th>Khách hàng <span class="bat-buoc">*</span></th>
-            <td><select id="nlfKhach" style="width:100%;"><option value="">-- Chọn khách --</option>
-              ${dsKhach.map(k => `<option value="${escapeHtml(k.TenKhach)}">${escapeHtml(k.TenKhach)} (${k.SoPhieu} phiếu)</option>`).join('')}
+            ${/* v9.21: chế độ sửa KHÓA ô khách — đổi khách là đổi luôn bộ dòng đã bán, số tiền và
+                 công nợ của hai khách; muốn vậy thì hủy phiếu rồi lập phiếu mới cho đúng khách. */''}
+            <td><select id="nlfKhach" style="width:100%;" ${sua ? 'disabled title="Sửa phiếu không đổi được khách — hủy rồi lập phiếu mới nếu cần"' : ''}><option value="">-- Chọn khách --</option>
+              ${dsKhach.map(k => `<option value="${escapeHtml(k.TenKhach)}"${sua && String(k.TenKhach).trim() === String(pCu.TenKhach || '').trim() ? ' selected' : ''}>${escapeHtml(k.TenKhach)} (${k.SoPhieu} phiếu)</option>`).join('')}
             </select></td>
             <th>Phiếu xuất (phiếu bán hàng) <span class="bat-buoc">*</span></th>
-            <td><select id="nlfPhieu" style="width:100%;"><option value="">-- Chọn khách trước --</option></select></td>
+            ${/* v9.22 (rà chéo bắt): chế độ sửa KHÓA luôn ô này. Đổi phiếu xuất là `taiDong()` chạy
+                 không giữ chọn ⇒ XÓA SẠCH số đang sửa dở mà không một lời báo, rồi bảng hiện câu
+                 chẩn đoán sai ("phiếu bán gốc có thể đã hủy"). Muốn đổi phiếu xuất thì hủy, lập mới.
+                 Select disabled vẫn đọc được .value nên các chỗ khác không phải sửa. */''}
+            <td><select id="nlfPhieu" style="width:100%;" ${sua ? 'disabled title="Sửa phiếu không đổi được phiếu xuất gốc — hủy rồi lập phiếu mới nếu cần"' : ''}><option value="">-- Chọn khách trước --</option></select></td>
           </tr>
           <tr>
             <th>Lý do trả</th>
@@ -210,12 +251,22 @@
           </tr>
         </table>
 
+        ${/* v9.22 (Nguyen 2026-11-05: "sửa là hiện ra cái phiếu đã nhập lại và những mã đã nhập lại
+             thôi — đang hiện ra như lúc lập phiếu ban đầu"):
+             · SỬA  → bảng CHỈ liệt kê các mã ĐANG CÓ trong phiếu. Muốn bổ sung mã thì tích ô
+                      "Thêm mã khác" — mặc định TẮT.
+             · LẬP  → giữ nguyên như cũ (chọn mã từ phiếu xuất / mọi phiếu).
+             Ô "mọi phiếu" vẫn được dựng khi sửa nhưng ẩn đi: taiDong() và phần nạp sẵn đều đọc
+             .checked của nó (phiếu lập từ "tự tìm mã hàng" cần bật), bỏ hẳn là TypeError. */''}
         <div class="phieu-thanh-muc">
-          <b>Chọn mã hàng cần nhập lại</b>
+          <b>${sua ? 'Các mã đã nhập lại trong phiếu' : 'Chọn mã hàng cần nhập lại'}</b>
           <input type="text" id="nlfTim" placeholder="Lọc mã hàng / tên / màu trong bảng dưới..." style="flex:1;min-width:200px;">
-          <label style="display:flex;gap:6px;align-items:center;font-weight:400;white-space:nowrap;">
+          <label style="display:flex;gap:6px;align-items:center;font-weight:400;white-space:nowrap;${sua ? 'display:none;' : ''}">
             <input type="checkbox" id="nlfMoiPhieu"> Lấy tất cả mã đã mua (mọi phiếu)
           </label>
+          ${sua ? `<label style="display:flex;gap:6px;align-items:center;font-weight:400;white-space:nowrap;">
+            <input type="checkbox" id="nlfThemMa"> ➕ Thêm mã khác vào phiếu
+          </label>` : ''}
         </div>
         <div class="empty-hint" id="nlfGoiY" style="margin:0 0 6px;">
           Giá lấy nguyên từ phiếu xuất, không sửa được — để số tiền trả lại khớp đúng số đã ghi nợ.
@@ -228,7 +279,7 @@
       </div>
       <div class="modal-foot">
         <button class="btn secondary" id="nlfHuy">Hủy</button>
-        <button class="btn" id="nlfLuu">Lưu phiếu nhập lại</button>
+        <button class="btn" id="nlfLuu">${sua ? '💾 Lưu thay đổi' : 'Lưu phiếu nhập lại'}</button>
       </div>`, { rong: true });
 
     const $ = (id) => document.getElementById(id);
@@ -251,6 +302,10 @@
        lưu cả mã thuộc phiếu khác mà người dùng không còn nhìn thấy. Chỉ GIỮ khi đổi CHỮ TÌM.
        ================================================================================================ */
     const daNhap = new Map();   // PhieuBHChiTietID -> { sl, con }
+    /* v9.22 (rà chéo bắt): khóa các dòng CÓ SẴN trên phiếu lúc mở form sửa. Bộ lọc "chỉ mã trong
+       phiếu" phải dựa trên HỢP của `daNhap` và tập này — chỉ dựa `daNhap` thì dòng vừa bị đặt
+       SL = 0 sẽ RỜI BẢNG ở lần vẽ lại kế tiếp và không còn ô nào để gõ lại số. */
+    const boGoc = new Set();
     const ghiNhap = (bct, sl, con) => {
       const n = Math.round(Number(sl) || 0);
       if (n > 0) daNhap.set(Number(bct), { sl: n, con: Number(con) || 0 });
@@ -284,6 +339,9 @@
     /* Đổi phiếu / bật-tắt "mọi phiếu" = ĐỔI PHẠM VI dòng -> KHÔNG giữ SL đã nhập (xem ghi chú ở daNhap). */
     $('nlfPhieu').onchange = () => taiDong();
     $('nlfMoiPhieu').onchange = () => taiDong();
+    /* v9.22: bật/tắt "Thêm mã khác" chỉ ĐỔI PHẠM VI HIỂN THỊ, KHÔNG đổi phạm vi dòng của phiếu ⇒
+       phải GIỮ SL đã nhập (giuChon: true). Xóa daNhap ở đây là mất sạch số đang sửa dở. */
+    if ($('nlfThemMa')) $('nlfThemMa').onchange = () => taiDong({ giuChon: true });
     /* ================================================================================================
        v7.99 — MỘT handler duy nhất cho ô tìm, và nó quyết định lọc ở đâu:
          · "mọi phiếu"  -> gọi lại server kèm `q` (chặn 200 đã bỏ, danh sách có thể vài nghìn dòng
@@ -323,20 +381,32 @@
          v9.06: bắt lỗi — không thì apiGet ném là bảng đứng im ở "Đang tải..." mãi mãi, không ai
          biết vì sao (cùng lớp lỗi với nút Lưu câm). */
       let kq;
+      // v9.21: chế độ sửa phải loại CHÍNH phiếu này khỏi phép "đã trả", không thì dòng của nó bị
+      // lọc mất (ConTraCai = 0) và form sửa mở ra trống trơn.
+      const boNL = sua ? '&boPhieuNLID=' + encodeURIComponent(suaId) : '';
       try {
         kq = moiPhieu
           ? await apiGet('/api/nhaplai/timmahang?tenKhach=' + encodeURIComponent(ten)
-              + (q ? '&q=' + encodeURIComponent(q) : ''))
-          : await apiGet(`/api/nhaplai/phieuxuat/${pid}/dong`);
+              + (q ? '&q=' + encodeURIComponent(q) : '') + boNL)
+          : await apiGet(`/api/nhaplai/phieuxuat/${pid}/dong` + (sua ? '?boPhieuNLID=' + encodeURIComponent(suaId) : ''));
       } catch (err) {
         $('nlfBang').innerHTML = `<div class="empty-hint">Không tải được danh sách mã hàng: <b>${escapeHtml(err.message)}</b></div>`;
         return;
       }
-      const ds = (kq.data || []).filter(r => Number(r.ConTraCai) > 0);
+      const dsTat = (kq.data || []).filter(r => Number(r.ConTraCai) > 0);
+      /* v9.22: chế độ SỬA chỉ hiện MÃ ĐANG CÓ TRONG PHIẾU (daNhap đã nạp từ chi tiết cũ), trừ khi
+         người dùng tự tích "Thêm mã khác". Lọc Ở ĐÂY chứ không lọc lúc gọi API: API vẫn phải trả
+         đủ để ô "Thêm mã khác" bật lên là có ngay, và để các cột "đã bán / đã trả / còn trả được"
+         của chính dòng cũ vẫn là số thật. */
+      const chiMaTrongPhieu = sua && !(($('nlfThemMa') || {}).checked);
+      const khoaGiu = new Set([...daNhap.keys(), ...boGoc]);   // v9.22: HỢP — xem ghi chú ở boGoc
+      const ds = locDongTheoCheDo(dsTat, khoaGiu, chiMaTrongPhieu);
       if (!ds.length) {
-        $('nlfBang').innerHTML = `<div class="empty-hint">${q && moiPhieu
-          ? 'Không có mã nào khớp "' + escapeHtml(q) + '" trong các phiếu đã mua của khách này.'
-          : 'Không còn mã nào trả lại được (đã trả hết hoặc phiếu không có dòng nào).'}</div>`;
+        $('nlfBang').innerHTML = `<div class="empty-hint">${chiMaTrongPhieu
+          ? 'Không hiện được dòng nào của phiếu — có thể phiếu bán gốc đã hủy. Tích <b>“➕ Thêm mã khác vào phiếu”</b> để chọn lại mã.'
+          : (q && moiPhieu
+            ? 'Không có mã nào khớp "' + escapeHtml(q) + '" trong các phiếu đã mua của khách này.'
+            : 'Không còn mã nào trả lại được (đã trả hết hoặc phiếu không có dòng nào).')}</div>`;
         capNhatGoiY(0, moiPhieu, q);
         tinhTong();
         return;
@@ -420,6 +490,12 @@
       const el = $('nlfGoiY');
       if (!el) return;
       const phan = ['Giá lấy nguyên từ phiếu xuất, không sửa được — để số tiền trả lại khớp đúng số đã ghi nợ.'];
+      // v9.22: nói rõ bảng đang hiện cái gì ở chế độ sửa (chỉ mã của phiếu / đã mở ra chọn thêm).
+      if (sua) {
+        phan.push((($('nlfThemMa') || {}).checked)
+          ? ('<b>Đang hiện mọi mã còn trả được' + (($('nlfMoiPhieu') || {}).checked ? ' của khách này' : ' TRONG PHIẾU XUẤT NÀY') + '</b> — tích thêm mã để bổ sung vào phiếu.')
+          : '<b>Chỉ hiện các mã đang có trong phiếu này.</b> Đặt số lượng = 0 để bỏ một dòng (dòng vẫn ở lại bảng để gõ lại); tích "➕ Thêm mã khác" nếu cần bổ sung mã.');
+      }
       if (gyMoiPhieu) {
         phan.push(`Đang hiện <b>${fmtNumber(gySoDong)}</b> dòng${gyQ ? ' khớp "' + escapeHtml(gyQ) + '"' : ' (tất cả phiếu của khách)'}.`);
         if (!gyQ && gySoDong > 500) phan.push('<b>Nhiều dòng — gõ vài chữ vào ô lọc cho nhẹ và dễ tìm.</b>');
@@ -446,7 +522,7 @@
            Ở SỐ CŨ: người dùng nhìn tổng cũ tưởng số mình vừa gõ hợp lệ. Giờ vẽ thẳng câu từ chối
            của backend vào chỗ tổng tiền — thấy NGAY khi gõ, trước cả khi bấm Lưu. */
         let kq;
-        try { kq = await apiPost('/api/nhaplai/tinhthu', { tenKhach: $('nlfKhach').value, dong }); }
+        try { kq = await apiPost('/api/nhaplai/tinhthu', { tenKhach: $('nlfKhach').value, dong, boPhieuNLID: sua ? suaId : null }); }
         catch (err) {
           oTong.innerHTML = `<span style="color:#c62828;font-weight:400;">⚠️ ${escapeHtml(err.message)}</span>`;
           return;
@@ -494,17 +570,24 @@
       const nut = $('nlfLuu');
       nut.disabled = true;
       try {
-        const kq = await apiPost('/api/nhaplai/phieu', {
+        const than = {
           ngayNhap: $('nlfNgay').value,
           tenKhach: $('nlfKhach').value,
-          sdt: sel.dataset.sdt || null,
-          diaChi: sel.dataset.diachi || null,
+          /* v9.21: khi SỬA, giữ nguyên SĐT/địa chỉ ĐÃ LƯU trên phiếu. Lấy lại từ dataset của ô chọn
+             (suy từ MAX(SDT) của bảng khách) là sửa số lượng mà thay luôn thông tin liên hệ in trên
+             phiếu — rà chéo bắt. */
+          sdt: (sua ? (pCu.SDT || null) : (sel.dataset.sdt || null)),
+          diaChi: (sua ? (pCu.DiaChi || null) : (sel.dataset.diachi || null)),
           phieuBHID: sel.value || null,
           lyDo: $('nlfLyDo').value || null,
           ghiChu: $('nlfGhiChu').value || null,
           dong
-        });
-        toast('Đã lưu phiếu ' + kq.data.soPhieu + ' — trừ công nợ ' + fmtTien(kq.data.tongThanhToan) + ' đ', 'success');
+        };
+        // v9.21: SỬA đi đường PUT (backend hoàn tồn cũ rồi ghi lại); LẬP MỚI vẫn POST như cũ.
+        const kq = sua ? await apiPut('/api/nhaplai/phieu/' + suaId, than)
+                       : await apiPost('/api/nhaplai/phieu', than);
+        toast((sua ? 'Đã lưu thay đổi phiếu ' : 'Đã lưu phiếu ') + kq.data.soPhieu
+          + ' — trừ công nợ ' + fmtTien(kq.data.tongThanhToan) + ' đ', 'success');
         closeModal();
         taiBang();   // tự đỡ lỗi bên trong, không bao giờ reject (v9.06)
         /* xemPhieu không await: phiếu ĐÃ lưu, mở bản xem lỗi thì chỉ báo riêng việc mở,
@@ -519,6 +602,76 @@
         nut.disabled = false;
       }
     };
+
+    /* ================================================================================================
+       v9.21 — NẠP SẴN khi SỬA. Đặt ở CUỐI hàm, sau khi mọi handler đã gắn: đoạn này gọi thẳng
+       `$('nlfKhach').onchange()` và `taiDong()`, mà hai thứ đó chỉ tồn tại sau các dòng trên.
+       `taiDong({ giuChon: true })` — KHÔNG được để nó xóa `daNhap` vừa nạp (xem ghi chú ở daNhap).
+       ================================================================================================ */
+    if (sua) {
+      ctCu.forEach(d => {
+        if (!d.PhieuBHChiTietID) return;   // dòng cũ không gắn được dòng bán gốc thì không sửa nổi SL
+        ghiNhap(d.PhieuBHChiTietID, d.SoLuongCai, d.SoLuongCai);
+        boGoc.add(Number(d.PhieuBHChiTietID));   // v9.22: giữ dòng trên bảng cả khi bị đặt SL = 0
+      });
+      $('nlfLyDo').value = pCu.LyDo || '';
+      $('nlfGhiChu').value = pCu.GhiChu || '';
+      /* Khách của phiếu có thể KHÔNG còn trong danh sách /khach (mọi phiếu bán của họ đã hủy).
+         Gán .value không khớp option nào thì ô về rỗng ⇒ bảng đứng trống KHÔNG một chữ báo, mà ô
+         lại đang disabled nên không ai sửa được (rà chéo v9.21 bắt). Thiếu thì CHÈN option. */
+      const tenCu = String(pCu.TenKhach || '').trim();
+      $('nlfKhach').value = tenCu;
+      if ($('nlfKhach').value !== tenCu) {
+        const op = document.createElement('option');
+        op.value = tenCu; op.textContent = tenCu + ' (khách của phiếu — không còn phiếu bán hiệu lực)';
+        $('nlfKhach').appendChild(op);
+        $('nlfKhach').value = tenCu;
+      }
+      try {
+        await $('nlfKhach').onchange();            // nạp danh sách phiếu xuất của khách
+        if (pCu.PhieuBHID) {
+          $('nlfPhieu').value = String(pCu.PhieuBHID);
+          /* Phiếu bán gốc đã hủy ⇒ không có trong ô chọn ⇒ value rỗng ⇒ taiDong() thoát sớm, bảng
+             trống mà daNhap vẫn đầy: người dùng thấy trống rồi bấm Lưu vẫn ghi dòng cũ. Lùi sang
+             "mọi phiếu" để các dòng hiện lại, và NÓI RA. */
+          if (!$('nlfPhieu').value) {
+            $('nlfMoiPhieu').checked = true;
+            toast('Phiếu bán gốc của phiếu này không còn hiệu lực (đã hủy) — đang hiện theo "tất cả mã đã mua". Kiểm lại các dòng trước khi lưu.', 'error', 9000);
+          }
+        } else {
+          $('nlfMoiPhieu').checked = true;         // phiếu lập từ "tự tìm mã hàng" (không gắn phiếu xuất)
+        }
+        await taiDong({ giuChon: true });
+        /* v9.22 — LƯỚI: phiếu có dòng từ NHIỀU phiếu bán (nhưng vẫn được gán một PhieuBHID) thì
+           nguồn "một phiếu xuất" không đủ dòng ⇒ bảng thiếu, mà daNhap vẫn giữ nên bấm Lưu lại ghi
+           đủ: người dùng thấy ít hơn thực tế. Thiếu thì tự mở rộng sang "mọi phiếu của khách". */
+        const dongTrenBang = () => new Set(Array.from(document.querySelectorAll('#nlfBang tr[data-bct]'))
+          .map(tr => Number(tr.dataset.bct)));
+        let thieu = [...daNhap.keys()].filter(k => !dongTrenBang().has(k));
+        if (thieu.length && !$('nlfMoiPhieu').checked) {
+          $('nlfMoiPhieu').checked = true;
+          await taiDong({ giuChon: true });
+          thieu = [...daNhap.keys()].filter(k => !dongTrenBang().has(k));
+        }
+        /* v9.22 (rà chéo bắt): KHÔNG được hứa "vẫn giữ khi lưu". Dòng không hiện lại được chỉ có hai
+           nguyên nhân, và backend TỪ CHỐI cả hai: phiếu bán gốc đã hủy (chuanBiPhieu: "không thuộc
+           về khách… hoặc phiếu bán đã hủy") hoặc dòng đã trả hết / khách mua luôn ở nơi khác
+           (ConTraCai = 0 ⇒ "chỉ còn trả được 0 Cái"). Giữ chúng trong daNhap là đẩy người dùng vào
+           ngõ cụt: ô tổng đỏ vĩnh viễn, bấm Lưu không bao giờ xong. Nên BỎ hẳn và nói đúng — y như
+           câu cảnh báo dòng không gắn dòng bán gốc ngay dưới. */
+        if (thieu.length) {
+          thieu.forEach(k => daNhap.delete(k));
+          tinhTong();
+          toast(`${thieu.length} dòng của phiếu không hiện lại được (phiếu bán gốc đã hủy, hoặc dòng đã trả hết / khách mua luôn ở nơi khác) — sửa và lưu sẽ BỎ ${thieu.length} dòng đó. Nếu không muốn, bấm Hủy.`, 'error', 11000);
+        }
+      } catch (err) {
+        toast('Không nạp được dòng hàng của phiếu: ' + err.message, 'error', 8000);
+      }
+      const soDongKhongGan = ctCu.filter(d => !d.PhieuBHChiTietID).length;
+      if (soDongKhongGan) {
+        toast(`Phiếu có ${soDongKhongGan} dòng cũ không gắn với dòng phiếu bán nào — sửa và lưu sẽ BỎ các dòng đó. Nếu không muốn, bấm Hủy.`, 'error', 10000);
+      }
+    }
   }
 
   /* ================================================================================================

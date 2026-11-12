@@ -15,6 +15,9 @@ backend/certs/
 *.pfx
 *.key
 *.pem
+# v9.30: token Zalo OA (access + refresh). Lo refresh token la nguoi khac nhan tin thay OA cua minh.
+backend/.zalo-oa.json
+backend/.zalo-oa.json.tmp
 
 # --- Tai lai duoc bang npm install ---
 node_modules/

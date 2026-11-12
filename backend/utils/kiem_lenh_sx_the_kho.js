@@ -157,7 +157,10 @@ kiem(/const chuoiLenh = dsLenhSXCuaDong\(r\)\.map\(l => l\.MaDH\)\.concat\(dsPhi
 kiem(/querySelectorAll\('\.act-xem-lenh'\)[\s\S]{0,200}moLenhSX\(a\.dataset\.madh\)/.test(rtRender), 'wire .act-xem-lenh -> moLenhSX');
 kiem(/querySelectorAll\('\.act-xem-phieu'\)[\s\S]{0,200}moPhieuNhap\(a\.dataset\.id\)/.test(rtRender), 'wire .act-xem-phieu -> moPhieuNhap');
 kiem(/querySelectorAll\('\.act-them'\)[\s\S]{0,400}querySelector\('\.kh-them'\)/.test(rtRender), 'wire .act-them -> xo .kh-them cua dung dong do');
-kiem(/module\.khohang\.js\?v=8\.97/.test(sIndex), 'index.html: module.khohang.js?v=8.97');
+/* v9.16: doi tu ghim cung ?v=8.97 sang so SO (nhu dong duoi) — ghim cung la moi lan bump
+   module.khohang.js (9.11, 9.16...) bo kiem nay do oan du tinh nang v8.97 van nguyen. */
+const vKhoHang = Number(((sIndex.match(/module\.khohang\.js\?v=([\d.]+)/) || [])[1]) || 0);
+kiem(vKhoHang >= 8.97, `index.html: module.khohang.js?v= >= 8.97  [duoc: ${vKhoHang}]`);
 const vQlsx = Number(((sIndex.match(/module\.qlsx\.js\?v=([\d.]+)/) || [])[1]) || 0);
 kiem(vQlsx >= 8.97, `index.html: module.qlsx.js?v= >= 8.97 (co export moi)  [duoc: ${vQlsx}]`);
 

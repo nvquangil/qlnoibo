@@ -12,6 +12,7 @@
     "reset:import": "node scripts/resetImportData.js"
   },
   "dependencies": {
+    "@zxing/library": "^0.21.3",
     "adm-zip": "^0.5.16",
     "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
