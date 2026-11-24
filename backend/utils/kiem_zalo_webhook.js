@@ -160,16 +160,23 @@ process.env.ZALO_OA_LOG_CHU_KY = '0';
   server.close();
 
   console.log('\n=== 4. BỐN LUẬT CỦA WEBHOOK ===');
-  kiem('🔴 trả 200 NGAY rồi mới xử lý (không để Zalo chờ → gửi lại → trả lời khách 2-3 lần)',
-       nguonZalo.indexOf('res.json({ success: true });') < nguonZalo.indexOf('xuLy(sk)'));
   /* "KHÔNG chứa X" thì phải lọc comment trước, không thì chính câu ghi chú giải thích luật lại làm
      phép đỏ (đã vấp 3 lần — xem feedback_qlnoibo_bo_tu_kiem_phai_loc_comment). */
   const maZalo = nguonZalo.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  /* Hai phép thứ tự phải nhìn vào THÂN ROUTE (từ router.post('/webhook') trở đi) và tìm CHỖ GỌI
+     `xuLy(sk).catch(` — `indexOf('xuLy(sk)')` trên cả file bắt nhầm dòng ĐỊNH NGHĨA `async function
+     xuLy(sk)` nằm phía trên route ⇒ đỏ oan dù thứ tự thật đúng (14/11 chạy kiem_tat_ca lòi ra). */
+  const iRoute = maZalo.indexOf("router.post('/webhook'");
+  const thanRoute = iRoute > -1 ? maZalo.slice(iRoute) : '';
+  kiem('🔴 trả 200 NGAY rồi mới xử lý (không để Zalo chờ → gửi lại → trả lời khách 2-3 lần)',
+       iRoute > -1 && thanRoute.indexOf('res.json({ success: true });') > -1
+         && thanRoute.indexOf('res.json({ success: true });') < thanRoute.indexOf('xuLy(sk).catch('));
   kiem('🔴 POST /webhook KHÔNG trả 401 nữa — 401 là Zalo KHÔNG khai được webhook',
        !/res\.status\(401\)/.test(maZalo),
        'siết lại thành 401 cho "chặt hơn" = tự khóa chính mình; hàng rào là KHÔNG XỬ LÝ, không phải mã HTTP');
   kiem('🔴 chữ ký sai thì return NGAY, trước khi chạm tới xuLy/tải ảnh/gọi API',
-       maZalo.indexOf('if (!chuKyHopLe(req))') < maZalo.indexOf('xuLy(sk)')
+       iRoute > -1 && thanRoute.indexOf('if (!chuKyHopLe(req))') > -1
+         && thanRoute.indexOf('if (!chuKyHopLe(req))') < thanRoute.indexOf('xuLy(sk).catch(')
          && /__demTuChoi\+\+;/.test(maZalo),
        'vứt muộn hơn một dòng là mở lại cửa SSRF và gửi tin mạo danh shop');
   kiem('🔴 chống tin LẶP theo msg_id', /function daXuLyRoi\(id\)/.test(nguonZalo) && /daXuLyRoi\(msgId\)/.test(nguonZalo));

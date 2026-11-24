@@ -117,7 +117,7 @@ kiem('doi tay o ngay cung di qua apDung (chan tu > den bang toast)',
      /if \(tu && den && tu > den\) \{ toast\('Từ ngày phải nhỏ hơn hoặc bằng đến ngày\.', 'error'\); return; \}[\s\S]{0,80}?kyLocDS\[khoa\] = \{ tu: tu \|\| '', den: den \|\| '' \};/.test(fe));
 
 console.log('\n=== 5. BUMP ===');
-kiem('index.html bump module.congno.js?v=9.17', html.includes('module.congno.js?v=9.17'));
+kiem('index.html bump module.congno.js?v >= 9.17', (() => { const m = /module\.congno\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.17; })());
 
 console.log('\n' + '='.repeat(70));
 console.log(sai === 0 ? `✅ ${dat} phep DAT, 0 sai` : `❌ ${sai} SAI / ${dat + sai} phep`);

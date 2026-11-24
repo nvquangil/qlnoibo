@@ -271,12 +271,13 @@ window.ModuleUsers = (function () {
       <form id="uForm">
         <div class="form-grid">
           <div class="form-row"><label>Tên đăng nhập *</label><input name="username" value="${escapeHtml(row ? row.Username : '')}" ${isEdit ? 'readonly' : 'required'}></div>
-          <div class="form-row"><label>${isEdit ? 'Mật khẩu mới (để trống nếu không đổi)' : 'Mật khẩu *'}</label><input type="password" name="password" ${isEdit ? '' : 'required'}></div>
+          ${/* v9.71: tạo mới KHÔNG bắt buộc mật khẩu — để trống ⇒ mật khẩu tạm = tên đăng nhập, lần đăng nhập đầu bắt đổi (migration_v897). */''}
+          <div class="form-row"><label>${isEdit ? 'Mật khẩu mới (để trống nếu không đổi)' : 'Mật khẩu (để trống = mật khẩu tạm là TÊN ĐĂNG NHẬP, bắt đổi khi đăng nhập lần đầu)'}</label><input type="password" name="password" autocomplete="new-password"></div>
           <div class="form-row"><label>Họ tên *</label><input name="hoTen" value="${escapeHtml(row ? row.HoTen : '')}" required></div>
           <div class="form-row"><label>Email</label><input name="email" value="${escapeHtml(row ? row.Email : '')}"></div>
           <div class="form-row"><label>Bộ phận</label><select name="boPhanId">
             <option value="">--</option>${opt(boPhanCache, 'BoPhanID', 'TenBoPhan', row ? row.BoPhanID : '')}</select></div>
-          <div class="form-row"><label>Liên kết nhân viên (để nhân viên tự xem lương)</label><select name="nhanVienId">
+          <div class="form-row"><label>Liên kết nhân viên (gắn là tự thấy phân hệ "Bảng lương của tôi" — không cần cấp quyền)</label><select name="nhanVienId">
             <option value="">-- Không liên kết --</option>${nhanVienCache.map(nv => `<option value="${nv.NhanVienID}" ${row && row.NhanVienID === nv.NhanVienID ? 'selected' : ''}>${escapeHtml((nv.MaNhanVien ? nv.MaNhanVien + ' - ' : '') + nv.HoTen)}</option>`).join('')}</select></div>
           <div class="form-row"><label>Trạng thái</label><select name="isActive">
             <option value="true" ${!row || row.IsActive ? 'selected' : ''}>Hoạt động</option>
@@ -311,9 +312,15 @@ window.ModuleUsers = (function () {
         groupIds: fd.getAll('groupIds').map(Number), stageIds: fd.getAll('stageIds').map(Number)
       };
       try {
-        if (isEdit) await apiPut('/api/users/' + row.UserID, body);
-        else await apiPost('/api/users', body);
+        const r = isEdit ? await apiPut('/api/users/' + row.UserID, body) : await apiPost('/api/users', body);
         closeModal(); toast('Đã lưu.', 'success'); render(container, currentUser);
+        /* v9.52: gắn nhân viên là máy chủ tự mở phân hệ "Bảng lương của tôi" cho tài khoản đó (ghi đè
+           riêng theo user, không phụ thuộc nhóm) — nói ra để quản trị không đi tìm ô tick. Người đó
+           đăng nhập lại mới thấy (quyền nạp lúc đăng nhập).
+           v9.59: tài khoản gắn nhân viên tự thấy MYPAY ngay lúc đăng nhập (luật ở loadUserContext.js),
+           không cần dòng ghi đè nào nữa — câu nhắc đổi theo, điều kiện giữ nguyên (chỉ nhắc khi gắn MỚI). */
+        if (r && r.data && r.data.daMoMyPay) toast('Tài khoản đã gắn nhân viên nên tự thấy "Bảng lương của tôi" (không phụ thuộc nhóm quyền). Người đó đăng nhập lại là thấy.', 'info');
+        if (r && r.data && r.data.matKhauTam) toast(`Mật khẩu tạm = "${r.data.matKhauTam}" (tên đăng nhập). Lần đăng nhập đầu người dùng sẽ bị bắt đổi mật khẩu.`, 'info');   // v9.71
       } catch (err) { toast(err.message, 'error'); }
     });
   }
@@ -489,12 +496,19 @@ window.ModuleUsers = (function () {
         cnHolder.innerHTML = '';
         return;
       }
+      /* v9.59: dòng MYPAY nói rõ "tự có khi gắn nhân viên" — kẻo quản trị thấy người đó có phân hệ mà
+         không ô nào tick rồi đi tìm. Tài khoản chưa gắn thì chỉ cách mở (gắn nhân viên), không phải tick.
+         Luật ở backend/utils/loadUserContext.js; /api/users trả NhanVienID từ v9.59. */
+      const uDangChon = users.find(x => String(x.UserID) === String(selU.value)) || {};
+      const nhacMyPay = (r) => r.ModuleCode !== 'MYPAY' ? '' : (uDangChon.NhanVienID
+        ? '<div style="font-size:11px;color:#1e7e34;">Tài khoản đã gắn nhân viên ⇒ TỰ thấy phân hệ này, không cần tick (v9.59). Muốn chặn riêng người này: tick "Ghi đè riêng" và bỏ "Xem".</div>'
+        : '<div style="font-size:11px;color:#5f6368;">Tự có khi tài khoản được gắn nhân viên (Tài khoản → Sửa → Liên kết nhân viên) — không cần tick ở đây.</div>');
       matrixHolder.innerHTML = `
         <h3 style="margin-top:0;">1. Theo phân hệ (ghi đè riêng cho user này, bỏ qua nhóm)</h3>
         <p style="color:#5f6368;font-size:13px;margin-top:-6px;">Chỉ tick "Ghi đè riêng" cho phân hệ nào muốn đặt quyền KHÁC với (các) nhóm mà user này đang thuộc. Không tick = user vẫn dùng đúng quyền tính theo nhóm như bình thường.</p>
         <table data-nostt><thead><tr><th>Phân hệ</th><th>Ghi đè riêng</th><th>Xem</th><th>Thêm</th><th>Sửa</th><th>Xóa</th></tr></thead>
         <tbody>${rows.map(r => `<tr data-mid="${r.ModuleID}">
-          <td>${escapeHtml(r.TenModule)}</td>
+          <td>${escapeHtml(r.TenModule)}${nhacMyPay(r)}</td>
           <td><input type="checkbox" class="ov" ${r.HasOverride ? 'checked' : ''}></td>
           <td><input type="checkbox" class="cv" ${r.CanView ? 'checked' : ''} ${r.HasOverride ? '' : 'disabled'}></td>
           <td><input type="checkbox" class="cc" ${r.CanCreate ? 'checked' : ''} ${r.HasOverride ? '' : 'disabled'}></td>

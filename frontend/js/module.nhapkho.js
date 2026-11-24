@@ -52,7 +52,8 @@
         <div><label>Loại nhập</label>
           <select id="nkLoai"><option value="">— Tất cả —</option>
             <option value="NhaCungCap">Từ nhà cung cấp</option>
-            <option value="SanXuat">Từ sản xuất</option></select></div>
+            <option value="SanXuat">Từ sản xuất</option>
+            <option value="TonDauKy">Tồn đầu kỳ / khác</option></select></div>
         <div><label>Số phiếu</label><input type="text" id="nkSoPhieu" placeholder="NK26..."></div>
         <button class="btn secondary" id="nkLoc">Lọc</button>
         <div style="flex:1"></div>
@@ -91,7 +92,7 @@
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
-  const nhanLoai = (l) => l === 'SanXuat' ? 'Từ sản xuất' : 'Từ nhà cung cấp';
+  const nhanLoai = (l) => l === 'SanXuat' ? 'Từ sản xuất' : (l === 'TonDauKy' ? 'Tồn đầu kỳ / khác' : 'Từ nhà cung cấp');   // v9.66
 
   async function taiBang() {
     const hop = document.getElementById('nkBang');
@@ -223,32 +224,16 @@
     const modal = openModal(`
       <div class="modal-head"><h3>${sua ? 'Sửa' : 'Lập'} phiếu nhập kho hàng hóa</h3></div>
       <div class="modal-body">
-        <table class="phieu-form">
-          <tr>
-            <th>Số phiếu</th><td><input type="text" value="${escapeHtml(soPhieu)}" readonly style="width:100%;font-weight:700;"></td>
-            <th>Ngày nhập <span class="bat-buoc">*</span></th>
-            <td><input type="date" id="nkfNgay" value="${h ? String(h.NgayNhap).slice(0, 10) : homNay}" style="width:100%;"></td>
-          </tr>
-          <tr>
-            <th>Loại nhập <span class="bat-buoc">*</span></th>
-            <td><select id="nkfLoai" style="width:100%;">
-              <option value="NhaCungCap"${h && h.LoaiNhap === 'NhaCungCap' ? ' selected' : ''}>Từ nhà cung cấp (có công nợ)</option>
-              <option value="SanXuat"${h && h.LoaiNhap === 'SanXuat' ? ' selected' : ''}>Từ sản xuất (không công nợ)</option>
-            </select></td>
-            ${/* v6.80: chỉ vẽ ĐÚNG MỘT ô nguồn. Bản trước nhét cả 2 select rồi ẩn bớt bằng display:none
-                 — ô ẩn vẫn chiếm chỗ trong luồng của ô cha nên nhìn như thừa một dòng trống. */''}
-            <th id="nkfNhanNguon"></th>
-            <td id="nkfONguon"></td>
-          </tr>
-          <tr>
-            <th>Số hóa đơn</th><td><input type="text" id="nkfSoHD" value="${escapeHtml(h ? (h.SoHoaDon || '') : '')}" style="width:100%;"></td>
-            <th>Ngày hóa đơn</th><td><input type="date" id="nkfNgayHD" value="${h && h.NgayHoaDon ? String(h.NgayHoaDon).slice(0, 10) : ''}" style="width:100%;"></td>
-          </tr>
-          <tr>
-            <th>Ghi chú</th><td colspan="3"><input type="text" id="nkfGhiChu" value="${escapeHtml(h ? (h.GhiChu || '') : '')}" style="width:100%;"></td>
-          </tr>
-        </table>
+        ${/* 🔴 v9.89 (Nguyen 23/11, theo giao diện KiotViet): BỐ CỤC 2 CỘT — dòng hàng bên TRÁI,
+             thông tin phiếu (số phiếu, ngày, loại nhập, nguồn, hoá đơn, ghi chú) + tổng tiền dồn
+             sang CỘT PHẢI, y chỗ KiotViet đặt. Hai nút Hủy/Lưu GIỮ NGUYÊN ở .modal-foot.
 
+             Chỉ BỌC THÊM div và xếp lại bảng đầu phiếu từ 4 cột (th/td/th/td) xuống 2 cột cho vừa
+             bề ngang — KHÔNG đổi một id/class/hàm/payload nào: màn này có 13 bộ tự kiểm bám vào
+             (#nkfLoai, #nkfONguon, #nkfBang, #nkfTong, loaiNhap/nccId...). apLoai(), veDong(),
+             tinhTong() không phải sửa một dòng. Luật CSS ở style.css mục v9.89 (.phieu-2cot). */''}
+        <div class="phieu-2cot">
+        <div class="p2-trai">
         <div class="phieu-thanh-muc">
           <b>Dòng hàng nhập kho</b>
           <div style="flex:1"></div>
@@ -286,7 +271,32 @@
           Ảnh, giá bán, màu bổ sung sau bằng nút <b>Mở thẻ kho</b>.
         </div>
         <div id="nkfBang" class="table-wrap" style="max-height:340px;overflow:auto;"></div>
-        <div id="nkfTong" style="margin-top:10px;text-align:right;font-weight:700;"></div>
+        </div>
+
+        ${/* ===== CỘT PHẢI: thông tin phiếu + tổng tiền (KiotViet để y chỗ này) ===== */''}
+        <aside class="p2-phai">
+          <table class="phieu-form">
+            <tr><th>Số phiếu</th><td><input type="text" value="${escapeHtml(soPhieu)}" readonly style="font-weight:700;"></td></tr>
+            <tr><th>Ngày nhập <span class="bat-buoc">*</span></th>
+              <td><input type="date" id="nkfNgay" value="${h ? String(h.NgayNhap).slice(0, 10) : homNay}"></td></tr>
+            <tr><th>Loại nhập <span class="bat-buoc">*</span></th>
+              <td><select id="nkfLoai">
+                <option value="NhaCungCap"${h && h.LoaiNhap === 'NhaCungCap' ? ' selected' : ''}>Từ nhà cung cấp (có công nợ)</option>
+                <option value="SanXuat"${h && h.LoaiNhap === 'SanXuat' ? ' selected' : ''}>Từ sản xuất (không công nợ)</option>
+                ${/* v9.66: tồn đầu kỳ / nhập khác — có đơn giá (giá vốn) nhưng KHÔNG NCC, KHÔNG công nợ. */''}
+                <option value="TonDauKy"${h && h.LoaiNhap === 'TonDauKy' ? ' selected' : ''}>Tồn đầu kỳ / nhập khác (có giá vốn, không công nợ)</option>
+              </select></td></tr>
+            ${/* v6.80: chỉ vẽ ĐÚNG MỘT ô nguồn. Bản trước nhét cả 2 select rồi ẩn bớt bằng display:none
+                 — ô ẩn vẫn chiếm chỗ trong luồng của ô cha nên nhìn như thừa một dòng trống.
+                 v9.89: hai ô này GIỮ NGUYÊN id — apLoai() vẫn ghi vào đúng chúng, không sửa gì. */''}
+            <tr><th id="nkfNhanNguon"></th><td id="nkfONguon"></td></tr>
+            <tr><th>Số hóa đơn</th><td><input type="text" id="nkfSoHD" value="${escapeHtml(h ? (h.SoHoaDon || '') : '')}"></td></tr>
+            <tr><th>Ngày hóa đơn</th><td><input type="date" id="nkfNgayHD" value="${h && h.NgayHoaDon ? String(h.NgayHoaDon).slice(0, 10) : ''}"></td></tr>
+            <tr><th>Ghi chú</th><td><input type="text" id="nkfGhiChu" value="${escapeHtml(h ? (h.GhiChu || '') : '')}"></td></tr>
+          </table>
+          <div id="nkfTong" style="margin-top:4px;text-align:right;font-weight:700;"></div>
+        </aside>
+        </div>
       </div>
       <div class="modal-foot">
         <button class="btn secondary" id="nkfHuy">Hủy</button>
@@ -302,6 +312,13 @@
        loại rồi chọn lại vẫn còn nguyên lựa chọn cũ. */
     function apLoai() {
       const sx = $('#nkfLoai').value === 'SanXuat';
+      const tdk = $('#nkfLoai').value === 'TonDauKy';   // v9.66
+      if (tdk) {
+        $('#nkfNhanNguon').innerHTML = 'Nguồn';
+        $('#nkfONguon').innerHTML = '<div class="empty-hint" style="padding:4px 0;">Không gắn nhà cung cấp, không gắn lệnh SX — số tiền <b>không vào công nợ</b>. Đơn giá nhập = giá vốn để tính lãi (bình quân với các phiếu NCC). Mã hàng mới sinh từ phiếu này được đặt <b>Nguồn hàng = Đặt ngoài</b>; hàng tự may thì sửa lại ở Danh mục → Hàng hóa.</div>';
+        veDong();
+        return;
+      }
       $('#nkfNhanNguon').innerHTML = sx
         ? 'Lệnh sản xuất <span class="bat-buoc">*</span>'
         : 'Nhà cung cấp <span class="bat-buoc">*</span>';
@@ -850,7 +867,8 @@
         tenHoaDon: d.tenHoaDon || ''   // v7.46
       }));
       if (!dong.length) return toast('Chưa có dòng nào có số lượng > 0.', 'error');
-      if (!sx && !$('#nkfNcc').value) return toast('Nhập từ nhà cung cấp thì phải chọn nhà cung cấp.', 'error');
+      const loaiChon = $('#nkfLoai').value;   // v9.66: NhaCungCap | SanXuat | TonDauKy
+      if (loaiChon === 'NhaCungCap' && !($('#nkfNcc') && $('#nkfNcc').value)) return toast('Nhập từ nhà cung cấp thì phải chọn nhà cung cấp. Tồn đầu kỳ (không nợ ai) thì chọn loại "Tồn đầu kỳ / nhập khác".', 'error');
       /* v6.88: chặn ngay ở đây cho mã MỚI thiếu thông tin — backend cũng chặn, nhưng báo tại form thì
          người dùng thấy đúng dòng nào thiếu chứ không phải đọc một câu lỗi chung.
          v6.97: chỉ soi MỘT LẦN cho mỗi mã mới (theo dòng khai) — các dòng sau đã thừa hưởng, kể tên
@@ -886,8 +904,8 @@
           + 'Tồn kho quản theo màu — thiếu màu là sau này không đặt/bán được. Hàng không phân màu thì chọn mục "(Không phân màu)".', 'error');
       }
       const body = {
-        ngayNhap: $('#nkfNgay').value, loaiNhap: sx ? 'SanXuat' : 'NhaCungCap',
-        nccId: sx ? null : ($('#nkfNcc').value || null),
+        ngayNhap: $('#nkfNgay').value, loaiNhap: loaiChon,
+        nccId: loaiChon === 'NhaCungCap' ? ($('#nkfNcc').value || null) : null,
         donHangId: sx ? ($('#nkfDon').value || null) : null,
         soHoaDon: $('#nkfSoHD').value || null, ngayHoaDon: $('#nkfNgayHD').value || null,
         ghiChu: $('#nkfGhiChu').value || null, dong,
@@ -940,15 +958,15 @@
      XEM CHI TIẾT + IN — kẻ bảng, dùng CHUNG một hàm cho cả màn xem và bản in
      ================================================================================================ */
   function dauPhieuHtml(h) {
-    const sx = h.LoaiNhap === 'SanXuat';
+    const sx = h.LoaiNhap === 'SanXuat', tdk = h.LoaiNhap === 'TonDauKy';   // v9.66
     return `
       <table class="phieu-form phieu-xem">
         <tr><th>Số phiếu</th><td><b>${escapeHtml(h.SoPhieu || '')}</b></td>
             <th>Ngày nhập</th><td>${fmtDate(h.NgayNhap)}</td></tr>
         <tr><th>Loại nhập</th><td>${nhanLoai(h.LoaiNhap)}</td>
-            <th>${sx ? 'Lệnh sản xuất' : 'Nhà cung cấp'}</th>
-            <td><b>${escapeHtml(sx ? (h.MaDH || '') : (h.TenNCC || ''))}</b></td></tr>
-        ${sx ? '' : `<tr><th>Địa chỉ NCC</th><td colspan="3">${escapeHtml(h.DiaChiNCC || '')}</td></tr>`}
+            <th>${sx ? 'Lệnh sản xuất' : (tdk ? 'Nguồn' : 'Nhà cung cấp')}</th>
+            <td><b>${tdk ? 'Không gắn NCC — không vào công nợ' : escapeHtml(sx ? (h.MaDH || '') : (h.TenNCC || ''))}</b></td></tr>
+        ${(sx || tdk) ? '' : `<tr><th>Địa chỉ NCC</th><td colspan="3">${escapeHtml(h.DiaChiNCC || '')}</td></tr>`}
         <tr><th>Số hóa đơn</th><td>${escapeHtml(h.SoHoaDon || '')}</td>
             <th>Ngày hóa đơn</th><td>${h.NgayHoaDon ? fmtDate(h.NgayHoaDon) : ''}</td></tr>
         <tr><th>Ghi chú</th><td>${escapeHtml(h.GhiChu || '')}</td>

@@ -13,6 +13,13 @@ const { notifyStageUsers } = require('./notifications');
 /* v9.36: phí vận chuyển vải — CHỈ dùng cho giá thành. Công nợ NCC tuyệt đối không đụng tới.
    Xem khối ghi chú v9.36 ở utils/tienVaiNhap.js trước khi sửa bất cứ thứ gì liên quan. */
 const { coCotPhiVanChuyen } = require('../utils/tienVaiNhap');
+/* v9.67: sản lượng theo lệnh (may mẫu / ảnh / video...) ⇒ thưởng theo sản phẩm tự động. Xem utils/sanLuongTheoLenh.js. */
+const sanLuongLenh = require('../utils/sanLuongTheoLenh');
+const bangLuongTuDong = require('../utils/bangLuongTuDong');
+const { coKieu } = require('../utils/kieuThuong');   // v9.73: hợp đồng nhiều kiểu thưởng
+/* v9.90: CHỈ lấy homNayVN() — ngày phải theo GIỜ VN. toISOString() lệch -7 giờ nên từ 00:00 tới
+   07:00 là ghi lùi sang hôm trước, rơi nhầm cả KỲ LƯƠNG (bài học cũ: không dùng toISOString). */
+const { homNayVN } = require('../utils/nghiPhep');
 
 const router = express.Router();
 const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -194,6 +201,9 @@ router.get('/danhmuc', requireAuth, requirePermission('QLSX', 'view'), async (re
     // (xem migration_v521.sql + renderLenhForm()/openEditOrderForm() trong module.qlsx.js).
     pool.request().query('SELECT * FROM DanhMucDonViQuyDoi ORDER BY DonViChinh')
   ]);
+  /* v9.70: cộng tác viên thiết kế đang hợp tác (migration_v896) — bảng chưa có thì danh sách rỗng, form không vỡ. */
+  let congTacVien = [];
+  try { congTacVien = (await pool.request().query("SELECT CongTacVienID, TenCTV, DonGiaThietKe, SDT FROM CongTacVien WHERE ISNULL(TrangThai, N'Đang hợp tác') <> N'Ngừng' ORDER BY TenCTV")).recordset; } catch (e) { congTacVien = []; }
   res.json({
     success: true,
     data: {
@@ -202,7 +212,8 @@ router.get('/danhmuc', requireAuth, requirePermission('QLSX', 'view'), async (re
       congDoan: congDoan.recordset, khachHang: khachHang.recordset,
       donViQuyDoi: donViQuyDoi.recordset,
       donViTinh: donViTinh.recordset, nhanVien: nhanVien.recordset, congDoanMay: congDoanMay.recordset,
-      phuKien: phuKien.recordset, loaiPhuKien: loaiPhuKien.recordset
+      phuKien: phuKien.recordset, loaiPhuKien: loaiPhuKien.recordset,
+      congTacVien
     }
   });
 });
@@ -803,18 +814,78 @@ async function getCatMauList(pool, donHangId, stageId) {
       ${dkCayLop}
     GROUP BY dv.MauSacID`);
   const lopMap = new Map(lopResult.recordset.map(r => [String(r.MauSacID), r]));
+  /* ================================================================================================
+     v9.82 (Nguyen 19/11: "1 màu trải nhiều bàn cắt hệ số khác nhau… lấy hệ số của bàn cắt chia theo
+     số size") — TRẢ CHI TIẾT TỪNG BÀN, không gộp nữa.
+
+     Hai con số khác nhau, trước v9.82 bị gộp làm một (gốc của lỗi):
+         CÁI / LỚP = hệ số của TỪNG BÀN  → cc.HeSoQuyDoi (bảng này)
+         CÁI / RI  = số size             → DonHangDaiSize.HeSo, hoặc DonHangSanXuat.HeSoQuyDoi (v9.85)
+     Số ri của một bàn = (cái/lớp ÷ cái/ri) × số lớp. Ví dụ Nguyen: bàn hệ số 10, dải 3-7 (5 size),
+     5 lớp ⇒ 10/5 × 5 = 10 ri. Vì vậy chỗ này CHỈ trả nguyên liệu thô (hệ số + số lớp + số cái của
+     từng bàn); phép chia cho số size do màn hình làm — nó mới biết người dùng đang ở dải nào.
+     GROUP BY cả TienDoID: mất chiều này là mất luôn khả năng nói "bàn nào bao nhiêu".
+     ================================================================================================ */
+  const banResult = await pool.request().query(`
+    SELECT dv.MauSacID, cc.TienDoID, t.SttSoCat, cc.HeSoQuyDoi AS HeSo,
+           SUM(cc.SoLuongLop) AS SoLop, SUM(cc.SoLuongLop * cc.HeSoQuyDoi) AS SoCai
+    FROM TienDoCatChiTietCay cc
+    JOIN VaiCay vc ON vc.CayID = cc.CayID
+    JOIN DanhMucVai dv ON dv.VaiID = vc.VaiID
+    JOIN TienDoSanXuat t ON t.TienDoID = cc.TienDoID
+    WHERE cc.TienDoID IN (${ids.join(',')})
+      AND ISNULL(cc.HeSoQuyDoi, 0) > 0
+      ${dkCayLop}
+    GROUP BY dv.MauSacID, cc.TienDoID, t.SttSoCat, cc.HeSoQuyDoi
+    ORDER BY dv.MauSacID, t.SttSoCat, cc.TienDoID`);
+  const banMap = new Map();
+  banResult.recordset.forEach(r => {
+    const k = String(r.MauSacID);
+    if (!banMap.has(k)) banMap.set(k, []);
+    banMap.get(k).push({ TienDoID: Number(r.TienDoID), SttSoCat: r.SttSoCat || null,
+      HeSo: Number(r.HeSo) || 0, SoLop: Number(r.SoLop) || 0, SoCai: Number(r.SoCai) || 0 });
+  });
   return maus.map(k => {
     const r = lopMap.get(String(k)) || {};
     const hMin = Number(r.HeSoMin) || 0, hMax = Number(r.HeSoMax) || 0;
     const lech = hMin > 0 && hMax > 0 && Math.abs(hMax - hMin) > 1e-9;
+    const ban = banMap.get(String(k)) || [];
     return {
       MauSacID: Number(k), TenMau: tenMap.get(String(k)) || '', SoLuong: Number(slMap[k]) || 0,
       TongSoLop: Number(r.TongSoLop) || 0,
       HeSoCat: (!lech && hMax > 0) ? hMax : null,
       HeSoCatLech: lech ? 1 : 0,
-      HeSoCatMin: hMin || null, HeSoCatMax: hMax || null
+      HeSoCatMin: hMin || null, HeSoCatMax: hMax || null,
+      BanCat: ban,                                                  // v9.82: từng bàn một dòng
+      SoBanCat: ban.length,
+      TongCaiTuBan: ban.reduce((s, b) => s + b.SoCai, 0)            // = tổng cái đã cắt của màu, theo bàn
     };
   }).sort((a, b) => String(a.TenMau).localeCompare(String(b.TenMau), 'vi'));
+}
+
+/* ================================================================================================
+   🔴 v9.88 — HE SO QUY DOI (SO CAI TRONG 1 RI) LA BAT BUOC VA PHAI KHAC 1
+
+   Nguyen 21/11: *"He so quy doi (so cai trong 1 ri) them dieu kien bat buoc phai nhap khac 1"* —
+   noi ro: o man **Chi dinh san xuat**.
+
+   VI SAO 1 KHONG PHAI MOT GIA TRI HOP LE: tu v9.85 o nay mang MOT nghia duy nhat — SO CAI TRONG 1
+   RI — va Dong goi / Kho nhap quy doi Ri -> Cai bang chinh no (caiMotRi o module.qlsx.js). De 1
+   nghia la "1 ri = 1 cai", o Ri bi khoa va ca day chuyen phai go tay so Cai. Ma 1 lai dung la gia
+   tri MAC DINH cu (xem khoi v9.12 ngay duoi: "cot do MAC DINH = 1"), nen "1" gan nhu luon la CHUA
+   KHAI chu khong phai da khai.
+
+   Ban sao cung luat o frontend (loiHeSoQuyDoi trong module.qlsx.js) de bao loi ngay truoc khi goi
+   API — sua mot ben phai sua ca hai. Chan o day moi la chan THAT (goi API truc tiep cung bi chan).
+   ================================================================================================ */
+function loiHeSoQuyDoi(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return 'Chưa nhập "Hệ số quy đổi (số cái trong 1 ri)". Đây là SỐ CÁI TRONG 1 RI — VD dải 3-7 có 5 size thì nhập 5.';
+  const n = Number(s);
+  if (!(n > 0)) return 'Hệ số quy đổi phải là một số lớn hơn 0.';
+  if (n === 1) return 'Hệ số quy đổi KHÔNG được để 1. Để 1 nghĩa là "1 ri = 1 cái", ô Ri ở Đóng gói / Kho nhập sẽ bị khoá. Nhập đúng SỐ CÁI TRONG 1 RI — VD dải 3-7 có 5 size thì nhập 5.';
+  if (n < 1) return 'Hệ số quy đổi phải LỚN HƠN 1 — "số cái trong 1 ri" nhỏ hơn 1 là vô nghĩa.';
+  return '';
 }
 
 /* ================================================================================================
@@ -991,11 +1062,16 @@ async function getOrderByMaDH(pool, maDH) {
   // v5.21 (muc 1/2): bo sung join DanhMucDonViQuyDoi (qua DonHangSanXuat.DonViQuyDoiID, xem
   // migration_v521.sql) - lay TenDonViQuyDoi/PhepTinhQuyDoi de frontend dinh dang dong "Tong cong" cua
   // Cau truc vai dung theo dong danh muc da chon (fmtQuyDoi() trong common.js), thay vi hardcode 'Ri'/Chia.
+  /* v9.67: tên nhân viên may mẫu (cột NhanVienMayMauID, migration_v895) — dò cột để bản chưa migration vẫn chạy. */
+  const coMayMau = await sanLuongLenh.coCotMayMau(pool);
+  const coCTV = await coCotQLSX(pool, 'DonHangSanXuat', 'CongTacVienID');   // v9.70
   const result = await pool.request().input('MaDH', sql.NVarChar, maDH).query(`
     SELECT d.*,
            ISNULL(NULLIF(LTRIM(RTRIM(d.TenKhachHangTuDo)), ''), kh.TenKhachHang) AS TenKhachHang,   -- v6.43
            c.TenCongDoan, c.MaCongDoan, ncc1.TenNha AS TenNhaGiaCong, ncc1.LaNoiBo AS LaNoiBoNhaGiaCong, ncc2.TenNha AS TenNhaIn,
            dvqd.DonViQuyDoi AS TenDonViQuyDoi, dvqd.PhepTinh AS PhepTinhQuyDoi,
+           ${coMayMau ? 'nvmm.HoTen AS TenNhanVienMayMau,' : 'CAST(NULL AS NVARCHAR(100)) AS TenNhanVienMayMau,'}
+           ${coCTV ? 'ctv.TenCTV AS TenCongTacVien,' : 'CAST(NULL AS NVARCHAR(150)) AS TenCongTacVien,'}
            ${/* v7.87: đặt ở chỗ đọc lệnh DÙNG CHUNG nên MỌI bản in của lệnh đều có sẵn 2 cột này,
                 không phải nhớ thêm vào từng bản in một. */''}
            ${COT_PHIEU_NHAP_KHO('d')}
@@ -1005,6 +1081,8 @@ async function getOrderByMaDH(pool, maDH) {
     LEFT JOIN NhaGiaCong ncc1 ON ncc1.NhaGiaCongID = d.NhaGiaCongID
     LEFT JOIN NhaGiaCong ncc2 ON ncc2.NhaGiaCongID = d.NhaInID
     LEFT JOIN DanhMucDonViQuyDoi dvqd ON dvqd.ID = d.DonViQuyDoiID
+    ${coMayMau ? 'LEFT JOIN NhanVien nvmm ON nvmm.NhanVienID = d.NhanVienMayMauID' : ''}
+    ${coCTV ? 'LEFT JOIN CongTacVien ctv ON ctv.CongTacVienID = d.CongTacVienID' : ''}
     WHERE d.MaDH = @MaDH`);
   return result.recordset[0] || null;
 }
@@ -1259,9 +1337,11 @@ async function slKhoNhapTheoDon(pool) {
     tongCai AS (
       SELECT knTd.DonHangID,
              SUM(ct.SoLuongLuyKe) AS SLCai,
-             MAX(CASE WHEN hc.HMin IS NOT NULL AND hc.HMin = hc.HMax THEN hc.HMax
-                      WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 THEN d.HeSoQuyDoi
-                      ELSE 1 END) AS HeSo
+             ${/* 🔴 v9.85: tách Ri dùng ĐÚNG số mà form Đóng gói / Kho nhập dùng = DonHangSanXuat.HeSoQuyDoi
+                   (số CÁI TRONG 1 RI). Bỏ hẳn ưu tiên "hệ số ở Cắt" của v8.92: hệ số cắt là số CÁI MỘT LỚP,
+                   đại lượng khác — lấy nó chia Ri thì danh sách báo "250 Ri" trong khi form báo "50 Ri".
+                   CTE heCat giữ lại (còn dùng cho cột khác), chỉ thôi dùng ở đây. */''}
+             MAX(CASE WHEN ISNULL(d.HeSoQuyDoi, 0) > 0 THEN d.HeSoQuyDoi ELSE 1 END) AS HeSo
       FROM knTd
       JOIN TienDoChiTietMau ct ON ct.TienDoID = knTd.TienDoID
       JOIN DonHangSanXuat d    ON d.DonHangID = knTd.DonHangID
@@ -1359,6 +1439,9 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
     if (!tenSanPham) {
       return res.status(400).json({ success: false, message: 'Thiếu tên sản phẩm.' });
     }
+    // 🔴 v9.88: hệ số quy đổi BẮT BUỘC và phải KHÁC 1 — xem loiHeSoQuyDoi() ở qlsx.js dưới đây.
+    const loiHS = loiHeSoQuyDoi(heSoQuyDoi);
+    if (loiHS) return res.status(400).json({ success: false, message: loiHS });
     const pool = await getPool();
     const maDH = await generateOrderId(pool);
     const firstStage = await pool.request().query('SELECT TOP 1 StageID FROM CongDoanSanXuat ORDER BY ThuTu');
@@ -1394,7 +1477,7 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
       .input('GhiChuLenh', sql.NVarChar, ghiChuLenh || null)
       // v5.13 (muc 1.1.2): "He so quy doi" (Cai/Ri) khai bao 1 LAN o day, dung CHUNG cho cong doan Cat
       // (xem POST /orders/:maDH/tiendo) thay vi nhap lai o tung cay vai moi lan Ghi tien do.
-      .input('HeSoQuyDoi', sql.Decimal(10, 3), Number(heSoQuyDoi) || 1)
+      .input('HeSoQuyDoi', sql.Decimal(10, 3), Number(heSoQuyDoi))   // v9.88: da qua loiHeSoQuyDoi() -> bo "|| 1" (chinh no giau loi chua khai)
       // v5.21 (muc 1/2): FK toi dong "Danh mục đơn vị quy đổi" da chon (chi dung de DINH DANG hien thi -
       // xem fmtQuyDoi()/getOrderByMaDH() - HeSoQuyDoi o tren VAN la con so THAT su dung cho Cat, khong doi).
       .input('DonViQuyDoiID', sql.Int, donViQuyDoiId || null)
@@ -1460,11 +1543,70 @@ router.post('/orders', requireAuth, requirePermission('QLSX', 'create'), require
                   VALUES (@DonHangID, @PhuKienID, @SoLuong, @DonVi, @GhiChu)`);
       }
     }
-    res.json({ success: true, data: { maDH, donHangId } });
+    /* v9.67: nhân viên may mẫu — ghi cột + đồng bộ dòng sản lượng 'MayMau' (thưởng theo SP tự động). */
+    const mayMau = await ghiNhanVienMayMau(pool, donHangId, req.body.nhanVienMayMauId, ngayDat, req.session.user.userId, req.body.mayMauTenSP);   // v9.76 + tên SP
+    await ghiCongTacVien(pool, donHangId, req.body.congTacVienId);   // v9.70
+    res.json({ success: true, data: { maDH, donHangId, mayMau } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi tạo đơn hàng: ' + err.message });
   }
+});
+
+/* ================================================================================================
+   v9.67 — NHÂN VIÊN MAY MẪU CỦA LỆNH (migration_v895). Gọi SAU khi lệnh đã ghi.
+   `nhanVienMayMauId` undefined (client cũ không gửi) ⇒ KHÔNG đụng cột, không đụng dòng sản lượng.
+   '' / null / 0 ⇒ bỏ chỉ định (cột NULL, xóa dòng 'MayMau'). Cột chưa có (chưa migration) ⇒ bỏ qua êm.
+   Trả về thông tin để màn hình cảnh báo: { ten, donGia, khop, kieuThuong } hoặc null.
+   ================================================================================================ */
+/* v9.82 từng thêm cột `DonHangSanXuat.SoSizeRi` (migration_v906) làm "số cái trong 1 ri" riêng.
+   🔴 v9.85 (Nguyen chốt): BỎ — ô "Hệ số quy đổi" sẵn có ở Ra lệnh SX CHÍNH LÀ số đó, Đóng gói / Kho nhập
+   đọc thẳng `HeSoQuyDoi` (xem caiMotRi ở module.qlsx.js). Không còn cột mới, không còn hàm lưu/bắt buộc.
+   ⛔ migration_v906.sql do đó KHÔNG CẦN CHẠY (đầu file đã ghi chú). */
+
+/* v9.70 — CỘNG TÁC VIÊN THIẾT KẾ của lệnh (migration_v896). `congTacVienId` undefined (client cũ) ⇒ không đụng;
+   '' / null ⇒ bỏ (NULL). Khi có CTV: ghi FK + ghi đè ThietKeVien = tên CTV để mọi bản in cũ hiện đúng tên.
+   Cột chưa có ⇒ bỏ qua êm. Trả tên CTV (hoặc null). */
+async function ghiCongTacVien(pool, donHangId, congTacVienId) {
+  if (congTacVienId === undefined) return undefined;
+  if (!(await coCotQLSX(pool, 'DonHangSanXuat', 'CongTacVienID'))) return null;
+  const id = parseInt(congTacVienId, 10) || null;
+  let ten = null;
+  if (id) {
+    const c = (await pool.request().input('id', sql.Int, id).query('SELECT TenCTV FROM CongTacVien WHERE CongTacVienID = @id')).recordset[0];
+    if (!c) throw new Error('Cộng tác viên không tồn tại trong danh mục.');
+    ten = c.TenCTV;
+  }
+  const rq = pool.request().input('id', sql.Int, donHangId).input('ctv', sql.Int, id);
+  if (ten) rq.input('tk', sql.NVarChar, ten);
+  await rq.query(`UPDATE DonHangSanXuat SET CongTacVienID = @ctv${ten ? ', ThietKeVien = @tk' : ''} WHERE DonHangID = @id`);
+  return ten;
+}
+/* v9.76: + `mayMauTenSP` — sản phẩm (tên trong danh mục hợp đồng của người may mẫu) do người lập lệnh chọn; cột
+   DonHangSanXuat.MayMauTenSP (migration_v902). Cột chưa có ⇒ không lưu, vẫn dùng luật cũ (tên có chữ "mẫu"). */
+async function ghiNhanVienMayMau(pool, donHangId, nhanVienMayMauId, ngayDat, userId, mayMauTenSP) {
+  if (nhanVienMayMauId === undefined) return undefined;
+  if (!(await sanLuongLenh.coCotMayMau(pool))) return null;
+  const nv = parseInt(nhanVienMayMauId, 10) || null;
+  const tenSP = nv ? (String(mayMauTenSP || '').trim().slice(0, 150) || null) : null;
+  const coTenSP = await coCotQLSX(pool, 'DonHangSanXuat', 'MayMauTenSP');
+  const rq = pool.request().input('id', sql.Int, donHangId).input('nv', sql.Int, nv);
+  if (coTenSP) rq.input('sp', sql.NVarChar(150), tenSP);
+  await rq.query(`UPDATE DonHangSanXuat SET NhanVienMayMauID = @nv${coTenSP ? ', MayMauTenSP = @sp' : ''} WHERE DonHangID = @id`);
+  const ngay = (await pool.request().input('id', sql.Int, donHangId)
+    .query('SELECT CONVERT(varchar(10), NgayDat, 23) AS NgayDat FROM DonHangSanXuat WHERE DonHangID = @id')).recordset[0];
+  return sanLuongLenh.dongBoMayMau(pool, donHangId, nv, (ngay && ngay.NgayDat) || ngayDat, userId, coTenSP ? tenSP : null);
+}
+/* v9.76: danh mục sản phẩm của hợp đồng hiệu lực của NV (cho ô chọn cạnh "Nhân viên may mẫu" trên form lệnh).
+   Gác bằng quyền lệnh SX (orders) chứ KHÔNG phải QLSX/sanluong (MacDinhCho = 0 — người lập lệnh thường không có). */
+router.get('/maymau/sanpham', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'orders', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nv = parseInt(req.query.nhanVienId, 10);
+    if (!nv) return res.json({ success: true, data: { hopDongId: null, kieuThuong: null, sanPham: [] } });
+    const hd = await sanLuongLenh.hopDongTaiNgay(pool, nv, req.query.ngay);
+    res.json({ success: true, data: Object.assign(hd, { theoSanPham: coKieu(hd.kieuThuong, 'SanPham') }) });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
 
 // ============ SUA / XOA LENH SAN XUAT (v5.2 - "Danh sach lenh san xuat", theo phan quyen) ============
@@ -1495,6 +1637,10 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
     if (!tenSanPham) {
       return res.status(400).json({ success: false, message: 'Thiếu tên sản phẩm.' });
     }
+    /* 🔴 v9.88: cùng luật với POST /orders. Hệ quả CỐ Ý: lệnh CŨ đang mang hệ số mặc định 1 sẽ không
+       lưu được ở form Sửa cho tới khi khai số cái/1 ri — đó chính là đường duy nhất để chữa dữ liệu cũ. */
+    const loiHS = loiHeSoQuyDoi(heSoQuyDoi);
+    if (loiHS) return res.status(400).json({ success: false, message: loiHS });
     // v5.13 (muc 1.1.1): bo o nhap tay "Tong so luong" - neu chiTietVai co gui kem (form Sua LUON gui,
     // xem ghi chu tren) thi tinh lai TongSoLuong tu tong SL cac dong mau CHINH; neu khong gui (goi tu
     // noi khac trong tuong lai, vd 1 API rieng chi sua thong tin chung) thi GIU NGUYEN gia tri cu qua
@@ -1541,7 +1687,7 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
       // để mặc định driver có thể cắt bớt và MẤT ảnh lặng lẽ. Cột đã nới rộng ở migration_v663.sql.
       .input('AnhHinhIn', sql.NVarChar(sql.MAX), anhHinhIn || null)
       .input('GhiChuLenh', sql.NVarChar, ghiChuLenh || null)
-      .input('HeSoQuyDoi', sql.Decimal(10, 3), Number(heSoQuyDoi) || 1)
+      .input('HeSoQuyDoi', sql.Decimal(10, 3), Number(heSoQuyDoi))   // v9.88: da qua loiHeSoQuyDoi() -> bo "|| 1" (chinh no giau loi chua khai)
       .input('DonViQuyDoiID', sql.Int, donViQuyDoiId || null)
       .input('CoInTheu', sql.Bit, req.body.coInTheu ? 1 : 0)   // v5.33
       .input('Mac', sql.NVarChar, mac || null)                  // v5.42
@@ -1596,7 +1742,10 @@ router.put('/orders/:maDH', requireAuth, requirePermission('QLSX', 'edit'), requ
       }
     }
 
-    res.json({ success: true });
+    /* v9.67: nhân viên may mẫu (form Sửa luôn gửi; đổi NgayDat cũng đồng bộ lại tháng của dòng sản lượng). */
+    const mayMau = await ghiNhanVienMayMau(pool, order.DonHangID, req.body.nhanVienMayMauId, ngayDat, req.session.user.userId, req.body.mayMauTenSP);   // v9.76 + tên SP
+    await ghiCongTacVien(pool, order.DonHangID, req.body.congTacVienId);   // v9.70
+    res.json({ success: true, data: { mayMau } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi cập nhật lệnh sản xuất: ' + err.message });
@@ -1640,6 +1789,833 @@ router.delete('/orders/:maDH', requireAuth, requirePermission('QLSX', 'delete'),
     // thay vi cau chung chung khong lan ra duoc nguyen nhan nhu truoc.
     res.status(400).json({ success: false, message: 'Không thể xóa lệnh SX: ' + err.message });
   }
+});
+
+/* ================================================================================================
+   v9.67 — SẢN LƯỢNG THEO LỆNH (tab QLSX › "Sản lượng theo lệnh"; ChucNang QLSX/sanluong; migration_v895)
+   Ảnh, video, may mẫu... của MỘT người cho MỘT lệnh: SL × đơn giá hợp đồng ⇒ thưởng theo sản phẩm
+   (payroll đọc qua utils/sanLuongTheoLenh.thuongTheoThang — không nhập tay ở tab KPI nữa).
+   Đường dẫn literal (/sanluong/...) đặt TRƯỚC mọi /:param cùng tiền tố — ở đây tiền tố riêng nên không đụng
+   /orders/:maDH. Dòng Nguon='MayMau' là tự động: sửa/xóa ở ô "Nhân viên may mẫu" của lệnh, không sửa ở đây.
+   ================================================================================================ */
+const SL_LENH_CHUA_MIGRATION = 'Chưa chạy migration_v895.sql (bảng SanLuongTheoLenh).';
+const chuoiNgayHoacHomNay = (v) => sanLuongLenh.ngayHopLe(v) || new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+/* v9.67d (Nguyen 16/11: "ảnh sản phẩm lấy từ ảnh hàng hóa, tự cập nhật khi có ảnh hàng hóa"): ảnh của một lệnh trong danh
+   sách sản lượng = ẢNH ĐẠI DIỆN HÀNG HÓA của mã hàng thuộc lệnh (HỢP HAI NGUỒN như utils/giaVonLenhSX.maHangCuaLenh:
+   TheKhoHangHoa.DonHangID ∪ PhieuNhapKhoHang.DonHangID không hủy), chưa có thì lùi về DonHangSanXuat.AnhSanPham.
+   Tính lúc ĐỌC ⇒ thêm ảnh ở Thẻ kho là lần mở sau thấy ngay, không chép cột. Subquery ở cột SELECT, KHÔNG trong aggregate. */
+const COT_ANH_SAN_LUONG = require('../utils/anhLenhSX').COT_ANH_LENH;   // v9.72: tách ra util, dùng chung với Lương CTV
+/* Gắn mã rập (một công thức, hai nguồn — utils/maRapCuaDon.maRapTheoDon) vào các dòng theo DonHangID. */
+async function ganMaRapSanLuong(pool, rows) {
+  if (!rows.length) return rows;
+  const mr = await maRapTheoDon(pool);
+  rows.forEach(r => { r.MaRap = mr[r.DonHangID] || ''; });
+  return rows;
+}
+
+/* Lệnh để chọn: 60 lệnh gần nhất khớp q (mã / tên SP / mã SP).
+   v9.70 (Nguyen 16/11: "ghi sản lượng những lệnh đã cập nhật thì không hiện ra ở list lệnh sản xuất nữa"): LOẠI lệnh đã có
+   dòng sản lượng ghi tay — của NGƯỜI đang chọn (nhanVienId) nếu biết, không biết thì của bất kỳ ai. `giu` = MaDH đang sửa,
+   luôn giữ trong danh sách. Dòng may mẫu (tự động) KHÔNG tính là "đã cập nhật". */
+async function timLenhChuaGhi(pool, q, nhanVienId, giu) {
+  const coSL = await sanLuongLenh.coBang(pool);
+  const nv = parseInt(nhanVienId, 10) || 0;
+  const rq = pool.request().input('q', sql.NVarChar(100), `%${String(q || '').trim()}%`).input('giu', sql.NVarChar(50), String(giu || '')).input('nv', sql.Int, nv);
+  const r = await rq.query(`
+    SELECT TOP 60 d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham, CONVERT(varchar(10), d.NgayDat, 23) AS NgayDat
+    FROM DonHangSanXuat d
+    WHERE (@q = N'%%' OR d.MaDH LIKE @q OR d.TenSanPham LIKE @q OR ISNULL(d.MaSanPham, N'') LIKE @q)
+      ${coSL ? `AND (d.MaDH = @giu OR NOT EXISTS (SELECT 1 FROM SanLuongTheoLenh s WHERE s.DonHangID = d.DonHangID AND s.Nguon = N'Tay'${nv ? ' AND s.NhanVienID = @nv' : ''}))` : ''}
+    ORDER BY d.NgayDat DESC, d.DonHangID DESC`);
+  /* v9.78 (Nguyen 19/11: "sổ list danh sách lệnh thêm cả mã rập"): gắn MÃ RẬP vào từng dòng của ô chọn lệnh —
+     cùng một bản công thức mã rập (hai nguồn) với bảng sản lượng và Lương CTV, không tự ghép lại. */
+  const mrMap = await maRapTheoDon(pool);
+  r.recordset.forEach(o => { o.MaRap = mrMap[o.DonHangID] || ''; });
+  return r.recordset;
+}
+router.get('/sanluong/lenh', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    res.json({ success: true, data: await timLenhChuaGhi(pool, req.query.q, req.query.nhanVienId, req.query.giu) });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* Danh mục sản phẩm (tên + đơn giá) của hợp đồng hiệu lực của một người tại một ngày — để ô "Sản phẩm" chỉ
+   cho chọn đúng tên hợp đồng (tên khớp mới có đơn giá). */
+router.get('/sanluong/hopdong', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nv = parseInt(req.query.nhanVienId, 10);
+    if (!nv) return res.status(400).json({ success: false, message: 'Thiếu nhân viên.' });
+    const hd = await sanLuongLenh.hopDongTaiNgay(pool, nv, chuoiNgayHoacHomNay(req.query.ngay));
+    res.json({ success: true, data: hd });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* Danh sách dòng của một tháng (mọi nguồn) + tiền theo đơn giá hợp đồng (tra tại cuối tháng, cùng mốc bảng lương). */
+router.get('/sanluong', requireAuth, requirePermission('QLSX', 'view'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await sanLuongLenh.coBang(pool))) return res.status(400).json({ success: false, message: SL_LENH_CHUA_MIGRATION });
+    const nam = parseInt(req.query.nam, 10), thang = parseInt(req.query.thang, 10);
+    if (!nam || !thang) return res.status(400).json({ success: false, message: 'Thiếu năm/tháng.' });
+    const rq = pool.request().input('n', sql.Int, nam).input('t', sql.Int, thang);
+    const dkDH = req.query.maDH ? ' AND d.MaDH = @ma' : '';
+    if (req.query.maDH) rq.input('ma', sql.NVarChar(50), String(req.query.maDH));
+    /* v9.81: LEFT JOIN — dòng "Làm lại mã cũ" không gắn lệnh nào (DonHangID NULL), JOIN thường sẽ NUỐT MẤT dòng
+       (mất tiền thưởng im lặng). Cột ảnh/mã rập của dòng đó trống là đúng: không có lệnh thì không có ảnh lệnh. */
+    const coMaCu = await sanLuongLenh.coCotMaHangCu(pool);
+    const rows = (await rq.query(`
+      SELECT s.ID, s.DonHangID, d.MaDH, d.TenSanPham AS TenSPLenh, d.MaSanPham, s.NhanVienID, nv.HoTen, nv.MaNhanVien,
+             s.TenSanPham, s.SoLuong, CONVERT(varchar(10), s.Ngay, 23) AS Ngay, s.Nguon, s.GhiChu,
+             CONVERT(varchar(16), s.CreatedAt, 120) AS TaoLuc,
+             ${coMaCu ? 's.MaHangCu' : "CAST(NULL AS NVARCHAR(100)) AS MaHangCu"},
+             ${COT_ANH_SAN_LUONG('d')}
+      FROM SanLuongTheoLenh s
+      LEFT JOIN DonHangSanXuat d ON d.DonHangID = s.DonHangID
+      JOIN NhanVien nv ON nv.NhanVienID = s.NhanVienID
+      WHERE YEAR(s.Ngay) = @n AND MONTH(s.Ngay) = @t${dkDH}
+      ORDER BY s.Ngay DESC, s.ID DESC`)).recordset;
+    await ganMaRapSanLuong(pool, rows);
+    const tong = await sanLuongLenh.thuongTheoThang(pool, nam, thang);
+    /* Đơn giá từng dòng: tra bảng tổng theo (NV, tên) — cùng một luật khớp tên. */
+    rows.forEach(r => {
+      const o = tong.get(r.NhanVienID);
+      const d = o && o.dong.find(x => sanLuongLenh.khoaTen(x.TenSanPham) === sanLuongLenh.khoaTen(r.TenSanPham));
+      r.DonGia = d ? d.DonGia : 0; r.khop = !!(d && d.khop); r.ThanhTien = Math.round((Number(r.SoLuong) || 0) * r.DonGia);
+    });
+    const tongTheoNV = [...tong.entries()].map(([NhanVienID, o]) => ({ NhanVienID, Tien: o.tien, dong: o.dong }));
+    res.json({ success: true, data: { nam, thang, rows, tongTheoNV } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* v9.81 (Nguyen 19/11: "trường lệnh SX thêm dấu tích LÀM LẠI MÃ CŨ — nhập mã hàng"): làm lại một mã hàng cũ thì
+   KHÔNG có lệnh sản xuất nào để chọn ⇒ dòng ghi với DonHangID = NULL + MaHangCu gõ tay (migration_v905).
+   Mọi thứ còn lại y nguyên: vẫn phải chọn nhân viên + sản phẩm theo danh mục hợp đồng, vẫn vào thưởng SP. */
+async function docDongSanLuong(pool, b, userId) {
+  const lamLai = b.lamLaiMaCu === true || b.lamLaiMaCu === 'true' || b.lamLaiMaCu === 1 || b.lamLaiMaCu === '1';
+  const maHangCu = String(b.maHangCu || '').trim().slice(0, 100);
+  const dh = parseInt(b.donHangId, 10) || 0;
+  let donHangId = dh;
+  if (!donHangId && b.maDH) {
+    const o = await getOrderByMaDH(pool, String(b.maDH));
+    donHangId = o ? o.DonHangID : 0;
+  }
+  if (lamLai) {
+    if (!(await sanLuongLenh.coCotMaHangCu(pool))) throw new Error('Chưa chạy migration_v905.sql — chưa ghi được dòng "Làm lại mã cũ" (thiếu cột SanLuongTheoLenh.MaHangCu).');
+    if (!maHangCu) throw new Error('Đã tích "Làm lại mã cũ" thì phải nhập mã hàng.');
+    donHangId = 0;   // cố ý bỏ lệnh: làm lại mã cũ không gắn lệnh SX nào
+  }
+  const nv = parseInt(b.nhanVienId, 10) || 0;
+  const ten = String(b.tenSanPham || '').trim().slice(0, 150);
+  const sl = Number(b.soLuong);
+  if (!donHangId && !lamLai) throw new Error('Chưa chọn lệnh sản xuất (hoặc tích "Làm lại mã cũ" rồi nhập mã hàng).');
+  if (!nv) throw new Error('Chưa chọn nhân viên.');
+  if (!ten) throw new Error('Chưa chọn sản phẩm (theo danh mục hợp đồng).');
+  if (!(sl > 0)) throw new Error('Số lượng phải > 0.');
+  const ngay = chuoiNgayHoacHomNay(b.ngay);
+  const hd = await sanLuongLenh.hopDongTaiNgay(pool, nv, ngay);
+  const khop = hd.sanPham.find(x => sanLuongLenh.khoaTen(x.TenSanPham) === sanLuongLenh.khoaTen(ten));
+  return { donHangId: lamLai ? null : donHangId, maHangCu: lamLai ? maHangCu : null,
+    nv, ten: khop ? khop.TenSanPham : ten, sl, ngay, ghiChu: String(b.ghiChu || '').trim().slice(0, 255) || null, userId,
+    canhBao: !hd.hopDongId ? 'Nhân viên chưa có hợp đồng hiệu lực tại ngày này — dòng ghi được nhưng 0 đồng.'
+      : !coKieu(hd.kieuThuong, 'SanPham') ? `Hợp đồng của nhân viên không phải kiểu "Theo sản phẩm" (đang: ${hd.kieuThuong || 'Không'}) — bộ tính lương sẽ KHÔNG cộng thưởng này.`
+      : !khop ? `"${ten}" không có trong danh mục sản phẩm của hợp đồng — 0 đồng cho tới khi thêm vào hợp đồng.` : null };
+}
+
+/* v9.67c (Nguyen 16/11: "Ghi sản lượng 1 lệnh thêm được nhiều dòng sản phẩm chọn từ list"): MỘT lệnh + MỘT người +
+   MỘT ngày, NHIỀU dòng { tenSanPham, soLuong, ghiChu } trong b.rows. Không có rows ⇒ coi chính b là một dòng (client cũ).
+   Kiểm hết các dòng TRƯỚC, sai một dòng là không ghi dòng nào; cùng tên SP lặp hai dòng ⇒ chặn (cộng gộp mới đúng). */
+async function docCacDongSanLuong(pool, b, userId) {
+  const ds = Array.isArray(b.rows) && b.rows.length ? b.rows : [b];
+  const kq = [];
+  const daCo = new Set();
+  for (const r of ds) {
+    const d = await docDongSanLuong(pool, { donHangId: b.donHangId, maDH: b.maDH, nhanVienId: b.nhanVienId, ngay: b.ngay,
+      lamLaiMaCu: b.lamLaiMaCu, maHangCu: b.maHangCu,   // v9.81: cờ "làm lại mã cũ" dùng chung cho mọi dòng của lần ghi
+      tenSanPham: r.tenSanPham, soLuong: r.soLuong, ghiChu: r.ghiChu }, userId);
+    const k = sanLuongLenh.khoaTen(d.ten);
+    if (daCo.has(k)) throw new Error(`Sản phẩm "${d.ten}" bị lặp hai dòng — gộp số lượng vào một dòng.`);
+    daCo.add(k);
+    kq.push(d);
+  }
+  return kq;
+}
+async function chenCacDongSanLuong(pool, ds, lyDo) {
+  const ids = [];
+  const coMaCu = await sanLuongLenh.coCotMaHangCu(pool);   // v9.81: máy chưa chạy v905 vẫn ghi được dòng CÓ lệnh
+  for (const d of ds) {
+    const r = await pool.request().input('dh', sql.Int, d.donHangId || null).input('nv', sql.Int, d.nv).input('ten', sql.NVarChar(150), d.ten)
+      .input('sl', sql.Decimal(12, 2), d.sl).input('ngay', sql.VarChar(10), d.ngay).input('gc', sql.NVarChar(255), d.ghiChu).input('u', sql.Int, d.userId)
+      .input('mhc', sql.NVarChar(100), d.maHangCu || null)
+      .query(`INSERT INTO SanLuongTheoLenh (DonHangID, NhanVienID, TenSanPham, SoLuong, Ngay, Nguon, GhiChu, NguoiTaoID${coMaCu ? ', MaHangCu' : ''})
+              OUTPUT INSERTED.ID VALUES (@dh, @nv, @ten, @sl, CONVERT(date, @ngay, 23), N'Tay', @gc, @u${coMaCu ? ', @mhc' : ''})`);
+    ids.push(r.recordset[0].ID);
+  }
+  if (ds.length) await bangLuongTuDong.danhDauTheoNgay(pool, ds[0].ngay, lyDo);
+  const canhBao = [...new Set(ds.map(d => d.canhBao).filter(Boolean))];
+  return { ids, soDong: ids.length, canhBao: canhBao.length ? canhBao.join(' ') : null };
+}
+
+router.post('/sanluong', requireAuth, requirePermission('QLSX', 'create'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await sanLuongLenh.coBang(pool))) return res.status(400).json({ success: false, message: SL_LENH_CHUA_MIGRATION });
+    const ds = await docCacDongSanLuong(pool, req.body || {}, req.session.user.userId);
+    res.json({ success: true, data: await chenCacDongSanLuong(pool, ds, 'Ghi sản lượng theo lệnh SX') });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+router.put('/sanluong/:id', requireAuth, requirePermission('QLSX', 'edit'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await sanLuongLenh.coBang(pool))) return res.status(400).json({ success: false, message: SL_LENH_CHUA_MIGRATION });
+    const id = parseInt(req.params.id, 10);
+    const coMaCu = await sanLuongLenh.coCotMaHangCu(pool);   // v9.81
+    const cu = (await pool.request().input('id', sql.Int, id)
+      .query(`SELECT ID, DonHangID, Nguon, CONVERT(varchar(10), Ngay, 23) AS Ngay${coMaCu ? ', MaHangCu' : ''} FROM SanLuongTheoLenh WHERE ID = @id`)).recordset[0];
+    if (!cu) return res.status(404).json({ success: false, message: 'Không thấy dòng sản lượng.' });
+    if (cu.Nguon === 'MayMau') return res.status(409).json({ success: false, message: 'Dòng may mẫu là tự động — sửa ở ô "Nhân viên may mẫu" của lệnh (Danh sách lệnh SX → Sửa).' });
+    /* v9.81: client cũ không gửi cờ ⇒ giữ nguyên trạng thái của dòng (đang làm lại mã cũ thì vẫn là làm lại). */
+    const b = Object.assign({ donHangId: cu.DonHangID, lamLaiMaCu: !cu.DonHangID, maHangCu: cu.MaHangCu }, req.body || {});
+    const d = await docDongSanLuong(pool, b, req.session.user.userId);
+    await pool.request().input('id', sql.Int, id).input('dh', sql.Int, d.donHangId || null).input('nv', sql.Int, d.nv).input('ten', sql.NVarChar(150), d.ten)
+      .input('sl', sql.Decimal(12, 2), d.sl).input('ngay', sql.VarChar(10), d.ngay).input('gc', sql.NVarChar(255), d.ghiChu)
+      .input('mhc', sql.NVarChar(100), d.maHangCu || null)
+      .query(`UPDATE SanLuongTheoLenh SET DonHangID = @dh, NhanVienID = @nv, TenSanPham = @ten, SoLuong = @sl,
+              Ngay = CONVERT(date, @ngay, 23), GhiChu = @gc${coMaCu ? ', MaHangCu = @mhc' : ''}, UpdatedAt = SYSDATETIME() WHERE ID = @id`);
+    if (cu.Ngay !== d.ngay) await bangLuongTuDong.danhDauTheoNgay(pool, cu.Ngay, 'Sửa sản lượng theo lệnh SX');
+    await bangLuongTuDong.danhDauTheoNgay(pool, d.ngay, 'Sửa sản lượng theo lệnh SX');
+    res.json({ success: true, data: { canhBao: d.canhBao } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* ------------------------------------------------------------------------------------------------
+   v9.67b — TỰ PHỤC VỤ: nhân viên ghi SẢN LƯỢNG CỦA CHÍNH MÌNH (Nguyen 16/11: "Sản lượng theo lệnh gán với nhân
+   viên luôn, nghĩa là tự cập nhật cho mình. Khi nhân viên ký hợp đồng theo sản phẩm thì sẽ hiện ở chức năng này").
+   requireAuth + ChucNang MYPAY/sanluongcuatoi (migration_v895, mặc định tick — Quản trị → Phân quyền CẤM được cho
+   nhóm/người): người = Users.NhanVienID của phiên, KHÔNG nhận nhanVienId từ client.
+   Hợp đồng hiệu lực không phải kiểu 'SanPham' ⇒ theoSanPham:false, màn hình không vẽ mục này. Chỉ dòng Nguon='Tay'
+   của chính mình mới sửa/xóa được. Đường dẫn 3 đoạn (/sanluong/cuatoi/:id) không đụng /sanluong/:id (2 đoạn).
+   ------------------------------------------------------------------------------------------------ */
+async function nhanVienCuaPhien(pool, req) {
+  const u = (await pool.request().input('uid', sql.Int, req.session.user.userId).query('SELECT NhanVienID FROM Users WHERE UserID = @uid')).recordset[0];
+  return u && u.NhanVienID ? Number(u.NhanVienID) : null;
+}
+router.get('/sanluong/cuatoi', requireAuth, requireChucNang('MYPAY', 'sanluongcuatoi', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nv = await nhanVienCuaPhien(pool, req);
+    if (!nv) return res.json({ success: true, data: { linked: false, theoSanPham: false, rows: [] } });
+    if (!(await sanLuongLenh.coBang(pool))) return res.json({ success: true, data: { linked: true, theoSanPham: false, chuaMigration: true, rows: [] } });
+    const nam = parseInt(req.query.nam, 10) || new Date().getFullYear();
+    const thang = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+    const cuoi = `${nam}-${String(thang).padStart(2, '0')}-${new Date(nam, thang, 0).getDate()}`;
+    const hd = await sanLuongLenh.hopDongTaiNgay(pool, nv, cuoi);
+    const theoSanPham = coKieu(hd.kieuThuong, 'SanPham');   // v9.73: 'KPI,SanPham' cũng là theo sản phẩm
+    const coMaCu = await sanLuongLenh.coCotMaHangCu(pool);   // v9.81
+    const rows = (await pool.request().input('nv', sql.Int, nv).input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
+      SELECT s.ID, s.DonHangID, d.MaDH, d.TenSanPham AS TenSPLenh, d.MaSanPham, s.TenSanPham, s.SoLuong,
+             CONVERT(varchar(10), s.Ngay, 23) AS Ngay, s.Nguon, s.GhiChu,
+             ${coMaCu ? 's.MaHangCu' : "CAST(NULL AS NVARCHAR(100)) AS MaHangCu"},
+             ${COT_ANH_SAN_LUONG('d')}
+      FROM SanLuongTheoLenh s LEFT JOIN DonHangSanXuat d ON d.DonHangID = s.DonHangID
+      WHERE s.NhanVienID = @nv AND YEAR(s.Ngay) = @n AND MONTH(s.Ngay) = @t
+      ORDER BY s.Ngay DESC, s.ID DESC`)).recordset;
+    await ganMaRapSanLuong(pool, rows);
+    const o = (await sanLuongLenh.thuongTheoThang(pool, nam, thang)).get(nv);
+    rows.forEach(r => {
+      const d = o && o.dong.find(x => sanLuongLenh.khoaTen(x.TenSanPham) === sanLuongLenh.khoaTen(r.TenSanPham));
+      r.DonGia = d ? d.DonGia : 0; r.khop = !!(d && d.khop); r.ThanhTien = Math.round((Number(r.SoLuong) || 0) * r.DonGia);
+    });
+    res.json({ success: true, data: { linked: true, theoSanPham, kieuThuong: hd.kieuThuong, sanPham: hd.sanPham, nam, thang, rows, tong: o ? o.tien : 0 } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.get('/sanluong/cuatoi/lenh', requireAuth, requireChucNang('MYPAY', 'sanluongcuatoi', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nv = await nhanVienCuaPhien(pool, req);
+    if (!nv) return res.status(403).json({ success: false, message: 'Tài khoản chưa liên kết nhân viên.' });
+    /* v9.70: loại lệnh CHÍNH MÌNH đã ghi; đang sửa thì giữ lệnh đó (giu). */
+    res.json({ success: true, data: await timLenhChuaGhi(pool, req.query.q, nv, req.query.giu) });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.post('/sanluong/cuatoi', requireAuth, requireChucNang('MYPAY', 'sanluongcuatoi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const nv = await nhanVienCuaPhien(pool, req);
+    if (!nv) return res.status(403).json({ success: false, message: 'Tài khoản chưa liên kết nhân viên.' });
+    if (!(await sanLuongLenh.coBang(pool))) return res.status(400).json({ success: false, message: SL_LENH_CHUA_MIGRATION });
+    const ds = await docCacDongSanLuong(pool, Object.assign({}, req.body || {}, { nhanVienId: nv }), req.session.user.userId);
+    const hd = await sanLuongLenh.hopDongTaiNgay(pool, nv, ds[0].ngay);
+    if (!coKieu(hd.kieuThuong, 'SanPham')) return res.status(409).json({ success: false, message: 'Hợp đồng của bạn tại ngày này không phải kiểu "Theo sản phẩm" — không ghi được sản lượng.' });
+    res.json({ success: true, data: await chenCacDongSanLuong(pool, ds, 'Nhân viên tự ghi sản lượng theo lệnh SX') });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+async function dongCuaToi(pool, req, res) {
+  const nv = await nhanVienCuaPhien(pool, req);
+  if (!nv) { res.status(403).json({ success: false, message: 'Tài khoản chưa liên kết nhân viên.' }); return null; }
+  const id = parseInt(req.params.id, 10);
+  const cu = (await pool.request().input('id', sql.Int, id)
+    .query("SELECT ID, DonHangID, NhanVienID, Nguon, CONVERT(varchar(10), Ngay, 23) AS Ngay FROM SanLuongTheoLenh WHERE ID = @id")).recordset[0];
+  if (!cu || Number(cu.NhanVienID) !== nv) { res.status(404).json({ success: false, message: 'Không thấy dòng sản lượng của bạn.' }); return null; }
+  if (cu.Nguon === 'MayMau') { res.status(409).json({ success: false, message: 'Dòng may mẫu do lệnh sản xuất ghi tự động — không sửa ở đây.' }); return null; }
+  return { nv, cu };
+}
+router.put('/sanluong/cuatoi/:id', requireAuth, requireChucNang('MYPAY', 'sanluongcuatoi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const x = await dongCuaToi(pool, req, res);
+    if (!x) return;
+    const d = await docDongSanLuong(pool, Object.assign({ donHangId: x.cu.DonHangID }, req.body || {}, { nhanVienId: x.nv }), req.session.user.userId);
+    await pool.request().input('id', sql.Int, x.cu.ID).input('dh', sql.Int, d.donHangId).input('ten', sql.NVarChar(150), d.ten)
+      .input('sl', sql.Decimal(12, 2), d.sl).input('ngay', sql.VarChar(10), d.ngay).input('gc', sql.NVarChar(255), d.ghiChu)
+      .query(`UPDATE SanLuongTheoLenh SET DonHangID = @dh, TenSanPham = @ten, SoLuong = @sl, Ngay = CONVERT(date, @ngay, 23), GhiChu = @gc, UpdatedAt = SYSDATETIME() WHERE ID = @id`);
+    if (x.cu.Ngay !== d.ngay) await bangLuongTuDong.danhDauTheoNgay(pool, x.cu.Ngay, 'Nhân viên sửa sản lượng theo lệnh SX');
+    await bangLuongTuDong.danhDauTheoNgay(pool, d.ngay, 'Nhân viên sửa sản lượng theo lệnh SX');
+    res.json({ success: true, data: { canhBao: d.canhBao } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.delete('/sanluong/cuatoi/:id', requireAuth, requireChucNang('MYPAY', 'sanluongcuatoi'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const x = await dongCuaToi(pool, req, res);
+    if (!x) return;
+    await pool.request().input('id', sql.Int, x.cu.ID).query('DELETE FROM SanLuongTheoLenh WHERE ID = @id');
+    await bangLuongTuDong.danhDauTheoNgay(pool, x.cu.Ngay, 'Nhân viên xóa sản lượng theo lệnh SX');
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* ================================================================================================
+   🔴 v9.90 — THỢ MAY TỰ GHI CÔNG ĐOẠN MAY CỦA MÌNH (Nguyen 23/11)
+
+   Nguyen: *"Công đoạn may phần cập nhật nhân viên và số lượng có thể cho nhân viên tự nhập khi phân
+   quyền... hoặc nhân viên thuộc bộ phận may nhập công đoạn của mình. Khi nhân viên tự nhập thì chỉ
+   hiện ra chọn công đoạn và điền số lượng. Để cả 2 cách cập nhật."* — chốt tiếp: *"chỉ cần thuộc bộ
+   phận May, nhưng chỉ nhìn thấy của mình không thấy của người khác. Thêm tick quyền cho người khác
+   như tổ trưởng nhìn thấy hết của mọi người."*
+
+   HAI ĐƯỜNG GHI, CÙNG MỘT BẢNG `PhanCongMay` — cố ý để lương khoán may chỉ có MỘT nguồn:
+     ① Quản lý ghi hộ: QLSX › Ghi tiến độ › May (POST /orders/:maDH/giaoviecmay) — GIỮ NGUYÊN.
+     ② Thợ may tự ghi: các route dưới đây. NhanVienID ÉP = người đang đăng nhập, KHÔNG nhận từ
+        client — y như luật đã dùng ở /sanluong/cuatoi.
+
+   AI VÀO ĐƯỢC: không cần tick quyền gì — chỉ cần hồ sơ nhân viên thuộc BỘ PHẬN MAY (laBoPhanMay).
+   AI THẤY HẾT: tick chức năng 'MYPAY/congdoanmaytatca' (MacDinhCho = 0 ⇒ mặc định TẮT, xem
+   migration_v907.sql). Dùng coQuyenChucNang() — hàm opt-in: KHÔNG có dòng cấu hình = KHÔNG có
+   quyền, ngược hẳn requireChucNang (thiếu cấu hình = cho qua). Ở đây phải là opt-in, vì "thấy số
+   của người khác" mà mặc định bật cho mọi người là lộ lương chéo.
+   ------------------------------------------------------------------------------------------------ */
+const BO_PHAN_MAY = 'May';
+/* 🔴 v9.93: v9.90 so khớp tên bộ phận BẰNG NHAU TUYỆT ĐỐI ('May') — xưởng đặt "Tổ may" / "May 1" là
+   không ai tự ghi được, và màn hình lại IM LẶNG nên không ai biết vì sao. Nay khớp theo TỪ:
+   tách tên bộ phận thành từ, có một từ đúng là "may" thì tính.
+   ⚠️ GIỮ DẤU, tuyệt đối KHÔNG bỏ dấu trước khi so: bỏ dấu thì "Máy" (bộ phận cơ khí/bảo trì máy)
+   thành "may" và cả tổ cơ khí tự ghi được vào lương khoán may. */
+function laTenBoPhanMay(ten) {
+  return String(ten || '').split(/[^\p{L}\p{N}]+/u).some(t => t.toLowerCase() === BO_PHAN_MAY.toLowerCase());
+}
+async function thoMayCuaPhien(pool, req) {
+  const nv = await nhanVienCuaPhien(pool, req);
+  if (!nv) return { nv: null, laBoPhanMay: false, tenBoPhan: '', lyDo: 'Tài khoản của bạn chưa được liên kết với hồ sơ nhân viên. Nhờ quản trị vào Quản lý User → sửa tài khoản → chọn "Liên kết nhân viên".' };
+  const r = (await pool.request().input('nv', sql.Int, nv).query(`
+    SELECT nv.HoTen, ISNULL(bp.TenBoPhan, N'') AS TenBoPhan
+    FROM NhanVien nv LEFT JOIN BoPhan bp ON bp.BoPhanID = nv.BoPhanID
+    WHERE nv.NhanVienID = @nv`)).recordset[0] || {};
+  const la = laTenBoPhanMay(r.TenBoPhan);
+  return {
+    nv, hoTen: r.HoTen || '', tenBoPhan: r.TenBoPhan || '', laBoPhanMay: la,
+    /* Câu này đi THẲNG lên màn hình. Ẩn mục đi mà không nói lý do chính là lỗi đã mắc ở v9.90:
+       thợ may mở ra thấy trống, không biết là thiếu liên kết, sai bộ phận hay file chưa copy. */
+    lyDo: la ? '' : (String(r.TenBoPhan || '').trim()
+      ? `Hồ sơ nhân viên của bạn (${r.HoTen || ''}) đang thuộc bộ phận "${r.TenBoPhan}" — chỉ bộ phận có chữ "${BO_PHAN_MAY}" mới tự ghi công đoạn may. Nhờ quản trị sửa bộ phận ở Nhân sự.`
+      : `Hồ sơ nhân viên của bạn (${r.HoTen || ''}) CHƯA KHAI BỘ PHẬN. Nhờ quản trị vào Nhân sự → sửa nhân viên → chọn bộ phận "${BO_PHAN_MAY}".`)
+  };
+}
+/* Chặn ở MỘT chỗ, mọi route ghi/đọc đều đi qua — nói rõ bộ phận đang khai để quản trị sửa được ngay,
+   thay vì câu "không có quyền" chung chung (xem feedback_qlnoibo_an_nut_khong_noi_ly_do). */
+async function chanNeuKhongPhaiThoMay(pool, req, res, choXem) {
+  const t = await thoMayCuaPhien(pool, req);
+  if (!t.nv) { res.status(403).json({ success: false, message: 'Tài khoản chưa liên kết hồ sơ nhân viên — nhờ quản trị gán nhân viên cho tài khoản này.' }); return null; }
+  /* v9.96: `choXem` = route chỉ ĐỌC ⇒ tổ trưởng có tick congdoanmaytatca vào được dù không thuộc bộ
+     phận May. Route GHI vẫn đòi đúng bộ phận May (trừ khi là tổ trưởng sửa dòng — xem dongMayDuocSua). */
+  if (choXem && MAY_XEM_TAT_CA(req)) return t;
+  if (!t.laBoPhanMay) {
+    res.status(403).json({ success: false, message: `Chỉ nhân viên thuộc bộ phận "${BO_PHAN_MAY}" mới tự ghi công đoạn may. Hồ sơ của bạn đang thuộc bộ phận "${t.tenBoPhan || '(chưa khai)'}".` });
+    return null;
+  }
+  return t;
+}
+const MAY_XEM_TAT_CA = (req) => coQuyenChucNang(req.session.user, 'MYPAY', 'congdoanmaytatca');
+
+/* ================================================================================================
+   🔴 v9.94 — ĐỦ SỐ THEO BÀN CẮT THÌ TỰ CHUYỂN CÔNG ĐOẠN (Nguyen 23/11)
+
+   *"Khi cập nhật số lượng và các công đoạn đã tạo đơn giá. Nếu đủ số lượng theo bàn cắt tự chuyển
+   công đoạn."*
+
+   ĐIỀU KIỆN (phải đủ CẢ BỐN, thiếu một là không chuyển):
+     ① Lệnh ĐANG ĐỨNG ở công đoạn May (không kéo con trỏ của lệnh đã đi xa hơn — luật v5.48).
+     ② Tổng bàn cắt > 0 (chưa ghi sổ cắt thì không có mốc nào để nói là "đủ").
+     ③ Lệnh có khai ít nhất MỘT công đoạn may trong bảng đơn giá.
+     ④ MỌI công đoạn đã khai đơn giá đều có tổng SL ghi >= tổng bàn cắt.
+
+   🔴 HAI ĐIỀU PHẢI BIẾT TRƯỚC KHI DÙNG:
+   · Chuyển xong, lệnh BIẾN MẤT khỏi danh sách của thợ may (danh sách lọc theo CongDoanHienTaiID).
+     Gõ nhầm 1000 thay vì 100 là cả tổ hết ghi tiếp được — nhưng gate "vượt tổng bàn cắt" ở POST đã
+     chặn trước nên ca này rất khó xảy ra. Muốn kéo lại: quản lý ghi tiến độ công đoạn May như cũ.
+   · Đường "Gửi" của quản lý ghi kèm SL LŨY KẾ THEO MÀU (TienDoChiTietMau) — số mà Đóng gói / Kho
+     nhập / báo cáo đọc. Tự chuyển mà bỏ trống phần đó thì khâu sau thấy May = 0. Nên ở đây ghi
+     luôn, lấy ĐÚNG số cắt theo màu (getStageActualQtyByColor của công đoạn CAT): điều kiện ④ nói
+     May đã làm đủ bằng tổng cắt, nên theo màu cũng chính là số cắt theo màu — KHÔNG tự chia tỉ lệ,
+     không bịa số. Và CHỈ ghi khi công đoạn May CHƯA có dòng nào: quản lý đã nhập tay thì giữ của họ.
+   ================================================================================================ */
+async function mayDaDuTheoBanCat(pool, donHangId, tongCat) {
+  if (!(tongCat > 0)) return false;
+  const ds = (await pool.request().input('dh', sql.Int, donHangId).query(`
+    SELECT g.ID, ISNULL(SUM(p.SoLuong), 0) AS DaMay
+    FROM DonHangDonGiaCongDoanMay g
+    LEFT JOIN PhanCongMay p ON p.DonGiaCongDoanMayID = g.ID
+    WHERE g.DonHangID = @dh
+      -- cùng bộ lọc "bản đơn giá đầu tiên" (v5.56) với ô chọn công đoạn, kẻo đếm nhầm sang bản khác
+      AND ISNULL(g.TenPhieu, N'') = (SELECT MIN(ISNULL(x.TenPhieu, N'')) FROM DonHangDonGiaCongDoanMay x WHERE x.DonHangID = @dh)
+    GROUP BY g.ID`)).recordset;
+  if (!ds.length) return false;                       // ③ chưa khai công đoạn nào
+  return ds.every(x => Number(x.DaMay) >= tongCat);   // ④
+}
+async function tuChuyenKhoiCongDoanMay(pool, order, userId, tongCat) {
+  const stages = (await pool.request().query(
+    'SELECT StageID, MaCongDoan, TenCongDoan FROM CongDoanSanXuat ORDER BY ThuTu')).recordset;
+  const iMay = stages.findIndex(s => s.MaCongDoan === 'MAY');
+  if (iMay < 0) return null;
+  const mayStage = stages[iMay];
+  if (Number(order.CongDoanHienTaiID) !== Number(mayStage.StageID)) return null;   // ①
+  if (!(await mayDaDuTheoBanCat(pool, order.DonHangID, tongCat))) return null;
+
+  const sau = stages[iMay + 1] || null;               // null = May là công đoạn cuối (hiếm)
+  /* Ghi SL lũy kế theo màu cho công đoạn May nếu chưa có dòng nào — xem khối ghi chú ở trên. */
+  const idsMay = await effectiveTienDoIds(pool, order.DonHangID, mayStage.StageID);
+  const daCoMau = idsMay.length
+    ? Number((await pool.request().query(
+        `SELECT COUNT(*) AS c FROM TienDoChiTietMau WHERE TienDoID IN (${idsMay.join(',')})`)).recordset[0].c) || 0
+    : 0;
+  if (!daCoMau) {
+    const theoMau = await getStageActualQtyByColor(pool, order.DonHangID, await getCatStageId(pool));
+    const cacMau = Object.keys(theoMau || {});
+    if (cacMau.length) {
+      const tienDoId = (await pool.request()
+        .input('DonHangID', sql.Int, order.DonHangID)
+        .input('StageID', sql.Int, mayStage.StageID)
+        .input('NguoiCapNhatID', sql.Int, userId)
+        .input('GhiChu', sql.NVarChar, 'Tự chốt công đoạn May: đã đủ số theo bàn cắt (thợ may tự ghi)')
+        .query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu)
+                OUTPUT INSERTED.TienDoID
+                VALUES (@DonHangID, CAST(GETDATE() AS date), @StageID, @NguoiCapNhatID, @GhiChu)`)).recordset[0].TienDoID;
+      for (const m of cacMau) {
+        await pool.request().input('td', sql.Int, tienDoId).input('ms', sql.Int, Number(m))
+          .input('sl', sql.Decimal(18, 2), Number(theoMau[m]) || 0)
+          .query('INSERT INTO TienDoChiTietMau (TienDoID, MauSacID, SoLuongLuyKe) VALUES (@td, @ms, @sl)');
+      }
+    }
+  }
+  const lenStages = stages.length;
+  await pool.request()
+    .input('id', sql.Int, order.DonHangID)
+    .input('StageID', sql.Int, sau ? sau.StageID : null)
+    .input('Percent', sql.Int, sau ? Math.round(((iMay + 1) / lenStages) * 100) : 100)
+    .input('TrangThai', sql.NVarChar, sau ? 'Đang sản xuất' : 'Hoàn thành')
+    .query(`UPDATE DonHangSanXuat SET CongDoanHienTaiID=@StageID, PhanTramHoanThanh=@Percent,
+                   TrangThai=@TrangThai, UpdatedAt=SYSDATETIME() WHERE DonHangID=@id`);
+  console.log(`[v9.94] Lenh ${order.MaDH}: May da du ${tongCat} theo ban cat -> tu chuyen sang ${sau ? sau.MaCongDoan : 'HOAN THANH'} (user ${userId}).`);
+  /* Báo cho người của công đoạn sau — y như đường "Gửi". Lỗi gửi thông báo KHÔNG được làm hỏng
+     việc đã ghi (cùng cách xử lý với POST /tiendo). */
+  if (sau) {
+    try { await notifyStageUsers(pool, { stageId: sau.StageID, stageName: sau.TenCongDoan, order, excludeUserId: userId }); }
+    catch (e) { console.warn('[v9.94] khong gui duoc thong bao cong doan sau:', e.message); }
+  }
+  return { tu: mayStage.TenCongDoan, den: sau ? sau.TenCongDoan : null, tongCat };
+}
+
+/* Danh sách công đoạn may ĐÃ GHI — mặc định CHỈ của mình; có tick 'congdoanmaytatca' thì thấy hết. */
+router.get('/congdoanmay/cuatoi', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const t = await thoMayCuaPhien(pool, req);
+    const tatCa = MAY_XEM_TAT_CA(req);
+    /* v9.93: KHÔNG trả về "rỗng không lý do" nữa — luôn kèm lyDo để màn hình nói ra. */
+    if (!t.nv) return res.json({ success: true, data: { linked: false, laBoPhanMay: false, xemTatCa: tatCa, lyDo: t.lyDo, rows: [] } });
+    const nam = parseInt(req.query.nam, 10) || new Date().getFullYear();
+    const thang = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+    const rows = (await pool.request().input('nv', sql.Int, t.nv).input('n', sql.Int, nam).input('t', sql.Int, thang).query(`
+      SELECT p.ID, p.SoLuong, p.NhanVienID, nv.HoTen,
+             d.MaDH, d.TenSanPham, dg.TenCongDoan, dg.ThanhTien AS DonGia,
+             CONVERT(varchar(10), td.NgayGhiNhan, 23) AS Ngay
+      FROM PhanCongMay p
+      JOIN TienDoSanXuat td ON td.TienDoID = p.TienDoID
+      JOIN DonHangSanXuat d ON d.DonHangID = td.DonHangID
+      LEFT JOIN NhanVien nv ON nv.NhanVienID = p.NhanVienID
+      LEFT JOIN DonHangDonGiaCongDoanMay dg ON dg.ID = p.DonGiaCongDoanMayID
+      WHERE YEAR(td.NgayGhiNhan) = @n AND MONTH(td.NgayGhiNhan) = @t
+        ${tatCa ? '' : 'AND p.NhanVienID = @nv'}
+      ORDER BY td.NgayGhiNhan DESC, p.ID DESC`)).recordset;
+    rows.forEach(r => { r.ThanhTien = Math.round((Number(r.SoLuong) || 0) * (Number(r.DonGia) || 0)); r.cuaToi = Number(r.NhanVienID) === t.nv; });
+    res.json({
+      success: true,
+      data: {
+        linked: true, laBoPhanMay: t.laBoPhanMay, tenBoPhan: t.tenBoPhan, hoTen: t.hoTen,
+        lyDo: t.lyDo, xemTatCa: tatCa,
+        nam, thang, rows, tong: rows.reduce((s, r) => s + (r.cuaToi || tatCa ? r.ThanhTien : 0), 0)
+      }
+    });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* 🔴 v9.93 (Nguyen 23/11: "mọi nhân viên bộ phận may KHI CÓ LỆNH Ở CÔNG ĐOẠN MAY sẽ hiện ra đó"):
+   KHÔNG bắt thợ may gõ tìm lệnh nữa — tự liệt kê lệnh ĐANG ĐỨNG ở công đoạn May.
+   Kèm luôn TỔNG SL CẮT (màu chính) và SL MAY ĐÃ GHI của cả tổ, để đối chiếu ngay trên danh sách
+   ("Vẫn so sánh số lượng với tổng bàn cắt như hiện tại").
+
+   🔴 Tổng SL cắt lấy bằng getCatMauList() — ĐÚNG hàm mà màn Ghi tiến độ đang dùng để tính
+   slCatTongChinh. Tự viết một câu SUM khác ở đây là hai màn ra hai con số, và đây là họ bẫy đã
+   sai 3 lần (xem khối ghi chú Ri/hệ số ở đầu file). */
+router.get('/congdoanmay/cuatoi/lenhmay', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await chanNeuKhongPhaiThoMay(pool, req, res, true))) return;   // v9.96: route ĐỌC, tổ trưởng cũng vào được
+    const stage = (await pool.request().query("SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan = 'MAY'")).recordset[0];
+    if (!stage) return res.status(400).json({ success: false, message: 'Hệ thống chưa khai công đoạn MAY.' });
+    /* 🔴 v9.96 — Nguyen 23/11: *"Công nhân bộ phận May vẫn chưa thấy danh sách lệnh thuộc công đoạn may"*.
+       Nguyên nhân: v9.93 lọc CỨNG `CongDoanHienTaiID = MAY`. Nhưng v9.94 vừa thêm luật TỰ CHUYỂN —
+       lệnh may đủ là rời May ngay; và nhiều lệnh thực tế đã bị đẩy qua khâu sau trong khi thợ may
+       vẫn còn phải ghi. Kết quả: danh sách rỗng, màn hình trông như hỏng.
+       Nay lấy RỘNG hơn: mọi lệnh **đã khai đơn giá công đoạn may** và **chưa Hoàn thành**. Lệnh nào
+       đang ĐỨNG ở May thì gắn cờ `DangOMay` và xếp LÊN ĐẦU — người dùng vẫn phân biệt được ngay.
+       + Mã rập và ẢNH sản phẩm (Nguyen: "Thêm mã rập và hình ảnh") — ảnh dùng COT_ANH_SAN_LUONG,
+       đúng bản công thức ảnh lệnh mà Sản lượng / Lương CTV đang dùng, không tự ghép lại. */
+    const ds = (await pool.request().input('st', sql.Int, stage.StageID).query(`
+      SELECT TOP 100 d.DonHangID, d.MaDH, d.TenSanPham, d.MaSanPham,
+             CONVERT(varchar(10), d.NgayDat, 23) AS NgayDat,
+             CONVERT(varchar(10), d.NgayGiaoDuKien, 23) AS NgayGiao,
+             CASE WHEN d.CongDoanHienTaiID = @st THEN 1 ELSE 0 END AS DangOMay,
+             cd.TenCongDoan AS CongDoanHienTai,
+             ${COT_ANH_SAN_LUONG('d')},
+             (SELECT COUNT(*) FROM DonHangDonGiaCongDoanMay g WHERE g.DonHangID = d.DonHangID) AS SoCongDoan
+      FROM DonHangSanXuat d
+      LEFT JOIN CongDoanSanXuat cd ON cd.StageID = d.CongDoanHienTaiID
+      WHERE ISNULL(d.TrangThai, N'') <> N'Hoàn thành'
+        AND EXISTS (SELECT 1 FROM DonHangDonGiaCongDoanMay g WHERE g.DonHangID = d.DonHangID)
+      ORDER BY CASE WHEN d.CongDoanHienTaiID = @st THEN 0 ELSE 1 END, d.NgayGiaoDuKien, d.DonHangID DESC`)).recordset;
+    /* 🔴 v9.97 (Nguyen 23/11: "số lượng so TỪNG CÔNG ĐOẠN chứ không so cả lệnh"):
+       gom theo (lệnh × CÔNG ĐOẠN), không gom cả lệnh. Bản v9.96 cộng mọi công đoạn vào một số rồi
+       đem trừ tổng bàn cắt ⇒ ra "còn lại −5964" vô nghĩa (lệnh 5 công đoạn thì tổng ghi đương nhiên
+       gấp ~5 lần bàn cắt). Nay mỗi công đoạn so riêng, và trả về DANH SÁCH CÔNG ĐOẠN CÒN THIẾU. */
+    const dsId = ds.map(o => o.DonHangID);
+    const theoCD = new Map();   // DonHangID -> [{ten, daMay}]
+    const dong = new Map();     // DonHangID -> tổng mọi công đoạn (chỉ để hiển thị, KHÔNG đem so)
+    if (dsId.length) {
+      (await pool.request().query(`
+        SELECT g.DonHangID, g.TenCongDoan, ISNULL(SUM(p.SoLuong), 0) AS DaMay
+        FROM DonHangDonGiaCongDoanMay g
+        LEFT JOIN PhanCongMay p ON p.DonGiaCongDoanMayID = g.ID
+        WHERE g.DonHangID IN (${dsId.map(x => Number(x)).join(',')})
+          AND ISNULL(g.TenPhieu, N'') = (SELECT MIN(ISNULL(x.TenPhieu, N'')) FROM DonHangDonGiaCongDoanMay x WHERE x.DonHangID = g.DonHangID)
+        GROUP BY g.DonHangID, g.TenCongDoan, g.ThuTu, g.ID
+        ORDER BY g.DonHangID, g.ThuTu, g.ID`)).recordset.forEach(r => {
+        const k = String(r.DonHangID);
+        if (!theoCD.has(k)) theoCD.set(k, []);
+        theoCD.get(k).push({ ten: r.TenCongDoan, daMay: Number(r.DaMay) || 0 });
+        dong.set(k, (dong.get(k) || 0) + (Number(r.DaMay) || 0));
+      });
+    }
+    const mrMap = await maRapTheoDon(pool);
+    for (const o of ds) {
+      /* 🔴 Dùng getTongSLCatForOrder — hàm SẴN CÓ, nó tự lấy StageID của 'CAT' rồi mới gọi
+         getCatMauList. Bản v9.93 đầu tiên của tôi gọi getCatMauList(pool, id) THIẾU stageId ⇒
+         effectiveTienDoIds nhận undefined, số cắt sai/rỗng. Đây cũng là hàm mà gate "chưa đủ số"
+         của Kho nhập/QC/Đóng gói đang dùng ⇒ mọi nơi so cùng một mốc. */
+      o.TongSLCat = await getTongSLCatForOrder(pool, o.DonHangID);
+      o.DaMayCaTo = dong.get(String(o.DonHangID)) || 0;
+      o.MaRap = mrMap[o.DonHangID] || '';
+      /* v9.97: CÒN THIẾU theo TỪNG công đoạn — màn hình đổ thẳng vào cột Ghi chú
+         ("Chưa đủ hiện cột ghi chú ghi công đoạn nào thiếu bao nhiêu cái"). */
+      const cds = theoCD.get(String(o.DonHangID)) || [];
+      o.SoCongDoan = cds.length;
+      /* v9.98: trả về SL ĐÃ MAY CỦA TỪNG CÔNG ĐOẠN (Nguyen: "Cột đã may ghi rõ số lượng từng công
+         đoạn, ko ghi tổng") — con số tổng chỉ gây hiểu nhầm vì nó cộng chéo các công đoạn. */
+      o.CongDoan = cds.map(c => ({ ten: c.ten, daMay: c.daMay }));
+      o.Thieu = o.TongSLCat > 0
+        ? cds.filter(c => c.daMay < o.TongSLCat).map(c => ({ ten: c.ten, thieu: o.TongSLCat - c.daMay }))
+        : [];
+      o.DuHet = o.TongSLCat > 0 && cds.length > 0 && o.Thieu.length === 0;
+    }
+    res.json({ success: true, data: ds });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* 🔴 v9.95 (Nguyen 23/11: "Người khác cùng bộ phận may nhìn được số lượng của người khác từng công
+   đoạn"): MỌI thợ may xem được, KHÔNG cần tick nữa. Tick MYPAY/congdoanmaytatca từ nay chỉ còn một
+   tác dụng: cho phép SỬA/XÓA dòng của người khác (tổ trưởng).
+   Trả kèm cờ `suaDuoc` cho từng dòng để màn hình không phải tự đoán luật. */
+router.get('/congdoanmay/lenh/:maDH/moinguoi', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const t = await chanNeuKhongPhaiThoMay(pool, req, res, true);   // v9.96: route ĐỌC
+    if (!t) return;
+    const order = await getOrderByMaDH(pool, String(req.params.maDH || '').trim());
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy lệnh sản xuất.' });
+    const conOMay = await lenhConODangCongDoanMay(pool, order);
+    const toTruong = MAY_XEM_TAT_CA(req);
+    const rows = (await pool.request().input('dh', sql.Int, order.DonHangID).query(`
+      SELECT p.ID, p.SoLuong, p.NhanVienID, nv.HoTen, dg.ID AS CongDoanID, dg.TenCongDoan,
+             dg.ThanhTien AS DonGia, dg.ThuTu AS ThuTuCD,
+             CONVERT(varchar(10), td.NgayGhiNhan, 23) AS Ngay
+      FROM PhanCongMay p
+      JOIN TienDoSanXuat td ON td.TienDoID = p.TienDoID
+      LEFT JOIN NhanVien nv ON nv.NhanVienID = p.NhanVienID
+      LEFT JOIN DonHangDonGiaCongDoanMay dg ON dg.ID = p.DonGiaCongDoanMayID
+      WHERE td.DonHangID = @dh
+      ORDER BY dg.ThuTu, dg.ID, nv.HoTen, td.NgayGhiNhan, p.ID`)).recordset;
+    rows.forEach(r => {
+      r.ThanhTien = Math.round((Number(r.SoLuong) || 0) * (Number(r.DonGia) || 0));
+      r.cuaToi = Number(r.NhanVienID) === t.nv;
+      /* Sửa được khi: lệnh CÒN ở công đoạn May, VÀ (dòng của mình HOẶC mình là tổ trưởng). */
+      r.suaDuoc = conOMay && (r.cuaToi || toTruong);
+    });
+    res.json({
+      success: true,
+      data: {
+        maDH: order.MaDH, tenSanPham: order.TenSanPham,
+        tongSLCat: await getTongSLCatForOrder(pool, order.DonHangID),
+        conOMay, toTruong, nvToi: t.nv, rows
+      }
+    });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* Ô chọn CÔNG ĐOẠN của một lệnh. Dùng ĐÚNG câu lọc "bản đầu tiên" của GET /orders/:maDH/dongiacongdoanmay
+   (v5.56) — hai nơi lệch nhau thì thợ may và quản lý nhìn thấy hai danh sách công đoạn khác nhau. */
+router.get('/congdoanmay/cuatoi/congdoan', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await chanNeuKhongPhaiThoMay(pool, req, res))) return;
+    const order = await getOrderByMaDH(pool, String(req.query.maDH || '').trim());
+    if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy lệnh sản xuất.' });
+    /* v9.95: kèm SL ĐÃ GHI của cả tổ cho TỪNG công đoạn + tổng bàn cắt, để form cảnh báo NGAY LÚC
+       GÕ (Nguyen: "quá bàn cắt theo từng công đoạn cảnh báo luôn khi người cuối cùng nhập, không
+       cho đi"). Máy chủ vẫn chặn 409 — cảnh báo sớm chỉ để người nhập khỏi gõ xong mới biết. */
+    const r = await pool.request().input('id', sql.Int, order.DonHangID).query(`
+      SELECT g.ID, g.TenCongDoan, g.GiayGio, g.ThanhTien, ISNULL(SUM(p.SoLuong), 0) AS DaMay
+      FROM DonHangDonGiaCongDoanMay g
+      LEFT JOIN PhanCongMay p ON p.DonGiaCongDoanMayID = g.ID
+      WHERE g.DonHangID = @id
+        AND ISNULL(g.TenPhieu, N'') = (SELECT MIN(ISNULL(x.TenPhieu, N'')) FROM DonHangDonGiaCongDoanMay x WHERE x.DonHangID = @id)
+      GROUP BY g.ID, g.TenCongDoan, g.GiayGio, g.ThanhTien, g.ThuTu
+      ORDER BY g.ThuTu, g.ID`);
+    res.json({ success: true, data: r.recordset, tongSLCat: await getTongSLCatForOrder(pool, order.DonHangID) });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+router.post('/congdoanmay/cuatoi', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const t = await chanNeuKhongPhaiThoMay(pool, req, res);
+    if (!t) return;
+    const b = req.body || {};
+    const { maDH, ngay, ghiChu } = b;
+    const order = await getOrderByMaDH(pool, String(maDH || '').trim());
+    if (!order) return res.status(400).json({ success: false, message: 'Chưa chọn lệnh sản xuất (hoặc mã lệnh không đúng).' });
+    /* 🔴 v9.97 (Nguyen 23/11: "1 người có thể chọn được NHIỀU CÔNG ĐOẠN trong 1 lần cập nhật, thêm
+       dòng"): nhận MẢNG `dong: [{donGiaCongDoanMayId, soLuong}]`. Vẫn nhận dạng 1 dòng cũ
+       (donGiaCongDoanMayId/soLuong ở gốc) để bản JS còn trong cache trình duyệt không gãy. */
+    const dsGui = Array.isArray(b.dong) && b.dong.length
+      ? b.dong
+      : [{ donGiaCongDoanMayId: b.donGiaCongDoanMayId, soLuong: b.soLuong }];
+    const items = [];
+    for (const g of dsGui) {
+      const sl = Number(g && g.soLuong);
+      if (!(sl > 0)) return res.status(400).json({ success: false, message: 'Mỗi dòng phải có số lượng lớn hơn 0.' });
+      /* Công đoạn phải thuộc ĐÚNG lệnh đang chọn — không kiểm thì gửi thẳng API là ghi được số của
+         lệnh này vào đơn giá của lệnh khác, lương ra sai mà không ai thấy. */
+      const cd = (await pool.request().input('id', sql.Int, parseInt(g && g.donGiaCongDoanMayId, 10) || 0).input('dh', sql.Int, order.DonHangID)
+        .query('SELECT ID, TenCongDoan FROM DonHangDonGiaCongDoanMay WHERE ID = @id AND DonHangID = @dh')).recordset[0];
+      if (!cd) return res.status(400).json({ success: false, message: 'Có dòng chọn công đoạn may KHÔNG thuộc lệnh đang chọn — chọn lại công đoạn.' });
+      items.push({ cd, sl: Math.round(sl) });
+    }
+    const ngayGhi = /^\d{4}-\d{2}-\d{2}$/.test(String(ngay || '')) ? String(ngay) : null;
+    const stage = (await pool.request().query("SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan = 'MAY'")).recordset[0];
+    if (!stage) return res.status(400).json({ success: false, message: 'Hệ thống chưa khai công đoạn MAY.' });
+    /* 🔴 v9.93 (Nguyen: "Vẫn so sánh số lượng với tổng bàn cắt"): tổng SL đã ghi của MỘT CÔNG ĐOẠN
+       (cả tổ, kể cả dòng do quản lý giao hộ) không được vượt tổng SL cắt màu chính. Chặn ở MÁY CHỦ
+       nên gọi thẳng API cũng không lách được. Cắt chưa ghi sổ (tổng = 0) thì KHÔNG chặn — chặn lúc
+       đó là khoá cả tổ vì khâu trước chưa nhập.
+       🔴 v9.97: gửi NHIỀU dòng một lần thì phải CỘNG DỒN các dòng CÙNG công đoạn trong chính lần gửi
+       này trước khi so — kiểm từng dòng riêng lẻ là lách được bằng cách tách 100 thành 2 dòng 50. */
+    const tongCat = await getTongSLCatForOrder(pool, order.DonHangID);
+    if (tongCat > 0) {
+      const themTheoCD = new Map();
+      items.forEach(it => themTheoCD.set(String(it.cd.ID), (themTheoCD.get(String(it.cd.ID)) || 0) + it.sl));
+      for (const it of items) {
+        const k = String(it.cd.ID);
+        if (!themTheoCD.has(k)) continue;              // đã xét công đoạn này rồi
+        const them = themTheoCD.get(k);
+        themTheoCD.delete(k);
+        const daCo = Number(((await pool.request().input('cd', sql.Int, it.cd.ID).query(`
+          SELECT SUM(ISNULL(SoLuong, 0)) AS N FROM PhanCongMay WHERE DonGiaCongDoanMayID = @cd`)).recordset[0] || {}).N) || 0;
+        if (daCo + them > tongCat) {
+          return res.status(409).json({
+            success: false,
+            message: `Vượt tổng bàn cắt: công đoạn "${it.cd.TenCongDoan}" đã ghi ${daCo} cái, lần này thêm ${them} ⇒ ${daCo + them} > tổng SL cắt màu chính (${tongCat}). Kiểm lại số, hoặc báo tổ trưởng nếu sổ cắt chưa ghi đủ.`
+          });
+        }
+      }
+    }
+    /* Gom vào MỘT dòng TienDoSanXuat cho mỗi (lệnh, ngày) — y luật của /giaoviecmay, để bảng tiến độ
+       không phình ra mỗi lần một thợ bấm Lưu. */
+    const rqNgay = pool.request().input('id', sql.Int, order.DonHangID).input('st', sql.Int, stage.StageID);
+    let tienDoId = ((ngayGhi
+      ? await rqNgay.input('ng', sql.Date, ngayGhi).query('SELECT TOP 1 TienDoID FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@st AND NgayGhiNhan=@ng ORDER BY TienDoID DESC')
+      : await rqNgay.query('SELECT TOP 1 TienDoID FROM TienDoSanXuat WHERE DonHangID=@id AND StageID=@st AND NgayGhiNhan=CAST(GETDATE() AS date) ORDER BY TienDoID DESC')
+    ).recordset[0] || {}).TienDoID;
+    if (!tienDoId) {
+      const rqIns = pool.request().input('DonHangID', sql.Int, order.DonHangID).input('StageID', sql.Int, stage.StageID)
+        .input('NguoiCapNhatID', sql.Int, req.session.user.userId)
+        .input('GhiChu', sql.NVarChar, 'Thợ may tự ghi công đoạn may');
+      tienDoId = (ngayGhi
+        ? await rqIns.input('NgayGhiNhan', sql.Date, ngayGhi).query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu)
+             OUTPUT INSERTED.TienDoID VALUES (@DonHangID, @NgayGhiNhan, @StageID, @NguoiCapNhatID, @GhiChu)`)
+        : await rqIns.query(`INSERT INTO TienDoSanXuat (DonHangID, NgayGhiNhan, StageID, NguoiCapNhatID, GhiChu)
+             OUTPUT INSERTED.TienDoID VALUES (@DonHangID, CAST(GETDATE() AS date), @StageID, @NguoiCapNhatID, @GhiChu)`)
+      ).recordset[0].TienDoID;
+    }
+    for (const it of items) {   // v9.97: nhiều công đoạn trong một lần gửi
+      await pool.request()
+        .input('TienDoID', sql.Int, tienDoId)
+        .input('NhanVienID', sql.Int, t.nv)                     // 🔴 ÉP = chính mình, KHÔNG lấy từ client
+        .input('CongDoanMayID', sql.Int, null)
+        .input('DonGiaCongDoanMayID', sql.Int, it.cd.ID)
+        .input('MauSacID', sql.Int, null)
+        .input('SoLuong', sql.Int, it.sl)
+        .query(`INSERT INTO PhanCongMay (TienDoID, NhanVienID, CongDoanMayID, DonGiaCongDoanMayID, MauSacID, SoLuong)
+                VALUES (@TienDoID, @NhanVienID, @CongDoanMayID, @DonGiaCongDoanMayID, @MauSacID, @SoLuong)`);
+    }
+    /* Dòng này vào lương khoán may ⇒ bảng lương tháng đó phải được đánh dấu tính lại, y như sản lượng. */
+    await bangLuongTuDong.danhDauTheoNgay(pool, ngayGhi || homNayVN(), 'Thợ may tự ghi công đoạn may');
+    /* 🔴 v9.94: ghi xong mới xét "đã đủ theo bàn cắt chưa" — đủ thì tự chuyển công đoạn.
+       Lỗi ở bước này KHÔNG được nuốt mất dòng vừa ghi: dòng đã nằm trong CSDL rồi, nên bọc try/catch
+       và chỉ cảnh báo. Im lặng nuốt lỗi cũng không được — trả `loiChuyen` để màn hình nói ra. */
+    let daChuyen = null, loiChuyen = null;
+    try { daChuyen = await tuChuyenKhoiCongDoanMay(pool, order, req.session.user.userId, tongCat); }
+    catch (e) { loiChuyen = e.message; console.error('[v9.94] loi khi tu chuyen cong doan:', e); }
+    res.json({ success: true, data: { tienDoId, soDong: items.length, tenCongDoan: items.map(i => i.cd.TenCongDoan).join(', '), ghiChu: ghiChu || null, daChuyen, loiChuyen } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+/* ================================================================================================
+   🔴 v9.95 — SỬA / XÓA DÒNG CÔNG ĐOẠN MAY (Nguyen 23/11 chốt)
+
+   *"khi chưa chuyển công đoạn mọi người vẫn có thể sửa số lượng được"* — chốt phạm vi: **mình sửa
+   của mình; tổ trưởng (tick MYPAY/congdoanmaytatca) sửa của mọi người.**
+
+   BA CỔNG, thiếu một là từ chối:
+     ① Người gọi thuộc bộ phận May.
+     ② Lệnh CÒN ĐANG ĐỨNG ở công đoạn May. Đã chuyển sang khâu sau ⇒ KHOÁ — số đó đã chảy vào
+        TienDoChiTietMau và vào lương; sửa lén sau lưng khâu sau là sai lệch dây chuyền. Muốn sửa
+        thì tổ trưởng kéo lệnh về / sửa ở QLSX › Ghi tiến độ (đường có dấu vết đầy đủ).
+     ③ Dòng của chính mình, HOẶC mình là tổ trưởng.
+
+   Sửa dòng của NGƯỜI KHÁC luôn được GHI NHẬT KÝ (console) — đây là số ăn lương khoán của họ.
+   ------------------------------------------------------------------------------------------------ */
+async function lenhConODangCongDoanMay(pool, order) {
+  const st = (await pool.request().query("SELECT TOP 1 StageID FROM CongDoanSanXuat WHERE MaCongDoan = 'MAY'")).recordset[0];
+  return !!(st && Number(order.CongDoanHienTaiID) === Number(st.StageID));
+}
+/* Lấy dòng + kiểm đủ ba cổng. Trả null và ĐÃ tự trả lời HTTP nếu không qua được. */
+async function dongMayDuocSua(pool, req, res) {
+  const t = await chanNeuKhongPhaiThoMay(pool, req, res);
+  if (!t) return null;
+  const id = parseInt(req.params.id, 10) || 0;
+  const cu = (await pool.request().input('id', sql.Int, id).query(`
+    SELECT p.ID, p.NhanVienID, p.SoLuong, p.DonGiaCongDoanMayID, td.DonHangID,
+           CONVERT(varchar(10), td.NgayGhiNhan, 23) AS Ngay,
+           d.MaDH, d.CongDoanHienTaiID, nv.HoTen
+    FROM PhanCongMay p
+    JOIN TienDoSanXuat td ON td.TienDoID = p.TienDoID
+    JOIN DonHangSanXuat d ON d.DonHangID = td.DonHangID
+    LEFT JOIN NhanVien nv ON nv.NhanVienID = p.NhanVienID
+    WHERE p.ID = @id`)).recordset[0];
+  if (!cu) { res.status(404).json({ success: false, message: 'Không thấy dòng công đoạn may này.' }); return null; }
+  const toTruong = MAY_XEM_TAT_CA(req);
+  if (Number(cu.NhanVienID) !== t.nv && !toTruong) {
+    res.status(403).json({ success: false, message: `Dòng này là của ${cu.HoTen || 'người khác'} — bạn chỉ sửa được dòng của chính mình. Nhờ tổ trưởng (có quyền MYPAY/congdoanmaytatca) sửa giúp.` });
+    return null;
+  }
+  if (!(await lenhConODangCongDoanMay(pool, { CongDoanHienTaiID: cu.CongDoanHienTaiID }))) {
+    res.status(409).json({ success: false, message: `Lệnh ${cu.MaDH} đã chuyển khỏi công đoạn May — không sửa được ở đây nữa. Nhờ tổ trưởng sửa ở QLSX › Ghi tiến độ.` });
+    return null;
+  }
+  return { t, cu, toTruong };
+}
+router.put('/congdoanmay/cuatoi/:id', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const x = await dongMayDuocSua(pool, req, res);
+    if (!x) return;
+    const sl = Number((req.body || {}).soLuong);
+    if (!(sl > 0)) return res.status(400).json({ success: false, message: 'Số lượng phải lớn hơn 0.' });
+    /* Cùng gate "vượt tổng bàn cắt" với lúc ghi mới — nhưng TRỪ chính dòng đang sửa ra khỏi tổng cũ,
+       không thì sửa 50 thành 60 lại bị tính thành 50 + 60. */
+    const tongCat = await getTongSLCatForOrder(pool, x.cu.DonHangID);
+    if (tongCat > 0) {
+      const daCo = Number(((await pool.request().input('cd', sql.Int, x.cu.DonGiaCongDoanMayID).input('id', sql.Int, x.cu.ID)
+        .query('SELECT SUM(ISNULL(SoLuong, 0)) AS N FROM PhanCongMay WHERE DonGiaCongDoanMayID = @cd AND ID <> @id')).recordset[0] || {}).N) || 0;
+      if (daCo + Math.round(sl) > tongCat) {
+        return res.status(409).json({ success: false, message: `Vượt tổng bàn cắt: công đoạn này đã có ${daCo} cái của người khác, sửa thành ${Math.round(sl)} ⇒ ${daCo + Math.round(sl)} > tổng SL cắt (${tongCat}).` });
+      }
+    }
+    await pool.request().input('id', sql.Int, x.cu.ID).input('sl', sql.Int, Math.round(sl))
+      .query('UPDATE PhanCongMay SET SoLuong = @sl WHERE ID = @id');
+    if (Number(x.cu.NhanVienID) !== x.t.nv) {
+      console.log(`[v9.95] ${x.t.hoTen} (NV ${x.t.nv}) SUA dong cong doan may cua ${x.cu.HoTen} (NV ${x.cu.NhanVienID}), lenh ${x.cu.MaDH}: ${x.cu.SoLuong} -> ${Math.round(sl)}.`);
+    }
+    await bangLuongTuDong.danhDauTheoNgay(pool, x.cu.Ngay, 'Sửa số lượng công đoạn may');
+    /* Sửa xong có thể vừa đủ theo bàn cắt ⇒ xét tự chuyển, y như lúc ghi mới (v9.94). */
+    let daChuyen = null, loiChuyen = null;
+    try {
+      const order = (await pool.request().input('id', sql.Int, x.cu.DonHangID)
+        .query('SELECT DonHangID, MaDH, CongDoanHienTaiID FROM DonHangSanXuat WHERE DonHangID = @id')).recordset[0];
+      if (order) daChuyen = await tuChuyenKhoiCongDoanMay(pool, order, req.session.user.userId, tongCat);
+    } catch (e) { loiChuyen = e.message; console.error('[v9.95] loi khi tu chuyen cong doan sau khi sua:', e); }
+    res.json({ success: true, data: { daChuyen, loiChuyen } });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+router.delete('/congdoanmay/cuatoi/:id', requireAuth, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const x = await dongMayDuocSua(pool, req, res);
+    if (!x) return;
+    await pool.request().input('id', sql.Int, x.cu.ID).query('DELETE FROM PhanCongMay WHERE ID = @id');
+    if (Number(x.cu.NhanVienID) !== x.t.nv) {
+      console.log(`[v9.95] ${x.t.hoTen} (NV ${x.t.nv}) XOA dong cong doan may cua ${x.cu.HoTen} (NV ${x.cu.NhanVienID}), lenh ${x.cu.MaDH}, SL ${x.cu.SoLuong}.`);
+    }
+    await bangLuongTuDong.danhDauTheoNgay(pool, x.cu.Ngay, 'Xóa dòng công đoạn may');
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
+});
+
+router.delete('/sanluong/:id', requireAuth, requirePermission('QLSX', 'delete'), requireChucNang('QLSX', 'sanluong'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await sanLuongLenh.coBang(pool))) return res.status(400).json({ success: false, message: SL_LENH_CHUA_MIGRATION });
+    const id = parseInt(req.params.id, 10);
+    const cu = (await pool.request().input('id', sql.Int, id)
+      .query("SELECT ID, Nguon, CONVERT(varchar(10), Ngay, 23) AS Ngay FROM SanLuongTheoLenh WHERE ID = @id")).recordset[0];
+    if (!cu) return res.status(404).json({ success: false, message: 'Không thấy dòng sản lượng.' });
+    if (cu.Nguon === 'MayMau') return res.status(409).json({ success: false, message: 'Dòng may mẫu là tự động — bỏ chọn "Nhân viên may mẫu" ở lệnh thì dòng tự mất.' });
+    await pool.request().input('id', sql.Int, id).query('DELETE FROM SanLuongTheoLenh WHERE ID = @id');
+    await bangLuongTuDong.danhDauTheoNgay(pool, cu.Ngay, 'Xóa sản lượng theo lệnh SX');
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
 
 // ============ IN PHIEU "LENH SAN XUAT" (theo mau file Chi dinh san xuat) ============

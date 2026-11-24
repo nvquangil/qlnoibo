@@ -33,6 +33,8 @@ const { coCotTenHoaDon } = require('../utils/maHangCapNhat');
 const { hangMauDangOKhach, gomTheoKhachMa, coCotHangMau, coCotMauChot } = require('../utils/dongDaBanChoKhach');
 /* v8.70: MOT ban cong thuc "%CK cua ma X vao ngay Y" — dung chung voi man don khach dat hang. */
 const { layKhuyenMaiTheoNgay } = require('../utils/khuyenMai');
+/* v9.75: hàng KÝ GỬI đang ở khách — cộng vào "đang giữ" (khả dụng) + cột KyGuiCTID trên dòng phiếu báo bán. */
+const { kyGuiDangGiu, coCotKyGuiCT } = require('../utils/kyGuiDangGiu');
 
 const router = express.Router();
 
@@ -210,6 +212,11 @@ async function layHangDangGiu(pool) {
     theoMau.set(k, (theoMau.get(k) || 0) + sl);
     theoMaHang.set(r.MaHangID, (theoMaHang.get(r.MaHangID) || 0) + sl);
   });
+  /* v9.75: + HÀNG KÝ GỬI đang ở khách (utils/kyGuiDangGiu) — vẫn là tồn kho (không trừ XuatCai) nhưng
+     không khả dụng để bán cho người khác. Cùng Map ⇒ Thẻ kho / lên đơn / catalogue thấy ngay. */
+  const kg = await kyGuiDangGiu(pool, sql);
+  kg.theoMau.forEach((v, k) => theoMau.set(k, (theoMau.get(k) || 0) + v));
+  kg.theoMaHang.forEach((v, k) => theoMaHang.set(k, (theoMaHang.get(k) || 0) + v));
   return { theoMau, theoMaHang };
 }
 router.get('/danggiu', requireAuth, requirePermission('KHOHANG', 'view'), async (req, res) => {
@@ -847,6 +854,11 @@ router.get('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'view'), requ
   if (so(header.DaThu) > 0) veXem.push(`đã có phiếu thu ${Number(header.DaThu).toLocaleString('vi-VN')} đ`);
   if (so(vuongXem.ChotMau) > 0) veXem.push(`${so(vuongXem.ChotMau)} đã đánh dấu "khách mua luôn"`);
   if (so(vuongXem.SoDongDaTra) > 0) veXem.push(`${so(vuongXem.SoDongDaTra)} dòng khách đã trả lại`);
+  /* v9.75: phiếu BÁO BÁN ký gửi — dòng mang KyGuiCTID; sửa = ghi lại dòng, mất liên kết ⇒ "còn ở khách" nhảy ngược.
+     Hủy phiếu rồi báo bán lại (hủy tự trả số về sổ ký gửi). */
+  const soDongKG = chiTiet.filter(c => c.KyGuiCTID).length;
+  if (soDongKG > 0) veXem.push(`${soDongKG} dòng là BÁO BÁN hàng ký gửi (hủy phiếu rồi báo bán lại thay vì sửa)`);
+  header.LaBaoBanKyGui = soDongKG > 0 ? 1 : 0;
   header.LyDoKhongSua = header.TrangThai === 'Đã hủy'
     ? 'Phiếu đã hủy — không sửa được. Hãy lập phiếu mới.'
     : (veXem.length
@@ -990,6 +1002,7 @@ async function chuanBiPhieu(pool, b, tonBu) {
       /* v6.25.4: 1 dong co the gom NHIEU don (cung khach + ma hang + mau, dat nhieu lan). */
       donIDs: (Array.isArray(d.donIDs) ? d.donIDs : (d.donID ? [d.donID] : []))
         .map(x => parseInt(x, 10)).filter(x => x > 0),
+      kyGuiCTID: parseInt(d.kyGuiCTID, 10) > 0 ? parseInt(d.kyGuiCTID, 10) : null,   // v9.75: dòng BÁO BÁN ký gửi
       ghiChu: d.ghiChu || null
     });
     const k = d.maHangId + '|' + d.mauSacId;
@@ -1179,6 +1192,8 @@ async function coCotChuongTrinh(pool) {
 
 async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPhieu) {
   const coCTKM = await coCotChuongTrinh(pool);
+  const coKG = await coCotKyGuiCT(pool);   // v9.75: KyGuiCTID (migration_v901)
+  if (!coKG && dong.some(d => d.kyGuiCTID)) throw new Error('Chưa chạy database/migration_v901.sql — chưa ghi được phiếu báo bán ký gửi.');
   for (const d of dong) {
     /* v7.58 — LƯỚI AN TOÀN: gắn đơn KHÔNG còn tồn tại thì SQL Server ném lỗi khóa ngoại thô
        ("FK__PhieuBanH__DonID__…") — không ai đọc ra được là chuyện gì. Kiểm trước để báo tiếng Việt.
@@ -1211,11 +1226,12 @@ async function ghiChiTietPhieu(pool, tran, phieuBHID, dong, coDonIDs, thongTinPh
       .input('GhiChu', sql.NVarChar, d.ghiChu)
       // v8.70: chương trình khuyến mãi của dòng (null = bán theo CK dùng chung)
       .input('ChuongTrinhID', sql.Int, coCTKM ? (d.chuongTrinhID || null) : null)
+      .input('KyGuiCTID', sql.Int, coKG ? (d.kyGuiCTID || null) : null)   // v9.75
       .query(`INSERT INTO PhieuBanHangChiTiet (PhieuBHID, MaHangID, MauSacID, SoLuong, DonVi, SoLuongCai,
-                SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''}${coCTKM ? ', ChuongTrinhID' : ''})
+                SoLuongQuyDoi, DonViQuyDoi, GiaBanLe, PhanTramCKShop, GiaBan, ThanhTien, DonID, GhiChu${coDonIDs ? ', DonIDs' : ''}${coCTKM ? ', ChuongTrinhID' : ''}${coKG ? ', KyGuiCTID' : ''})
               OUTPUT INSERTED.ID
               VALUES (@PhieuBHID, @MaHangID, @MauSacID, @SoLuong, @DonVi, @SoLuongCai,
-                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''}${coCTKM ? ', @ChuongTrinhID' : ''})`)).recordset[0].ID;
+                @SoLuongQuyDoi, @DonViQuyDoi, @GiaBanLe, @CKShop, @GiaBan, @ThanhTien, @DonID, @GhiChu${coDonIDs ? ', @DonIDs' : ''}${coCTKM ? ', @ChuongTrinhID' : ''}${coKG ? ', @KyGuiCTID' : ''})`)).recordset[0].ID;
 
     /* v7.22 — CHIEU PHIEU -> DON: dong nay khong xuat phat tu don nao (ban thang, hoac vua THEM MA
        MOI luc sua phieu) thi sinh mot dong o Chi tiet dat hang roi GAN NGUOC lai vao dong phieu.
@@ -1392,13 +1408,14 @@ async function huyDonKhach(pool, tran, donId) {
   return true;
 }
 
-router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', CN), async (req, res) => {
-  const pool = await getPool();
-  const user = req.session.user;
-  const kq = await chuanBiPhieu(pool, req.body || {});
-  if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
+/* v9.75: ruột của POST /phieu tách thành hàm để routes/kygui.js (BÁO BÁN ký gửi) tạo phiếu bán hàng THẬT qua
+   đúng một đường — cùng chuẩn hóa, cùng trừ tồn, cùng công nợ. Trả { loi } (400) hoặc { phieuBHID, soPhieu,
+   tongThanhToan }; lỗi lúc ghi thì NÉM (đã rollback). */
+async function taoPhieuBanHang(pool, user, bodyVao) {
+  const kq = await chuanBiPhieu(pool, bodyVao || {});
+  if (kq.loi) return { loi: kq.loi };
   const { dong, tong } = kq;
-  const b = req.body || {};
+  const b = bodyVao || {};
 
   const coDonIDs = await coCotDonIDs(pool);   // v6.25.4
   const coMau = await coCotHangMau(pool);     // v7.59: cot LaHangMau (migration_v693)
@@ -1437,11 +1454,26 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
     await ghiShopNVKD(pool, tran, phieuBHID, b);              // v7.24: chon tay tren form (neu co)
     await keThuaShopNVTuDon(pool, tran, phieuBHID, dong);     // v7.24: hoac ke thua tu don di tuyen
     await tran.commit();
-    res.json({ success: true, data: { phieuBHID, soPhieu, tongThanhToan: tong.tongThanhToan } });
+    return { phieuBHID, soPhieu, tongThanhToan: tong.tongThanhToan };
   } catch (err) {
     try { await tran.rollback(); } catch (e) { /* transaction co the da ket thuc */ }
-    console.error('[banhang POST /phieu] ', err);
-    res.status(400).json({ success: false, message: 'Lỗi khi lưu phiếu bán hàng (đã quay lui, dữ liệu giữ nguyên): ' + err.message });
+    console.error('[banhang taoPhieuBanHang] ', err);
+    throw new Error('Lỗi khi lưu phiếu bán hàng (đã quay lui, dữ liệu giữ nguyên): ' + err.message);
+  }
+}
+
+router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', CN), async (req, res) => {
+  const pool = await getPool();
+  /* v9.75: dòng mang kyGuiCTID chỉ được sinh từ routes/kygui.js (POST /baoban) — form bán hàng thường gửi lên là nhầm. */
+  if (Array.isArray((req.body || {}).dong) && req.body.dong.some(d => d && d.kyGuiCTID)) {
+    return res.status(400).json({ success: false, message: 'Dòng ký gửi phải báo bán ở tab Hàng ký gửi, không lập ở Phiếu bán hàng.' });
+  }
+  try {
+    const kq = await taoPhieuBanHang(pool, req.session.user, req.body || {});
+    if (kq.loi) return res.status(400).json({ success: false, message: kq.loi });
+    res.json({ success: true, data: kq });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
   }
 });
 
@@ -1484,11 +1516,13 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
            ISNULL((SELECT COUNT(*) FROM PhieuNhapLaiChiTiet nl
                      JOIN PhieuNhapLai np ON np.PhieuNLID = nl.PhieuNLID
                      JOIN PhieuBanHangChiTiet c2 ON c2.ID = nl.PhieuBHChiTietID
-                    WHERE c2.PhieuBHID = @id AND np.TrangThai <> N'Đã hủy'), 0) AS SoDongDaTra`)).recordset[0];
-  if (so(vuong.ChotMau) > 0 || so(vuong.SoDongDaTra) > 0) {
+                    WHERE c2.PhieuBHID = @id AND np.TrangThai <> N'Đã hủy'), 0) AS SoDongDaTra,
+           ${(await coCotKyGuiCT(pool)) ? 'ISNULL((SELECT COUNT(*) FROM PhieuBanHangChiTiet c4 WHERE c4.PhieuBHID = @id AND c4.KyGuiCTID IS NOT NULL), 0)' : '0'} AS SoDongKyGui`)).recordset[0];
+  if (so(vuong.ChotMau) > 0 || so(vuong.SoDongDaTra) > 0 || so(vuong.SoDongKyGui) > 0) {
     const ve = [];
     if (so(vuong.ChotMau) > 0) ve.push(`${so(vuong.ChotMau)} đã đánh dấu "khách mua luôn" (ở sổ Hàng mẫu)`);
     if (so(vuong.SoDongDaTra) > 0) ve.push(`${so(vuong.SoDongDaTra)} dòng khách đã trả lại qua Phiếu nhập lại`);
+    if (so(vuong.SoDongKyGui) > 0) ve.push(`${so(vuong.SoDongKyGui)} dòng BÁO BÁN hàng ký gửi (v9.75 — hủy phiếu rồi báo bán lại)`);   // v9.75
     return res.status(400).json({
       success: false,
       message: `Phiếu này có ${ve.join(' và ')} — sửa phiếu sẽ ghi lại toàn bộ dòng hàng và LÀM MẤT các liên kết đó `
@@ -1757,4 +1791,5 @@ router.get('/donchoxuat', requireAuth, requirePermission('KHOHANG', 'view'), req
 
 module.exports = router;
 module.exports.layHangDangGiu = layHangDangGiu;
+module.exports.taoPhieuBanHang = taoPhieuBanHang;   // v9.75: báo bán ký gửi (routes/kygui.js)
 module.exports.slSangCai = slSangCai;

@@ -83,6 +83,21 @@ router.use('/nhagiacong', buildCrudRouter({
   ]
 }));
 
+/* --- v9.70: Cong tac vien THIET KE (migration_v896) — Nguyen 16/11: "luong CTV, don gia, danh muc CTV".
+   DonGiaThietKe = dong / 1 lenh SX; tab Luong CTV (payroll.js /luongctv) dem lenh co CongTacVienID theo thang NgayDat. --- */
+router.use('/congtacvien', buildCrudRouter({
+  table: 'CongTacVien', idCol: 'CongTacVienID', moduleCode: 'DANHMUC',
+  columns: [
+    { name: 'TenCTV', sqlType: sql.NVarChar, required: true },
+    { name: 'SDT', sqlType: sql.NVarChar },
+    { name: 'Email', sqlType: sql.NVarChar },
+    { name: 'DonGiaThietKe', sqlType: sql.Decimal(14, 2) },
+    { name: 'NganHang', sqlType: sql.NVarChar },
+    { name: 'TrangThai', sqlType: sql.NVarChar },
+    { name: 'GhiChu', sqlType: sql.NVarChar }
+  ]
+}));
+
 // --- Nha cung cap ---
 router.use('/nhacungcap', buildCrudRouter({
   table: 'NhaCungCap', idCol: 'NCC_ID', moduleCode: 'DANHMUC',
@@ -226,7 +241,71 @@ router.use('/khachhang', buildCrudRouter({
     { name: 'TenHoaDon', sqlType: sql.NVarChar },
     { name: 'MaSoThue', sqlType: sql.NVarChar },
     { name: 'DiaChiHoaDon', sqlType: sql.NVarChar },
-    { name: 'EmailHoaDon', sqlType: sql.NVarChar }
+    { name: 'EmailHoaDon', sqlType: sql.NVarChar },
+    /* v9.75 (migration_v901): % chiết khấu HÀNG KÝ GỬI của khách — phiếu báo bán tự áp làm CK NPP.
+       `tuyChon` ⇒ chưa chạy migration thì bỏ qua cột, KHÔNG làm hỏng nút Lưu của cả danh mục khách. */
+    { name: 'PhanTramCKKyGui', sqlType: sql.Decimal(5, 2), tuyChon: true },
+    /* v9.77 (migration_v903): NHÓM khách hàng — chọn ngay khi tạo/sửa khách (hoặc gán hàng loạt ở tab Nhóm khách hàng).
+       Dashboard kinh doanh gom theo nhóm này. NULL = chưa gán nhóm. */
+    { name: 'NhomKhachHangID', sqlType: sql.Int, tuyChon: true }
+  ]
+}));
+
+/* ================================================================================================
+   v9.77 — NHÓM KHÁCH HÀNG (migration_v903). Danh mục đơn giản + một route GÁN HÀNG LOẠT.
+   Nguyen 19/11: "danh mục nhóm khách hàng, tự thêm khách hàng vào nhóm hoặc khi tạo khách hàng thì chọn nhóm".
+   Một khách thuộc TỐI ĐA một nhóm (cột trên KhachHang) — gán ở hai nơi nhưng chỉ một chỗ lưu, không thể lệch.
+   ================================================================================================ */
+/* 🔴 HAI route riêng PHẢI đứng TRƯỚC router.use('/nhomkhachhang', ...) — router.use bắt mọi đường con
+   (bài học route literal trước :param, v5.59). danhmuc.js KHÔNG có lưới bắt lỗi async ⇒ try/catch tại chỗ. */
+async function coCotNhomKH(pool) {
+  return (await pool.request().query("SELECT COL_LENGTH('KhachHang','NhomKhachHangID') AS c")).recordset[0].c != null;
+}
+const LOI_V903 = 'Chưa chạy database/migration_v903.sql — chưa có nhóm khách hàng. Chạy migration rồi pm2 restart.';
+/* Toàn bộ khách hàng + đang thuộc nhóm nào, để màn "Khách hàng trong nhóm" tích chọn. */
+router.get('/nhomkhachhang/:id/khachhang', requireAuth, requirePermission('DANHMUC', 'view'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await coCotNhomKH(pool))) return res.status(400).json({ success: false, message: LOI_V903 });
+    const id = parseInt(req.params.id, 10) || 0;
+    const rows = (await pool.request().input('id', sql.Int, id).query(`
+      SELECT k.KhachHangID, k.TenKhachHang, k.SDT, k.NhomKhachHangID, n.TenNhom,
+             CASE WHEN ISNULL(k.NhomKhachHangID, 0) = @id THEN 1 ELSE 0 END AS TrongNhom
+      FROM KhachHang k LEFT JOIN NhomKhachHang n ON n.NhomKhachHangID = k.NhomKhachHangID
+      ORDER BY k.TenKhachHang`)).recordset;
+    res.json({ success: true, data: rows });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+/* Gán hàng loạt: body { khachHangIds: [...] } = DANH SÁCH ĐẦY ĐỦ khách thuộc nhóm này sau khi lưu.
+   Khách bị bỏ tích ⇒ gỡ khỏi nhóm (NULL); khách đang thuộc nhóm KHÁC thì chuyển sang nhóm này (một khách một nhóm). */
+router.put('/nhomkhachhang/:id/khachhang', requireAuth, requirePermission('DANHMUC', 'edit'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    if (!(await coCotNhomKH(pool))) return res.status(400).json({ success: false, message: LOI_V903 });
+    const id = parseInt(req.params.id, 10) || 0;
+    if (!id) return res.status(400).json({ success: false, message: 'Thiếu nhóm.' });
+    const ids = [...new Set((Array.isArray(req.body && req.body.khachHangIds) ? req.body.khachHangIds : [])
+      .map(x => parseInt(x, 10)).filter(x => x > 0))];
+    const tran = new sql.Transaction(pool);
+    await tran.begin();
+    try {
+      await new sql.Request(tran).input('id', sql.Int, id)
+        .query('UPDATE KhachHang SET NhomKhachHangID = NULL WHERE NhomKhachHangID = @id');
+      if (ids.length) {
+        await new sql.Request(tran).input('id', sql.Int, id)
+          .query(`UPDATE KhachHang SET NhomKhachHangID = @id WHERE KhachHangID IN (${ids.join(',')})`);
+      }
+      await tran.commit();
+    } catch (e) { try { await tran.rollback(); } catch (_) { /* đã kết thúc */ } throw e; }
+    res.json({ success: true, data: { soKhach: ids.length } });
+  } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
+});
+router.use('/nhomkhachhang', buildCrudRouter({
+  table: 'NhomKhachHang', idCol: 'NhomKhachHangID', moduleCode: 'DANHMUC', orderBy: 'ThuTu, TenNhom',
+  columns: [
+    { name: 'TenNhom', sqlType: sql.NVarChar, required: true, trim: true, duyNhat: true },
+    { name: 'MoTa', sqlType: sql.NVarChar },
+    { name: 'ThuTu', sqlType: sql.Int }
   ]
 }));
 

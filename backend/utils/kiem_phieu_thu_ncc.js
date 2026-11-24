@@ -74,7 +74,7 @@ kiem(/chưa chạy migration_v875/.test(sCongNo),
    2. HAI HAM CONG NO deu co nhanh phieu thu
    ------------------------------------------------------------------------------------------------ */
 console.log('\n=== 2. congNoNCC() va soChiTietNCC() deu tinh phieu thu NCC ===');
-const khoiTong = sCongNo.slice(sCongNo.indexOf('async function congNoNCC(pool)'),
+const khoiTong = sCongNo.slice(sCongNo.indexOf('async function congNoNCC(pool'),   // v9.65: them tham so denNgay — khong ghim ')'
   sCongNo.indexOf("router.get('/congnoncc'"));
 const khoiCT = sCongNo.slice(sCongNo.indexOf('async function soChiTietNCC'),
   sCongNo.indexOf("router.get('/congnoncc/chitiet'"));

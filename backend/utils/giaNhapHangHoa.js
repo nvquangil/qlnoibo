@@ -54,7 +54,7 @@ async function mapGiaNhap(pool) {
       FROM PhieuNhapKhoHangChiTiet ct
       JOIN PhieuNhapKhoHang p ON p.PhieuNKID = ct.PhieuNKID
       WHERE ct.MaHangID = h.MaHangID AND p.TrangThai <> N'Đã hủy'
-        AND p.LoaiNhap = N'NhaCungCap' AND ISNULL(ct.ThanhTien, 0) > 0
+        AND p.LoaiNhap IN (N'NhaCungCap', N'TonDauKy') AND ISNULL(ct.ThanhTien, 0) > 0   /* v9.66: ton dau ky co gia von khai -> vao BQGQ; SanXuat van khong */
     ) bq
     ${coGiaVon ? 'LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID' : ''}`)).recordset;
   rs.forEach(r => {

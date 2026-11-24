@@ -13,6 +13,14 @@ window.ModuleDanhMuc = (function () {
     { key: 'vai', label: 'Danh mục vải (mã vải)', api: '/api/danhmuc/vai', idCol: 'VaiID', custom: 'vai' },
     { key: 'phulieu', label: 'Phụ liệu', api: '/api/danhmuc/phulieu', idCol: 'PhuLieuID', custom: 'phulieu' },
     { key: 'nhagiacong', label: 'Nhà gia công / In thêu', api: '/api/danhmuc/nhagiacong', idCol: 'NhaGiaCongID', custom: 'nhagiacong' },
+    /* v9.70 (Nguyen 16/11): CỘNG TÁC VIÊN THIẾT KẾ — chọn ở lệnh SX khi tích "CTV" cạnh ô Thiết kế; đơn giá × số lệnh
+       trong tháng = tab Tính lương › Lương CTV. Ngừng hợp tác thì không hiện trong ô chọn của lệnh mới (lệnh cũ giữ). */
+    { key: 'congtacvien', label: 'Cộng tác viên thiết kế', api: '/api/danhmuc/congtacvien', idCol: 'CongTacVienID',
+      fields: [{ name: 'TenCTV', label: 'Tên cộng tác viên', required: true }, { name: 'SDT', label: 'SĐT' }, { name: 'Email', label: 'Email' },
+               { name: 'DonGiaThietKe', label: 'Đơn giá thiết kế (đ / 1 lệnh SX)', type: 'number', render: v => fmtNumber(v) },
+               { name: 'NganHang', label: 'Số TK + ngân hàng' },
+               { name: 'TrangThai', label: 'Trạng thái', options: [{ value: 'Đang hợp tác', label: 'Đang hợp tác' }, { value: 'Ngừng', label: 'Ngừng hợp tác' }] },
+               { name: 'GhiChu', label: 'Ghi chú' }] },
     { key: 'nhacungcap', label: 'Nhà cung cấp', api: '/api/danhmuc/nhacungcap', idCol: 'NCC_ID',
       fields: [{ name: 'TenNCC', label: 'Tên nhà cung cấp', required: true }, { name: 'DiaChi', label: 'Địa chỉ' }, { name: 'SDT', label: 'SĐT' }, { name: 'MaSoThue', label: 'Mã số thuế' },
                /* v7.81: đối tác vừa bán cho mình vừa mua của mình -> chọn đúng dòng bên Danh mục
@@ -44,7 +52,22 @@ window.ModuleDanhMuc = (function () {
                { name: 'TenHoaDon', label: 'Tên viết hóa đơn (tên pháp nhân)' },
                { name: 'MaSoThue', label: 'Mã số thuế (chỉ nhập số)' },
                { name: 'DiaChiHoaDon', label: 'Địa chỉ hóa đơn' },
-               { name: 'EmailHoaDon', label: 'Email nhận hóa đơn' }] },
+               { name: 'EmailHoaDon', label: 'Email nhận hóa đơn' },
+               /* v9.75: % CK hàng ký gửi theo khách — tab Hàng ký gửi › Báo bán tự áp (sửa được trên phiếu). */
+               { name: 'PhanTramCKKyGui', label: '% chiết khấu hàng ký gửi (VD 12)', type: 'number' },
+               /* v9.77 (migration_v903): NHÓM khách hàng — chọn ngay khi tạo/sửa khách; hoặc gán hàng loạt ở tab
+                  "Nhóm khách hàng". Dashboard kinh doanh gom doanh thu / công nợ theo nhóm này.
+                  `cot: 'TenNhom'` chỉ có tác dụng ở renderSimpleWithSelect; bảng của tab này dùng `render` bên dưới. */
+               { name: 'NhomKhachHangID', label: 'Nhóm khách hàng', type: 'number',
+                 optionsApi: '/api/danhmuc/nhomkhachhang', optionsValue: 'NhomKhachHangID', optionsLabel: 'TenNhom',
+                 optionsRong: '— chưa gán nhóm —' }] },
+    /* v9.77 — NHÓM KHÁCH HÀNG (Nguyen 19/11). Một khách thuộc tối đa MỘT nhóm (cột trên KhachHang), gán được
+       ở hai nơi: form khách hàng (ô trên) hoặc nút "Khách hàng trong nhóm" ở tab này. */
+    { key: 'nhomkhachhang', label: 'Nhóm khách hàng', api: '/api/danhmuc/nhomkhachhang', idCol: 'NhomKhachHangID',
+      custom: 'nhomkhachhang',
+      fields: [{ name: 'TenNhom', label: 'Tên nhóm', required: true },
+               { name: 'MoTa', label: 'Mô tả' },
+               { name: 'ThuTu', label: 'Thứ tự hiện ra', type: 'number' }] },
     // v5.62: có thêm CÔNG KHAI theo từng danh mục (link riêng gửi khách xem) -> dùng renderer riêng.
     { key: 'thekhodanhmuc', label: 'Danh mục thẻ kho', api: '/api/danhmuc/thekhodanhmuc', idCol: 'TheKhoDanhMucID',
       custom: 'thekhodanhmuc',
@@ -148,6 +171,16 @@ window.ModuleDanhMuc = (function () {
       ] },
       { name: 'GhiChu', label: 'Ghi chú', type: 'text' }
     ]);
+    if (tab.custom === 'nhomkhachhang') return renderNhomKhachHang(body, tab, rows, perm);   // v9.77
+    /* v9.77: bảng Khách hàng hiện TÊN nhóm (cột lưu ID). Nạp danh mục nhóm một lần, lỗi/chưa migration ⇒ để trống. */
+    if (activeTab === 'khachhang') {
+      const f = tab.fields.find(x => x.name === 'NhomKhachHangID');
+      if (f && !f.render) {
+        const dsN = await apiGet('/api/danhmuc/nhomkhachhang').then(r => r.data || []).catch(() => []);
+        const tenCua = new Map(dsN.map(n => [String(n.NhomKhachHangID), n.TenNhom]));
+        f.render = (v) => (v == null || v === '' ? '<span class="empty-hint" style="padding:0;">chưa gán</span>' : escapeHtml(tenCua.get(String(v)) || ('#' + v)));
+      }
+    }
     if (tab.custom === 'loaitaikhoan' || tab.custom === 'taikhoan') return renderTaiKhoan(body, tab, rows, perm);
     if (tab.custom === 'congdoan') return renderCongDoan(body, tab, rows, perm);
     if (tab.custom === 'nhanvien') return renderNhanVien(body, tab, rows, perm);
@@ -187,6 +220,131 @@ window.ModuleDanhMuc = (function () {
     }
 
     renderGenericTable(body, tab, rows, perm);
+  }
+
+  /* ================================================================================================
+     v9.77 — NHÓM KHÁCH HÀNG: bảng nhóm + số khách đang thuộc nhóm + nút "Khách hàng trong nhóm"
+     (tích chọn hàng loạt). Một khách một nhóm: tích ở đây = chuyển khách khỏi nhóm cũ, bỏ tích = gỡ nhóm.
+     ================================================================================================ */
+  async function renderNhomKhachHang(body, tab, rows, perm) {
+    const dsKH = await apiGet('/api/danhmuc/khachhang').then(r => r.data || []).catch(() => []);
+    const demCua = new Map();
+    dsKH.forEach(k => { if (k.NhomKhachHangID != null) demCua.set(String(k.NhomKhachHangID), (demCua.get(String(k.NhomKhachHangID)) || 0) + 1); });
+    const chuaGan = dsKH.filter(k => k.NhomKhachHangID == null).length;
+    body.innerHTML = `
+      <div class="toolbar">${searchBoxHtml()}${perm.canCreate ? `<button class="btn" id="btnAdd">+ Thêm nhóm</button>` : ''}</div>
+      <div class="empty-hint" style="margin-bottom:6px;">Một khách hàng thuộc <b>tối đa một nhóm</b>. Gán ở đây (tích chọn hàng loạt) hoặc ở từng khách trong tab <b>Khách hàng</b> — cùng một chỗ lưu. Hiện có <b>${chuaGan}</b> khách <b>chưa gán nhóm</b> (Dashboard gom vào dòng "Chưa gán nhóm").</div>
+      <table><thead><tr><th>Tên nhóm</th><th>Mô tả</th><th class="num" style="width:90px;">Thứ tự</th><th class="num" style="width:110px;">Số khách</th><th style="width:260px">Thao tác</th></tr></thead>
+      ${/* v9.83 (Nguyen 19/11: "khi click vào nhóm khách hiện ra list khách thuộc nhóm đó"): BẤM VÀO
+           TÊN NHÓM (hoặc số khách) = XEM danh sách khách của nhóm. Nút "Thêm khách" là việc khác — gán
+           thêm — nên tách hẳn hai đường, bấm nhầm không còn mở ra màn gán. */''}
+      <tbody>${rows.map(r => `<tr>
+        <td><a href="#" class="act-xem-kh" style="font-weight:600;">${escapeHtml(r.TenNhom)}</a></td><td>${escapeHtml(r.MoTa || '')}</td><td class="num">${r.ThuTu == null ? '' : escapeHtml(r.ThuTu)}</td>
+        <td class="num"><a href="#" class="act-xem-kh">${demCua.get(String(r.NhomKhachHangID)) || 0}</a></td>
+        <td>${perm.canEdit ? `<button class="btn small secondary act-kh">➕ Thêm khách vào nhóm</button> ` : ''}${rowActions(perm)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="empty-hint">Chưa có nhóm nào. Bấm "+ Thêm nhóm" (VD: Shop lẻ, Nhà phân phối, Khách ký gửi, Khách tỉnh).</td></tr>'}</tbody></table>`;
+    if (perm.canCreate) document.getElementById('btnAdd').addEventListener('click', () => openForm(tab, null, perm));
+    wireRowActions(body, rows, tab, perm);
+    body.querySelectorAll('tbody tr').forEach((tr, i) => {
+      const nut = tr.querySelector('.act-kh');
+      if (nut && rows[i]) nut.addEventListener('click', () => moGanKhach(rows[i]).catch(e => toast(e.message, 'error')));
+      tr.querySelectorAll('.act-xem-kh').forEach(a => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (rows[i]) moXemKhachNhom(rows[i], perm).catch(err => toast(err.message, 'error'));
+      }));
+    });
+    wireTableSearch(body);
+  }
+
+  /* ================================================================================================
+     v9.83 — XEM danh sách khách THUỘC một nhóm (bấm vào tên nhóm). Chỉ đọc + nút gỡ từng khách.
+     Tách khỏi màn gán: ở đây không có ô tích nào để lỡ tay bỏ sạch nhóm.
+     ================================================================================================ */
+  async function moXemKhachNhom(nhom, perm) {
+    const ds = ((await apiGet(`/api/danhmuc/nhomkhachhang/${nhom.NhomKhachHangID}/khachhang`)).data || [])
+      .filter(k => Number(k.TrongNhom) === 1);
+    const modal = openModal(`
+      <div class="modal-head"><h3>Khách hàng thuộc nhóm: ${escapeHtml(nhom.TenNhom)} (${ds.length})</h3></div>
+      <div class="modal-body">
+        <input type="text" id="xkTim" placeholder="Gõ để tìm khách..." style="width:100%;margin-bottom:8px;">
+        <div class="table-wrap" style="max-height:420px;overflow:auto;">
+        <table class="data-table phieu-ke"><thead><tr><th style="width:40px;">STT</th><th>Khách hàng</th><th>SĐT</th><th style="width:130px;"></th></tr></thead>
+        <tbody>${ds.map((k, i) => `<tr data-tim="${escapeHtml(String(k.TenKhachHang || '').toLowerCase())}" data-id="${k.KhachHangID}">
+          <td class="num">${i + 1}</td><td>${escapeHtml(k.TenKhachHang)}</td><td>${escapeHtml(k.SDT || '')}</td>
+          <td>${perm.canEdit ? '<button type="button" class="btn small danger xk-go">Gỡ khỏi nhóm</button>' : ''}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="empty-hint">Nhóm này chưa có khách hàng nào. Bấm "➕ Thêm khách vào nhóm" ở dòng nhóm để thêm.</td></tr>'}</tbody></table></div>
+      </div>
+      <div class="modal-actions"><button class="btn secondary" id="xkDong">Đóng</button></div>`);
+    modal.querySelector('#xkTim').addEventListener('input', (e) => {
+      const q = String(e.target.value || '').trim().toLowerCase();
+      modal.querySelectorAll('tbody tr').forEach(tr => { tr.style.display = (!q || (tr.dataset.tim || '').includes(q)) ? '' : 'none'; });
+    });
+    modal.querySelector('#xkDong').addEventListener('click', () => closeModal());
+    modal.querySelectorAll('.xk-go').forEach(b => b.addEventListener('click', async () => {
+      const tr = b.closest('tr');
+      const ten = tr.children[1].textContent;
+      if (!confirm(`Gỡ "${ten}" khỏi nhóm ${nhom.TenNhom}? Khách này sẽ thành "chưa gán nhóm".`)) return;
+      b.disabled = true;
+      /* Gửi lại DANH SÁCH ĐẦY ĐỦ của nhóm trừ người vừa gỡ — đúng hợp đồng của route gán hàng loạt
+         (nó xóa sạch nhóm rồi gán lại), không có route gỡ một người. */
+      const conLai = ds.map(x => Number(x.KhachHangID)).filter(id => String(id) !== String(tr.dataset.id));
+      try {
+        await apiPut(`/api/danhmuc/nhomkhachhang/${nhom.NhomKhachHangID}/khachhang`, { khachHangIds: conLai });
+        toast('Đã gỡ khỏi nhóm.', 'success');
+        closeModal();
+        render(container, currentUser);
+      } catch (e) { b.disabled = false; toast(e.message, 'error'); }
+    }));
+  }
+  async function moGanKhach(nhom) {
+    /* ================================================================================================
+       v9.83 (Nguyen 19/11: "khi gán vào nhóm rồi, ở nhóm khác thêm thì không hiện ra nữa"):
+       màn THÊM KHÁCH chỉ còn hai loại — khách CHƯA gán nhóm nào, và khách ĐANG thuộc chính nhóm này
+       (để bỏ tích = gỡ ra). Khách đang ở nhóm KHÁC bị loại hẳn khỏi danh sách, không thể vô tình
+       kéo khách của nhóm khác sang. Muốn chuyển nhóm: vào nhóm cũ gỡ ra trước (bấm tên nhóm → Gỡ).
+       ================================================================================================ */
+    const tatCa = (await apiGet(`/api/danhmuc/nhomkhachhang/${nhom.NhomKhachHangID}/khachhang`)).data || [];
+    const ds = tatCa.filter(k => Number(k.TrongNhom) === 1 || k.NhomKhachHangID == null);
+    const soNhomKhac = tatCa.length - ds.length;
+    const modal = openModal(`
+      <div class="modal-head"><h3>Thêm khách vào nhóm: ${escapeHtml(nhom.TenNhom)}</h3></div>
+      <div class="modal-body">
+        <input type="text" id="gkTim" placeholder="Gõ để tìm khách..." style="width:100%;margin-bottom:8px;">
+        <div class="empty-hint">Tích = đưa vào nhóm này, bỏ tích = gỡ khỏi nhóm. Một khách chỉ thuộc <b>một</b> nhóm.${
+          soNhomKhac > 0 ? ` <b>${soNhomKhac}</b> khách đang thuộc nhóm khác nên <b>không hiện ở đây</b> — muốn chuyển sang nhóm này thì vào nhóm cũ (bấm tên nhóm) gỡ ra trước.` : ''}</div>
+        <div class="table-wrap" style="max-height:400px;overflow:auto;">
+        <table class="data-table phieu-ke"><thead><tr><th style="width:40px;"></th><th>Khách hàng</th><th>SĐT</th><th>Nhóm hiện tại</th></tr></thead>
+        <tbody>${ds.map(k => `<tr data-tim="${escapeHtml(String(k.TenKhachHang || '').toLowerCase())}">
+          <td><input type="checkbox" class="gk-ck" value="${k.KhachHangID}" ${Number(k.TrongNhom) === 1 ? 'checked' : ''}></td>
+          <td>${escapeHtml(k.TenKhachHang)}</td><td>${escapeHtml(k.SDT || '')}</td>
+          <td>${k.NhomKhachHangID == null ? '<span class="empty-hint" style="padding:0;">chưa gán</span>' : escapeHtml(k.TenNhom || '')}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="empty-hint">Danh mục khách hàng đang trống.</td></tr>'}</tbody></table></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="gkHuy">Hủy</button>
+        <button class="btn secondary" id="gkHet">Chọn hết (đang hiện)</button>
+        <button class="btn secondary" id="gkBo">Bỏ chọn hết (đang hiện)</button>
+        <button class="btn" id="gkLuu">💾 Lưu</button>
+      </div>`);
+    const hien = () => [...modal.querySelectorAll('tbody tr')].filter(tr => tr.style.display !== 'none');
+    modal.querySelector('#gkTim').addEventListener('input', (e) => {
+      const q = String(e.target.value || '').trim().toLowerCase();
+      modal.querySelectorAll('tbody tr').forEach(tr => { tr.style.display = (!q || (tr.dataset.tim || '').includes(q)) ? '' : 'none'; });
+    });
+    modal.querySelector('#gkHet').addEventListener('click', () => hien().forEach(tr => { const c = tr.querySelector('.gk-ck'); if (c) c.checked = true; }));
+    modal.querySelector('#gkBo').addEventListener('click', () => hien().forEach(tr => { const c = tr.querySelector('.gk-ck'); if (c) c.checked = false; }));
+    modal.querySelector('#gkHuy').addEventListener('click', () => closeModal());
+    modal.querySelector('#gkLuu').addEventListener('click', async () => {
+      /* ⚠️ Đọc TẤT CẢ ô tích (kể cả dòng đang bị ô tìm ẩn) — gửi lên là danh sách ĐẦY ĐỦ của nhóm;
+         chỉ đọc dòng đang hiện thì gõ tìm rồi Lưu sẽ gỡ sạch những khách khác khỏi nhóm. */
+      const ids = [...modal.querySelectorAll('.gk-ck')].filter(c => c.checked).map(c => Number(c.value));
+      const nut = modal.querySelector('#gkLuu'); nut.disabled = true;
+      try {
+        const kq = await apiPut(`/api/danhmuc/nhomkhachhang/${nhom.NhomKhachHangID}/khachhang`, { khachHangIds: ids });
+        closeModal(); toast(`Nhóm "${nhom.TenNhom}": ${kq.data.soKhach} khách hàng.`, 'success');
+        render(container, currentUser);
+      } catch (e) { nut.disabled = false; toast(e.message, 'error', 8000); }
+    });
   }
 
   function renderGenericTable(body, tab, rows, perm) {
@@ -415,16 +573,26 @@ window.ModuleDanhMuc = (function () {
     }
   }
 
-  async function openForm(tab, row, perm) {
+  /* v9.92: thêm tham số `opts` để phân hệ KHÁC mượn đúng form này (xem moFormKhachHang ở cuối file):
+       · opts.giaTriSan  — điền sẵn vài ô nhưng VẪN là chế độ THÊM MỚI (khác hẳn truyền `row`, vốn
+                           bật chế độ SỬA và sẽ gọi apiPut vào một bản ghi chưa tồn tại).
+       · opts.sauKhiLuu  — thay cho render(container, currentUser) mặc định. BẮT BUỘC phải thay khi
+                           gọi từ phân hệ khác: `container`/`currentUser` là biến của riêng Danh mục,
+                           người dùng chưa từng mở tab Danh mục thì chúng là null ⇒ ném lỗi ngay sau
+                           khi đã lưu xong — mất dữ liệu thì không, nhưng người dùng thấy "lỗi" dù
+                           khách đã được tạo, rồi bấm Lưu lần nữa thành hai khách trùng tên. */
+  async function openForm(tab, row, perm, opts) {
+    opts = opts || {};
     const isEdit = !!row;
+    const dl = row || opts.giaTriSan || null;   // nguồn điền sẵn (sửa: bản ghi cũ; thêm: giá trị gợi ý)
     await napOptions(tab.fields);   // v7.81
     const html = `
       <h3>${isEdit ? 'Sửa' : 'Thêm'} - ${tab.label}</h3>
       <form id="dmForm">
         ${tab.fields.map(f => (f.options || f.type)
-          ? fieldHtml(f, row)      // v7.81: ô chọn / checkbox / số / ngày -> dùng bộ dựng ô chung
+          ? fieldHtml(f, dl)       // v7.81: ô chọn / checkbox / số / ngày -> dùng bộ dựng ô chung
           : `<div class="form-row"><label>${f.label}${f.required ? ' *' : ''}</label>
-          <input name="${f.name}" value="${escapeHtml(row ? row[f.name] : '')}" ${f.required ? 'required' : ''}></div>`).join('')}
+          <input name="${f.name}" value="${escapeHtml(dl ? (dl[f.name] == null ? '' : dl[f.name]) : '')}" ${f.required ? 'required' : ''}></div>`).join('')}
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="btnCancel">Hủy</button>
           <button type="submit" class="btn">Lưu</button>
@@ -455,8 +623,42 @@ window.ModuleDanhMuc = (function () {
       try {
         if (isEdit) await apiPut(`${tab.api}/${row[tab.idCol]}`, body);
         else await apiPost(tab.api, body);
-        closeModal(); toast('Đã lưu.', 'success'); render(container, currentUser);
+        closeModal(); toast('Đã lưu.', 'success');
+        if (opts.sauKhiLuu) await opts.sauKhiLuu(body);   // v9.92: phân hệ khác tự lo phần sau khi lưu
+        else render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  /* ================================================================================================
+     🔴 v9.92 — MƯỢN FORM KHÁCH HÀNG CỦA DANH MỤC (Nguyen 23/11)
+
+     *"khách mới lưu danh mục đầy đủ trường như thêm ở danh mục (gọi luôn form nhập ở danh mục khách
+     hàng)"*. Trước đây phiếu bán hàng có hộp thoại "thêm khách nhanh" RIÊNG, chỉ 4 ô (tên, SĐT, địa
+     chỉ, email) — khách tạo từ đó thiếu Tên viết hóa đơn, MST, địa chỉ/email hóa đơn, % CK ký gửi,
+     Nhóm khách hàng. Nay dùng ĐÚNG MỘT form, khai ở TABS['khachhang'] — thêm trường vào danh mục là
+     phiếu bán hàng có ngay, không phải nhớ sửa hai nơi.
+
+     Dùng CALLBACK chứ không Promise: người dùng bấm Hủy / Esc / ✕ thì không có gì gọi lại, một
+     Promise sẽ treo mãi mãi (và giữ luôn closure của form bán hàng). Callback chỉ chạy khi LƯU XONG.
+
+     `apiPost /api/danhmuc/khachhang` KHÔNG trả về ID, nên đọc lại danh mục rồi lấy bản ghi mới nhất
+     trùng tên — y cách themKhachNhanh() cũ vẫn làm.
+     ================================================================================================ */
+  async function moFormKhachHang(tenGoiY, xongThiGoi) {
+    const tab = TABS.find(t => t.key === 'khachhang');
+    if (!tab) { toast('Không tìm thấy khai báo danh mục Khách hàng.', 'error'); return; }
+    await openForm(tab, null, { canCreate: true }, {
+      giaTriSan: String(tenGoiY || '').trim() ? { TenKhachHang: String(tenGoiY).trim() } : null,
+      sauKhiLuu: async (body) => {
+        const ten = String(body.TenKhachHang || '').trim();
+        let k = null;
+        try {
+          const ds = (await apiGet('/api/danhmuc/khachhang')).data || [];
+          k = ds.filter(x => String(x.TenKhachHang) === ten).sort((a, b) => b.KhachHangID - a.KhachHangID)[0] || null;
+        } catch (e) { /* đọc lại hỏng thì vẫn trả bản tạm bên dưới — khách ĐÃ tạo rồi, đừng báo lỗi */ }
+        if (xongThiGoi) xongThiGoi(k || { KhachHangID: '', TenKhachHang: ten, SDT: body.SDT || '', DiaChi: body.DiaChi || '' });
+      }
     });
   }
 
@@ -695,5 +897,6 @@ window.ModuleDanhMuc = (function () {
     }
   }
 
-  return { render, getTabs };
+  // v9.92: moFormKhachHang để phiếu bán hàng (module.khohang.js) gọi đúng form này, không dựng form thứ hai.
+  return { render, getTabs, moFormKhachHang };
 })();

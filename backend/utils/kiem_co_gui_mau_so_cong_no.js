@@ -120,7 +120,7 @@ console.log('\n=== 4. BAY CU PHAP DA LAM SAP PRODUCTION ===');
 ['be', 'fe'].forEach(k => kiem(F[k] + ' khong co byte NUL', !(src[k] || '').includes('\u0000')));
 
 console.log('\n=== 5. index.html ===');
-kiem('module.congno.js da bump ?v=9.10', src.html.includes('module.congno.js?v=9.10'),
+kiem('module.congno.js da bump ?v >= 9.10', (() => { const m = /module\.congno\.js\?v=([\d.]+)/.exec(src.html); return !!m && parseFloat(m[1]) >= 9.10; })(),
      'khong bump thi trinh duyet chay ban cu');
 
 console.log('\n' + '='.repeat(70));

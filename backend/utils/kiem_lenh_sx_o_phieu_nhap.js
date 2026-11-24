@@ -148,7 +148,7 @@ kiem('nhan o tich da doi nghia', src.fe.includes('Hiện cả lệnh SX đã nh�
 kiem('van giu duong nap lai khi tich o', feSach.includes('keCaDaNhap=1'));
 
 console.log('\n=== 5. index.html ===');
-kiem('module.nhapkho.js da bump ?v=9.09', src.html.includes('module.nhapkho.js?v=9.09'),
+kiem('module.nhapkho.js da bump ?v= >= 9.09', (() => { const m = /module\.nhapkho\.js\?v=([\d.]+)/.exec(src.html); return !!m && parseFloat(m[1]) >= 9.09; })(),   // v9.66: so >=, khong ghim (ghim = do oan tu v9.15)
      'khong bump thi trinh duyet chay ban cu, sua xong van "khong thay gi doi"');
 
 console.log('\n=== 6. BAY CU PHAP DA TUNG LAM SAP PRODUCTION ===');

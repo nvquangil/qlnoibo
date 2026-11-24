@@ -32,6 +32,8 @@ const notificationRoutes = require('./routes/notifications');
 const publicRoutes = require('./routes/public');
 const zaloRoutes = require('./routes/zalo');   // v9.30: webhook Zalo OA (tự xác thực chữ ký)
 const saoLuuRoutes = require('./routes/saoluu');   // v9.37: sao lưu CSDL tự động
+const hopDongRoutes = require('./routes/hopdong');   // v9.61: hợp đồng mua bán + ký điện tử (nội bộ)
+const publicKyRoutes = require('./routes/publicKy'); // v9.61: cổng ký cho khách (token trong link, không đăng nhập)
 
 const app = express();
 
@@ -139,6 +141,13 @@ function duocPhepCongKhai(duong) {
        phải ở lại cổng nội bộ. Bản thân route webhook tự XÁC THỰC CHỮ KÝ của Zalo (routes/zalo.js),
        nên mở ở đây không có nghĩa là ai gọi cũng làm được gì. */
     || duong === '/api/zalo/webhook'
+    /* v9.61: trang KÝ HỢP ĐỒNG cho khách (link gửi qua email/SMS) + API của nó. Mọi thứ đi qua token 32 byte
+       trong link; routes/publicKy.js tự chặn (không token hợp lệ = không có gì). KHÔNG mở /api/hopdong/ (nội bộ). */
+    || duong === '/ky.html'
+    || duong === '/js/ky.js'
+    || duong === '/js/kysoclient.js'
+    || duong.startsWith('/tools/MoynKySo/')     // trang tải công cụ ký số USB token cho khách (frontend/tools/MoynKySo/)
+    || duong.startsWith('/api/public/ky/')
     || duong.startsWith('/css/')
     || duong.startsWith('/icons/')
     || duong.startsWith('/uploads/')       // ảnh sản phẩm (ảnh gốc) — xem cảnh báo ở trên
@@ -178,6 +187,7 @@ app.use('/api/phukien', phuKienRoutes);
 app.use('/api/banhang', banHangRoutes);   // v6.23
 app.use('/api/khuyenmai', khuyenMaiRoutes);   // v8.70
 app.use('/api/nhaplai', nhapLaiRoutes);   // v6.66
+app.use('/api/kygui', require('./routes/kygui'));   // v9.75: hàng ký gửi (xuất ký gửi / báo bán / trả về)
 app.use('/api/dashboard', dashboardRoutes);   // v6.67
 app.use('/api/doisoat', doiSoatRoutes);   // v6.74
 app.use('/api/nhapkho', nhapKhoRoutes);   // v6.78
@@ -191,6 +201,8 @@ app.use('/api/hrm', hrmRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/hopdong', hopDongRoutes);     // v9.61: nội bộ (requireAuth + HOPDONG)
+app.use('/api/public/ky', publicKyRoutes);  // v9.61: khách ký qua link — gắn TRƯỚC /api/public để không bị router catalogue bắt nhầm
 app.use('/api/public', publicRoutes);   // khong qua requireAuth - dung cho catalogue.html cong khai
 /* v9.30: KHONG qua requireAuth — nguoi goi la ZALO, khong phai nhan vien. Thay vao do route tu
    XAC THUC CHU KY cua Zalo (routes/zalo.js). Chi /api/zalo/webhook duoc mo o cong cong khai. */
@@ -287,6 +299,8 @@ if (httpsOptions) {
 
 // Bat canh bao tre han tu dong (chay ngam trong tien trinh nay). Neu khong muon, comment dong duoi.
 try { require('./utils/checkOverdue').schedule(); } catch (e) { console.warn('Không bật được lịch cảnh báo:', e.message); }
+// v9.62: nhắc hạn ký hợp đồng + đánh dấu hết hạn (giờ chạy ở Hợp đồng mua bán → Cấu hình ký; lỗi chỉ ghi log).
+try { require('./utils/nhacHanKy').schedule(); } catch (e) { console.warn('Không bật được lịch nhắc hạn ký hợp đồng:', e.message); }
 
 /* ================================================================================================
    v9.37 — LỊCH SAO LƯU CSDL.
@@ -298,3 +312,6 @@ try { require('./utils/checkOverdue').schedule(); } catch (e) { console.warn('Kh
    ================================================================================================ */
 try { require('./utils/lichSaoLuu').khoiDong(); }
 catch (e) { console.error('[saoluu] KHÔNG bật được lịch sao lưu: ' + (e && e.message)); }
+/* v9.49: lịch kéo chấm công tự động — cùng khuôn, cùng mức an toàn (không bao giờ chặn khởi động). */
+try { require('./utils/lichChamCong').khoiDong(); }
+catch (e) { console.error('[chamcong-tudong] KHÔNG bật được lịch: ' + (e && e.message)); }

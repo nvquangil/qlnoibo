@@ -48,7 +48,7 @@ console.log('\n=== 1. Mot ban cong thuc duy nhat ===');
 const demOuterApply = ['utils/giaNhapHangHoa.js', 'routes/baocao.js', 'routes/danhmuc.js',
   'routes/khohang.js', 'routes/nhapkho.js', 'routes/qlsx.js']
   .map(f => [f, (boGhiChu(doc(f))
-    .match(/p\.LoaiNhap = N'NhaCungCap' AND ISNULL\(ct\.ThanhTien, 0\) > 0/g) || []).length]);
+    .match(/p\.LoaiNhap (= N'NhaCungCap'|IN \(N'NhaCungCap', N'TonDauKy'\)) AND ISNULL\(ct\.ThanhTien, 0\) > 0/g) || []).length]);   // v9.66: + TonDauKy
 bang(demOuterApply.filter(([, n]) => n > 0).map(([f]) => f), ['utils/giaNhapHangHoa.js'],
   '⚠️ cau SQL tinh gia nhap chi con o DUNG util, khong con ban sao nao');
 kiem(/require\('\.\.\/utils\/giaNhapHangHoa'\)/.test(sBaoCao), 'baocao.js dung LAI util');
@@ -105,8 +105,8 @@ function taoPool(rows, coBangGiaVon = true) {
   kiem(!/SUM\(ct\.SoLuong\)/.test(cau), 'KHONG dung SoLuong (chia nham la sai gap <he so> lan)');
   kiem(/ISNULL\(ct\.ThanhTien, 0\) > 0/.test(cau),
     'chi tinh dong CO TIEN — dong gia 0 keo binh quan tut xuong sai');
-  kiem(/p\.LoaiNhap = N'NhaCungCap'/.test(cau),
-    'chi lay phieu tu NHA CUNG CAP (phieu tu san xuat luon DonGia = 0)');
+  kiem(/p\.LoaiNhap IN \(N'NhaCungCap', N'TonDauKy'\)/.test(cau) && !/N'SanXuat'/.test(cau),
+    'chi lay phieu tu NHA CUNG CAP + TON DAU KY (v9.66) — KHONG lay SanXuat (DonGia luon 0)');
   kiem(/p\.TrangThai <> N'Đã hủy'/.test(cau), 'bo phieu da huy');
 
   console.log('\n  --- ⚠️ Quy ve DVT CHINH ---');

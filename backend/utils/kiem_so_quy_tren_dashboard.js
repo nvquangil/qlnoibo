@@ -47,9 +47,11 @@ if (sDash.indexOf(RETURN_GOC) > 0) {
   const oGia = { innerHTML: '', value: '2026-09-01', querySelectorAll: () => [], addEventListener: () => { } };
   const docGia = { getElementById: () => oGia, querySelectorAll: () => [], addEventListener: () => { } };
   try {
+    /* themOTimTuDong: o tim dung chung v9.05 (common.js) — module.dashboard.js goi sau khi ve bang;
+       thieu stub la "themOTimTuDong is not defined" lam do oan ca hai phep hanh vi (14/11). */
     FE = new Function('window', 'document', 'localStorage', 'escapeHtml', 'fmtTien', 'fmtNumber',
       'fmtDate', 'fmtDateTime', 'apiGet', 'apiPost', 'toast', 'openModal', 'closeModal', 'ngayISO',
-      'enhanceONgay', 'searchBoxHtml', 'wireTableSearch', 'statusBadge', 'URLSearchParams',
+      'enhanceONgay', 'searchBoxHtml', 'wireTableSearch', 'statusBadge', 'URLSearchParams', 'themOTimTuDong',
       srcTest + '\nreturn window.ModuleDashboard.__t;')(
         win, docGia, { getItem: () => null, setItem: () => { } },
         escapeHtml, fmtTien, fmtTien, (d) => String(d), (d) => String(d),
@@ -60,7 +62,7 @@ if (sDash.indexOf(RETURN_GOC) > 0) {
           return t;
         },
         async () => ({}), () => { }, () => oGia, () => { }, () => '2026-09-01',
-        () => { }, () => '', () => { }, () => '', URLSearchParams);
+        () => { }, () => '', () => { }, () => '', URLSearchParams, () => null);
     OK('nap duoc module.dashboard.js that va lay ra daiSoQuy() / taiSoLieu()');
   } catch (e) { NO('nap module.dashboard.js that bai: ' + e.message); }
 }

@@ -144,6 +144,31 @@ function chuanHoaPhieuChi(b) {
 }
 /* Máy chưa chạy migration_v886 vẫn phải lập phiếu chi bình thường — chỉ là chưa gắn được nhân viên. */
 const { coCotTamUng } = require('../utils/tamUngNhanVien');
+/* === v9.53 PHIEU CHI TAM UNG DANH DAU BANG LUONG — BAT DAU === */
+/* v9.53: phiếu chi TẠM ỨNG là đầu vào của bảng lương công nhật (v9.32) ⇒ lập/sửa/xóa phiếu thì tháng trừ
+   lương cần tính lại — bảng tự tính khi mở tab Lương công nhật, kế toán không phải nhắc nhân sự bấm.
+   🔴 Ba route phiếu chi không có try/catch riêng (lỗi ném ra đi vào next(err) ⇒ người dùng thấy "lỗi" dù
+   phiếu ĐÃ ghi). Nên danhDau* không bao giờ ném; hàm đọc dưới cũng nuốt lỗi (đọc hỏng = không đánh
+   dấu tháng cũ, phiếu vẫn ghi/xóa bình thường). */
+const bangLuongTuDong = require('../utils/bangLuongTuDong');
+/* Đọc phần tạm ứng của một phiếu TRƯỚC khi sửa/xóa (tháng trừ lương CŨ cũng phải tính lại). Ngày lấy
+   CHUỖI yyyy-mm-dd — không qua Date của driver (useUTC). Trả null khi không có cột v886 / không tìm thấy / lỗi. */
+async function docPhieuChiTamUng(pool, phieuChiId) {
+  try {
+    if (!(await coCotTamUng(pool))) return null;
+    const r = (await pool.request().input('id', sql.Int, phieuChiId).query(`
+      SELECT SoPhieu, LoaiDoiTuong, NhanVienID, LoaiChiNV, TruLuongNam, TruLuongThang, CONVERT(varchar(10), NgayChi, 23) AS NgayChi
+      FROM PhieuChi WHERE PhieuChiID=@id`)).recordset[0];
+    return r || null;
+  } catch (e) { console.warn('[congno docPhieuChiTamUng] ' + e.message); return null; }
+}
+const laPhieuTamUng = (p) => !!p && String(p.LoaiDoiTuong || '') === 'NhanVien' && p.NhanVienID != null && String(p.LoaiChiNV || '') === 'TamUng';
+/* Đánh dấu tháng trừ lương của một phiếu (cùng luật ISNULL(TruLuongThang, MONTH(NgayChi)) với utils/tamUngNhanVien.js). */
+function danhDauThangTamUng(pool, p, lyDo) {
+  const t = bangLuongTuDong.thangTruLuong(p.TruLuongNam, p.TruLuongThang, p.NgayChi);
+  return bangLuongTuDong.danhDau(pool, t.nam, t.thang, lyDo);
+}
+/* === v9.53 PHIEU CHI TAM UNG DANH DAU BANG LUONG — KET THUC === */
 /* v6.24: hinh thuc thanh toan + tai khoan ngan hang.
    - "Chuyển khoản" thi BAT BUOC chon so tai khoan (de so quy ngan hang biet tien vao/ra TK nao).
    - "Tiền mặt" thi NULL hoa TaiKhoanNHID (form an o chon van co the gui id cu). */
@@ -787,6 +812,9 @@ router.post('/phieuchi', requireAuth, requirePermission('CONGNO', 'create'), req
               TaiKhoanID, SoTien, HinhThuc, DienGiai, NguoiTaoID${coNH ? ', TaiKhoanNHID' : ''}${coNV ? ', NhanVienID, LoaiChiNV, TruLuongNam, TruLuongThang' : ''})
             VALUES (@SoPhieu, @NgayChi, @Loai, @NCC_ID, @NhaGiaCongID, @Ten,
               @TaiKhoanID, @SoTien, @HinhThuc, @DienGiai, @NguoiTaoID${coNH ? ', @TaiKhoanNHID' : ''}${coNV ? ', @NhanVienID, @LoaiChiNV, @TruLuongNam, @TruLuongThang' : ''})`);
+  /* v9.53: tạm ứng ⇒ tháng trừ lương cần tính lại. Ngày lấy từ body (chuỗi yyyy-mm-dd); không gửi ⇒ tháng hiện tại. */
+  if (coNV && chC.loai === 'NhanVien' && chC.loaiChiNV === 'TamUng')
+    await danhDauThangTamUng(pool, { TruLuongNam: chC.truLuongNam, TruLuongThang: chC.truLuongThang, NgayChi: b.ngay || null }, 'Phiếu chi tạm ứng ' + soPhieu);
   res.json({ success: true, data: { soPhieu } });
 });
 
@@ -802,15 +830,16 @@ router.get('/nhanvien', requireAuth, requirePermission('CONGNO', 'view'), requir
        hrm.js đều JOIN như vậy). Viết thẳng `BoPhan` là SQL ném "Invalid column name", mà route
        không có try/catch thì request TREO luôn, kéo theo Promise.all ở màn Công nợ đứng mãi ⇒ cả
        phân hệ không mở được. Bản đầu mắc đúng lỗi này, rà chéo bắt.
-       🔴 Và lọc nhân viên phải GIỐNG HỆT route tính lương (payroll.js): ở đó là
-       `nv.TrangThaiLaoDong <> N'Đã nghỉ việc'` — NULL bị loại. Nếu ở đây dùng ISNULL(...,'') thì
-       người có trạng thái NULL vẫn chọn ứng được nhưng tháng đó KHÔNG có dòng lương nào ⇒ tiền ứng
-       nằm im vĩnh viễn, không ai bị trừ. Hai nơi phải cùng một luật. */
+       🔴 Và lọc nhân viên phải GIỐNG HỆT route tính lương (payroll.js POST /bangluong/tinh). Người
+       chọn ứng được mà tháng đó KHÔNG có dòng lương ⇒ tiền ứng nằm im vĩnh viễn, không ai bị trừ.
+       Hai nơi phải cùng một luật. v9.45 (13/11) đổi route tính lương sang
+       `ISNULL(nv.TrangThaiLaoDong, N'') <> N'Đã nghỉ việc'` (trạng thái NULL = đang làm) — đây đổi
+       theo, kẻo người trạng thái NULL có lương mà không ứng được. */
     const rows = (await pool.request().query(`
       SELECT nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan AS BoPhan
       FROM NhanVien nv
       LEFT JOIN BoPhan bp ON bp.BoPhanID = nv.BoPhanID
-      WHERE nv.TrangThaiLaoDong <> N'Đã nghỉ việc'
+      WHERE ISNULL(nv.TrangThaiLaoDong, N'') <> N'Đã nghỉ việc'
       ORDER BY nv.HoTen`)).recordset;
     res.json({ success: true, data: rows });
   } catch (err) {
@@ -848,6 +877,7 @@ router.put('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
       message: 'Máy chủ chưa chạy migration_v886.sql nên chưa chi cho nhân viên được. Chạy migration rồi restart pm2.' });
   if (chC.loai === 'NhanVien' && !chC.nhanVienId)
     return res.status(400).json({ success: false, message: 'Chi cho nhân viên thì phải chọn nhân viên.' });
+  const pcCu = coNV ? await docPhieuChiTamUng(pool, req.params.id) : null;   // v9.53: đọc TRƯỚC khi ghi đè
   const rqU = pool.request().input('id', sql.Int, req.params.id)
     .input('NgayChi', sql.Date, b.ngay || new Date())
     .input('Loai', sql.NVarChar, chC.loai)
@@ -876,13 +906,24 @@ router.put('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'edit'), re
               ${coGui(b, 'dienGiai') ? 'DienGiai=@DienGiai' : 'DienGiai=ISNULL(@DienGiai, DienGiai)'}
               ${coNH ? (coGui(b, 'taiKhoanNHID') ? ', TaiKhoanNHID=@TaiKhoanNHID' : ', TaiKhoanNHID=ISNULL(@TaiKhoanNHID, TaiKhoanNHID)') : ''}
             WHERE PhieuChiID=@id`);
+  /* v9.53: tháng CŨ (nếu phiếu từng là tạm ứng) và tháng MỚI (nếu còn/thành tạm ứng) đều cần tính lại —
+     đổi tháng trừ lương, đổi nhân viên, đổi số tiền, hay đổi loại chi đều qua đây. */
+  if (coNV) {
+    const pcMoi = { LoaiDoiTuong: chC.loai, NhanVienID: chC.nhanVienId, LoaiChiNV: chC.loaiChiNV,
+      TruLuongNam: chC.truLuongNam, TruLuongThang: chC.truLuongThang, NgayChi: b.ngay || null };   // không gửi ngày ⇒ UPDATE ghi hôm nay ⇒ tháng hiện tại
+    const ly = 'Sửa phiếu chi tạm ứng ' + ((pcCu && pcCu.SoPhieu) || ('#' + req.params.id));
+    if (laPhieuTamUng(pcCu)) await danhDauThangTamUng(pool, pcCu, ly);
+    if (laPhieuTamUng(pcMoi)) await danhDauThangTamUng(pool, pcMoi, ly);
+  }
   res.json({ success: true });
 });
 router.delete('/phieuchi/:id', requireAuth, requirePermission('CONGNO', 'delete'), requireChucNang('CONGNO', 'phieuchi'), async (req, res) => {
   const pool = await getPool();
   const chan = await chanPhieuChiKem(pool, req.params.id);   // v6.54
   if (chan) return res.status(400).json({ success: false, message: chan });
-  await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM PhieuChi WHERE PhieuChiID=@id');
+  const pcCu = await docPhieuChiTamUng(pool, req.params.id);   // v9.53: đọc TRƯỚC khi xóa
+  const r = await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM PhieuChi WHERE PhieuChiID=@id');
+  if (r.rowsAffected[0] && laPhieuTamUng(pcCu)) await danhDauThangTamUng(pool, pcCu, 'Xóa phiếu chi tạm ứng ' + (pcCu.SoPhieu || ('#' + req.params.id)));
   res.json({ success: true });
 });
 
@@ -982,27 +1023,35 @@ router.delete('/dieuchinh/:id', requireAuth, requirePermission('CONGNO', 'delete
 /* ================================================================================================
    6. CONG NO KHACH HANG  (nhom theo TEN KHACH)
    ================================================================================================ */
-async function congNoKhachHang(pool) {
-  const ban = (await pool.request().query(`
+/* v9.65 (Nguyen 16/11: "cong no chua co xem nam truoc"): `denNgay` tuy chon (YYYY-MM-DD) = SO DU TINH DEN
+   NGAY DO — moi nguon chi cong chung tu co ngay <= denNgay (phieu ban NgayBan, phieu thu NgayThu, dieu chinh
+   Ngay, nhap lai NgayNhap). Khong truyen = luy ke den hien tai, y nhu truoc. Cung cach voi soChiTietKH():
+   "Du cuoi ky" cua so chi tiet den ngay D phai = "Con no" cua bang nay voi denNgay = D. */
+const ngayDen = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
+function rqDen(pool, den) { const r = pool.request(); if (den) r.input('den', sql.Date, den); return r; }
+async function congNoKhachHang(pool, denNgay) {
+  const den = ngayDen(denNgay);
+  const dk = (cot) => den ? ` AND ${cot} <= @den` : '';
+  const ban = (await rqDen(pool, den).query(`
     SELECT LTRIM(RTRIM(TenKhach)) AS Ten, SUM(TongThanhToan) AS PhaiThu, COUNT(*) AS SoPhieu,
            MAX(NgayBan) AS LanCuoi
-    FROM PhieuBanHang WHERE TrangThai <> N'Đã hủy'
+    FROM PhieuBanHang WHERE TrangThai <> N'Đã hủy'${dk('NgayBan')}
     GROUP BY LTRIM(RTRIM(TenKhach))`)).recordset;
-  const thu = (await pool.request().query(`
+  const thu = (await rqDen(pool, den).query(`
     SELECT LTRIM(RTRIM(ISNULL(TenDoiTuong, ''))) AS Ten, SUM(SoTien) AS DaThu, COUNT(*) AS SoPhieuThu
-    FROM PhieuThu WHERE LoaiDoiTuong = N'KhachHang'
+    FROM PhieuThu WHERE LoaiDoiTuong = N'KhachHang'${dk('NgayThu')}
     GROUP BY LTRIM(RTRIM(ISNULL(TenDoiTuong, '')))`)).recordset;
-  const dc = (await pool.request().query(`
+  const dc = (await rqDen(pool, den).query(`
     SELECT LTRIM(RTRIM(ISNULL(TenDoiTuong, ''))) AS Ten, SUM(SoTien) AS DieuChinh
-    FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'KhachHang'
+    FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'KhachHang'${dk('Ngay')}
     GROUP BY LTRIM(RTRIM(ISNULL(TenDoiTuong, '')))`)).recordset;
   /* v6.66: PHIEU NHAP LAI (hang khach tra) -> GIAM cong no. Bang moi nen do ton tai truoc, khong thi
      he thong chua chay migration_v676 se trang ca man cong no. */
   let traLai = [];
   try {
-    traLai = (await pool.request().query(`
+    traLai = (await rqDen(pool, den).query(`
       SELECT LTRIM(RTRIM(TenKhach)) AS Ten, SUM(TongThanhToan) AS TraLai, COUNT(*) AS SoPhieuTraLai
-      FROM PhieuNhapLai WHERE TrangThai <> N'Đã hủy'
+      FROM PhieuNhapLai WHERE TrangThai <> N'Đã hủy'${dk('NgayNhap')}
       GROUP BY LTRIM(RTRIM(TenKhach))`)).recordset;
   } catch (err) {
     console.warn('[congno congNoKhachHang] chua co bang PhieuNhapLai (migration_v676) - bo qua phan tra lai:', err.message);
@@ -1022,7 +1071,8 @@ async function congNoKhachHang(pool) {
 }
 router.get('/congnokh', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnokh'), async (req, res) => {
   const pool = await getPool();
-  res.json({ success: true, data: await congNoKhachHang(pool) });
+  const den = ngayDen(req.query.denNgay);   // v9.65: ?denNgay=YYYY-MM-DD -> so du tinh den ngay
+  res.json({ success: true, data: await congNoKhachHang(pool, den), denNgay: den || null });
 });
 /* So chi tiet cong no 1 khach: phieu ban hang + phieu thu + dieu chinh.
    v6.47: tach thanh HAM RIENG de route xem va route xuat Excel dung CHUNG mot ban - hai ban tinh
@@ -1161,32 +1211,37 @@ router.get('/congnokh/chitiet', requireAuth, requirePermission('CONGNO', 'view')
 /* ================================================================================================
    7. CONG NO NHA CUNG CAP  (tu dong tu phieu nhap VAI + PHU KIEN, tru phieu chi, cong dieu chinh)
    ================================================================================================ */
-async function congNoNCC(pool) {
+/* v9.65: `denNgay` tuy chon -> so du tinh den ngay (cot ngay tung nguon LAY DUNG tu soChiTietNCC() ben duoi:
+   PhieuNhapVai.NgayNhap, PhieuPhuKien.Ngay, PhieuChi.NgayChi, PhieuThu.NgayThu, CongNoDieuChinh.Ngay,
+   PhieuXuatVai.NgayXuat, PhieuNhapKhoHang.NgayNhap). Khong truyen = luy ke den hien tai nhu truoc. */
+async function congNoNCC(pool, denNgay) {
+  const den = ngayDen(denNgay);
+  const dk = (cot) => den ? ` AND ${cot} <= @den` : '';
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
-  const vai = coGiaVai ? (await pool.request().query(`
+  const vai = coGiaVai ? (await rqDen(pool, den).query(`
     SELECT pn.NCC_ID, SUM(${await bieuThucTienCay(pool, 'vc', 'pn')}) AS Tien, COUNT(DISTINCT pn.PhieuNhapID) AS SoPhieu
     FROM PhieuNhapVai pn JOIN VaiCay vc ON vc.PhieuNhapID = pn.PhieuNhapID
-    WHERE pn.NCC_ID IS NOT NULL GROUP BY pn.NCC_ID`)).recordset : [];
-  const pk = coGiaPK ? (await pool.request().query(`
+    WHERE pn.NCC_ID IS NOT NULL${dk('pn.NgayNhap')} GROUP BY pn.NCC_ID`)).recordset : [];
+  const pk = coGiaPK ? (await rqDen(pool, den).query(`
     SELECT p.NCC_ID, SUM(ISNULL(ct.SoLuong,0) * ISNULL(ct.DonGia,0)) AS Tien, COUNT(DISTINCT p.PhieuID) AS SoPhieu
     FROM PhieuPhuKien p JOIN PhieuPhuKienChiTiet ct ON ct.PhieuID = p.PhieuID
-    WHERE p.LoaiPhieu = N'Nhập' AND p.NCC_ID IS NOT NULL GROUP BY p.NCC_ID`)).recordset : [];
-  const chi = (await pool.request().query(`
+    WHERE p.LoaiPhieu = N'Nhập' AND p.NCC_ID IS NOT NULL${dk('p.Ngay')} GROUP BY p.NCC_ID`)).recordset : [];
+  const chi = (await rqDen(pool, den).query(`
     SELECT NCC_ID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuChi
-    WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap' GROUP BY NCC_ID`)).recordset;
+    WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap'${dk('NgayChi')} GROUP BY NCC_ID`)).recordset;
   /* v8.78 — THU LAI TU NCC (NCC hoan tien thua / hang loi / chiet khau tra sau).
      Tien chay NGUOC chieu phieu chi: minh da tra IT DI => tru vao "Da tra" => CON NO TANG lai.
      ⚠️ Cong thuc nay phai KHOP voi soChiTietNCC() ben duoi (o do phieu thu vao cot ThanhToan voi
      DAU AM). Hai ban tinh song song ma lech nhau thi bang tong va so chi tiet ra hai con so khac
      nhau — dung lop loi da ghi o comment v6.78 ngay duoi. */
   const coNCCThu = await coCot(pool, 'PhieuThu', 'NCC_ID');
-  const thuLai = coNCCThu ? (await pool.request().query(`
+  const thuLai = coNCCThu ? (await rqDen(pool, den).query(`
     SELECT NCC_ID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuThu
-    WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap' GROUP BY NCC_ID`)).recordset : [];
-  const dc = (await pool.request().query(`
+    WHERE NCC_ID IS NOT NULL AND LoaiDoiTuong = N'NhaCungCap'${dk('NgayThu')} GROUP BY NCC_ID`)).recordset : [];
+  const dc = (await rqDen(pool, den).query(`
     SELECT NCC_ID, SUM(SoTien) AS Tien FROM CongNoDieuChinh
-    WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL GROUP BY NCC_ID`)).recordset;
+    WHERE LoaiDoiTuong = N'NhaCungCap' AND NCC_ID IS NOT NULL${dk('Ngay')} GROUP BY NCC_ID`)).recordset;
   /* v6.66: TRA HANG VE NCC -> GIAM no phai tra.
      Vai:      v8.91 — don gia uu tien ct.DonGiaTra (go tay luc lap phieu), de trong thi lay
                VaiCay.DonGiaNhap cua chinh cay do nhu truoc. Xem bieuThucTienTraVai().
@@ -1195,18 +1250,18 @@ async function congNoNCC(pool) {
   const coTraVai = await coCot(pool, 'PhieuXuatVai', 'LaTraNCC');
   const coTraPK = await coCot(pool, 'PhieuPhuKien', 'LaTraNCC');
   const btTraVai = await bieuThucTienTraVai(pool);
-  const traVai = (coTraVai && coGiaVai) ? (await pool.request().query(`
+  const traVai = (coTraVai && coGiaVai) ? (await rqDen(pool, den).query(`
     SELECT px.NCC_ID, SUM(${btTraVai}) AS Tien,
            COUNT(DISTINCT px.PhieuXuatID) AS SoPhieu
     FROM PhieuXuatVai px
     JOIN PhieuXuatVaiChiTiet ct ON ct.PhieuXuatID = px.PhieuXuatID
     JOIN VaiCay vc ON vc.CayID = ct.CayID
-    WHERE px.LaTraNCC = 1 AND px.NCC_ID IS NOT NULL GROUP BY px.NCC_ID`)).recordset : [];
-  const traPK = (coTraPK && coGiaPK) ? (await pool.request().query(`
+    WHERE px.LaTraNCC = 1 AND px.NCC_ID IS NOT NULL${dk('px.NgayXuat')} GROUP BY px.NCC_ID`)).recordset : [];
+  const traPK = (coTraPK && coGiaPK) ? (await rqDen(pool, den).query(`
     SELECT p.NCC_ID, SUM(ISNULL(ct.SoLuong,0) * ISNULL(ct.DonGia,0)) AS Tien,
            COUNT(DISTINCT p.PhieuID) AS SoPhieu
     FROM PhieuPhuKien p JOIN PhieuPhuKienChiTiet ct ON ct.PhieuID = p.PhieuID
-    WHERE p.LoaiPhieu = N'Xuất' AND p.LaTraNCC = 1 AND p.NCC_ID IS NOT NULL GROUP BY p.NCC_ID`)).recordset : [];
+    WHERE p.LoaiPhieu = N'Xuất' AND p.LaTraNCC = 1 AND p.NCC_ID IS NOT NULL${dk('p.Ngay')} GROUP BY p.NCC_ID`)).recordset : [];
   /* v6.78: NHAP KHO HANG HOA tu NCC -> TANG no phai tra (giong nhap vai / nhap phu kien).
      Bang PhieuNhapKhoHang do migration_v681 tao - do bang truoc, chua chay migration thi bo qua
      phan nay chu KHONG lam vo ca man cong no. */
@@ -1214,10 +1269,10 @@ async function congNoNCC(pool) {
   try {
     coBangNKH = (await pool.request().query(`SELECT OBJECT_ID('PhieuNhapKhoHang') AS c`)).recordset[0].c != null;
   } catch (e) { coBangNKH = false; }
-  const nhapHH = coBangNKH ? (await pool.request().query(`
+  const nhapHH = coBangNKH ? (await rqDen(pool, den).query(`
     SELECT p.NCC_ID, SUM(ISNULL(p.TongTien, 0)) AS Tien, COUNT(*) AS SoPhieu
     FROM PhieuNhapKhoHang p
-    WHERE p.LoaiNhap = N'NhaCungCap' AND p.NCC_ID IS NOT NULL AND p.TrangThai <> N'Đã hủy'
+    WHERE p.LoaiNhap = N'NhaCungCap' AND p.NCC_ID IS NOT NULL AND p.TrangThai <> N'Đã hủy'${dk('p.NgayNhap')}
     GROUP BY p.NCC_ID`)).recordset : [];
   const ncc = (await pool.request().query('SELECT NCC_ID, TenNCC FROM NhaCungCap ORDER BY TenNCC')).recordset;
 
@@ -1250,8 +1305,9 @@ async function congNoNCC(pool) {
 }
 router.get('/congnoncc', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnoncc'), async (req, res) => {
   const pool = await getPool();
-  const kq = await congNoNCC(pool);
-  res.json({ success: true, data: kq.rows, canhBao: kq.canhBao });
+  const den = ngayDen(req.query.denNgay);   // v9.65
+  const kq = await congNoNCC(pool, den);
+  res.json({ success: true, data: kq.rows, canhBao: kq.canhBao, denNgay: den || null });
 });
 // So chi tiet 1 NCC: tung phieu nhap vai / nhap phu kien / phieu chi / dieu chinh
 // v6.47: tach ham rieng (dung chung voi xuat Excel) + tra ve NGAY MOI NHAT LEN TRUOC.
@@ -1762,19 +1818,30 @@ router.get('/soquy/chitiet', requireAuth, requirePermission('CONGNO', 'view'), r
    bang danh muc `NhaGiaCong`, va phieu chi cung chi co MOT loai doi tuong 'NhaGiaCong'. Tach hai so du
    thi tien chi phai tu phan bo cho tung ben — khong co du lieu nao noi phan bo the nao.
    ================================================================================================ */
-async function congNoNhaGiaCong(pool) {
-  const gc = await loadGiaCong(pool, sql);      // khong truyen ky -> LAY TAT CA (cong no la luy ke)
-  const it = await loadInThe(pool, sql);
-  const chi = (await pool.request().query(`
+/* v9.65: `denNgay` tuy chon -> so du tinh den ngay. Dong gia cong / in theu loc theo r.Ngay (= qc.NgayQC,
+   cung moc voi soChiTietNhaGiaCong()) bang chuoi YYYY-MM-DD dung local (khong toISOString). */
+function ngayLocal(v) {
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d)) return '';
+  const h = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${h(d.getMonth() + 1)}-${h(d.getDate())}`;
+}
+async function congNoNhaGiaCong(pool, denNgay) {
+  const den = ngayDen(denNgay);
+  const dk = (cot) => den ? ` AND ${cot} <= @den` : '';
+  const trongMoc = r => !den || !ngayLocal(r.Ngay) || ngayLocal(r.Ngay) <= den;
+  const gc = (await loadGiaCong(pool, sql)).filter(trongMoc);      // khong truyen ky -> LAY TAT CA (cong no la luy ke)
+  const it = (await loadInThe(pool, sql)).filter(trongMoc);
+  const chi = (await rqDen(pool, den).query(`
     SELECT NhaGiaCongID, SUM(SoTien) AS Tien, COUNT(*) AS SoPhieu FROM PhieuChi
-    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL
+    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL${dk('NgayChi')}
     GROUP BY NhaGiaCongID`)).recordset;
   /* Cot NhaGiaCongID cua CongNoDieuChinh den tu migration_v691 -> do cot, chua chay thi coi nhu chua
      co dieu chinh nao (khong lam sap ca man hinh). */
   const coDC = await coCot(pool, 'CongNoDieuChinh', 'NhaGiaCongID');
-  const dc = coDC ? (await pool.request().query(`
+  const dc = coDC ? (await rqDen(pool, den).query(`
     SELECT NhaGiaCongID, SUM(SoTien) AS Tien FROM CongNoDieuChinh
-    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL
+    WHERE LoaiDoiTuong = N'NhaGiaCong' AND NhaGiaCongID IS NOT NULL${dk('Ngay')}
     GROUP BY NhaGiaCongID`)).recordset : [];
 
   const nha = (await pool.request().query('SELECT NhaGiaCongID, TenNha FROM NhaGiaCong')).recordset;
@@ -1812,7 +1879,8 @@ async function congNoNhaGiaCong(pool) {
 }
 router.get('/congnogiacong', requireAuth, requirePermission('CONGNO', 'view'), requireChucNang('CONGNO', 'congnogiacong'), async (req, res) => {
   const pool = await getPool();
-  res.json({ success: true, data: await congNoNhaGiaCong(pool) });
+  const den = ngayDen(req.query.denNgay);   // v9.65
+  res.json({ success: true, data: await congNoNhaGiaCong(pool, den), denNgay: den || null });
 });
 
 /* ================================================================================================
@@ -2714,7 +2782,7 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       return await guiFile(res, wb, `cong_no_gia_cong_${khongDau(d.tenNha || ('nha' + nhaMot))}.xlsx`);
     }
     if (loai === 'gc') {
-      const rows = await congNoNhaGiaCong(pool);
+      const rows = await congNoNhaGiaCong(pool, denNgay);   // v9.65: ?denNgay -> so du tinh den ngay
       const ws = wb.addWorksheet('Công nợ gia công - in thêu');
       const cot = [
         { header: 'Nhà gia công / in thêu', key: 'TenNha', width: 30 },
@@ -2833,8 +2901,10 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       return await guiFile(res, wb, `cong_no_${khongDau(d.tenNCC || ('ncc' + nccMot))}.xlsx`);
     }
 
+    /* v9.65: bang tong hop xuat theo ?denNgay (so du tinh den ngay) — khong truyen thi luy ke nhu truoc. */
+    const ghiChuDen = denNgay ? 'Số dư tính đến ngày ' + denNgay.split('-').reverse().join('/') : '';
     if (loai === 'kh') {
-      const rows = await congNoKhachHang(pool);
+      const rows = await congNoKhachHang(pool, denNgay);
       const ws = wb.addWorksheet('Công nợ khách hàng');
       const cot = [
         { header: 'Khách hàng', key: 'TenKhach', width: 28 },
@@ -2845,7 +2915,7 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
         { header: 'Số phiếu BH', key: 'SoPhieu', width: 12 },
         { header: 'Số phiếu thu', key: 'SoPhieuThu', width: 12 }
       ];
-      dauTrang(ws, cot.length, 'BẢNG TỔNG HỢP CÔNG NỢ KHÁCH HÀNG', '');
+      dauTrang(ws, cot.length, 'BẢNG TỔNG HỢP CÔNG NỢ KHÁCH HÀNG', ghiChuDen);
       const dongTD = dongTieuDeCot(ws, cot).number;
       // v6.52: có khối đầu trang -> dòng dữ liệu KHÔNG còn bắt đầu từ dòng 2, phải lấy mốc động.
       const dongDau = ws.rowCount + 1;
@@ -2860,7 +2930,7 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       }
       ketBang(ws, cot.length, dongTD);   // v6.53
     } else {
-      const kq = await congNoNCC(pool);
+      const kq = await congNoNCC(pool, denNgay);   // v9.65
       const ws = wb.addWorksheet('Công nợ nhà cung cấp');
       const cot = [
         { header: 'Nhà cung cấp', key: 'TenNCC', width: 28 },
@@ -2871,7 +2941,7 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
         { header: 'Đã trả', key: 'DaTra', width: 16 },
         { header: 'Còn nợ', key: 'ConNo', width: 16 }
       ];
-      dauTrang(ws, cot.length, 'BẢNG TỔNG HỢP CÔNG NỢ NHÀ CUNG CẤP', '');
+      dauTrang(ws, cot.length, 'BẢNG TỔNG HỢP CÔNG NỢ NHÀ CUNG CẤP', ghiChuDen);
       /* v7.34 SỬA LỖI: dòng này trước đây gọi dongTieuDeCot() mà KHÔNG gán, nhưng cuối nhánh lại
          `ketBang(ws, cot.length, dongTD)` -> dongTD chỉ tồn tại trong nhánh 'kh' (khai bằng const bên
          trong if) nên ở đây là ReferenceError: mọi lần bấm "Xuất Excel" ở tab Công nợ NHÀ CUNG CẤP
@@ -2901,14 +2971,15 @@ router.get('/export', requireAuth, requirePermission('CONGNO', 'view'), async (r
       'Toàn bộ đối tượng');
     const dongTD2 = dongTieuDeCot(ws2, cot2).number;
     ghiChuThuTu(ws2, cot2.length);
+    /* v9.65: co denNgay thi so chi tiet cung CAT den ngay do (soChiTietKH/NCC nhan denNgay) — cung moc voi bang tong hop. */
     if (loai === 'kh') {
-      for (const k of await congNoKhachHang(pool)) {
-        const d = await soChiTietKH(pool, k.TenKhach);
+      for (const k of await congNoKhachHang(pool, denNgay)) {
+        const d = await soChiTietKH(pool, k.TenKhach, '', denNgay);
         doSo(ws2, d.rows, k.TenKhach);
       }
     } else {
-      for (const n of (await congNoNCC(pool)).rows) {
-        const d = await soChiTietNCC(pool, n.NCC_ID);
+      for (const n of (await congNoNCC(pool, denNgay)).rows) {
+        const d = await soChiTietNCC(pool, n.NCC_ID, '', denNgay);
         doSo(ws2, d.rows, n.TenNCC);
       }
     }

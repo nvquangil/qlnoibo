@@ -121,7 +121,8 @@ window.ModuleCongNo = (function () {
       const mDau = q * 3 + 1;
       ds.quy.push({ nhan: `Quý ${q + 1}/${y}`, tu: iso(y, mDau, 1), den: iso(y, mDau + 2, cuoiThang(y, mDau + 2)) });
     }
-    for (let i = 0; i < 4; i++) ds.nam.push({ nhan: `Năm ${y0 - i}`, tu: iso(y0 - i, 1, 1), den: iso(y0 - i, 12, 31) });
+    // v9.65: ghi rõ "năm nay / năm trước" để người dùng thấy ngay là có xem năm trước
+    for (let i = 0; i < 4; i++) ds.nam.push({ nhan: `Năm ${y0 - i}${i === 0 ? ' (năm nay)' : (i === 1 ? ' (năm trước)' : '')}`, tu: iso(y0 - i, 1, 1), den: iso(y0 - i, 12, 31) });
     return ds;
   }
   function oKyNhanhHtml(id) {
@@ -160,6 +161,26 @@ window.ModuleCongNo = (function () {
     if (ky.den && n > ky.den) return false;
     return true;
   }
+  /* v9.65 (Nguyen 16/11: "công nợ chưa có xem năm trước") — BẢNG TỔNG HỢP công nợ (KH / NCC / gia công)
+     thêm mốc "Tính đến ngày": chọn kỳ nhanh (tháng/quý/năm, có 4 năm gần nhất) hay gõ ngày → máy chủ cộng
+     chứng từ đến hết ngày đó (?denNgay=) → "Còn nợ" = số dư tại ngày đó (vd 31/12 năm trước). Để trống =
+     lũy kế đến hiện tại như cũ. Nhớ theo phiên, mỗi bảng một mốc. */
+  const denNgayTH = { kh: '', ncc: '', gc: '' };
+  function khoiDenNgayHtml(pre, den) {
+    return `<span style="font-size:12px;color:#5f6368;">Tính đến ngày:</span>
+      ${oKyNhanhHtml(pre + 'DenKyNhanh')}
+      <input type="date" id="${pre}DenNgay" value="${den}" style="width:auto;" title="Số dư tính đến hết ngày này — để trống = đến hiện tại">
+      ${den ? `<button class="btn small secondary" id="${pre}BoDen" title="Về số dư hiện tại">✖</button>` : ''}`;
+  }
+  function ganDenNgay(body, pre, khoa, veLai) {
+    const apDung = (den) => { denNgayTH[khoa] = den || ''; veLai(); };
+    ganKyNhanh(body, pre + 'DenKyNhanh', null, pre + 'DenNgay', (tu, den) => apDung(den));   // chỉ lấy ĐẾN ngày của kỳ
+    const o = body.querySelector('#' + pre + 'DenNgay');
+    if (o) o.addEventListener('change', () => apDung(o.value || ''));
+    const nutBo = body.querySelector('#' + pre + 'BoDen');
+    if (nutBo) nutBo.addEventListener('click', () => apDung(''));
+  }
+  const nhanDenNgay = (den) => den ? ` <span style="color:#1a73e8;">(tính đến ${fmtDate(den)})</span>` : '';
   /* Kỳ đang lọc của BA danh sách chứng từ — nhớ theo phiên (đổi tab rồi quay lại vẫn giữ, CRUD xong
      render lại vẫn giữ). Số TỔNG trên toolbar tính từ đúng các dòng lọc ra — yêu cầu "số tổng biến
      động theo lọc". */
@@ -269,6 +290,19 @@ window.ModuleCongNo = (function () {
      Một hàm dựng cho cả 2 loại — chỉ khác nhãn (thu/chi, nộp/nhận) nên tách 2 hàm sẽ lệch nhau dần.
      Theo khuôn chứng từ kế toán VN: ngày tháng, số phiếu, người nộp/nhận, lý do, số tiền + bằng chữ,
      hình thức (kèm STK nếu chuyển khoản), rồi hàng chữ ký. */
+  /* v9.52 (Nguyen 14/11: "Phiếu chi Tạm ứng — TRỪ vào lương tháng thì khi in phiếu chi ghi rõ Tạm ứng trừ
+     lương tháng chọn"): câu in đậm trên bản in + nhãn ở danh sách/popup. Tháng = TruLuongThang/Nam đã
+     khai trên phiếu; phiếu cũ (trước v9.32) chưa khai thì = tháng của ngày chi — ĐÚNG luật trừ lương
+     của utils/tamUngNhanVien.js (ISNULL(TruLuongThang, MONTH(NgayChi))), bản in không được nói khác
+     bảng lương. Không phải tạm ứng ⇒ chuỗi rỗng (không in gì). Hàm thuần, bộ tự kiểm cắt ra chạy. */
+  function dongTamUngTruLuong(r) {
+    if (!r || String(r.LoaiChiNV || '') !== 'TamUng') return '';
+    const ngay = new Date(r.NgayChi);
+    const coNgay = !isNaN(ngay.getTime());
+    const thang = Number(r.TruLuongThang) || (coNgay ? ngay.getMonth() + 1 : 0);
+    const nam = Number(r.TruLuongNam) || (coNgay ? ngay.getFullYear() : 0);
+    return thang && nam ? `TẠM ỨNG — TRỪ VÀO LƯƠNG THÁNG ${thang}/${nam}` : 'TẠM ỨNG — TRỪ VÀO LƯƠNG';
+  }
   function inPhieuThuChi(r, loai) {
     const laThu = loai === 'Thu';
     const ngay = new Date(laThu ? r.NgayThu : r.NgayChi);
@@ -276,12 +310,14 @@ window.ModuleCongNo = (function () {
     const doiTuong = laThu ? (r.TenDoiTuong || '') : (r.TenNCC || r.TenNhaGiaCong || r.TenDoiTuong || '');
     const dong = (nhan, giaTri) => giaTri
       ? `<p style="margin:4px 0;"><b>${nhan}:</b> ${escapeHtml(String(giaTri))}</p>` : '';
+    const tamUng = laThu ? '' : dongTamUngTruLuong(r);
     printHtml(`${laThu ? 'Phiếu thu' : 'Phiếu chi'} ${r.SoPhieu || ''}`, `
       <h2 style="text-align:center;margin:0 0 2px;">${laThu ? 'PHIẾU THU' : 'PHIẾU CHI'}</h2>
       <div style="text-align:center;margin-bottom:2px;">Ngày ${ngay.getDate()} tháng ${ngay.getMonth() + 1} năm ${ngay.getFullYear()}</div>
       <div style="text-align:right;margin-bottom:10px;"><b>Số: ${escapeHtml(r.SoPhieu || '')}</b></div>
       ${dong(laThu ? 'Họ tên người nộp tiền' : 'Họ tên người nhận tiền', doiTuong)}
       ${dong(laThu ? 'Lý do nộp' : 'Lý do chi', r.DienGiai)}
+      ${tamUng ? `<p style="margin:6px 0;"><span style="display:inline-block;border:1.5px solid #000;padding:3px 10px;font-size:14px;"><b>${escapeHtml(tamUng)}</b></span></p>` : ''}
       ${dong('Tài khoản', (r.MaTK ? r.MaTK + ' - ' : '') + (r.TenTK || ''))}
       ${dong('Hình thức thanh toán', (r.HinhThuc || '') + (r.SoTaiKhoan ? ` — ${r.TenNganHang || ''} ${r.SoTaiKhoan}` : ''))}
       ${laThu && r.SoPhieuBH ? dong('Thu cho phiếu xuất kho', r.SoPhieuBH) : ''}
@@ -657,7 +693,8 @@ window.ModuleCongNo = (function () {
         ${/* v7.83: chiều ngược của "phiếu chi kèm". Phiếu chi sinh từ chuyển thẳng KHÔNG sửa/xóa được
              ở đây (v6.54) nên chỉ rõ nó thuộc phiếu thu nào để người dùng biết sang đó mà sửa. */''}
         <td>${oPhieuKem(r.PhieuThuKemID, r.SoPhieuThuKem, 'PT', r.TenNguoiNopKem)}</td>
-        <td>${escapeHtml(r.DienGiai || '')}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
+        ${/* v9.52: phiếu tạm ứng nói rõ trừ lương tháng nào ngay trên danh sách (cùng chữ với bản in). */''}
+        <td>${escapeHtml(r.DienGiai || '')}${dongTamUngTruLuong(r) ? `<div style="font-size:11px;color:#b06000;font-weight:600;">${escapeHtml(dongTamUngTruLuong(r))}</div>` : ''}</td><td>${escapeHtml(r.NguoiTao || '')}</td>
         <td><button class="btn small secondary act-in" data-id="${r.PhieuChiID}" title="In phiếu chi">🖨️</button>
           ${perm.canEdit ? `<button class="btn small secondary act-sua" data-id="${r.PhieuChiID}">Sửa</button> ` : ''}${perm.canDelete ? `<button class="btn small danger act-xoa" data-id="${r.PhieuChiID}">Xóa</button>` : ''}</td>
       </tr>`).join('') || `<tr><td colspan="11" class="empty-hint">${coLocChi ? 'Không có phiếu chi nào trong kỳ đang lọc' : 'Chưa có phiếu chi nào'}</td></tr>`}</tbody></table>`;
@@ -823,7 +860,8 @@ window.ModuleCongNo = (function () {
   /* ============================== 3. CÔNG NỢ KHÁCH HÀNG ============================== */
   async function renderCongNoKH(perm) {
     const body = document.getElementById('cnBody');
-    const rows = (await apiGet('/api/congno/congnokh')).data || [];
+    const den = denNgayTH.kh;   // v9.65
+    const rows = (await apiGet('/api/congno/congnokh' + (den ? '?denNgay=' + den : ''))).data || [];
     const dt2c = await mapDoiTac2Chieu();   // v7.81: khách nào đồng thời là nhà cung cấp
     const t = rows.reduce((a, r) => ({
       PhaiThu: a.PhaiThu + Number(r.PhaiThu || 0), DaThu: a.DaThu + Number(r.DaThu || 0),
@@ -834,12 +872,13 @@ window.ModuleCongNo = (function () {
         ${searchBoxHtml()}
         ${/* v7.34: ghi rõ "tổng hợp" — sổ chi tiết theo mẫu kế toán nằm trong popup từng khách. */''}
         <button class="btn small secondary" id="btnXuat" title="Bảng tổng hợp công nợ + sổ chi tiết của tất cả khách + các sheet chứng từ">⬇️ Xuất tổng hợp (Excel)</button>
+        ${khoiDenNgayHtml('kh', den) /* v9.65 */}
         ${/* v8.89: dòng này phải đổi theo kết quả lọc — xem opts.tomTat bên dưới. Để cố định thì
              màn hình có hai con số tiền mâu thuẫn: trong bảng "TỔNG (đang lọc)" một kiểu, ở đây
              một kiểu. */''}
-        <span class="empty-hint" style="padding:0;margin-left:auto;" id="cnTomTatKH">Tổng còn phải thu: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} khách</span>
+        <span class="empty-hint" style="padding:0;margin-left:auto;" id="cnTomTatKH">Tổng còn phải thu: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} khách${nhanDenNgay(den)}</span>
       </div>
-      <div class="empty-hint" style="text-align:left;">Phải thu = tổng <b>phiếu bán hàng</b> (chưa hủy) + điều chỉnh · Đã thu = tổng <b>phiếu thu</b> · Bấm tên khách để xem sổ chi tiết.</div>
+      <div class="empty-hint" style="text-align:left;">Phải thu = tổng <b>phiếu bán hàng</b> (chưa hủy) + điều chỉnh · Đã thu = tổng <b>phiếu thu</b> · Bấm tên khách để xem sổ chi tiết.${den ? ` <b>Đang xem số dư tính đến hết ${fmtDate(den)}</b> — chứng từ sau ngày đó không tính.` : ''}</div>
       <table><thead><tr><th>Khách hàng</th><th>Phải thu (phiếu BH)</th><th>Điều chỉnh</th><th>Đã thu</th><th>Còn nợ</th><th>Số phiếu BH</th><th>Số phiếu thu</th><th>Bán gần nhất</th></tr></thead>
       ${/* v7.81: khách nào đồng thời là NHÀ CUNG CẤP thì có thêm nút mở bảng công nợ 2 chiều —
            gom cả phiếu bán hàng, phiếu nhập kho, phiếu thu, phiếu chi vào một bảng. */''}
@@ -871,12 +910,14 @@ window.ModuleCongNo = (function () {
       tongTheoLoc: true,
       tomTat: tt => {
         const o = body.querySelector('#cnTomTatKH');
-        if (o) o.innerHTML = `Tổng còn phải thu: <b style="color:#c0392b;">${fmtNumber(tt.tong.ConNo || 0)}</b> đ / ${tt.hien} khách${tt.dangLoc ? ' (đang lọc)' : ''}`;
+        if (o) o.innerHTML = `Tổng còn phải thu: <b style="color:#c0392b;">${fmtNumber(tt.tong.ConNo || 0)}</b> đ / ${tt.hien} khách${tt.dangLoc ? ' (đang lọc)' : ''}${nhanDenNgay(den)}`;
       }
     });
     wireTableSort(body);   // v6.47: bấm tiêu đề cột để sắp xếp
-    body.querySelector('#btnXuat').addEventListener('click', () => taiFile('/api/congno/export?loai=kh', 'cong_no_khach_hang.xlsx'));
-    body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietKH(a.dataset.khach)));
+    ganDenNgay(body, 'kh', 'kh', () => renderCongNoKH(perm));   // v9.65
+    body.querySelector('#btnXuat').addEventListener('click', () => taiFile('/api/congno/export?loai=kh' + (den ? '&denNgay=' + den : ''), 'cong_no_khach_hang' + (den ? '_den_' + den : '') + '.xlsx'));
+    /* v9.65: đang xem số dư đến ngày D thì sổ chi tiết mở ra cũng cắt đến D (từ đầu → D) để "Dư cuối kỳ" = "Còn nợ" trên bảng. */
+    body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietKH(a.dataset.khach, den ? { tu: '', den } : undefined)));
     /* v7.81: nút "↔ 2 chiều". stopPropagation để bấm nút không kích hoạt luôn link tên khách bên cạnh. */
     body.querySelectorAll('.act-2c').forEach(b => b.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1427,6 +1468,7 @@ window.ModuleCongNo = (function () {
         ${h.HinhThuc ? ` · <b>Hình thức:</b> ${escapeHtml(h.HinhThuc)}` : ''}
         ${h.SoTien != null ? `<div style="font-size:15px;margin-top:4px;">Số tiền: <b style="color:#c0392b;">${fmtNumber(h.SoTien)}</b> đ</div>` : ''}
         ${h.DienGiai || h.GhiChu ? `<div style="color:#5f6368;">Diễn giải: ${escapeHtml(h.DienGiai || h.GhiChu)}</div>` : ''}
+        ${loai === 'PC' && dongTamUngTruLuong(h) ? `<div style="color:#b06000;font-weight:600;">${escapeHtml(dongTamUngTruLuong(h))}</div>` : ''}
         ${h.NguoiTao ? `<div style="color:#5f6368;">Người tạo: ${escapeHtml(h.NguoiTao)}</div>` : ''}
       </div>
       ${dong.length ? `<div style="max-height:50vh;overflow:auto;">
@@ -1505,7 +1547,8 @@ window.ModuleCongNo = (function () {
   /* ============================== 4. CÔNG NỢ NHÀ CUNG CẤP ============================== */
   async function renderCongNoNCC(perm) {
     const body = document.getElementById('cnBody');
-    const res = await apiGet('/api/congno/congnoncc');
+    const den = denNgayTH.ncc;   // v9.65
+    const res = await apiGet('/api/congno/congnoncc' + (den ? '?denNgay=' + den : ''));
     const rows = res.data || [];
     if (res.canhBao) toast(res.canhBao, 'info');
     const t = rows.reduce((a, r) => ({
@@ -1517,9 +1560,10 @@ window.ModuleCongNo = (function () {
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${searchBoxHtml()}
         <button class="btn small secondary" id="btnXuat" title="Bảng tổng hợp công nợ + sổ chi tiết của tất cả NCC + sheet phiếu chi">⬇️ Xuất tổng hợp (Excel)</button>
-        <span class="empty-hint" style="padding:0;margin-left:auto;" id="cnTomTatNCC">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} NCC</span>
+        ${khoiDenNgayHtml('ncc', den) /* v9.65 */}
+        <span class="empty-hint" style="padding:0;margin-left:auto;" id="cnTomTatNCC">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} NCC${nhanDenNgay(den)}</span>
       </div>
-      <div class="empty-hint" style="text-align:left;">Phải trả tự tính từ <b>phiếu nhập vải</b> (KG × đơn giá từng cây) + <b>phiếu nhập phụ kiện</b> (SL × đơn giá) + điều chỉnh nhập tay (gia công, in thêu, nợ đầu kỳ). Đã trả = tổng <b>phiếu chi</b> có chọn NCC. Bấm tên NCC để xem sổ chi tiết.</div>
+      <div class="empty-hint" style="text-align:left;">Phải trả tự tính từ <b>phiếu nhập vải</b> (KG × đơn giá từng cây) + <b>phiếu nhập phụ kiện</b> (SL × đơn giá) + điều chỉnh nhập tay (gia công, in thêu, nợ đầu kỳ). Đã trả = tổng <b>phiếu chi</b> có chọn NCC. Bấm tên NCC để xem sổ chi tiết.${den ? ` <b>Đang xem số dư tính đến hết ${fmtDate(den)}</b> — chứng từ sau ngày đó không tính.` : ''}</div>
       <table><thead><tr><th>Nhà cung cấp</th><th>Tiền nhập vải</th><th>Tiền nhập phụ kiện</th><th>Điều chỉnh</th><th>Phải trả</th><th>Đã trả</th><th>Còn nợ</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
         <td><a href="javascript:void(0)" class="act-ct" data-id="${r.NCC_ID}"><b>${escapeHtml(r.TenNCC)}</b></a>
@@ -1544,12 +1588,13 @@ window.ModuleCongNo = (function () {
       tongTheoLoc: true,
       tomTat: tt => {
         const o = body.querySelector('#cnTomTatNCC');
-        if (o) o.innerHTML = `Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(tt.tong.ConNo || 0)}</b> đ / ${tt.hien} NCC${tt.dangLoc ? ' (đang lọc)' : ''}`;
+        if (o) o.innerHTML = `Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(tt.tong.ConNo || 0)}</b> đ / ${tt.hien} NCC${tt.dangLoc ? ' (đang lọc)' : ''}${nhanDenNgay(den)}`;
       }
     });
     wireTableSort(body);   // v6.47
-    body.querySelector('#btnXuat').addEventListener('click', () => taiFile('/api/congno/export?loai=ncc', 'cong_no_nha_cung_cap.xlsx'));
-    body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietNCC(a.dataset.id)));
+    ganDenNgay(body, 'ncc', 'ncc', () => renderCongNoNCC(perm));   // v9.65
+    body.querySelector('#btnXuat').addEventListener('click', () => taiFile('/api/congno/export?loai=ncc' + (den ? '&denNgay=' + den : ''), 'cong_no_nha_cung_cap' + (den ? '_den_' + den : '') + '.xlsx'));
+    body.querySelectorAll('.act-ct').forEach(a => a.addEventListener('click', () => soChiTietNCC(a.dataset.id, den ? { tu: '', den } : undefined)));   // v9.65: cắt sổ đến cùng mốc
   }
 
   /* v8.89 — GIỐNG HỆT sổ khách hàng: lọc kỳ + dòng Dư đầu kỳ + đổi tiêu đề in thành "SỔ TỔNG HỢP".
@@ -1643,7 +1688,8 @@ window.ModuleCongNo = (function () {
      lệch với bảng lương thì là LỖI, không phải "hai cách tính". Xem utils/luongGiaCongInThe.js. */
   async function renderCongNoGiaCong(perm) {
     const body = document.getElementById('cnBody');
-    const rows = (await apiGet('/api/congno/congnogiacong')).data || [];
+    const den = denNgayTH.gc;   // v9.65
+    const rows = (await apiGet('/api/congno/congnogiacong' + (den ? '?denNgay=' + den : ''))).data || [];
     const t = rows.reduce((a, r) => ({
       TienGiaCong: a.TienGiaCong + Number(r.TienGiaCong || 0), TienInThe: a.TienInThe + Number(r.TienInThe || 0),
       DieuChinh: a.DieuChinh + Number(r.DieuChinh || 0), PhaiTra: a.PhaiTra + Number(r.PhaiTra || 0),
@@ -1654,7 +1700,8 @@ window.ModuleCongNo = (function () {
         ${searchBoxHtml()}
         ${/* v7.54: xuất Excel — dùng CHUNG route /congno/export (loai=gc) với 2 tab cũ. */''}
         <button class="btn small secondary" id="btnXuatGC" title="Bảng tổng hợp + sổ chi tiết của tất cả nhà + sheet phiếu chi">⬇️ Xuất tổng hợp (Excel)</button>
-        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} nhà</span>
+        ${khoiDenNgayHtml('gc', den) /* v9.65 */}
+        <span class="empty-hint" style="padding:0;margin-left:auto;">Tổng còn phải trả: <b style="color:#c0392b;">${fmtNumber(t.ConNo)}</b> đ / ${rows.length} nhà${nhanDenNgay(den)}</span>
       </div>
       <div class="empty-hint" style="text-align:left;">
         Phải trả = <b>tiền gia công + tiền in thêu</b> (đúng số của <b>Bảng lương gia công / in thêu</b>:
@@ -1680,9 +1727,10 @@ window.ModuleCongNo = (function () {
           <td></td></tr>` : ''}</tbody></table>`;
     wireTableSearch(body);
     wireTableSort(body);
+    ganDenNgay(body, 'gc', 'gc', () => renderCongNoGiaCong(perm));   // v9.65
     body.querySelector('#btnXuatGC').addEventListener('click', () =>
-      taiFile('/api/congno/export?loai=gc', 'cong_no_gia_cong_in_theu.xlsx'));
-    body.querySelectorAll('.act-ct-gc').forEach(a => a.addEventListener('click', () => soChiTietGiaCong(a.dataset.id)));
+      taiFile('/api/congno/export?loai=gc' + (den ? '&denNgay=' + den : ''), 'cong_no_gia_cong_in_theu' + (den ? '_den_' + den : '') + '.xlsx'));
+    body.querySelectorAll('.act-ct-gc').forEach(a => a.addEventListener('click', () => soChiTietGiaCong(a.dataset.id, den ? { tu: '', den } : undefined)));   // v9.65
   }
 
   /* ================================================================================================

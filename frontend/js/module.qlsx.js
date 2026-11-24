@@ -3,6 +3,29 @@ window.ModuleQLSX = (function () {
   let activeTab = 'dashboard';
   let container, currentUser, dm = null;
 
+  /* 🔴 v9.88 (Nguyen 21/11: "Hệ số quy đổi (số cái trong 1 ri) thêm điều kiện bắt buộc phải nhập khác 1"
+     — nói rõ: ở màn CHỈ ĐỊNH SẢN XUẤT).
+
+     VÌ SAO 1 KHÔNG PHẢI MỘT GIÁ TRỊ HỢP LỆ: từ v9.85 ô này mang MỘT nghĩa duy nhất — SỐ CÁI TRONG 1 RI —
+     và Đóng gói / Kho nhập quy đổi Ri → Cái bằng chính nó (xem caiMotRi). Để 1 nghĩa là "1 ri = 1 cái",
+     ô Ri bị khoá và cả dây chuyền phải gõ tay số Cái. Mà 1 lại đúng là giá trị MẶC ĐỊNH cũ, nên "1" gần
+     như luôn là CHƯA KHAI chứ không phải đã khai. Vì vậy: trống / <= 0 / = 1 đều bị chặn.
+
+     KHÔNG dựa vào required+min của HTML: khi submit được gọi bằng tay thì trình duyệt bỏ qua constraint
+     validation, và thông báo mặc định của trình duyệt không nói được "vì sao phải khác 1".
+
+     Trả về CHUỖI LỖI, hoặc '' nếu hợp lệ. Backend có bản sao cùng luật (POST/PUT /orders trong qlsx.js)
+     — sửa một bên phải sửa cả hai. */
+  function loiHeSoQuyDoi(v) {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return 'Chưa nhập "Hệ số quy đổi (số cái trong 1 ri)". Đây là SỐ CÁI TRONG 1 RI — VD dải 3-7 có 5 size thì nhập 5.';
+    const n = Number(s);
+    if (!(n > 0)) return 'Hệ số quy đổi phải là một số lớn hơn 0 — đang nhập "' + s + '".';
+    if (n === 1) return 'Hệ số quy đổi KHÔNG được để 1. Để 1 nghĩa là "1 ri = 1 cái", ô Ri ở Đóng gói / Kho nhập sẽ bị khoá. Nhập đúng SỐ CÁI TRONG 1 RI — VD dải 3-7 có 5 size thì nhập 5.';
+    if (n < 1) return 'Hệ số quy đổi phải LỚN HƠN 1 — "số cái trong 1 ri" nhỏ hơn 1 là vô nghĩa. Đang nhập "' + s + '".';
+    return '';
+  }
+
   // v5.0: them tab "Ra lenh san xuat" (tach rieng khoi "Danh sach don hang", chi hien voi nguoi co
   // quyen tao don) va "Don gia cong doan may" (man hinh danh muc/dinh gia, xem duoc voi ai co quyen
   // xem QLSX, chinh sua can quyen tao/sua tuong ung o tung nut).
@@ -34,6 +57,12 @@ window.ModuleQLSX = (function () {
     // v6.04: "Định mức & Hao hụt" CHUYỂN từ phân hệ Kho vải sang đây (ChucNang QLSX/dinhmuc, migration_v664).
     tabs.push({ key: 'dinhmuc', label: 'Định mức & Hao hụt' });
     tabs.push({ key: 'giathanh', label: 'Giá thành sản phẩm' });   // v6.15 (ChucNang QLSX/giathanh, migration_v665)
+    /* v9.67 (ChucNang QLSX/sanluong, migration_v895): ảnh/video/may mẫu ⇒ thưởng SP tự động.
+       v9.67d (Nguyen: "mặc định không có, phân quyền ai có quyền mới hiển thị"): MacDinhCho = 0 ⇒ loadUserContext điền
+       canView=false vào chucNangPerm nhưng KHÔNG đưa vào hiddenChucNang (tính trước) — nên phải tự hỏi chucNangPerm ở đây,
+       visibleTabsOf() của app.js không ẩn hộ. */
+    const cnSL = user.isAdmin ? null : (user.chucNangPerm && user.chucNangPerm['QLSX:sanluong']);
+    if (!cnSL || cnSL.canView !== false) tabs.push({ key: 'sanluong', label: 'Sản lượng theo lệnh' });
     // v5.19 (muc 1.1.2 + 1.4): chuc nang con MOI "Chỉ định vải SX" - man hinh khai bao KG vai yeu cau
     // (tai su dung Cau truc vai cua Ra lenh san xuat). An/hien qua Ma tran phan quyen (ChucNangPermissions)
     // nhu moi tab khac - xem visibleTabsOf() trong app.js.
@@ -87,6 +116,7 @@ window.ModuleQLSX = (function () {
     if (activeTab === 'chidinhvaisx') return renderChiDinhVaiSX(perm);   // v5.47: KHÔI PHỤC "Chỉ định vải SX"
     if (activeTab === 'dinhmuc') return renderDinhMucHaoHut(perm);   // v6.04: chuyển từ Kho vải sang
     if (activeTab === 'giathanh') return renderGiaThanh(perm);       // v6.15
+    if (activeTab === 'sanluong') return renderSanLuongTheoLenh(perm);   // v9.67
     if (activeTab === 'chidinhnpl') return window.ModuleTaiLieuKyThuat.render(document.getElementById('qBody'), currentUser, 'chidinhnpl');   // v5.50: tab riêng, dùng nhóm 'chidinhnpl' của ModuleTaiLieuKyThuat
     // v5.6: "Danh sách lệnh sản xuất" gio gom 2 nhom quyen KHAC NHAU tu khi tach chuc nang o backend -
     // "Sửa"/"Xóa" (lenh san xuat, van chuc nang 'orders' - dung "perm" nhu cu) va "Ghi tiến độ"/"Giao
@@ -1218,10 +1248,10 @@ window.ModuleQLSX = (function () {
       const heSo = Number(heSoEl ? heSoEl.value : 1) || 1;
       const firstDonViEl = area.querySelector('#cvChinhRowsEdit .cv-donvi');
       const donVi = firstDonViEl ? firstDonViEl.value : 'Cái';
-      const dvqdEl = document.getElementById('inpDonViQuyDoiEdit');
-      const dvqd = dvqdEl ? dm.donViQuyDoi.find(d => String(d.ID) === String(dvqdEl.value)) : null;
+      /* v9.85: ô chọn "Đơn vị quy đổi" đã bỏ ⇒ lấy thẳng đơn vị ĐÃ LƯU của lệnh (lệnh cũ vẫn hiện
+         "240 Ri × 5 = 1.200 Cái"; lệnh mới không gắn đơn vị thì fmtQuyDoi tự rút về "240 Ri"). */
       const totalEl = document.getElementById('cvTongCongValEdit');
-      if (totalEl) totalEl.innerHTML = fmtQuyDoi(total, heSo, dvqd ? dvqd.PhepTinh : null, donVi, dvqd ? dvqd.DonViQuyDoi : null);
+      if (totalEl) totalEl.innerHTML = fmtQuyDoi(total, heSo, detail.PhepTinhQuyDoi || null, donVi, detail.TenDonViQuyDoi || null);
     }
 
     function phoiRowHtmlEdit(prefill) {
@@ -1354,16 +1384,24 @@ window.ModuleQLSX = (function () {
           <div class="form-row"><label>Deadline ra hàng *</label><input type="date" name="ngayGiao" value="${detail.NgayGiaoDuKien ? String(detail.NgayGiaoDuKien).slice(0, 10) : ''}" required></div>
           <!-- v5.13 (muc 1.1.2): "He so quy doi" sua duoc ngay tai day, thay cho o "Tong so luong" nhap
                tay da bo (muc 1.1.1 - xem hang Tong cong duoi Cau truc vai). -->
-          <div class="form-row"><label>Hệ số quy đổi</label><input id="inpHeSoQuyDoiEdit" name="heSoQuyDoi" type="number" min="0" step="0.001" value="${detail.HeSoQuyDoi ?? 1}"></div>
-          <!-- v5.21 (muc 1/2): xem ghi chu chi tiet tai form Tao moi (#inpDonViQuyDoi) - cung logic. -->
-          <div class="form-row"><label>Đơn vị quy đổi</label><select id="inpDonViQuyDoiEdit">
-            <option value="">-- Không quy đổi --</option>
-            ${dm.donViQuyDoi.map(d => `<option value="${d.ID}" ${String(d.ID) === String(detail.DonViQuyDoiID || '') ? 'selected' : ''}>${escapeHtml(d.DonViChinh)} → ${escapeHtml(d.DonViQuyDoi)} (${d.PhepTinh === 'Chia' ? '÷' : '×'}${d.HeSo})</option>`).join('')}
-          </select></div>
-          <div class="form-row"><label>Thiết kế</label>
-            <div style="display:flex;gap:4px;"><input name="thietKeVien" id="inpThietKeEdit" value="${escapeHtml(detail.ThietKeVien || '')}" style="flex:1;"><select id="selThietKeEdit" title="Chọn từ danh sách nhân viên" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienKyThuat(), 'HoTen', 'HoTen')}</select></div></div>
+          ${/* 🔴 v9.85 (Nguyen 19/11: "Ra lệnh sản xuất bỏ trường hệ số quy đổi và đơn vị quy đổi vì có
+               trường số size/1 ri rồi" → chốt lại: GIỮ "Hệ số quy đổi", BỎ ô "Số size" vừa thêm và BỎ ô
+               "Đơn vị quy đổi"). Ô này giờ mang MỘT nghĩa duy nhất: SỐ CÁI TRONG 1 RI — Đóng gói / Kho
+               nhập quy đổi Ri bằng chính nó (caiMotRi). Nhãn đổi cho khỏi ai hiểu nhầm là hệ số cắt. */''}
+          ${/* 🔴 v9.88: cùng luật với Chỉ định sản xuất — bắt buộc, phải khác 1. Lệnh CŨ phần lớn đang
+               mang giá trị mặc định 1 (= chưa khai): để TRỐNG ô thay vì hiện "1", kèm dòng đỏ nói rõ,
+               vì hiện "1" thì người sửa tưởng đã khai rồi và bấm Lưu sẽ bị chặn mà không hiểu vì sao. */''}
+          <div class="form-row"><label>Hệ số quy đổi (số cái trong 1 ri) <span style="color:#c62828;">*</span></label><input id="inpHeSoQuyDoiEdit" name="heSoQuyDoi" type="number" min="0" step="0.001" value="${Number(detail.HeSoQuyDoi) > 1 ? detail.HeSoQuyDoi : ''}" placeholder="Bắt buộc — VD: 5" required>
+            <span style="color:#5f6368;font-size:12px;">Dùng quy đổi Ri → Cái ở Đóng gói / Kho nhập. VD dải 3-7 có 5 size → 5. <b style="color:#c62828;">Bắt buộc nhập và phải khác 1</b> — để 1 nghĩa là 1 ri = 1 cái, ô Ri sẽ bị khoá.</span>
+            ${Number(detail.HeSoQuyDoi) > 1 ? '' : `<div style="color:#c62828;font-size:12px;padding-top:2px;">🔴 Lệnh này chưa khai số cái trong 1 ri (đang là ${detail.HeSoQuyDoi == null ? 'trống' : fmtNumber(detail.HeSoQuyDoi)}) — khai vào đây thì Đóng gói / Kho nhập mới gõ được theo Ri.</div>`}</div>
+          ${/* v9.85: ô "Đơn vị quy đổi" đã BỎ khỏi form. Bảng DanhMucDonViQuyDoi + cột DonViQuyDoiID GIỮ
+               NGUYÊN (lệnh cũ vẫn in được "240 Ri × 5 = 1.200 Cái"); form Sửa chỉ chép lại giá trị cũ. */''}
+          ${oThietKeHtml('Edit', detail)}
           <div class="form-row"><label>Kỹ thuật rập</label>
-            <div style="display:flex;gap:4px;"><input name="kyThuatRap" id="inpKyThuatRapEdit" value="${escapeHtml(detail.KyThuatRap || '')}" style="flex:1;"><select id="selKyThuatRapEdit" title="Chọn từ danh sách nhân viên" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienKyThuat(), 'HoTen', 'HoTen')}</select></div></div>
+            <div style="display:flex;gap:4px;"><input name="kyThuatRap" id="inpKyThuatRapEdit" value="${escapeHtml(detail.KyThuatRap || '')}" style="flex:1;"><select id="selKyThuatRapEdit" title="Chọn từ danh sách nhân viên bộ phận Kỹ thuật" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienBoPhan('ky thuat'), 'HoTen', 'HoTen')}</select></div></div>
+          ${/* v9.67: nhân viên may mẫu — FK NhanVien (không phải tên tự do như Thiết kế/Rập) vì sinh thưởng theo SP. */''}
+          <div class="form-row"><label>Nhân viên may mẫu <span style="font-weight:normal;color:#5f6368;">(thưởng theo SP tự động)</span></label>
+            ${oNhanVienMayMauHtml('inpNhanVienMayMauEdit', detail.NhanVienMayMauID, detail.MayMauTenSP)}</div>
         </div>
         <div class="form-row"><label>Có in thêu</label><label style="font-weight:normal;"><input type="checkbox" id="chkCoInTheuEdit" ${detail.CoInTheu ? 'checked' : ''}> Đơn hàng này có công đoạn in/thêu</label></div>
         <div class="form-row"><label>Dòng hình in</label><input name="dongHinhIn" value="${escapeHtml(detail.DongHinhIn || '')}"></div>
@@ -1417,15 +1455,13 @@ window.ModuleQLSX = (function () {
     const wireNvPickE = (selId, inpId) => { const s = modal.querySelector('#' + selId); if (s) s.addEventListener('change', () => { if (s.value) { modal.querySelector('#' + inpId).value = s.value; s.value = ''; } }); };
     wireNvPickE('selThietKeEdit', 'inpThietKeEdit');
     wireNvPickE('selKyThuatRapEdit', 'inpKyThuatRapEdit');
+    wireThietKeCTV(modal, 'Edit');   // v9.70
+    wireMayMauSP(modal, 'inpNhanVienMayMauEdit', modal.querySelector('input[name="ngayDat"]'));   // v9.76
     /* v6.02: hộp NHIỀU ảnh hình in (thay khối 1-ảnh + nút "Xóa ảnh" của v5.92). Xóa/thêm ảnh chỉ đổi
        danh sách trên form; chỉ thực sự ghi khi bấm Lưu (bấm nhầm thì đóng form là xong). */
     const wAnhHinhInEdit = wireAnhHinhInBox('ahiEdit', tachAnhHinhIn(detail.AnhHinhIn));
     modal.querySelector('#inpHeSoQuyDoiEdit').addEventListener('input', recalcCvTongCongEdit);
-    modal.querySelector('#inpDonViQuyDoiEdit').addEventListener('change', (e) => {
-      const dvqd = dm.donViQuyDoi.find(d => String(d.ID) === e.target.value);
-      if (dvqd) modal.querySelector('#inpHeSoQuyDoiEdit').value = dvqd.HeSo;
-      recalcCvTongCongEdit();
-    });
+    /* v9.85: ô "Đơn vị quy đổi" đã bỏ khỏi form ⇒ không còn listener tự điền hệ số. Hệ số gõ tay. */
     modal.querySelector('#btnAddChinhEdit').addEventListener('click', () => {
       modal.querySelector('#cvChinhRowsEdit').insertAdjacentHTML('beforeend', chinhBlockHtmlEdit());
       const newCard = modal.querySelector('#cvChinhRowsEdit').lastElementChild;
@@ -1439,6 +1475,14 @@ window.ModuleQLSX = (function () {
     modal.querySelector('#editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      /* 🔴 v9.88: chặn TRƯỚC mọi việc khác (kể cả upload ảnh) — nói rõ lý do rồi đưa con trỏ về đúng ô. */
+      const loiHS = loiHeSoQuyDoi(fd.get('heSoQuyDoi'));
+      if (loiHS) {
+        toast(loiHS, 'error');
+        const oHS = modal.querySelector('#inpHeSoQuyDoiEdit');
+        if (oHS) { oHS.focus(); oHS.select(); }
+        return;
+      }
       try {
         /* v6.02: ảnh hình in = danh sách trên form nối bằng '\n' (ảnh đã tải lên lúc chọn). Gửi thẳng cả
            danh sách, kể cả rỗng -> xóa hết ảnh (SQL ghi đè trực tiếp cột AnhHinhIn). */
@@ -1482,24 +1526,38 @@ window.ModuleQLSX = (function () {
 
         // v5.13 (muc 1.1.1/1.1.2): bo gui "tongSoLuong" (backend tu tinh tu chiTietVai, xem PUT
         // /orders/:maDH trong qlsx.js) - them gui "heSoQuyDoi".
-        await apiPut(`/api/qlsx/orders/${maDH}`, {
+        const kqSua = await apiPut(`/api/qlsx/orders/${maDH}`, {
           tenSanPham: fd.get('tenSanPham'), size: fd.get('size'),
           tenSanPhamTem: fd.get('tenSanPhamTem'),   // v8.35: tên in lên nhãn/tem SP (tự do, được để trống)
           ...tachKhachHang(fd.get('khachHangText')),   // v6.43: -> { khachHangId, tenKhachHangTuDo }
           ngayDat: fd.get('ngayDat'), ngayGiao: fd.get('ngayGiao'),
-          heSoQuyDoi: fd.get('heSoQuyDoi') || 1,
-          // v5.21 (muc 1/2): dong "Danh mục đơn vị quy đổi" da chon (neu co) - de trong = khong quy doi.
-          donViQuyDoiId: modal.querySelector('#inpDonViQuyDoiEdit').value || null,
+          heSoQuyDoi: Number(fd.get('heSoQuyDoi')),   // v9.88: đã qua loiHeSoQuyDoi() ở trên — KHÔNG còn "|| 1" (chính nó giấu lỗi chưa khai)
+          /* v9.85: ô "Đơn vị quy đổi" đã bỏ khỏi form — CHÉP LẠI giá trị cũ của lệnh, KHÔNG gửi null,
+             nếu không mỗi lần sửa lệnh là xoá mất đơn vị quy đổi (bản in mất phần "× 5 = 1.200 Cái"). */
+          donViQuyDoiId: detail.DonViQuyDoiID || null,
           thietKeVien: fd.get('thietKeVien'), kyThuatRap: fd.get('kyThuatRap'),
+          nhanVienMayMauId: modal.querySelector('#inpNhanVienMayMauEdit').value || null,   // v9.67: '' = bỏ chỉ định
+          mayMauTenSP: modal.querySelector('#inpNhanVienMayMauEditSP').value || null,   // v9.76
+          congTacVienId: docCongTacVien(modal, 'Edit'),   // v9.70: null = không phải CTV
           dongHinhIn: fd.get('dongHinhIn'), anhHinhIn,   // v6.02: chuỗi nhiều ảnh nối '\n' ('' = bỏ hết ảnh)
           coInTheu: modal.querySelector('#chkCoInTheuEdit') ? modal.querySelector('#chkCoInTheuEdit').checked : false,   // v5.33
           ghiChuLenh: fd.get('ghiChuLenh'), mac: fd.get('mac') || null, phuLieu: readPhuKien(modal),   // v5.42
           anhSanPham: anhSanPham !== undefined ? anhSanPham : (detail.AnhSanPham || null),   // v5.42: giữ ảnh cũ nếu không chọn ảnh mới
           chiTietVai
         });
-        closeModal(); toast('Đã lưu.', 'success'); render(container, currentUser);
+        closeModal(); toast('Đã lưu.', 'success'); baoMayMau(kqSua); render(container, currentUser);
       } catch (err) { toast(err.message, 'error'); }
     });
+  }
+
+  /* v9.67: sau khi lưu lệnh có chỉ định may mẫu — máy chủ trả { ten, donGia, khop, kieuThuong }. Người may mẫu mà
+     hợp đồng không phải "Theo sản phẩm" hoặc hợp đồng không có SP "May mẫu" thì thưởng = 0: nói ngay, đừng im. */
+  function baoMayMau(kq) {
+    const mm = kq && kq.data && kq.data.mayMau;
+    if (!mm) return;
+    if (!String(mm.kieuThuong || '').includes('SanPham')) toast(`Nhân viên may mẫu: hợp đồng không phải kiểu "Theo sản phẩm" (đang: ${mm.kieuThuong || 'không có HĐ / Không'}) — bộ tính lương sẽ không cộng thưởng may mẫu.`, 'error');
+    else if (!mm.khop) toast(`Nhân viên may mẫu: hợp đồng chưa có sản phẩm "${mm.ten}" — thưởng may mẫu 0 đ cho tới khi thêm vào hợp đồng (Nhân sự → Hợp đồng).`, 'error');
+    else toast(`Thưởng may mẫu: ${mm.ten} — ${fmtNumber(mm.donGia)} đ/lệnh (tự vào lương tháng của ngày đặt lệnh).`, 'success');
   }
 
   async function doDeleteOrder(maDH) {
@@ -1619,10 +1677,9 @@ window.ModuleQLSX = (function () {
       const heSo = Number(heSoEl ? heSoEl.value : 1) || 1;
       const firstDonViEl = area.querySelector('#cvChinhRows .cv-donvi');
       const donVi = firstDonViEl ? firstDonViEl.value : 'Cái';
-      const dvqdEl = document.getElementById('inpDonViQuyDoi');
-      const dvqd = dvqdEl ? dm.donViQuyDoi.find(d => String(d.ID) === String(dvqdEl.value)) : null;
+      /* v9.85: lệnh MỚI không gắn đơn vị quy đổi nữa ⇒ fmtQuyDoi rút gọn về "<số> <đơn vị chính>". */
       const totalEl = document.getElementById('cvTongCongVal');
-      if (totalEl) totalEl.innerHTML = fmtQuyDoi(total, heSo, dvqd ? dvqd.PhepTinh : null, donVi, dvqd ? dvqd.DonViQuyDoi : null);
+      if (totalEl) totalEl.innerHTML = fmtQuyDoi(total, heSo, null, donVi, null);
     }
 
     // v5.2: them o tai anh RIENG cho tung mau chinh (moi vai chinh 1 anh, yeu cau v5.2 muc 3b) - anh mau
@@ -1746,19 +1803,19 @@ window.ModuleQLSX = (function () {
             <div class="form-row"><label>Deadline ra hàng *</label><input type="date" name="ngayGiao" required></div>
             <!-- v5.13 (muc 1.1.2): "He so quy doi" MOI, khai bao 1 lan o day - dung CHUNG cho cong doan
                  Cat sau nay thay vi nhap tay tung cay/tung lan Ghi tien do - xem renderStageFields('CAT'). -->
-            <div class="form-row"><label>Hệ số quy đổi</label><input id="inpHeSoQuyDoi" name="heSoQuyDoi" type="number" min="0" step="0.001" value="1"></div>
-            <!-- v5.21 (muc 1/2): chon 1 dong "Danh mục đơn vị quy đổi" (Danh mục QLSX) - auto-dien lai
-                 Hệ số quy đổi o tren (van sua tay duoc rieng) + quyet dinh Phép tính (Nhân/Chia) + nhãn
-                 don vi quy doi dung khi hien thi dong "Tổng cộng" (xem recalcCvTongCong()). -->
-            <div class="form-row"><label>Đơn vị quy đổi</label><select id="inpDonViQuyDoi">
-              <option value="">-- Không quy đổi --</option>
-              ${dm.donViQuyDoi.map(d => `<option value="${d.ID}">${escapeHtml(d.DonViChinh)} → ${escapeHtml(d.DonViQuyDoi)} (${d.PhepTinh === 'Chia' ? '÷' : '×'}${d.HeSo})</option>`).join('')}
-            </select></div>
+            ${/* 🔴 v9.85 — xem khối ghi chú ở form Sửa lệnh. Ô này là SỐ CÁI TRONG 1 RI; ô "Đơn vị quy đổi"
+                 đã bỏ khỏi form (bảng danh mục và cột trong CSDL vẫn giữ nguyên cho lệnh cũ). */''}
+            ${/* 🔴 v9.88: BẮT BUỘC nhập và phải KHÁC 1 (xem loiHeSoQuyDoi ở đầu file). Bỏ value="1" —
+                 giá trị mặc định cũ chính là thứ làm ai cũng bấm Lưu mà không khai. */''}
+            <div class="form-row"><label>Hệ số quy đổi (số cái trong 1 ri) <span style="color:#c62828;">*</span></label><input id="inpHeSoQuyDoi" name="heSoQuyDoi" type="number" min="0" step="0.001" value="" placeholder="Bắt buộc — VD: 5" required>
+              <span style="color:#5f6368;font-size:12px;">Dùng quy đổi Ri → Cái ở Đóng gói / Kho nhập. VD dải 3-7 có 5 size → 5. <b style="color:#c62828;">Bắt buộc nhập và phải khác 1</b> — để 1 nghĩa là 1 ri = 1 cái, ô Ri sẽ bị khoá.</span></div>
             <div class="form-row"><label>Ảnh sản phẩm</label><input type="file" name="anhFile" accept="image/*"></div>
-            <div class="form-row"><label>Thiết kế</label>
-              <div style="display:flex;gap:4px;"><input name="thietKeVien" id="inpThietKe" placeholder="Chọn NV hoặc gõ tên" style="flex:1;"><select id="selThietKe" title="Chọn từ danh sách nhân viên" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienKyThuat(), 'HoTen', 'HoTen')}</select></div></div>
+            ${oThietKeHtml('', null)}
             <div class="form-row"><label>Kỹ thuật rập</label>
-              <div style="display:flex;gap:4px;"><input name="kyThuatRap" id="inpKyThuatRap" placeholder="Chọn NV hoặc gõ tên" style="flex:1;"><select id="selKyThuatRap" title="Chọn từ danh sách nhân viên" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienKyThuat(), 'HoTen', 'HoTen')}</select></div></div>
+              <div style="display:flex;gap:4px;"><input name="kyThuatRap" id="inpKyThuatRap" placeholder="Chọn NV hoặc gõ tên" style="flex:1;"><select id="selKyThuatRap" title="Chọn từ danh sách nhân viên bộ phận Kỹ thuật" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienBoPhan('ky thuat'), 'HoTen', 'HoTen')}</select></div></div>
+            ${/* v9.67: nhân viên may mẫu — chọn trong danh sách NV (FK), 1 lệnh = 1 sản phẩm "May mẫu" vào thưởng theo SP. */''}
+            <div class="form-row"><label>Nhân viên may mẫu <span style="font-weight:normal;color:#5f6368;">(thưởng theo SP tự động)</span></label>
+              ${oNhanVienMayMauHtml('inpNhanVienMayMau', null)}</div>
           </div>
           <div class="form-row"><label>Có in thêu</label><label style="font-weight:normal;"><input type="checkbox" id="chkCoInTheu"> Đơn hàng này có công đoạn in/thêu (bỏ trống = bỏ qua 2 công đoạn Giao/Nhận in thêu)</label></div>
           <div class="form-row"><label>Dòng hình in</label><input name="dongHinhIn" placeholder="VD: In ngực trái logo ABC, in lưng sau chữ XYZ..."></div>
@@ -1792,17 +1849,13 @@ window.ModuleQLSX = (function () {
     const wireNvPick = (selId, inpId) => { const s = document.getElementById(selId); if (s) s.addEventListener('change', () => { if (s.value) { document.getElementById(inpId).value = s.value; s.value = ''; } }); };
     wireNvPick('selThietKe', 'inpThietKe');
     wireNvPick('selKyThuatRap', 'inpKyThuatRap');
+    wireThietKeCTV(area, '');   // v9.70
+    wireMayMauSP(area, 'inpNhanVienMayMau', area.querySelector('input[name="ngayDat"]'));   // v9.76
     // v6.02: hộp NHIỀU ảnh hình in ở form RA LỆNH (ảnh tải lên ngay khi chọn, xóa từng ảnh bằng nút ×).
     const wAnhHinhInMoi = wireAnhHinhInBox('ahiMoi', []);
     // v5.27.1: xem truoc Ma DH tu sinh NGAY (chua luu). Chi hien thi - ma that sinh lai luc Luu.
     apiGet('/api/qlsx/next-madh').then(r => { const el = document.getElementById('inpMaDHPreview'); if (el && r.data && r.data.maDH) el.value = r.data.maDH + ' (tự sinh khi lưu)'; }).catch(() => { const el = document.getElementById('inpMaDHPreview'); if (el) el.value = '(tự động sinh khi lưu)'; });
-    // v5.21 (muc 1/2): chon 1 dong danh muc -> auto-dien lai He so quy doi (van sua tay duoc them sau
-    // do neu can lech voi danh muc) roi tinh lai Tong cong ngay.
-    document.getElementById('inpDonViQuyDoi').addEventListener('change', (e) => {
-      const dvqd = dm.donViQuyDoi.find(d => String(d.ID) === e.target.value);
-      if (dvqd) document.getElementById('inpHeSoQuyDoi').value = dvqd.HeSo;
-      recalcCvTongCong();
-    });
+    /* v9.85: ô "Đơn vị quy đổi" đã bỏ khỏi form ⇒ không còn listener tự điền hệ số. Hệ số gõ tay. */
     document.getElementById('btnAddChinh').addEventListener('click', () => {
       document.getElementById('cvChinhRows').insertAdjacentHTML('beforeend', chinhBlockHtml());
       const newCard = document.getElementById('cvChinhRows').lastElementChild;
@@ -1815,6 +1868,14 @@ window.ModuleQLSX = (function () {
     document.getElementById('lenhForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      /* 🔴 v9.88: chặn TRƯỚC mọi việc khác (kể cả upload ảnh) — nói rõ lý do rồi đưa con trỏ về đúng ô. */
+      const loiHS = loiHeSoQuyDoi(fd.get('heSoQuyDoi'));
+      if (loiHS) {
+        toast(loiHS, 'error');
+        const oHS = document.getElementById('inpHeSoQuyDoi');
+        if (oHS) { oHS.focus(); oHS.select(); }
+        return;
+      }
       try {
         let anhSanPham = '';
         const file = fd.get('anhFile');
@@ -1860,10 +1921,12 @@ window.ModuleQLSX = (function () {
           tenSanPhamTem: fd.get('tenSanPhamTem'),   // v8.35: tên in lên nhãn/tem SP (tự do, được để trống)
           ...tachKhachHang(fd.get('khachHangText')),   // v6.43: -> { khachHangId, tenKhachHangTuDo }
           ngayDat: fd.get('ngayDat'), ngayGiao: fd.get('ngayGiao'),
-          anhSanPham, heSoQuyDoi: fd.get('heSoQuyDoi') || 1,
-          // v5.21 (muc 1/2): dong "Danh mục đơn vị quy đổi" da chon (neu co) - de trong = khong quy doi.
-          donViQuyDoiId: document.getElementById('inpDonViQuyDoi').value || null,
+          anhSanPham, heSoQuyDoi: Number(fd.get('heSoQuyDoi')),   // v9.88: đã qua loiHeSoQuyDoi() ở trên — KHÔNG còn "|| 1"
+          donViQuyDoiId: null,   // v9.85: ô đã bỏ khỏi form Ra lệnh; lệnh mới không gắn đơn vị quy đổi
           thietKeVien: fd.get('thietKeVien'), kyThuatRap: fd.get('kyThuatRap'),
+          nhanVienMayMauId: document.getElementById('inpNhanVienMayMau').value || null,   // v9.67
+          mayMauTenSP: document.getElementById('inpNhanVienMayMauSP').value || null,   // v9.76
+          congTacVienId: docCongTacVien(area, ''),   // v9.70
           dongHinhIn: fd.get('dongHinhIn'), anhHinhIn, ghiChuLenh: fd.get('ghiChuLenh'),
           coInTheu: document.getElementById('chkCoInTheu') ? document.getElementById('chkCoInTheu').checked : false,   // v5.33
           mac: fd.get('mac') || null, phuLieu: readPhuKien(area),   // v5.42
@@ -1871,6 +1934,7 @@ window.ModuleQLSX = (function () {
         });
 
         toast('Đã tạo lệnh sản xuất ' + res.data.maDH + '.', 'success');
+        baoMayMau(res);   // v9.67
         // v5.8: an form vua nop (khong chi hien ket qua BEN CANH no) - fix "refresh về trang trắng,
         // hiện tại đang lưu lại cấu trúc vải từ phiên trước" (yeu cau v5.8): truoc day #lenhForm van
         // hien nguyen voi du lieu VUA nop ngay canh khung "Đã tạo lệnh", de nguoi dung de hieu nham la
@@ -1928,10 +1992,271 @@ window.ModuleQLSX = (function () {
      So khớp bỏ dấu + chữ thường nên "Kỹ thuật", "Ky thuat", "Phòng Kỹ Thuật"... đều nhận.
      AN TOÀN: nếu công ty CHƯA khai bộ phận nào tên kỹ thuật thì trả về TOÀN BỘ danh sách như cũ —
      tránh trường hợp danh sách rỗng làm không nhập nổi lệnh sản xuất. */
-  function nhanVienKyThuat() {
-    // v7.92: dùng boDau() của common.js — bản công thức bỏ dấu DUY NHẤT (trước đây chép riêng ở đây).
-    const ds = (dm.nhanVien || []).filter(nv => boDau(nv.TenBoPhan).includes('ky thuat'));
+  /* v9.70 (Nguyen 16/11): Thiết kế chọn NV bộ phận THIẾT KẾ, Kỹ thuật rập chọn NV bộ phận KỸ THUẬT — trước đây cả hai
+     ô cùng lọc "ky thuat". Lọc theo TÊN bộ phận không dấu (boDau của common.js); bộ phận không có ai ⇒ lùi về toàn bộ
+     (không để ô chọn trống câm). Tên bộ phận là DỮ LIỆU (Danh mục → Bộ phận): "Thiết kế", "Kỹ thuật". */
+  function nhanVienBoPhan(tuKhoa) {
+    const ds = (dm.nhanVien || []).filter(nv => boDau(nv.TenBoPhan).includes(tuKhoa));
     return ds.length ? ds : (dm.nhanVien || []);
+  }
+  function nhanVienKyThuat() { return nhanVienBoPhan('ky thuat'); }
+  /* v9.70 — Ô "Thiết kế" + dấu tích "Cộng tác viên": tích ⇒ chọn trong danh mục CTV (dm.congTacVien, đang hợp tác);
+     không tích ⇒ NV bộ phận Thiết kế (hoặc gõ tay như cũ). CTV được chọn thì ô tên (thietKeVien) tự = tên CTV để
+     bản in / danh sách lệnh vẫn hiện tên. sfx = '' (form Ra lệnh) | 'Edit' (form Sửa). */
+  function oThietKeHtml(sfx, detail) {
+    const ctvId = detail && detail.CongTacVienID ? String(detail.CongTacVienID) : '';
+    const dsCTV = dm.congTacVien || [];
+    const coTrongDS = dsCTV.some(c => String(c.CongTacVienID) === ctvId);
+    return `<div class="form-row"><label for="inpThietKe${sfx}">Thiết kế
+        <span style="font-weight:normal;margin-left:10px;"><input type="checkbox" id="chkCTV${sfx}" ${ctvId ? 'checked' : ''}> <label for="chkCTV${sfx}" style="display:inline;font-weight:normal;">Cộng tác viên</label></span></label>
+      <div id="tkNV${sfx}" style="display:${ctvId ? 'none' : 'flex'};gap:4px;"><input name="thietKeVien" id="inpThietKe${sfx}" value="${escapeHtml((detail && detail.ThietKeVien) || '')}" placeholder="Chọn NV bộ phận Thiết kế hoặc gõ tên" style="flex:1;"><select id="selThietKe${sfx}" title="Chọn từ danh sách nhân viên bộ phận Thiết kế" style="max-width:130px;"><option value="">↧ NV</option>${opt(nhanVienBoPhan('thiet ke'), 'HoTen', 'HoTen')}</select></div>
+      <div id="tkCTV${sfx}" style="display:${ctvId ? 'block' : 'none'};"><select id="selCTV${sfx}" style="width:100%;"><option value="">-- Chọn cộng tác viên (Danh mục → Cộng tác viên thiết kế) --</option>
+        ${dsCTV.map(c => `<option value="${c.CongTacVienID}" ${String(c.CongTacVienID) === ctvId ? 'selected' : ''}>${escapeHtml(c.TenCTV)}${c.DonGiaThietKe ? ' — ' + fmtNumber(c.DonGiaThietKe) + ' đ/lệnh' : ''}</option>`).join('')}
+        ${ctvId && !coTrongDS ? `<option value="${ctvId}" selected>${escapeHtml((detail && detail.TenCongTacVien) || ('CTV #' + ctvId))} (đã ngừng hợp tác)</option>` : ''}</select></div></div>`;
+  }
+  function wireThietKeCTV(root, sfx) {
+    const chk = root.querySelector('#chkCTV' + sfx), khungNV = root.querySelector('#tkNV' + sfx), khungCTV = root.querySelector('#tkCTV' + sfx), sel = root.querySelector('#selCTV' + sfx), inp = root.querySelector('#inpThietKe' + sfx);
+    if (!chk || !khungNV || !khungCTV || !sel || !inp) return;
+    const ap = () => { khungNV.style.display = chk.checked ? 'none' : 'flex'; khungCTV.style.display = chk.checked ? 'block' : 'none'; };
+    chk.addEventListener('change', () => { ap(); if (!chk.checked) sel.value = ''; });
+    sel.addEventListener('change', () => { const o = sel.options[sel.selectedIndex]; if (sel.value && o) inp.value = o.textContent.split(' — ')[0].replace(/ \(đã ngừng hợp tác\)$/, '').trim(); });
+    ap();
+  }
+  /* Giá trị congTacVienId gửi lên: tích + có chọn ⇒ id; còn lại null (= không phải CTV, máy chủ ghi NULL). */
+  function docCongTacVien(root, sfx) {
+    const chk = root.querySelector('#chkCTV' + sfx), sel = root.querySelector('#selCTV' + sfx);
+    return chk && chk.checked && sel && sel.value ? sel.value : null;
+  }
+  /* v9.67: ô chọn "Nhân viên may mẫu" — TOÀN BỘ nhân viên đang làm (dm.nhanVien), giá trị = NhanVienID (FK),
+     có mã + bộ phận để không nhầm người trùng tên. Người đã nghỉ mà lệnh cũ còn gắn: thêm option riêng để không mất. */
+  function oNhanVienMayMauHtml(id, chonId, tenSPChon) {
+    const ds = dm.nhanVien || [];
+    const co = ds.some(nv => String(nv.NhanVienID) === String(chonId || ''));
+    /* v9.76: + ô chọn SẢN PHẨM theo danh mục hợp đồng của người may mẫu (vd "May mẫu áo" / "May mẫu quần" đơn giá khác).
+       Nạp qua wireMayMauSP() sau khi vẽ; giá trị = TenSanPham (khóa khớp đơn giá). Trống = luật cũ (dòng có chữ "mẫu"). */
+    return `<select id="${id}" style="width:100%;">
+      <option value="">-- Không chỉ định --</option>
+      ${ds.map(nv => `<option value="${nv.NhanVienID}" ${String(nv.NhanVienID) === String(chonId || '') ? 'selected' : ''}>${escapeHtml(nv.HoTen)}${nv.MaNhanVien ? ' (' + escapeHtml(nv.MaNhanVien) + ')' : ''}${nv.TenBoPhan ? ' — ' + escapeHtml(nv.TenBoPhan) : ''}</option>`).join('')}
+      ${chonId && !co ? `<option value="${chonId}" selected>NV #${chonId} (không còn trong danh sách đang làm)</option>` : ''}
+    </select>
+    <select id="${id}SP" data-chon="${escapeHtml(tenSPChon || '')}" style="width:100%;margin-top:4px;" title="Sản phẩm may mẫu theo danh mục hợp đồng của người này — quyết định đơn giá thưởng"><option value="">-- Sản phẩm may mẫu: theo hợp đồng (tự chọn dòng có chữ "mẫu") --</option></select>`;
+  }
+  /* v9.76: nạp danh mục SP của hợp đồng người may mẫu vào ô #<id>SP mỗi khi đổi người; giữ lựa chọn cũ nếu còn trong danh mục. */
+  function wireMayMauSP(root, id, oNgay) {
+    const selNV = root.querySelector('#' + id), selSP = root.querySelector('#' + id + 'SP');
+    if (!selNV || !selSP) return;
+    const nap = async () => {
+      const nv = selNV.value, cu = selSP.value || selSP.dataset.chon || '';
+      selSP.innerHTML = '<option value="">-- Sản phẩm may mẫu: theo hợp đồng (tự chọn dòng có chữ "mẫu") --</option>';
+      if (!nv) return;
+      try {
+        const hd = (await apiGet(`/api/qlsx/maymau/sanpham?nhanVienId=${nv}&ngay=${(oNgay && oNgay.value) || ''}`)).data;
+        if (!hd.hopDongId) { selSP.innerHTML += '<option value="" disabled>(người này chưa có hợp đồng hiệu lực)</option>'; return; }
+        if (!hd.theoSanPham) selSP.innerHTML += '<option value="" disabled>(hợp đồng không có kiểu thưởng Theo sản phẩm — sẽ không tính tiền)</option>';
+        hd.sanPham.forEach(sp => selSP.innerHTML += `<option value="${escapeHtml(sp.TenSanPham)}" ${sp.TenSanPham === cu ? 'selected' : ''}>${escapeHtml(sp.TenSanPham)} — ${fmtNumber(sp.DonGia)} đ</option>`);
+        if (cu && selSP.value !== cu) selSP.innerHTML += `<option value="${escapeHtml(cu)}" selected>${escapeHtml(cu)} (không còn trong danh mục hợp đồng — 0 đ)</option>`;
+      } catch (e) { toast('Không nạp được danh mục sản phẩm may mẫu: ' + e.message, 'error'); }
+    };
+    selNV.addEventListener('change', nap);
+    if (oNgay) oNgay.addEventListener('change', nap);
+    nap();
+  }
+
+  /* ================================================================================================
+     v9.67 — TAB "SẢN LƯỢNG THEO LỆNH" (ảnh, video, may mẫu... ⇒ thưởng theo sản phẩm TỰ ĐỘNG)
+     Nguyen 16/11: "cập nhật ảnh, video gán theo lệnh sản xuất — số lượng ảnh, video theo danh mục trong
+     ký hợp đồng KPI theo sản phẩm (SL × đơn giá), phần tính lương cập nhật từ đây, không cập nhật tay."
+     Một dòng = lệnh + người + sản phẩm (CHỈ tên trong danh mục hợp đồng hiệu lực của người đó — tên khớp
+     mới có đơn giá) + SL + ngày (quyết định tháng lương). Dòng Nguon='MayMau' tự sinh từ ô "Nhân viên
+     may mẫu" của lệnh — hiện để đối chiếu, không sửa/xóa ở đây. Ghi xong, bảng lương tháng đó tự tính
+     lại (v9.53) — tab Tính lương › Đánh giá KPI / sản phẩm chỉ còn xem phần này.
+     ================================================================================================ */
+  async function renderSanLuongTheoLenh(perm) {
+    const body = document.getElementById('qBody');
+    const h = new Date();
+    const st = renderSanLuongTheoLenh.st || (renderSanLuongTheoLenh.st = { nam: h.getFullYear(), thang: h.getMonth() + 1 });
+    const nvAll = dm.nhanVien || [];
+    body.innerHTML = `<div class="card">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label>Tháng <select id="slThang">${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}" ${st.thang === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>
+        <label>Năm <input type="number" id="slNam" value="${st.nam}" style="width:80px;"></label>
+        ${perm.canCreate ? '<button type="button" class="btn" id="slThem">＋ Ghi sản lượng</button>' : ''}
+        <span style="color:#5f6368;font-size:12px;">Đơn giá tra từ <b>danh mục sản phẩm của hợp đồng</b> (Nhân sự → Hợp đồng, kiểu thưởng "Theo sản phẩm"). Tên không khớp = 0 đ.</span>
+      </div>
+      <div id="slBang" style="margin-top:10px;"><div class="empty-hint">Đang tải...</div></div>
+    </div>`;
+    const taiLai = async () => {
+      st.thang = parseInt(body.querySelector('#slThang').value, 10); st.nam = parseInt(body.querySelector('#slNam').value, 10) || h.getFullYear();
+      const khung = body.querySelector('#slBang');
+      let d;
+      try { d = (await apiGet(`/api/qlsx/sanluong?nam=${st.nam}&thang=${st.thang}`)).data; }
+      catch (e) { khung.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; return; }
+      const rows = d.rows || [];
+      const tongNV = (d.tongTheoNV || []).map(x => ({ ...x, HoTen: (nvAll.find(n => String(n.NhanVienID) === String(x.NhanVienID)) || {}).HoTen || ('NV #' + x.NhanVienID) }));
+      khung.innerHTML = `
+        ${tongNV.length ? `<div style="margin-bottom:8px;font-size:13px;"><b>Tổng tháng ${st.thang}/${st.nam}:</b> ${tongNV.map(x => `${escapeHtml(x.HoTen)}: <b>${fmtNumber(x.Tien)}</b> đ`).join(' · ')}</div>` : ''}
+        <div style="overflow:auto;"><table style="font-size:13px;min-width:900px;"><thead><tr>
+          <th style="width:36px;">STT</th><th>Ngày</th><th style="width:48px;">Ảnh</th><th>Lệnh SX</th><th>Mã rập</th><th>Nhân viên</th><th>Sản phẩm</th><th style="text-align:right;">SL</th><th style="text-align:right;">Đơn giá HĐ</th><th style="text-align:right;">Thành tiền</th><th>Nguồn</th><th>Ghi chú</th><th style="width:110px;"></th>
+        </tr></thead><tbody>
+        ${rows.map((r, i) => `<tr data-id="${r.ID}">
+          <td style="text-align:center;">${i + 1}</td><td>${fmtDate(r.Ngay)}</td>
+          <td>${anhSanLuongHtml(r.Anh)}</td>
+          <td>${oLenhSanLuongHtml(r)}</td>
+          <td>${escapeHtml(r.MaRap || '')}</td>
+          <td>${escapeHtml(r.HoTen)}${r.MaNhanVien ? ` <span style="color:#5f6368;">(${escapeHtml(r.MaNhanVien)})</span>` : ''}</td>
+          <td>${escapeHtml(r.TenSanPham)}${r.khop ? '' : ' <span style="color:#c0392b;" title="Không có trong danh mục sản phẩm của hợp đồng hiệu lực — 0 đ">(không khớp HĐ)</span>'}</td>
+          <td style="text-align:right;">${fmtNumber(r.SoLuong)}</td><td style="text-align:right;">${fmtNumber(r.DonGia)}</td><td style="text-align:right;"><b>${fmtNumber(r.ThanhTien)}</b></td>
+          <td>${r.Nguon === 'MayMau' ? '<span title="Tự sinh từ ô Nhân viên may mẫu của lệnh — sửa ở Danh sách lệnh SX → Sửa">🧵 May mẫu (tự động)</span>' : 'Ghi tay'}</td>
+          <td>${escapeHtml(r.GhiChu || '')}</td>
+          <td>${r.Nguon === 'MayMau' ? '' : `${perm.canEdit ? `<button type="button" class="btn small secondary sl-sua">Sửa</button>` : ''} ${perm.canDelete ? `<button type="button" class="btn small danger sl-xoa">Xóa</button>` : ''}`}</td>
+        </tr>`).join('') || `<tr><td colspan="13" class="empty-hint">Chưa có dòng sản lượng nào trong tháng ${st.thang}/${st.nam}.</td></tr>`}
+        </tbody></table></div>`;
+      themOTimTuDong(khung);
+      khung.querySelectorAll('.sl-sua').forEach(b => b.addEventListener('click', () => {
+        const r = rows.find(x => String(x.ID) === b.closest('tr').dataset.id);
+        if (r) moFormSanLuong(r, taiLai);
+      }));
+      khung.querySelectorAll('.sl-xoa').forEach(b => b.addEventListener('click', async () => {
+        const r = rows.find(x => String(x.ID) === b.closest('tr').dataset.id);
+        if (!r || !confirm(`Xóa dòng ${r.TenSanPham} × ${fmtNumber(r.SoLuong)} của ${r.HoTen} (${r.MaDH ? 'lệnh ' + r.MaDH : 'làm lại mã cũ ' + (r.MaHangCu || '')})? Lương tháng ${st.thang}/${st.nam} sẽ tính lại.`)) return;
+        try { await apiDelete(`/api/qlsx/sanluong/${r.ID}`); toast('Đã xóa.', 'success'); taiLai(); } catch (e) { toast(e.message, 'error'); }
+      }));
+    };
+    body.querySelector('#slThang').addEventListener('change', taiLai);
+    body.querySelector('#slNam').addEventListener('change', taiLai);
+    const bThem = body.querySelector('#slThem');
+    if (bThem) bThem.addEventListener('click', () => moFormSanLuong(null, taiLai));
+    taiLai();
+  }
+
+  /* v9.81: ô "Lệnh SX" của một dòng sản lượng — dòng LÀM LẠI MÃ CŨ không có lệnh nào, hiện mã hàng gõ tay.
+     Nói rõ "Làm lại mã cũ" chứ không để trống: nhìn bảng phải biết ngay vì sao dòng này không có lệnh. */
+  function oLenhSanLuongHtml(r) {
+    if (!r.MaDH) {
+      return `<span style="color:#b26a00;">♻️ Làm lại mã cũ</span><div style="font-size:12px;"><b>${escapeHtml(r.MaHangCu || '(chưa ghi mã hàng)')}</b></div>`;
+    }
+    return `<b>${escapeHtml(r.MaDH)}</b><div style="color:#5f6368;font-size:12px;">${escapeHtml(r.TenSPLenh || '')}${r.MaSanPham ? ' · ' + escapeHtml(r.MaSanPham) : ''}</div>`;
+  }
+
+  /* Form ghi / sửa MỘT dòng sản lượng. Lệnh: gõ mã/tên → danh sách 60 lệnh gần nhất. Sản phẩm: lấy theo hợp
+     đồng hiệu lực của người được chọn tại ngày ghi (đổi người/ngày là nạp lại). */
+  function moFormSanLuong(r, sauKhiLuu) {
+    const nvAll = dm.nhanVien || [];
+    const m = openModal(`<h3>${r ? 'Sửa' : 'Ghi'} sản lượng theo lệnh</h3>
+      <div class="form-row"><label>Ngày (quyết định tháng lương)</label><input type="date" id="slfNgay" value="${r ? String(r.Ngay).slice(0, 10) : homNayISO()}"></div>
+      ${/* v9.81 (Nguyen 19/11: "trường lệnh SX thêm dấu tích làm lại mã cũ nhập mã hàng"): tích ⇒ bỏ hẳn ô chọn
+           lệnh, gõ tay mã hàng cũ. Dòng ghi KHÔNG gắn lệnh nào (cần migration_v905). Mọi thứ khác giữ nguyên:
+           vẫn chọn nhân viên + sản phẩm theo danh mục hợp đồng, vẫn vào thưởng theo sản phẩm. */''}
+      <div class="form-row"><label>Lệnh sản xuất</label>
+        <label style="font-weight:400;display:block;margin-bottom:4px;"><input type="checkbox" id="slfLamLai" ${r && !r.MaDH ? 'checked' : ''}> ♻️ Làm lại mã cũ (không có lệnh sản xuất — nhập mã hàng)</label>
+        <div id="slfOLenh">
+          <input type="text" id="slfLenhTim" list="slfLenhDS" placeholder="Gõ mã lệnh hoặc tên sản phẩm rồi chọn" value="${r && r.MaDH ? escapeHtml(r.MaDH) : ''}" autocomplete="off">
+          <datalist id="slfLenhDS"></datalist>
+          <div id="slfLenhChon" style="font-size:12px;color:#5f6368;margin-top:2px;">${r && r.MaDH ? escapeHtml(r.MaDH + ' — ' + (r.TenSPLenh || '')) : 'Chưa chọn lệnh'}</div>
+        </div>
+        <div id="slfOMaCu" style="display:none;">
+          <input type="text" id="slfMaCu" placeholder="Mã hàng cũ (vd MH-2305-01)" maxlength="100" value="${r && r.MaHangCu ? escapeHtml(r.MaHangCu) : ''}" autocomplete="off">
+          <div style="font-size:12px;color:#5f6368;margin-top:2px;">Gõ đúng mã hàng để sau còn tra lại — dòng này không gắn lệnh sản xuất nào.</div>
+        </div></div>
+      <div class="form-row"><label>Nhân viên</label><select id="slfNV" style="width:100%;"><option value="">-- Chọn --</option>
+        ${nvAll.map(nv => `<option value="${nv.NhanVienID}" ${r && String(r.NhanVienID) === String(nv.NhanVienID) ? 'selected' : ''}>${escapeHtml(nv.HoTen)}${nv.MaNhanVien ? ' (' + escapeHtml(nv.MaNhanVien) + ')' : ''}${nv.TenBoPhan ? ' — ' + escapeHtml(nv.TenBoPhan) : ''}</option>`).join('')}</select></div>
+      ${/* v9.67c: NHIỀU dòng sản phẩm cho một lệnh (Nguyen 16/11) — mỗi dòng = SP chọn từ list hợp đồng + SL + ghi chú. Sửa (r) = 1 dòng. */''}
+      <div class="form-row"><label>Sản phẩm (theo danh mục hợp đồng của nhân viên) — số lượng — ghi chú</label>
+        <table style="font-size:13px;"><tbody id="slfDong">${dongSanLuongHtml(r)}</tbody></table>
+        ${r ? '' : '<button type="button" class="btn small secondary" id="slfThemDong" style="margin-top:4px;">＋ Thêm dòng sản phẩm</button>'}
+        <div id="slfSPGhiChu" style="font-size:12px;color:#5f6368;margin-top:2px;"></div></div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="slfHuy">Hủy</button><button type="button" class="btn" id="slfLuu">💾 Lưu</button></div>`);
+    let lenhChon = r && r.MaDH ? { DonHangID: r.DonHangID, MaDH: r.MaDH, TenSanPham: r.TenSPLenh } : null;
+    let dsLenh = [];
+    const oTim = m.querySelector('#slfLenhTim'), dl = m.querySelector('#slfLenhDS'), oChon = m.querySelector('#slfLenhChon');
+    /* v9.81: tích/bỏ tích ⇒ đổi hẳn ô nhập. Dùng hidden của khối bao, KHÔNG xoá khỏi DOM — bỏ tích là số cũ còn đó. */
+    const oLamLai = m.querySelector('#slfLamLai'), oKhoiLenh = m.querySelector('#slfOLenh'), oKhoiMaCu = m.querySelector('#slfOMaCu'), oMaCu = m.querySelector('#slfMaCu');
+    const doiKieuLenh = () => {
+      const lam = oLamLai.checked;
+      oKhoiLenh.style.display = lam ? 'none' : '';
+      oKhoiMaCu.style.display = lam ? '' : 'none';
+      if (lam) oMaCu.focus();
+    };
+    oLamLai.addEventListener('change', doiKieuLenh);
+    doiKieuLenh();
+    let timer = null;
+    const timLenh = async () => {
+      if (oLamLai.checked) return;   // đang làm lại mã cũ thì không cần tìm lệnh
+      const q = oTim.value.trim();
+      /* v9.70: máy chủ loại lệnh người này đã ghi (chưa chọn người ⇒ loại lệnh bất kỳ ai đã ghi); đang sửa thì giữ lệnh đó. */
+      const nvDangChon = (m.querySelector('#slfNV') || {}).value || '';
+      try { dsLenh = (await apiGet(`/api/qlsx/sanluong/lenh?q=${encodeURIComponent(q)}&nhanVienId=${encodeURIComponent(nvDangChon)}&giu=${encodeURIComponent(r ? r.MaDH : '')}`)).data || []; } catch (e) { dsLenh = []; }
+      /* v9.78 (Nguyen 19/11: "sổ list danh sách lệnh thêm cả mã rập") — mã rập đứng ĐẦU phần mô tả để nhìn thấy ngay. */
+      dl.innerHTML = dsLenh.map(l => `<option value="${escapeHtml(l.MaDH)}">${l.MaRap ? 'Rập ' + escapeHtml(l.MaRap) + ' · ' : ''}${escapeHtml(l.TenSanPham || '')} · ${fmtDate(l.NgayDat)}</option>`).join('');
+      const hit = dsLenh.find(l => l.MaDH === q);
+      if (hit) { lenhChon = hit; oChon.textContent = `${hit.MaDH} — ${hit.TenSanPham || ''}${hit.MaRap ? ' — rập ' + hit.MaRap : ''} (${fmtDate(hit.NgayDat)})`; }
+      else if (q !== (lenhChon && lenhChon.MaDH)) { lenhChon = null; oChon.textContent = 'Chưa chọn lệnh'; }
+    };
+    oTim.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(timLenh, 250); });
+    oTim.addEventListener('change', timLenh);
+    timLenh();
+    const oNV = m.querySelector('#slfNV'), oSPgc = m.querySelector('#slfSPGhiChu'), oNgay = m.querySelector('#slfNgay'), oDong = m.querySelector('#slfDong');
+    let dsSP = [];
+    const napSP = async () => {
+      const nv = oNV.value;
+      if (!nv) { dsSP = []; oDong.querySelectorAll('.slf-sp').forEach(s => { s.innerHTML = '<option value="">-- Chọn nhân viên trước --</option>'; }); oSPgc.textContent = ''; return; }
+      let hd;
+      try { hd = (await apiGet(`/api/qlsx/sanluong/hopdong?nhanVienId=${nv}&ngay=${oNgay.value || ''}`)).data; } catch (e) { toast(e.message, 'error'); return; }
+      dsSP = hd.sanPham || [];
+      oDong.querySelectorAll('.slf-sp').forEach(s => { s.innerHTML = optSanLuongSP(dsSP, s.value || (r ? r.TenSanPham : '')); });
+      if (!hd.hopDongId) oSPgc.innerHTML = '<span style="color:#c0392b;">Nhân viên chưa có hợp đồng hiệu lực tại ngày này — ghi được nhưng 0 đ.</span>';
+      else if (!String(hd.kieuThuong || '').includes('SanPham')) oSPgc.innerHTML = `<span style="color:#c0392b;">Hợp đồng kiểu thưởng "${escapeHtml(hd.kieuThuong || 'Không')}", không phải "Theo sản phẩm" — bộ tính lương sẽ không cộng.</span>`;
+      else if (!dsSP.length) oSPgc.innerHTML = '<span style="color:#c0392b;">Hợp đồng chưa khai danh mục sản phẩm — thêm ở Nhân sự → Hợp đồng (vd "Ảnh", "Video", "May mẫu").</span>';
+      else oSPgc.textContent = `${dsSP.length} sản phẩm theo hợp đồng — mỗi sản phẩm một dòng.`;
+    };
+    const noiDong = (tr) => { const x = tr.querySelector('.slf-xoa'); if (x) x.addEventListener('click', () => { if (oDong.children.length > 1) tr.remove(); }); };
+    oDong.querySelectorAll('tr').forEach(noiDong);
+    const bThem = m.querySelector('#slfThemDong');
+    if (bThem) bThem.addEventListener('click', () => {
+      oDong.insertAdjacentHTML('beforeend', dongSanLuongHtml(null));
+      const tr = oDong.lastElementChild; tr.querySelector('.slf-sp').innerHTML = optSanLuongSP(dsSP, ''); noiDong(tr); tr.querySelector('.slf-sp').focus();
+    });
+    oNV.addEventListener('change', () => { napSP(); timLenh(); });   // v9.70: đổi người ⇒ danh sách lệnh chưa ghi của người đó
+    oNgay.addEventListener('change', napSP);
+    if (oNV.value) napSP();
+    m.querySelector('#slfHuy').addEventListener('click', closeModal);
+    m.querySelector('#slfLuu').addEventListener('click', async () => {
+      const lamLai = oLamLai.checked;   // v9.81
+      if (!lamLai && !lenhChon) { toast('Chưa chọn lệnh sản xuất (gõ mã rồi chọn trong danh sách), hoặc tích "Làm lại mã cũ".', 'error'); return; }
+      if (lamLai && !oMaCu.value.trim()) { toast('Đã tích "Làm lại mã cũ" thì phải nhập mã hàng.', 'error'); return; }
+      const rows = docDongSanLuongForm(oDong);
+      if (!rows.length) { toast('Chưa có dòng sản phẩm nào có số lượng.', 'error'); return; }
+      const payload = { donHangId: lamLai ? null : lenhChon.DonHangID, lamLaiMaCu: lamLai, maHangCu: lamLai ? oMaCu.value.trim() : null,
+        nhanVienId: oNV.value, ngay: oNgay.value, rows, tenSanPham: rows[0].tenSanPham, soLuong: rows[0].soLuong, ghiChu: rows[0].ghiChu };
+      try {
+        const kq = r ? await apiPut(`/api/qlsx/sanluong/${r.ID}`, payload) : await apiPost('/api/qlsx/sanluong', payload);
+        closeModal();
+        toast(r ? 'Đã sửa.' : `Đã ghi ${(kq.data && kq.data.soDong) || rows.length} dòng sản lượng.`, 'success');
+        if (kq.data && kq.data.canhBao) toast(kq.data.canhBao, 'error');
+        sauKhiLuu();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+  /* v9.67d: ô ảnh nhỏ — máy chủ đã chọn ảnh hàng hóa (ưu tiên) hoặc ảnh lệnh; class thumb ⇒ rê chuột hiện to (v9.47), bấm mở lớn. */
+  function anhSanLuongHtml(url) {
+    if (!url) return '<span style="color:#bbb;" title="Chưa có ảnh hàng hóa / ảnh lệnh">—</span>';
+    return `<a href="${escapeHtml(url)}" target="_blank"><img class="thumb" src="${escapeHtml(anhNho(url, 160))}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border);"></a>`;
+  }
+  /* Một dòng sản phẩm của form ghi sản lượng (dùng chung QLSX; module.mypay.js có bản riêng cùng khuôn). */
+  function dongSanLuongHtml(r) {
+    return `<tr><td style="min-width:200px;"><select class="slf-sp" style="width:100%;"><option value="">-- Chọn nhân viên trước --</option></select></td>
+      <td><input type="number" class="slf-sl" min="0" step="1" value="${r ? Number(r.SoLuong) || '' : ''}" placeholder="SL" style="width:80px;"></td>
+      <td><input type="text" class="slf-gc" maxlength="255" value="${r ? escapeHtml(r.GhiChu || '') : ''}" placeholder="Ghi chú" style="width:100%;min-width:120px;"></td>
+      <td>${r ? '' : '<button type="button" class="btn small secondary slf-xoa" title="Bỏ dòng">✕</button>'}</td></tr>`;
+  }
+  function optSanLuongSP(ds, dangChon) {
+    const k = (s) => String(s || '').trim().toLowerCase();
+    return '<option value="">-- Chọn --</option>' + ds.map(x => `<option value="${escapeHtml(x.TenSanPham)}" ${dangChon && k(dangChon) === k(x.TenSanPham) ? 'selected' : ''}>${escapeHtml(x.TenSanPham)} — ${fmtNumber(x.DonGia)} đ</option>`).join('')
+      + (dangChon && !ds.some(x => k(x.TenSanPham) === k(dangChon)) ? `<option value="${escapeHtml(dangChon)}" selected>${escapeHtml(dangChon)} (không có trong HĐ — 0 đ)</option>` : '');
+  }
+  function docDongSanLuongForm(oDong) {
+    return [...oDong.querySelectorAll('tr')].map(tr => ({ tenSanPham: tr.querySelector('.slf-sp').value, soLuong: tr.querySelector('.slf-sl').value, ghiChu: tr.querySelector('.slf-gc').value }))
+      .filter(x => x.tenSanPham || Number(x.soLuong) > 0);
   }
 
   /* ================================================================================================
@@ -2017,7 +2342,8 @@ window.ModuleQLSX = (function () {
       <table style="margin-top:8px;"><tbody>
         <tr><td><b>Mã sản phẩm:</b> ${escapeHtml(o.MaSanPham || o.MaDH || '')}</td><td><b>Kỹ thuật rập:</b> ${escapeHtml(o.KyThuatRap || '')}</td></tr>
         <tr><td colspan="2"><b>Mã rập (sơ đồ):</b> ${escapeHtml(o.MaRap || '')}</td></tr>
-        <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}</td></tr>
+        <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}${o.TenCongTacVien ? ' (CTV)' : ''}</td></tr>
+        ${o.TenNhanVienMayMau ? `<tr><td colspan="2"><b>May mẫu:</b> ${escapeHtml(o.TenNhanVienMayMau)}</td></tr>` : ''}
         ${/* v8.35: LUÔN in dòng này kể cả khi trống (Nguyen: "luôn in nhãn với ô trống để ghi tay") -
              đơn cũ chưa có dữ liệu sẽ ra ô trống, xưởng điền tay, bố cục phiếu không đổi. */''}
         <tr><td colspan="2"><b>Tên sản phẩm trên tem:</b> ${escapeHtml(o.TenSanPhamTem || '')}</td></tr>
@@ -2047,7 +2373,8 @@ window.ModuleQLSX = (function () {
       <div style="text-align:right;font-weight:600;margin-bottom:6px;">Mã ĐH: ${escapeHtml(o.MaDH || '')}</div>
       <table style="margin-top:8px;"><tbody>
         <tr><td><b>Tên sản phẩm:</b> ${escapeHtml(o.TenSanPham || '')}</td><td><b>Mã SP:</b> ${escapeHtml(o.MaSanPham || o.MaDH || '')}</td><td><b>Size:</b> ${escapeHtml(o.Size || '')}</td></tr>
-        <tr><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}</td><td><b>Kỹ thuật rập:</b> ${escapeHtml(o.KyThuatRap || '')}</td><td><b>Deadline ra hàng:</b> ${fmtDate(o.NgayGiaoDuKien)}</td></tr>
+        <tr><td><b>Thiết kế:</b> ${escapeHtml(o.ThietKeVien || '')}${o.TenCongTacVien ? ' (CTV)' : ''}</td><td><b>Kỹ thuật rập:</b> ${escapeHtml(o.KyThuatRap || '')}</td><td><b>Deadline ra hàng:</b> ${fmtDate(o.NgayGiaoDuKien)}</td></tr>
+        ${o.TenNhanVienMayMau ? `<tr><td colspan="3"><b>May mẫu:</b> ${escapeHtml(o.TenNhanVienMayMau)}</td></tr>` : ''}
         ${/* v8.35: LUÔN in dòng này kể cả khi trống (Nguyen: "luôn in nhãn với ô trống để ghi tay"). */''}
         <tr><td colspan="3"><b>Tên sản phẩm trên tem:</b> ${escapeHtml(o.TenSanPhamTem || '')}</td></tr>
         <tr><td colspan="3"><b>Khách hàng:</b> ${escapeHtml(o.TenKhachHang || '')}</td></tr>
@@ -3891,7 +4218,11 @@ window.ModuleQLSX = (function () {
       ? (laTachMauLenh
           ? `tách MẪU ở công đoạn Cắt (mỗi mẫu hệ số ${fmtNumber(heSoTuTachDai)}, các mẫu dùng chung một dải size)`
           : `tách DẢI SIZE ở công đoạn Kỹ thuật (${dsDaiCuaLenh.map(d => `${d.TenDai} ${fmtNumber(d.HeSo)}`).join(' + ')} = ${fmtNumber(heSoTuTachDai)})`)
-      : `Ra lệnh SX (${fmtNumber(heSoQuyDoiDonHang)})`;
+      /* 🔴 v9.88: ô "Hệ số quy đổi" ở Chỉ định SX nay BẮT BUỘC và khác 1, nên nhánh này không còn điền
+         sẵn số 1 vô nghĩa mà điền một con số TRÔNG NHƯ ĐÚNG. Hai số đó chỉ TRÙNG NHAU khi 1 lớp cắt ra
+         đúng 1 ri. Lệnh nào 1 lớp ra nhiều ri (bàn hệ số 10, dải 5 size ⇒ 2 ri/lớp) thì số ở đây PHẢI
+         sửa — đây là bẫy CÁI/LỚP ≠ CÁI/RI, nói thẳng ra trên tooltip thay vì để người cắt bấm qua. */
+      : `Chỉ định SX — số cái/1 ri (${fmtNumber(heSoQuyDoiDonHang)}); ô này là số CÁI 1 LỚP cắt ra, chỉ bằng nhau khi 1 lớp = 1 ri`;
     // v5.2: state co the thay doi TRONG luc modal dang mo (them/xoa Giao vai, Phu kien) - dung mang
     // rieng thay vi doc thang tu detail de refresh tai cho khong can dong modal.
     /* v9.24: GOM THEO CÂY. Một cây xuất cho lệnh qua NHIỀU phiếu thì trước đây dropdown hiện mấy
@@ -4139,23 +4470,28 @@ window.ModuleQLSX = (function () {
         /* v8.52: hệ số quy đổi Ri → cái là HeSoQuyDoi CỦA LỆNH, không phải TongSoLop (xem khối
            ghi chú ở soLuongRiLe). TongSoLop vẫn hiện, nhưng với đúng ý nghĩa của nó: SỐ RI cắt được.
            v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
-        const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
+        /* v9.82: hệ số quy đổi Ri → cái là SỐ CÁI TRONG 1 RI (số size của dải, hoặc ô "Số size" của
+           lệnh khi không tách dải) — KHÔNG phải cái/lớp của bàn cắt. Xem khối ghi chú ở caiMotRi. */
+        const heSo = caiMotRi(dai);
         const coHeSo = heSo > 0;
-        const soRiCat = Number(ct.TongSoLop) || 0;
         const dk = `data-mausac="${ct.MauSacID}" data-dai="${dai ? dai.ID : ''}"`;
+        /* v9.82: thiếu số cái/ri thì ô Ri HIỆN NHƯNG KHOÁ + nói lý do, không ẩn (ẩn nút vì nghiệp vụ
+           chặn là tệ hơn nút câm). Vẫn gõ thẳng Cái được như cũ. */
         const oRi = coHeSo
           ? `<input type="number" min="0" step="1" class="dg-ri-qty" ${dk} placeholder="Ri">`
-          : '<div class="readonly-fact">—</div>';
+          : `<input type="number" class="dg-ri-qty" ${dk} placeholder="—" disabled title="Chưa biết 1 ri mấy cái">`;
         const oLe = coHeSo
           ? `<input type="number" min="0" step="1" class="dg-le-qty" ${dk} placeholder="cái">`
           : `<input type="number" min="0" step="1" class="mau-qty" ${dk} placeholder="cái">`;
         // v8.31.1: nhãn đơn vị là "ri" (không phải "cái") - thuần túy chữ hiển thị, không đụng công thức.
         // v8.34: dòng này chuyển XUỐNG DƯỚI dòng nhập của đúng màu đó (yêu cầu Nguyen), giữ NGUYÊN chữ.
-        // v8.52: viết lại cho đúng nghĩa + hiện HỆ SỐ lên (yêu cầu Nguyen "hiển thị luôn cả hệ số").
+        // v9.82: số ri đã cắt = tổng CÁI đã cắt ÷ số cái/ri (đúng cả khi nhiều bàn lệch hệ số).
+        const caiCat = Number(ct.TongCaiTuBan) || Number(ct.SoLuong) || 0;
+        const riCat = coHeSo ? Math.round((caiCat / heSo) * 100) / 100 : 0;
         const ghiChu = coHeSo
-          ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${nhanHeSo(dai, ct)})`
-            + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>` : '')
-          : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
+          ? `1 ri = <b>${fmtNumber(heSo)}</b> cái — ${nhanHeSo(dai, ct)}`
+            + (caiCat > 0 ? ` · Cắt <b>${fmtNumber(caiCat)}</b> cái = <b>${fmtNumber(riCat)} ri</b>` : '')
+          : nhanHeSo(dai, ct);
         return `<div class="row-item" style="grid-template-columns:${cols};">
           <div class="form-row"><label>${nhanDong(ct, dai)}</label></div>
           <div class="form-row"><label>Ri</label>${oRi}</div>
@@ -4164,7 +4500,7 @@ window.ModuleQLSX = (function () {
           ${oDoiChieuHtml('DG', ct, dai)}
           ${oLuyKeHtml('DG', ct, dai)}
         </div>
-        <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${nhanDong(ct, dai)}: ${ghiChu}</div>`;
+        <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${nhanDong(ct, dai)}: ${ghiChu}${bangBanCat(ct, dai)}</div>`;
       }, '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập (màu theo dõi lấy từ kết quả Cắt).</div>');
     }
     /* ============================================================================================
@@ -4285,10 +4621,31 @@ window.ModuleQLSX = (function () {
            2. ct.HeSoCat > 0   → hệ số ở sổ cắt của màu đó (backend getCatMauList, mọi cây cùng một số)
            3. còn lại          → hệ số của lệnh (Cắt chưa ghi, hoặc các cây lệch nhau — xem nhanHeSo)
        ============================================================================================ */
-    function heSoCuaDong(dai, ct) {
-      if (dai) return Number(dai.HeSo) || 0;
-      const cat = Number(ct && ct.HeSoCat) || 0;
-      return cat > 0 ? cat : (Number(heSoQuyDoiDonHang) || 0);
+    /* ============================================================================================
+       🔴 v9.82 (Nguyen 19/11) — SỬA GỐC: TRƯỚC NAY GỘP HAI CON SỐ KHÁC NHAU LÀM MỘT.
+
+           CÁI / LỚP = hệ số của TỪNG BÀN cắt   → ct.BanCat[].HeSo (TienDoCatChiTietCay.HeSoQuyDoi)
+           CÁI / RI  = SỐ SIZE                  → dai.HeSo (dải), hoặc DonHangSanXuat.HeSoQuyDoi (lệnh)
+
+       v9.85 (Nguyen chốt lại): KHÔNG thêm cột mới — ô "Hệ số quy đổi" sẵn có ở Ra lệnh SX CHÍNH LÀ số
+       cái trong 1 ri, Đóng gói / Kho nhập lấy thẳng từ đó. Cái bị bỏ là bước "lấy hệ số CẮT làm hệ số
+       RI" (ct.HeSoCat) — đó mới là lỗi gốc, không phải chuyện thiếu một ô.
+
+       Nguyen: *"1 màu trải nhiều bàn cắt hệ số khác nhau… lấy hệ số của bàn cắt chia theo số size.
+       Ví dụ 3-7 có 5 size lấy 10/5 để tính số ri: 10/5 = 2 × 5 lớp = 10 ri."*
+         bàn 1: 5 cái/lớp ÷ 5 = 1 ri/lớp × 20 lớp = 20 ri (100 cái)
+         bàn 2: 10 ÷ 5 = 2 × 5 lớp  = 10 ri (50 cái)
+         bàn 3: 10 ÷ 5 = 2 × 10 lớp = 20 ri (100 cái)      ⇒ màu A: 50 ri = 250 cái
+       Hệ quả quan trọng: **1 Ri luôn = số size cái, BẤT KỂ bàn nào** (50 = 250 ÷ 5). Nên ô nhập chỉ
+       cần MỘT số cái/ri; hệ số từng bàn chỉ để biết mỗi bàn ra bao nhiêu ri (bảng dưới ô nhập).
+
+       v8.92 từng chốt "1 ri = số cái một lớp" — đúng CHỈ khi hệ số cắt = số size (1 lớp = 1 bộ ri),
+       đúng mỗi bàn 1 ở ví dụ trên. Bàn 2/3 sẽ ra GẤP ĐÔI. Nay sửa cho đúng cả ba.
+       KHÔNG còn lùi về HeSoQuyDoi của lệnh: thiếu số cái/ri thì KHOÁ ô Ri, bắt gõ thẳng số Cái.
+       ============================================================================================ */
+    function caiMotRi(dai) {
+      if (dai) return Number(dai.HeSo) || 0;              // dải size: HeSo = "so cai trong 1 ri CUA DAI NAY"
+      return Number(detail && detail.HeSoQuyDoi) || 0;    // lệnh không tách dải: ô "Hệ số quy đổi" ở Ra lệnh SX
     }
     /* Nguồn của hệ số, để dòng ghi chú dưới mỗi màu NÓI RÕ đang dùng thước nào — và cảnh báo khi
        sổ cắt có nhiều hệ số khác nhau cho cùng một màu (lúc đó không tồn tại một cỡ ri duy nhất,
@@ -4314,16 +4671,39 @@ window.ModuleQLSX = (function () {
         return 'của dải ' + escapeHtml(dai.TenDai) + (lech
           ? ` — <span style="color:#c62828;">⚠️ tổng hệ số các dải = ${fmtNumber(tongDai)} nhưng sổ cắt dùng ${fmtNumber(cat)}/lớp; sửa lại bảng dải size cho khớp Cắt</span>` : '');
       }
-      const cat = Number(ct && ct.HeSoCat) || 0;
-      if (cat > 0) {
-        const lenh = Number(heSoQuyDoiDonHang) || 0;
-        return 'theo sổ cắt' + (lenh > 0 && Math.abs(lenh - cat) > 1e-9
-          ? ` — <span style="color:#b06000;">lệnh khai ${fmtNumber(lenh)}, Cắt dùng ${fmtNumber(cat)}; lấy theo Cắt</span>` : '');
-      }
-      if (ct && Number(ct.HeSoCatLech) === 1) {
-        return `quy đổi của lệnh — <span style="color:#c62828;">⚠️ sổ cắt của màu này có nhiều hệ số khác nhau (${fmtNumber(ct.HeSoCatMin)}–${fmtNumber(ct.HeSoCatMax)}), không có một cỡ ri duy nhất; kiểm lại sổ cắt hoặc nhập thẳng số cái</span>`;
-      }
-      return 'quy đổi của lệnh';
+      /* v9.85: không tách dải ⇒ số cái/ri lấy ở ô "Hệ số quy đổi" của lệnh. Không có thì KHÔNG đoán. */
+      const ss = Number(detail && detail.HeSoQuyDoi) || 0;
+      if (ss > 0) return `1 ri = ${fmtNumber(ss)} cái (hệ số quy đổi khai ở lệnh)`;
+      return '<span style="color:#c62828;">⚠️ lệnh chưa khai “Hệ số quy đổi” nên chưa quy đổi được Ri — gõ thẳng số CÁI, hoặc sửa lệnh để khai hệ số</span>';
+    }
+    /* ============================================================================================
+       v9.82 — BẢNG TỪNG BÀN CẮT ngay dưới ô nhập của màu (Nguyen chọn: "ngay dưới ô nhập của màu đó").
+       Mỗi bàn: hệ số (cái/lớp) × số lớp = số cái; số ri = số cái ÷ số cái/ri. Chỉ hiện khi màu cắt từ
+       2 bàn trở lên — một bàn thì dòng ghi chú ở trên đã đủ, thêm bảng chỉ làm rối.
+       ============================================================================================ */
+    function bangBanCat(ct, dai) {
+      const ban = (ct && ct.BanCat) || [];
+      if (ban.length < 2) return '';
+      const cr = caiMotRi(dai);
+      const o = (n) => fmtNumber(n);
+      const dong = ban.map((b, i) => {
+        const ri = cr > 0 ? b.SoCai / cr : null;
+        return `<tr><td>Bàn ${escapeHtml(String(b.SttSoCat || (i + 1)))}</td>
+          <td style="text-align:right;">${o(b.HeSo)}</td><td style="text-align:right;">${o(b.SoLop)}</td>
+          <td style="text-align:right;">${o(b.SoCai)}</td>
+          <td style="text-align:right;">${ri == null ? '—' : o(Math.round(ri * 100) / 100)}</td></tr>`;
+      }).join('');
+      const tongCai = ban.reduce((s, b) => s + b.SoCai, 0);
+      const tongRi = cr > 0 ? Math.round((tongCai / cr) * 100) / 100 : null;
+      return `<div style="margin-top:3px;">
+        <table style="font-size:11px;border-collapse:collapse;" class="ban-cat-bang">
+          <thead><tr style="color:#5f6368;"><th style="text-align:left;">Bàn cắt</th><th>cái/lớp</th><th>lớp</th><th>cái</th><th>ri</th></tr></thead>
+          <tbody>${dong}</tbody>
+          <tfoot><tr style="font-weight:600;"><td>Tổng ${ban.length} bàn</td><td></td>
+            <td style="text-align:right;">${o(ban.reduce((s, b) => s + b.SoLop, 0))}</td>
+            <td style="text-align:right;">${o(tongCai)}</td>
+            <td style="text-align:right;">${tongRi == null ? '—' : o(tongRi)}</td></tr></tfoot>
+        </table></div>`;
     }
     /* Nhãn màu kèm dải, dùng ở cột đầu mỗi dòng. */
     function nhanDong(ct, dai) {
@@ -4375,7 +4755,7 @@ window.ModuleQLSX = (function () {
     }
 
     function soLuongRiLe(root, pre, ct, dai) {
-      const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
+      const heSo = caiMotRi(dai);   // v9.82: SỐ CÁI TRONG 1 RI (số size), KHÔNG phải cái/lớp của bàn
       const k = `[data-mausac="${ct.MauSacID}"][data-dai="${dai ? dai.ID : ''}"]`;
       const oRi = root.querySelector(`.${pre}-ri-qty${k}`);
       const oLe = root.querySelector(`.${pre}-le-qty${k}`);
@@ -6213,7 +6593,7 @@ window.ModuleQLSX = (function () {
              "Đã nhập" cũng phải là số CHUNG — nếu không ba ô cạnh nhau không trừ ra nhau
              (108 − 54 = 0 trên màn hình). Giống hệt cách oLuyKeHtml làm cho QC/Đóng gói. */
           const tong = laTachMau ? daGhiCuaMau('KN', ct) : daNhapCai(ct, dai);
-          const he = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
+          const he = caiMotRi(dai);   // v9.82: số cái trong 1 ri (số size), không phải cái/lớp
           if (!(he > 0)) return { ri: 0, cuaRi: 0, le: tong, tong };
           const ri = Math.trunc(tong / he);
           const cuaRi = ri * he;
@@ -6244,17 +6624,18 @@ window.ModuleQLSX = (function () {
             /* v8.52: hệ số Ri → cái là HeSoQuyDoi CỦA LỆNH (xem soLuongRiLe). TongSoLop là SỐ RI
                cắt được, không phải hệ số — trước đây dùng nhầm nó làm hệ số.
                v8.59: lệnh đã tách dải thì lấy hệ số CỦA DẢI. */
-            const heSo = heSoCuaDong(dai, ct);   // v8.92: theo sổ cắt
+            const heSo = caiMotRi(dai);   // v9.82: số cái trong 1 ri (số size), không phải cái/lớp của bàn
             const coHeSo = heSo > 0;
-            const soRiCat = Number(ct.TongSoLop) || 0;
             const dk = `data-mausac="${ct.MauSacID}" data-dai="${dai ? dai.ID : ''}"`;
             const oRi = coHeSo
               ? `<input type="number" min="0" step="1" class="kn-ri-qty" ${dk} placeholder="Ri">`
-              : '<div class="readonly-fact">—</div>';
+              : `<input type="number" class="kn-ri-qty" ${dk} placeholder="—" disabled title="Chưa biết 1 ri mấy cái">`;
+            const caiCat = Number(ct.TongCaiTuBan) || Number(ct.SoLuong) || 0;
+            const riCat = coHeSo ? Math.round((caiCat / heSo) * 100) / 100 : 0;
             const ghiChu = coHeSo
-              ? `1 ri = <b>${fmtNumber(heSo)}</b> cái (hệ số ${nhanHeSo(dai, ct)})`
-                + (soRiCat > 0 ? ` · Cắt ${fmtNumber(soRiCat)} lớp = <b>${fmtNumber(soRiCat)} ri</b>${laTachMau ? ' (một bàn chung, không phải mỗi mẫu từng ấy)' : ''}` : '')
-              : 'Lệnh chưa khai hệ số quy đổi — nhập thẳng số cái vào ô "SL lẻ"';
+              ? `1 ri = <b>${fmtNumber(heSo)}</b> cái — ${nhanHeSo(dai, ct)}`
+                + (caiCat > 0 ? ` · Cắt <b>${fmtNumber(caiCat)}</b> cái = <b>${fmtNumber(riCat)} ri</b>${laTachMau ? ' (một bàn chung, không phải mỗi mẫu từng ấy)' : ''}` : '')
+              : nhanHeSo(dai, ct);
             return `
             <div class="row-item" style="grid-template-columns:190px 100px 110px 110px 120px 110px 170px 100px;">
               <div class="form-row"><label>${nhanDong(ct, dai)}</label></div>
@@ -6286,7 +6667,7 @@ window.ModuleQLSX = (function () {
               }</div></div>
               <div class="form-row"><label>Còn lại${nhanChungMau}</label><div class="readonly-fact" style="color:${conLaiCua(ct, dai) > 0 ? '#c0392b' : '#137333'};font-weight:600;">${fmtNumber(conLaiCua(ct, dai))}</div></div>
             </div>
-            <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}</div>`;
+            <div class="empty-hint" style="text-align:left;margin:-6px 0 8px 0;">${escapeHtml(ct.TenMau)}: ${ghiChu}${bangBanCat(ct, dai)}</div>`;
           }, '<div class="empty-hint">Chưa ghi nhận Cắt — chưa có màu để nhập kho.</div>')}</div>
           </div>
           ${/* v7.57: LUA CHON KET THUC. Chua nhap du so cat thi mac dinh don O LAI cong doan Kho nhap

@@ -656,7 +656,7 @@ window.ModuleKhoVai = (function () {
       <form id="nEditForm">
         <div class="form-grid">
           <div class="form-row"><label>Ngày nhập *</label><input type="date" name="ngayNhap" value="${new Date(row.NgayNhap).toISOString().slice(0, 10)}" required></div>
-          <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">--</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC', row.NCC_ID)}</select></div>
+          <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">-- Không có (tồn đầu kỳ / nhập khác — không vào công nợ) --</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC', row.NCC_ID)}</select></div>
           <div class="form-row"><label>Số hóa đơn</label><input name="soHoaDon" value="${escapeHtml(row.SoHoaDon || '')}"></div>
           <div class="form-row"><label>Ngày hóa đơn</label><input type="date" name="ngayHoaDon" value="${row.NgayHoaDon ? new Date(row.NgayHoaDon).toISOString().slice(0, 10) : ''}"></div>
           ${oDonViTinhGiaHtml(row.DonViTinhGia)}
@@ -760,7 +760,8 @@ window.ModuleKhoVai = (function () {
       <form id="nForm">
         <div class="form-grid">
           <div class="form-row"><label>Ngày nhập *</label><input type="date" name="ngayNhap" value="${homNayISO()}" required></div>
-          <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">--</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC')}</select></div>
+          ${/* v9.66: nói rõ "để trống = không công nợ" — kế toán từng tạo NCC giả "Nhập tồn kho vải đầu kỳ" để có chỗ chọn, thành nợ NCC đó. */''}
+          <div class="form-row"><label>Nhà cung cấp</label><select name="nccId"><option value="">-- Không có (tồn đầu kỳ / nhập khác — không vào công nợ) --</option>${opt(dm.nhaCungCap, 'NCC_ID', 'TenNCC')}</select></div>
           <div class="form-row"><label>Số hóa đơn</label><input name="soHoaDon"></div>
           <div class="form-row"><label>Ngày hóa đơn</label><input type="date" name="ngayHoaDon"></div>
           ${oDonViTinhGiaHtml(null)}

@@ -61,7 +61,7 @@ kiem('cau confirm noi luat MOI (ton am), khong con "phải hủy phiếu bán h�
      feNK.includes('bị ÂM (đã bán/xuất vượt phần nhập còn lại) thì máy sẽ chặn')
        && !feNK.includes('phải hủy phiếu bán hàng trước'),
      'cau cu lam nguoi dung tuong van luat cu, mau thuan voi thong bao backend moi');
-kiem('index.html bump module.nhapkho.js?v=9.15', html.includes('module.nhapkho.js?v=9.15'));
+kiem('index.html bump module.nhapkho.js?v= >= 9.15', (() => { const m = /module\.nhapkho\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.15; })());   // v9.66: so >=, khong ghim
 
 console.log('\n=== 3. NGUON HANG theo loai phieu ===');
 kiem('chuanDong truyen loai xuong timHoacTaoMaHang',

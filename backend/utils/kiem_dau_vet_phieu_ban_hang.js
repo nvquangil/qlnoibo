@@ -82,8 +82,10 @@ console.log('\n=== 5. MIGRATION ===');
 kiem('migration_v891: them NguoiSuaID + UpdatedAt, co IF COL_LENGTH (chay lai duoc)', /IF COL_LENGTH\('PhieuBanHang', 'NguoiSuaID'\) IS NULL/.test(mig) && /ADD NguoiSuaID INT NULL/.test(mig)
   && /IF COL_LENGTH\('PhieuBanHang', 'UpdatedAt'\) IS NULL/.test(mig) && /ADD UpdatedAt DATETIME2 NULL/.test(mig));
 kiem('migration_v891 KHONG xoa/sua du lieu', !/DELETE FROM|DROP (TABLE|COLUMN)|UPDATE PhieuBanHang SET/i.test(mig));
-kiem('CAI_DAT_DAY_DU.sql da gop [124/124] migration_v891 (truoc dong CAI DAT XONG)', (() => {
-  const i = full.indexOf('[124/124]  migration_v891.sql'), j = full.indexOf('=== CAI DAT XONG');
+kiem('CAI_DAT_DAY_DU.sql da gop migration_v891 (dong [i/N], truoc dong CAI DAT XONG)', (() => {
+  // [i/N] do tao_file_cai_dat.js sinh — khong khoa cung so, them migration sau la lech.
+  const m = /\[\d+\/\d+\]\s+migration_v891\.sql/.exec(full);
+  const i = m ? m.index : -1, j = full.indexOf('=== CAI DAT XONG');
   return i > -1 && j > i && /ADD NguoiSuaID INT NULL/.test(full.slice(i, j)) && /ADD UpdatedAt DATETIME2 NULL/.test(full.slice(i, j));
 })());
 

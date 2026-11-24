@@ -34,6 +34,9 @@ database/import/
 *.trn
 
 # --- Rac ---
+# v10.03: ban sao luu CAI_DAT_DAY_DU.sql do database\tao_file_cai_dat.js tao truoc khi ghi de.
+# Khong phai ma nguon (ban cu cua chinh file ben canh), 11.700 dong trung lap - khong dua len kho.
+database/CAI_DAT_DAY_DU.truoc_khi_gop.sql
 *.log
 npm-debug.log*
 .DS_Store

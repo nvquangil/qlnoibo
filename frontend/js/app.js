@@ -24,6 +24,8 @@ const MODULES = [
   { code: 'HRM', label: 'Quản lý nhân sự', icon: '👥', mod: window.ModuleHRM },
   { code: 'PAYROLL', label: 'Tính lương', icon: '💰', mod: window.ModulePayroll },
   { code: 'MYPAY', label: 'Bảng lương của tôi', icon: '🧾', mod: window.ModuleMyPay },
+  // v9.61: hợp đồng mua bán + ký điện tử qua link (OTP / chữ ký số), khách ký ở /ky.html (cổng công khai)
+  { code: 'HOPDONG', label: 'Hợp đồng mua bán', icon: '📝', mod: window.ModuleHopDong },
   { code: 'DANHMUC', label: 'Danh mục', icon: '📋', mod: window.ModuleDanhMuc },
   { code: 'USERS', label: 'Quản lý User', icon: '👤', mod: window.ModuleUsers },
   /* v9.39 — SAO LƯU CSDL. Nguyen 2026-11-10: *"làm riêng hẳn 1 chức năng backup"*.
@@ -59,6 +61,33 @@ async function init() {
     window.location.href = '/login.html';
   });
   document.getElementById('btnChangePassword').addEventListener('click', openChangePasswordForm);
+
+  /* v9.71 (Nguyen 16/11): tài khoản tạo không mật khẩu (mật khẩu tạm = tên đăng nhập) ⇒ CHẶN TOÀN MÀN HÌNH bằng form
+     đổi mật khẩu, không menu, không Hủy, không Esc — đổi xong mới vào. Cờ do máy chủ trả (Users.PhaiDoiMatKhau, migration_v897). */
+  if (currentUser.phaiDoiMatKhau) {
+    document.getElementById('pageTitle').textContent = 'Đổi mật khẩu lần đầu';
+    document.getElementById('content').innerHTML = `<div class="card" style="max-width:480px;margin:24px auto;">
+      <h3 style="margin-top:0;">Đổi mật khẩu trước khi sử dụng</h3>
+      <p style="color:#5f6368;font-size:13px;">Tài khoản <b>${escapeHtml(currentUser.username || '')}</b> đang dùng mật khẩu tạm (trùng tên đăng nhập). Hãy đặt mật khẩu riêng — tối thiểu 6 ký tự, không trùng tên đăng nhập.</p>
+      <form id="cpFormLanDau">
+        <div class="form-row"><label>Mật khẩu tạm (hiện tại) *</label><input type="password" name="currentPassword" required autocomplete="current-password"></div>
+        <div class="form-row"><label>Mật khẩu mới *</label><input type="password" name="newPassword" minlength="6" required autocomplete="new-password"></div>
+        <div class="form-row"><label>Nhập lại mật khẩu mới *</label><input type="password" name="confirmPassword" minlength="6" required autocomplete="new-password"></div>
+        <div class="modal-actions"><button type="submit" class="btn">Đổi mật khẩu và vào phần mềm</button></div>
+      </form></div>`;
+    document.getElementById('cpFormLanDau').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const newPassword = fd.get('newPassword'), confirmPassword = fd.get('confirmPassword');
+      if (newPassword !== confirmPassword) { toast('Mật khẩu mới nhập lại không khớp.', 'error'); return; }
+      try {
+        await apiPut('/api/auth/change-password', { currentPassword: fd.get('currentPassword'), newPassword });
+        toast('Đã đổi mật khẩu. Đang vào phần mềm...', 'success');
+        setTimeout(() => window.location.reload(), 600);
+      } catch (err) { toast(err.message, 'error'); }
+    });
+    return;
+  }
 
   initMobileNav();
   initNotifications();

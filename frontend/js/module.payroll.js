@@ -14,12 +14,15 @@ window.ModulePayroll = (function () {
   const TABS = [
     { key: 'cauhinh', label: 'Cấu hình lương' },
     { key: 'chamcong', label: 'Chấm công' },
+    { key: 'nghiphep', label: 'Tạo giấy nghỉ phép / Nghỉ cá nhân' },   // v9.57: tách khỏi tab Chấm công (ChucNang 'nghiphep', migration_v892)
+    { key: 'nghiphepnam', label: 'Ngày nghỉ theo năm' },   // v10.01 (ChucNang PAYROLL/nghiphepnam, migration_v909)
     { key: 'luongcongnhat', label: 'Lương công nhật' },
     { key: 'kpi', label: 'Đánh giá KPI' },   // v9.45: điểm KPI + sản phẩm theo tháng (ChucNang 'kpi', migration_v890)
     { key: 'luongmay', label: 'Lương khoán may' },
     { key: 'luonggcinthe', label: 'Lương GC / In thêu' },
     { key: 'luongladonggoi', label: 'Lương là / đóng gói' },
-    { key: 'luongtraivaicat', label: 'Lương trải vải cắt' }   // v5.91
+    { key: 'luongtraivaicat', label: 'Lương trải vải cắt' },   // v5.91
+    { key: 'luongctv', label: 'Lương CTV thiết kế' }   // v9.70 (ChucNang PAYROLL/luongctv, migration_v896)
   ];
   function getTabs() { return TABS; }
 
@@ -30,12 +33,69 @@ window.ModulePayroll = (function () {
     perm = effectivePerm(user, 'PAYROLL', activeTab, rawPerm);
     if (activeTab === 'cauhinh') return renderCauHinh();
     if (activeTab === 'chamcong') return renderChamCong();
+    if (activeTab === 'nghiphep') return renderNghiPhep();   // v9.57
+    if (activeTab === 'nghiphepnam') return renderNghiPhepNam();   // v10.01
     if (activeTab === 'luongcongnhat') return renderLuong();
     if (activeTab === 'kpi') return renderKPI();   // v9.45
     if (activeTab === 'luongmay') return renderLuongMay();
     if (activeTab === 'luonggcinthe') return renderLuongGcInThe();
     if (activeTab === 'luongladonggoi') return renderLuongLaDongGoi();
     if (activeTab === 'luongtraivaicat') return renderLuongTraiVaiCat();   // v5.91
+    if (activeTab === 'luongctv') return renderLuongCTV();   // v9.70
+  }
+
+  /* v9.70 — LƯƠNG CỘNG TÁC VIÊN THIẾT KẾ: số lệnh SX gắn CTV trong tháng (theo Ngày đặt) × đơn giá ở Danh mục.
+     Bấm một CTV để xem / in chi tiết từng lệnh. Không vào bảng lương công nhật — kế toán lập phiếu chi tay. */
+  /* v9.72: ô ảnh lệnh (ảnh hàng hóa ưu tiên, lùi về ảnh lệnh — máy chủ chọn); class thumb ⇒ rê chuột hiện to (v9.47). */
+  function anhCTVHtml(url) {
+    if (!url) return '<span style="color:#bbb;">—</span>';
+    return `<a href="${escapeHtml(url)}" target="_blank"><img class="thumb" src="${escapeHtml(anhNho(url, 160))}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border);"></a>`;
+  }
+  /* v9.73 (Nguyen 17/11: "bản in lương ctv thiết kế đang không có ảnh"): ô ảnh cho BẢN IN + modal chi tiết —
+     <img> trần, KHÔNG class thumb (iframe in không có CSS rê chuột), không <a>; đường dẫn /anh/… cùng gốc nên
+     iframe tải được; printHtml đã đợi ảnh tải xong mới in (v7.x). */
+  function anhInHtml(url) {
+    if (!url) return '';
+    return `<img src="${escapeHtml(anhNho(url, 160))}" style="width:56px;height:56px;object-fit:cover;border-radius:4px;border:1px solid #ccc;" alt="">`;
+  }
+  async function renderLuongCTV() {
+    container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+    let d;
+    try { d = (await apiGet(`/api/payroll/luongctv?nam=${selNam}&thang=${selThang}`)).data; }
+    catch (e) { container.innerHTML = periodBar(null, '') + `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`; wirePeriod(container, renderLuongCTV); return; }
+    const th = d.tongHop || [], rows = d.rows || [], trung = d.trung || [], chuaMR = d.chuaCoMaRap || [];
+    /* v9.71: đơn vị tính = MÃ RẬP (Kỹ thuật cập nhật), mỗi mã rập một lần toàn hệ thống. */
+    container.innerHTML = periodBar(null, `<button type="button" class="btn small secondary" id="btnInCTV">🖨️ In tổng hợp</button>`) + `
+      <h4 style="margin:4px 0;">Tổng hợp theo cộng tác viên <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm một dòng để xem / in chi tiết)</span></h4>
+      <table><thead><tr><th style="width:38px;">STT</th><th>Cộng tác viên</th><th>SĐT</th><th>Số TK / ngân hàng</th><th style="text-align:right;">Số mã rập</th><th style="text-align:right;">Số lệnh</th><th style="text-align:right;">Đơn giá / mã rập</th><th style="text-align:right;">Thành tiền</th></tr></thead>
+      <tbody>${th.map((r, i) => `<tr class="ctv-dong" data-id="${r.CongTacVienID}" style="cursor:pointer;"><td style="text-align:center;">${i + 1}</td><td>${escapeHtml(r.TenCTV)}</td><td>${escapeHtml(r.SDT || '')}</td><td>${escapeHtml(r.NganHang || '')}</td><td style="text-align:right;">${num(r.SoMaRap)}</td><td style="text-align:right;">${num(r.SoLenh)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Tháng ${selThang}/${selNam} chưa có mã rập nào được tính cho cộng tác viên (lệnh phải tích "Cộng tác viên" và Kỹ thuật đã cập nhật mã rập).</td></tr>`}</tbody>
+      ${th.length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="6" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(d.tong)}</td></tr></tfoot>` : ''}</table>
+      <h4 style="margin:16px 0 4px;">Chi tiết theo mã rập</h4>
+      <div style="overflow:auto;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th style="width:48px;">Ảnh</th><th>Cộng tác viên</th><th>Mã rập</th><th>Mã lệnh</th><th>Sản phẩm</th><th>Ngày đặt</th><th style="text-align:right;">Đơn giá</th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr><td style="text-align:center;">${i + 1}</td><td>${anhCTVHtml(r.Anh)}</td><td>${escapeHtml(r.TenCTV)}</td><td><b>${escapeHtml(r.MaRap)}</b></td><td>${escapeHtml(r.MaDH)}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${fmtDate(r.NgayDat)}</td><td style="text-align:right;">${money(r.DonGia)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-hint">—</td></tr>'}</tbody></table></div>
+      ${trung.length ? `<h4 style="margin:16px 0 4px;color:#b06000;">Mã rập đã tính ở lệnh trước — không tính lại (${trung.length})</h4>
+      <div style="overflow:auto;"><table style="font-size:13px;"><thead><tr><th>Cộng tác viên</th><th>Mã rập</th><th>Lệnh này</th><th>Đã tính ở lệnh</th><th>Ngày đặt</th></tr></thead>
+      <tbody>${trung.map(r => `<tr><td>${escapeHtml(r.TenCTV)}</td><td>${escapeHtml(r.MaRap)}</td><td>${escapeHtml(r.MaDH)}</td><td><b>${escapeHtml(r.DaTinhO)}</b></td><td>${fmtDate(r.NgayDat)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      ${chuaMR.length ? `<h4 style="margin:16px 0 4px;color:#c0392b;">Lệnh gắn CTV nhưng Kỹ thuật CHƯA cập nhật mã rập — chưa tính (${chuaMR.length})</h4>
+      <div style="overflow:auto;"><table style="font-size:13px;"><thead><tr><th style="width:48px;">Ảnh</th><th>Cộng tác viên</th><th>Mã lệnh</th><th>Sản phẩm</th><th>Ngày đặt</th></tr></thead>
+      <tbody>${chuaMR.map(r => `<tr><td>${anhCTVHtml(r.Anh)}</td><td>${escapeHtml(r.TenCTV)}</td><td><b>${escapeHtml(r.MaDH)}</b></td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${fmtDate(r.NgayDat)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Tính theo <b>mã rập</b> do bộ phận Kỹ thuật cập nhật (sơ đồ / tiến độ kỹ thuật của lệnh gắn CTV). Mỗi mã rập chỉ tính <b>một lần</b> — lệnh sau dùng lại mã rập cũ thì không tính. Tháng = tháng Ngày đặt của lệnh có mã rập lần đầu; đơn giá lấy từ <b>Danh mục → Cộng tác viên thiết kế</b> lúc xem. Không vào bảng lương công nhật — chi cho CTV bằng phiếu chi ở Công nợ.</p>`;
+    wirePeriod(container, renderLuongCTV);
+    themOTimTuDong(container);
+    const inBody = (dsTH, dsRows, tieuDe) => `<h2 style="text-align:center;">${escapeHtml(tieuDe)} — Tháng ${selThang}/${selNam}</h2>
+      <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Cộng tác viên</th><th>Số mã rập</th><th>Đơn giá / mã rập</th><th>Thành tiền</th></tr></thead>
+      <tbody>${dsTH.map((r, i) => `<tr><td style="text-align:center;">${i + 1}</td><td>${escapeHtml(r.TenCTV)}</td><td style="text-align:right;">${num(r.SoMaRap)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('')}
+      <tr data-tong style="font-weight:bold;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(dsTH.reduce((s, x) => s + num(x.ThanhTien), 0))}</td></tr></tbody></table>
+      ${dsRows.length ? `<h3>Chi tiết mã rập</h3><table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th style="width:64px;">Ảnh</th><th>Cộng tác viên</th><th>Mã rập</th><th>Mã lệnh</th><th>Sản phẩm</th><th>Ngày đặt</th><th>Đơn giá</th></tr></thead>
+      <tbody>${dsRows.map((r, i) => `<tr><td style="text-align:center;">${i + 1}</td><td style="text-align:center;">${anhInHtml(r.Anh)}</td><td>${escapeHtml(r.TenCTV)}</td><td>${escapeHtml(r.MaRap || '')}</td><td>${escapeHtml(r.MaDH)}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${fmtDate(r.NgayDat)}</td><td style="text-align:right;">${money(r.DonGia)}</td></tr>`).join('')}</tbody></table>` : ''}`;
+    const bIn = container.querySelector('#btnInCTV'); if (bIn) bIn.addEventListener('click', () => printHtml(`Lương CTV thiết kế T${selThang}/${selNam}`, inBody(th, rows, 'TỔNG HỢP LƯƠNG CỘNG TÁC VIÊN THIẾT KẾ')));
+    container.querySelectorAll('.ctv-dong').forEach(tr => tr.addEventListener('click', () => {
+      const id = tr.dataset.id, ctv = th.find(x => String(x.CongTacVienID) === id), ds = rows.filter(x => String(x.CongTacVienID) === id);
+      const modal = openModal(`<h3>Chi tiết — ${escapeHtml(ctv ? ctv.TenCTV : '')}</h3><div style="max-height:60vh;overflow:auto;">${inBody(ctv ? [ctv] : [], ds, 'LƯƠNG CỘNG TÁC VIÊN THIẾT KẾ')}</div>
+        <div class="modal-actions"><button type="button" class="btn secondary" id="btnInCTV1">🖨️ In</button><button type="button" class="btn" id="btnDongCTV">Đóng</button></div>`);
+      modal.querySelector('#btnDongCTV').addEventListener('click', closeModal);
+      modal.querySelector('#btnInCTV1').addEventListener('click', () => printHtml(`Lương CTV - ${ctv ? ctv.TenCTV : ''} - T${selThang}/${selNam}`, inBody(ctv ? [ctv] : [], ds, 'LƯƠNG CỘNG TÁC VIÊN THIẾT KẾ')));
+    }));
   }
 
   const money = (v) => (v == null || v === '' ? '0' : fmtNumber(Number(v)));
@@ -122,7 +182,11 @@ window.ModulePayroll = (function () {
           ${f('Tỷ lệ lương thử việc (%)', 'c_tyLeTV', c.TyLeThuViec, 1)}
           ${f('Làm tròn thực lĩnh (đ)', 'c_lamTron', c.LamTronThucLinh, 1)}
           ${f('Đi muộn châm chước (phút)', 'c_chamChuoc', c.DiMuonChamChuocPhut, 1)}
+          ${/* v9.79 (Nguyen 19/11 chốt lại): xăng khai THEO TỪNG NGƯỜI bằng số tiền/1 ngày trên hợp đồng, nên ở
+               đây KHÔNG còn ô đơn giá chung nào. Ô "Tiền xăng hỗ trợ (đ/1 km)" của v9.78 đã gỡ; cột
+               CauHinhLuong.XangXeDonGiaKm để nguyên trong CSDL, không ai đọc. */''}
         </div>
+        <p style="color:#5f6368;font-size:12px;margin:6px 0 0;">Xăng xe = <b>số tiền một ngày</b> khai ở từng hợp đồng (Nhân sự › Hợp đồng) × <b>ngày công đi làm thực tế</b> — không tính ngày phép, ngày lễ. Khai ở đây không có gì cho xăng xe: mỗi người một mức.</p>
         <p style="color:#5f6368;font-size:12px;margin:6px 0 0;">Thử việc: lương ngày × tỷ lệ này (bảng thực tế 85%) cho các ngày trước <i>Ngày hết thử việc</i> ở hợp đồng. Đi muộn = giờ vào máy chấm công trễ hơn giờ vào của nhóm quá số phút châm chước — một ngày là mất chuyên cần.</p>` : ''}
         ${perm.canEdit ? `<div style="margin-top:10px;"><button class="btn" id="btnSaveCfg">💾 Lưu cấu hình</button></div>` : ''}
       </fieldset>
@@ -183,6 +247,7 @@ window.ModulePayroll = (function () {
         ...(container.querySelector('#c_truThue') ? {
           truThueTNCN: container.querySelector('#c_truThue').value === '1',
           tyLeThuViec: g('c_tyLeTV'), lamTronThucLinh: g('c_lamTron'), diMuonChamChuocPhut: g('c_chamChuoc')
+          // v9.79: KHÔNG gửi xangXeDonGiaKm nữa — ô đã gỡ, xăng khai đ/ngày trên từng hợp đồng
         } : {})
       });
       toast('Đã lưu cấu hình.', 'success');
@@ -209,6 +274,68 @@ window.ModulePayroll = (function () {
   /* ================================================================
      2. CHAM CONG
      ================================================================ */
+  /* ================================================================================================
+     v9.49 — KÉO CHẤM CÔNG TỰ ĐỘNG THEO GIỜ (Nguyen 13/11: "cho tải tự động vào 1 thời gian cài đặt").
+     Ô này đọc /chamcong/tudong: cấu hình + TRẠNG THÁI THẬT của lịch (đang chạy / vì sao không) + kết
+     quả lần chạy cuối. Ô tick xanh mà lịch không chạy là lời nói dối nguy hiểm nhất (bài học sao lưu
+     v9.40) — nên dòng trạng thái lấy từ máy chủ, không suy từ ô tick.
+     "Chạy ngay" gọi đúng hàm lịch sẽ gọi — thử được tại chỗ, không phải chờ đến giờ.
+     ================================================================================================ */
+  async function veKeoTuDong(o) {
+    if (!o) return;
+    let d;
+    try { d = (await apiGet('/api/payroll/chamcong/tudong')).data; }
+    catch (e) { o.innerHTML = `<span class="empty-hint" style="padding:0;">Không đọc được cài đặt kéo tự động: ${escapeHtml(e.message)}</span>`; return; }
+    const c = d.cauHinh || {}, l = d.lich || {}, lc = l.lanCuoi;
+    const dongLich = l.chay
+      ? `<span style="color:#137333;font-weight:600;">● Đang chạy</span> — mỗi ngày lúc <b>${escapeHtml(l.gioChay)}</b>, kéo <b>${l.soNgayLui}</b> ngày gần nhất của mọi máy đang Hoạt động${l.tongHop ? ', rồi tổng hợp bảng công tháng' : ''}.`
+      : `<span style="color:#b06000;font-weight:600;">● Không chạy</span> — ${escapeHtml(l.lyDo || '')}`;
+    const dongCuoi = lc
+      ? `Lần chạy gần nhất ${escapeHtml(lc.luc)} (${lc.nguon === 'tay' ? 'bấm tay' : 'theo lịch'}): `
+        + (lc.loi ? `<span style="color:#c0392b;">${escapeHtml(lc.loi)}</span>` : '')
+        + (lc.ketQua || []).map(x => x.ok
+          ? `<b>${escapeHtml(x.may)}</b> +${x.inserted} lần quẹt mới${x.unmatched ? ` (<span style="color:#b06000;">${x.unmatched} chưa gán NV</span>)` : ''}`
+          : `<b>${escapeHtml(x.may)}</b> <span style="color:#c0392b;">LỖI: ${escapeHtml(x.thongBao || '')}</span>`).join('; ')
+        + (lc.tongHop || []).map(t => t.ok ? `; tổng hợp ${t.thang}/${t.nam}: ${t.affected} dòng${t.thieuQuet ? `, ${t.thieuQuet} ngày thiếu quẹt` : ''}` : `; tổng hợp ${t.thang}/${t.nam} <span style="color:#c0392b;">LỖI: ${escapeHtml(t.thongBao || '')}</span>`).join('')
+      : 'Chưa chạy lần nào kể từ khi khởi động phần mềm.';
+    o.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px;">⏰ Kéo tự động theo giờ</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" id="tdBat" ${c.bat ? 'checked' : ''} ${perm.canEdit ? '' : 'disabled'}> Bật</label>
+        <div class="form-row" style="margin:0;"><label>Giờ chạy mỗi ngày</label><input type="time" id="tdGio" value="${escapeHtml(c.gioChay || '23:30')}" style="width:110px;" ${perm.canEdit ? '' : 'disabled'}></div>
+        <div class="form-row" style="margin:0;"><label>Kéo mấy ngày gần nhất</label><input type="number" id="tdNgay" min="1" max="31" value="${Number(c.soNgayLui) || 3}" style="width:80px;" ${perm.canEdit ? '' : 'disabled'}></div>
+        <label style="display:flex;align-items:center;gap:4px;margin:0;"><input type="checkbox" id="tdTongHop" ${c.tongHop !== false ? 'checked' : ''} ${perm.canEdit ? '' : 'disabled'}> Tổng hợp bảng công sau khi kéo</label>
+        ${perm.canEdit ? `<button class="btn small" id="tdLuu">💾 Lưu</button><button class="btn small secondary" id="tdChay" title="Kéo + tổng hợp ngay bây giờ, đúng như lịch sẽ làm">▶ Chạy ngay</button>` : ''}
+      </div>
+      <div style="font-size:12px;margin-top:6px;">${dongLich}</div>
+      <div style="font-size:12px;color:#5f6368;margin-top:2px;">${dongCuoi}</div>
+      <div style="font-size:12px;color:#5f6368;margin-top:2px;">Nên đặt sau giờ tan ca cuối (quẹt ra của ca tối phải có rồi mới tổng hợp đúng). Kéo lại vài ngày gần nhất là cố ý: máy tắt hay mất mạng một hôm thì hôm sau vẫn lấy được, bản ghi trùng tự bỏ. Dòng bảng công đã <b>sửa tay</b> không bị ghi đè.</div>`;
+    const bLuu = o.querySelector('#tdLuu');
+    if (bLuu) bLuu.addEventListener('click', async () => {
+      try {
+        const r = await apiPost('/api/payroll/chamcong/tudong', {
+          bat: o.querySelector('#tdBat').checked, gioChay: o.querySelector('#tdGio').value,
+          soNgayLui: o.querySelector('#tdNgay').value, tongHop: o.querySelector('#tdTongHop').checked
+        });
+        toast(r.data.lich.chay ? `Đã lưu — lịch chạy mỗi ngày ${r.data.lich.gioChay}.` : `Đã lưu. Lịch không chạy: ${r.data.lich.lyDo}`, r.data.lich.chay ? 'success' : 'info');
+        veKeoTuDong(o);
+      } catch (e) { toast(e.message, 'error'); }
+    });
+    const bChay = o.querySelector('#tdChay');
+    if (bChay) bChay.addEventListener('click', async () => {
+      bChay.disabled = true; bChay.textContent = '⏳ Đang kéo…';
+      try {
+        const r = (await apiPost('/api/payroll/chamcong/tudong/chayngay', {})).data || {};
+        if (r.boQua) toast(r.lyDo, 'info');
+        else {
+          const loi = (r.ketQua || []).filter(x => !x.ok).length;
+          toast(loi ? `Xong, ${loi} máy lỗi — xem dòng kết quả.` : `Xong: ${(r.ketQua || []).reduce((s, x) => s + (x.inserted || 0), 0)} lần quẹt mới.`, loi ? 'error' : 'success');
+        }
+        renderChamCong();   // bảng công + chi tiết đã kéo đổi theo
+      } catch (e) { toast(e.message, 'error'); bChay.disabled = false; bChay.textContent = '▶ Chạy ngay'; }
+    });
+  }
+
   async function renderChamCong() {
     container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
     let mays = [], cc = { rows: [] }, ccDetail = [];
@@ -242,11 +369,15 @@ window.ModulePayroll = (function () {
           <input type="file" id="fileCC" accept=".xlsx,.xls" style="display:none;">
         </div>` : ''}
         <p style="color:#5f6368;font-size:12px;margin:6px 0 0;">Bấm "👥 Tải NV từ máy" để lấy danh sách người trên máy rồi gán vào nhân viên (lưu trường "Mã chấm công") — hệ thống map theo mã này khi kéo. File tải lên cần 2 cột: <b>MaChamCong</b>, <b>ThoiGian</b>.</p>
+        ${/* v9.49: kéo TỰ ĐỘNG theo giờ cài đặt (Nguyen 13/11). Vẽ sau khi tải cấu hình — xem veKeoTuDong(). */''}
+        <div id="ccTuDong" style="margin-top:10px;padding-top:8px;border-top:1px dashed #e0e0e0;"><span class="empty-hint" style="padding:0;">Đang tải cài đặt kéo tự động…</span></div>
       </fieldset>
       ${periodBar(null, `${perm.canEdit ? `<button class="btn small secondary" id="btnTongHop">🔄 Tổng hợp từ máy → bảng công</button>
         <button class="btn small secondary" id="btnCauHinhCC">⚙️ Cài đặt chấm công</button>
         <button class="btn small secondary" id="btnNhomCC">👥 Nhóm chấm công</button>
         <button class="btn small secondary" id="btnRawCC">📄 Chi tiết đã kéo về</button>` : ''}
+        ${/* v9.55: lịch nghỉ lễ chung — xem được với quyền xem, thêm/xóa gác trong modal. Giấy nghỉ phép là TAB riêng (v9.57). */''}
+        <button class="btn small secondary" id="btnNgayLe">📅 Lịch nghỉ lễ</button>
         ${perm.canDelete ? `<button class="btn small danger" id="btnXoaBangCC">🗑️ Xóa bảng công tháng</button>` : ''}`)}
       ${/* v8.00: ô tìm kiếm cho bảng công tháng.
            KHONG dung wireTableSearch co san: no so tren tr.textContent, ma cot Thao tac co nut
@@ -281,9 +412,11 @@ window.ModulePayroll = (function () {
     if (bangCC && bangCC.closest('table')) bangCC.closest('table').dataset.coOTim = '1';
     themOTimTuDong(container);
     const bAdd = container.querySelector('#btnAddMay'); if (bAdd) bAdd.addEventListener('click', () => openMayForm(null));
+    veKeoTuDong(container.querySelector('#ccTuDong'));   // v9.49
     // v5.60: cài đặt giờ vào/ra + tăng ca, xem chi tiết từng lần quẹt, xóa bảng công tháng.
     const bCfg = container.querySelector('#btnCauHinhCC'); if (bCfg) bCfg.addEventListener('click', () => openCauHinhChamCong());
     const bNhom = container.querySelector('#btnNhomCC'); if (bNhom) bNhom.addEventListener('click', openNhomChamCong);   // v8.00
+    const bLe = container.querySelector('#btnNgayLe'); if (bLe) bLe.addEventListener('click', openLichNghiLe);            // v9.55
     /* v8.00: ô tìm bảng công tháng. Ẩn/hiện tại chỗ (dữ liệu đã nạp đủ 1 tháng, không cần gọi lại
        server). Dòng "không tìm thấy" phải dựng TRƯỚC khi themCotStt chạy thì colspan mới đúng — nên
        ở đây chỉ ẩn/hiện dòng có sẵn và đếm, không chèn dòng mới (bài học v7.92). */
@@ -491,9 +624,10 @@ window.ModulePayroll = (function () {
             ${f('Tăng ca tối đa / ngày (giờ)', `<input type="number" step="0.5" min="0" id="cc_otMax" value="${cfg.otToiDaGioNgay != null ? cfg.otToiDaGioNgay : 6}">`, 'Chặn trên, tránh 1 lần quẹt sai thành tăng ca vô lý')}
             ${f('Tính cả phần đến sớm', `<label style="display:block;padding-top:6px;"><input type="checkbox" id="cc_otTruoc" ${cfg.tinhOtTruocGioVao ? 'checked' : ''}> Có tính giờ trước giờ vào là tăng ca</label>`)}
           </div>
-          ${nhomId ? '' : `<div class="form-row" style="margin-top:8px;"><label>Ngày lễ / Tết (mỗi dòng 1 ngày, dạng 2026-09-02)</label>
-            <textarea id="cc_ngayLe" rows="3" placeholder="2026-09-02&#10;2027-01-01">${escapeHtml((cfg.ngayLe || []).join('\n'))}</textarea>
-            <div style="font-size:11px;color:#5f6368;">Tăng ca ngày lễ vào cột "Lễ/Tết"; Chủ nhật tự nhận diện vào cột "Chủ nhật".</div>
+          ${/* v9.55: ngày lễ chuyển sang nút 📅 Lịch nghỉ lễ (bảng NgayLeChung) — ô gõ tay cũ bỏ, ngày đã gõ được máy chủ
+               chép sang lịch lần đầu mở. KHÔNG đặt dấu backtick trong comment này. */''}
+          ${nhomId ? '' : `<div class="form-row" style="margin-top:8px;"><label>Ngày lễ / Tết</label>
+            <div style="font-size:12px;color:#5f6368;">Quản lý ở nút <b>📅 Lịch nghỉ lễ</b> trên tab Chấm công (đang có ${(cfg.ngayLe || []).length} ngày). Tăng ca ngày lễ vào cột "Lễ/Tết"; Chủ nhật tự nhận diện vào cột "Chủ nhật".</div>
           </div>`}
         </fieldset>
         <p class="empty-hint" style="margin-top:8px;">Sau khi lưu, bấm <b>🔄 Tổng hợp từ máy → bảng công</b> để áp cài đặt mới cho tháng đang xem (các dòng đã sửa tay không bị ghi đè).</p>
@@ -655,6 +789,166 @@ window.ModulePayroll = (function () {
     });
   }
 
+  /* === v9.55 NGHI LE + PHIEU NGHI — BAT DAU === */
+  /* v9.55 (Nguyen 14/11): "Chấm công thêm chức năng tạo lịch nghỉ lễ chung cho cả công ty. Tạo lịch nghỉ không lương,
+     thai sản, tai nạn theo từng cá nhân" + "tạo phiếu nghỉ phép chọn nhân viên, chọn ngày nghỉ phép để đưa vào bảng
+     lương. Chữ ký có người xin nghỉ và trưởng bộ phận". Máy chủ ghi các ngày làm việc của phiếu vào bảng chấm công
+     (mã P/KL/TS/TN, nguồn PhieuNghi) — bảng lương đọc như cũ; mở tab Lương công nhật là tự tính lại (v9.53).
+     Anh chốt: phép (P) KHÔNG lương như v9.45; lễ chung KHÔNG công. */
+  const LOAI_NGHI = { P: 'Nghỉ phép', KL: 'Nghỉ không lương', TS: 'Nghỉ thai sản', TN: 'Nghỉ tai nạn' };
+  const TIEU_DE_DON = { P: 'GIẤY NGHỈ PHÉP', KL: 'GIẤY NGHỈ KHÔNG LƯƠNG', TS: 'GIẤY NGHỈ THAI SẢN', TN: 'GIẤY NGHỈ DO TAI NẠN LAO ĐỘNG' };   // v9.57: "giấy" theo chữ Nguyen dùng
+  const thuCua = (s) => { const d = new Date(String(s).slice(0, 10) + 'T00:00:00'); return isNaN(d) ? '' : ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][d.getDay()]; };
+  const ddmm = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : escapeHtml(String(s || '')); };
+  function baoChuaMigration(tenViec) {
+    const m = openModal(`<h3>${escapeHtml(tenViec)}</h3><p>Máy chủ <b>chưa chạy database/migration_v892.sql</b> nên chưa có bảng cho chức năng này. Chạy migration rồi <code>pm2 restart</code>.</p>
+      <div class="modal-actions"><button type="button" class="btn" id="mgDong">Đóng</button></div>`);
+    m.querySelector('#mgDong').addEventListener('click', closeModal);
+  }
+  async function openLichNghiLe() {
+    let kq;
+    try { kq = (await apiGet('/api/payroll/chamcong/ngayle?nam=' + selNam)).data || {}; } catch (e) { toast(e.message, 'error'); return; }
+    if (kq.chuaMigration) { baoChuaMigration('📅 Lịch nghỉ lễ'); return; }
+    const rows = kq.rows || [];
+    const m = openModal(`<h3>📅 Lịch nghỉ lễ chung — năm ${selNam}</h3>
+      <p class="empty-hint" style="text-align:left;">Áp cho cả công ty. Ngày lễ: <b>không tính công</b>, không tính "không phép", phiếu nghỉ bỏ qua ngày này; ai đi làm thì giờ tăng ca vào cột <b>Lễ/Tết</b>. Xem năm khác: đổi năm ở ô Kỳ lương rồi mở lại.</p>
+      ${perm.canEdit ? `<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+        <div class="form-row" style="margin:0;"><label>Ngày *</label><input type="date" id="leNgay"></div>
+        <div class="form-row" style="margin:0;flex:1;min-width:200px;"><label>Tên ngày lễ</label><input id="leTen" maxlength="100" placeholder="VD: Quốc khánh 2/9" style="width:100%;"></div>
+        <button type="button" class="btn small" id="leThem">➕ Thêm</button>
+      </div>` : ''}
+      <table data-nostt><thead><tr><th style="width:120px;">Ngày</th><th style="width:50px;">Thứ</th><th>Tên ngày lễ</th><th style="width:90px;"></th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${ddmm(r.Ngay)}</td><td style="text-align:center;">${thuCua(r.Ngay)}</td><td>${escapeHtml(r.TenLe || '')}</td>
+        <td>${perm.canDelete ? `<button type="button" class="btn small danger le-xoa" data-id="${r.ID}" data-ngay="${escapeHtml(r.Ngay)}">Xóa</button>` : ''}</td></tr>`).join('')
+        || `<tr><td colspan="4" class="empty-hint">Năm ${selNam} chưa có ngày lễ nào.</td></tr>`}</tbody></table>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="leDong">Đóng</button></div>`);
+    m.querySelector('#leDong').addEventListener('click', closeModal);
+    const bThem = m.querySelector('#leThem');
+    if (bThem) bThem.addEventListener('click', async () => {
+      const ngay = m.querySelector('#leNgay').value;
+      if (!ngay) { toast('Chọn ngày.', 'error'); return; }
+      try { await apiPost('/api/payroll/chamcong/ngayle', { ngay, tenLe: m.querySelector('#leTen').value.trim() }); toast('Đã thêm ngày lễ.', 'success'); openLichNghiLe(); }
+      catch (e) { toast(e.message, 'error'); }
+    });
+    m.querySelectorAll('.le-xoa').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm(`Xóa ngày lễ ${ddmm(b.dataset.ngay)}?`)) return;
+      try { await apiDelete('/api/payroll/chamcong/ngayle/' + b.dataset.id); toast('Đã xóa.', 'success'); openLichNghiLe(); }
+      catch (e) { toast(e.message, 'error'); }
+    }));
+  }
+  /* v9.57 (Nguyen 14/11: "Nghỉ phép / nghỉ cá nhân đưa ra thành chức năng dưới Tính lương, sửa thành Tạo giấy nghỉ
+     phép / Nghỉ cá nhân"): là TAB RIÊNG (key 'nghiphep', chức năng PAYROLL/nghiphep), không còn là nút trong tab
+     Chấm công. Nút "Phiếu nghỉ của người này" ở chi tiết chấm công chuyển sang tab này với người đó chọn sẵn. */
+  let nvMacDinhNghiPhep = null;
+  async function renderNghiPhep() {
+    container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+    const nv = nvMacDinhNghiPhep; nvMacDinhNghiPhep = null;
+    await veNghiPhep(container, { nvMacDinh: nv });
+  }
+  /* Vẽ danh sách + form vào `host` (tab). Phiếu của THÁNG đang chọn (phiếu chạm tới tháng); nvMacDinh: chọn sẵn
+     người; suaId: đang sửa phiếu đó (form điền sẵn). */
+  async function veNghiPhep(host, opts) {
+    opts = opts || {};
+    let kq, nvList = [];
+    try {
+      kq = (await apiGet(`/api/payroll/chamcong/phieunghi?nam=${selNam}&thang=${selThang}`)).data || {};
+      if (perm.canEdit) nvList = (await apiGet('/api/payroll/nhanvien')).data || [];
+    } catch (e) { host.innerHTML = `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`; return; }
+    const rows = kq.rows || [];
+    const dangSua = opts.suaId ? rows.find(r => String(r.PhieuNghiID) === String(opts.suaId)) : null;
+    const f = (label, inner) => `<div class="form-row" style="margin:0;"><label>${label}</label>${inner}</div>`;
+    const h = dangSua || {};
+    const nvChon = h.NhanVienID || opts.nvMacDinh || '';
+    host.innerHTML = periodBar(null, '') + (kq.chuaMigration
+      ? `<div class="empty-hint" style="text-align:left;">Máy chủ <b>chưa chạy database/migration_v892.sql</b> nên chưa có bảng Phiếu nghỉ. Chạy migration rồi <code>pm2 restart</code>.</div>`
+      : `<p class="empty-hint" style="text-align:left;">Lưu giấy là các <b>ngày làm việc</b> trong khoảng (bỏ Chủ nhật + lễ chung) được ghi vào bảng chấm công với mã <b>P / KL / TS / TN</b>, số công 0 — bảng lương tự tính lại.
+        <b>Phép (P) không lương</b> (vào cột Phép, mất chuyên cần). Ngày đã có quẹt máy thì <b>máy thắng</b> (người đi làm sớm hơn giấy). 🖨️ In giấy có chỗ ký <b>người xin nghỉ</b> và <b>trưởng bộ phận</b>. Lễ chung khai ở Chấm công → 📅 Lịch nghỉ lễ.</p>
+      ${perm.canEdit ? `<form id="pnForm" style="border:1px solid #e0e0e0;border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+        <div style="font-weight:600;margin-bottom:6px;">${dangSua ? '✏️ Sửa giấy ' + escapeHtml(h.SoPhieu || ('#' + h.PhieuNghiID)) : '➕ Tạo giấy nghỉ phép / nghỉ cá nhân'}</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px;">
+          ${f('Nhân viên *', `<select id="pnNV"><option value="">-- Chọn nhân viên --</option>${nvList.map(x => `<option value="${x.NhanVienID}" ${String(nvChon) === String(x.NhanVienID) ? 'selected' : ''}>${escapeHtml((x.MaNhanVien ? x.MaNhanVien + ' - ' : '') + x.HoTen)}</option>`).join('')}</select>`)}
+          ${f('Loại nghỉ *', `<select id="pnLoai" data-nosearch>${Object.keys(LOAI_NGHI).map(k => `<option value="${k}" ${(h.Loai || 'P') === k ? 'selected' : ''}>${k} — ${LOAI_NGHI[k]}</option>`).join('')}</select>`)}
+          ${f('Người duyệt (trưởng bộ phận)', `<input id="pnDuyet" maxlength="100" value="${escapeHtml(h.NguoiDuyet || '')}" placeholder="Trống = lấy Quản lý trực tiếp trên hợp đồng">`)}
+          ${f('Từ ngày *', `<input type="date" id="pnTu" value="${escapeHtml(h.TuNgay || '')}">`)}
+          ${f('Đến ngày *', `<input type="date" id="pnDen" value="${escapeHtml(h.DenNgay || '')}">`)}
+          ${f('Lý do', `<input id="pnLyDo" maxlength="255" value="${escapeHtml(h.LyDo || '')}" placeholder="VD: Việc gia đình">`)}
+          ${/* v9.73 (Nguyen 17/11): nghỉ NỬA ngày — chỉ cho giấy 1 ngày; chấm công ghi P 0,5 công (phần còn lại theo máy/sửa tay). */''}
+          ${f('Nửa ngày', `<label style="font-weight:normal;"><input type="checkbox" id="pnNuaNgay" ${h.NuaNgay ? 'checked' : ''}> Chỉ nghỉ ½ ngày (giấy 1 ngày — Từ = Đến)</label>`)}
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+          ${dangSua ? '<button type="button" class="btn secondary" id="pnHuySua">Hủy sửa</button>' : ''}
+          <button type="submit" class="btn">💾 ${dangSua ? 'Lưu sửa' : 'Lưu giấy'}</button>
+        </div></form>` : ''}
+      <h4 style="margin:6px 0;">Giấy nghỉ chạm tới tháng ${selThang}/${selNam}</h4>
+      <table data-nostt style="font-size:13px;"><thead><tr><th>Số giấy</th><th>Nhân viên</th><th>Loại</th><th>Từ ngày</th><th>Đến ngày</th><th style="text-align:right;">Ngày LV</th><th>Lý do</th><th>Người duyệt</th><th style="width:170px;"></th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td>${escapeHtml(r.SoPhieu || '')}</td><td>${escapeHtml((r.MaNhanVien ? r.MaNhanVien + ' - ' : '') + (r.HoTen || ''))}</td>
+        <td><span class="badge">${escapeHtml(r.Loai)}</span> ${escapeHtml(LOAI_NGHI[r.Loai] || '')}</td>
+        <td>${ddmm(r.TuNgay)}</td><td>${ddmm(r.DenNgay)}</td><td style="text-align:right;">${num(r.SoNgay)}</td>
+        <td>${escapeHtml(r.LyDo || '')}</td><td>${escapeHtml(r.NguoiDuyet || '')}</td>
+        <td><button type="button" class="btn small secondary pn-in" data-id="${r.PhieuNghiID}">🖨️ In</button>
+          ${perm.canEdit ? `<button type="button" class="btn small secondary pn-sua" data-id="${r.PhieuNghiID}">Sửa</button>` : ''}
+          ${perm.canDelete ? `<button type="button" class="btn small danger pn-xoa" data-id="${r.PhieuNghiID}" data-so="${escapeHtml(r.SoPhieu || '')}">Xóa</button>` : ''}</td>
+      </tr>`).join('') || `<tr><td colspan="9" class="empty-hint">Tháng ${selThang}/${selNam} chưa có giấy nghỉ nào.</td></tr>`}</tbody></table>`);
+    wirePeriod(host, () => veNghiPhep(host, {}));
+    themOTimTuDong(host);   // v9.05: ô tìm số giấy / tên người trên danh sách
+    const form = host.querySelector('#pnForm');
+    if (form) {
+      // Chọn Đến ngày = Từ ngày khi còn trống (nghỉ một ngày là trường hợp thường nhất).
+      host.querySelector('#pnTu').addEventListener('change', (e) => { const den = host.querySelector('#pnDen'); if (!den.value || den.value < e.target.value) den.value = e.target.value; });
+      const bHuy = host.querySelector('#pnHuySua'); if (bHuy) bHuy.addEventListener('click', () => veNghiPhep(host, {}));
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = { nhanVienId: host.querySelector('#pnNV').value, loai: host.querySelector('#pnLoai').value, tuNgay: host.querySelector('#pnTu').value,
+          denNgay: host.querySelector('#pnDen').value, lyDo: host.querySelector('#pnLyDo').value.trim(), nguoiDuyet: host.querySelector('#pnDuyet').value.trim(),
+          nuaNgay: !!(host.querySelector('#pnNuaNgay') && host.querySelector('#pnNuaNgay').checked) };   // v9.73
+        if (!payload.nhanVienId) { toast('Chọn nhân viên.', 'error'); return; }
+        if (!payload.tuNgay || !payload.denNgay) { toast('Chọn từ ngày / đến ngày.', 'error'); return; }
+        if (payload.nuaNgay && payload.tuNgay !== payload.denNgay) { toast('Nghỉ nửa ngày chỉ áp dụng cho giấy MỘT ngày (Từ ngày = Đến ngày).', 'error'); return; }
+        try {
+          const r = dangSua ? await apiPut('/api/payroll/chamcong/phieunghi/' + dangSua.PhieuNghiID, payload) : await apiPost('/api/payroll/chamcong/phieunghi', payload);
+          toast(`Đã lưu giấy${r.data && r.data.SoPhieu ? ' ' + r.data.SoPhieu : ''} — ${num(r.data && r.data.SoNgay)} ngày làm việc đã ghi vào bảng chấm công.`, 'success');
+          veNghiPhep(host, {});
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    }
+    host.querySelectorAll('.pn-sua').forEach(b => b.addEventListener('click', () => veNghiPhep(host, { suaId: b.dataset.id })));
+    host.querySelectorAll('.pn-xoa').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm(`Xóa giấy ${b.dataset.so || '#' + b.dataset.id}? Các ngày nghỉ do giấy ghi vào bảng chấm công sẽ bị gỡ.`)) return;
+      try { await apiDelete('/api/payroll/chamcong/phieunghi/' + b.dataset.id); toast('Đã xóa giấy nghỉ.', 'success'); veNghiPhep(host, {}); }
+      catch (err) { toast(err.message, 'error'); }
+    }));
+    host.querySelectorAll('.pn-in').forEach(b => b.addEventListener('click', () => {
+      const r = rows.find(x => String(x.PhieuNghiID) === String(b.dataset.id));
+      /* v9.58 (Nguyen 14/11, ảnh): bỏ đầu trang công ty chung của printHtml — giấy đã có khung "Công ty | CHXHCN" riêng. */
+      if (r) printHtml(`Giay nghi ${r.SoPhieu || ''} - ${r.HoTen || ''}`, buildPhieuNghiBody(r), { noLetterhead: true });
+    }));
+  }
+  /* Bản in: hai chữ ký (trưởng bộ phận trái, người xin nghỉ phải). Tên công ty lấy từ module Nhân sự (một hằng). */
+  function buildPhieuNghiBody(r) {
+    const ct = (window.ModuleHRM && typeof ModuleHRM.congTy === 'function') ? ModuleHRM.congTy() : {};
+    const loai = LOAI_NGHI[r.Loai] || 'Nghỉ';
+    const ngayLap = r.CreatedAt ? String(r.CreatedAt).slice(0, 10) : '';
+    const d = ngayLap ? new Date(ngayLap + 'T00:00:00') : new Date();
+    /* v9.58: in với noLetterhead (bỏ đầu trang chung); CSS in kẻ viền mọi ô nên hai bảng đầu/cuối phải border:0 từng ô. */
+    return `<table style="width:100%;font-size:13px;border:0;margin-top:0;"><tr>
+        <td style="width:50%;text-align:center;vertical-align:top;border:0;"><b>${escapeHtml(ct.ten || '')}</b></td>
+        <td style="width:50%;text-align:center;vertical-align:top;border:0;"><b>CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</b><br><b><u>Độc lập - Tự do - Hạnh phúc</u></b></td>
+      </tr></table>
+      <h2 style="text-align:center;margin:18px 0 2px;">${escapeHtml(TIEU_DE_DON[r.Loai] || 'GIẤY NGHỈ')}</h2>
+      <p style="text-align:center;margin:0 0 14px;font-size:12px;">Số: ${escapeHtml(r.SoPhieu || '')}</p>
+      <p><b>Kính gửi:</b> Ban Giám đốc ${escapeHtml(ct.ten || 'Công ty')}${r.NguoiDuyet ? `;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Trưởng bộ phận ${escapeHtml(r.TenBoPhan || '')} — ${escapeHtml(r.NguoiDuyet)}` : ''}.</p>
+      <p>Tôi tên là: <b>${escapeHtml(r.HoTen || '')}</b>${r.MaNhanVien ? ` — Mã NV: ${escapeHtml(r.MaNhanVien)}` : ''}${r.TenBoPhan ? ` — Bộ phận: ${escapeHtml(r.TenBoPhan)}` : ''}${r.ChucVu ? ` — Chức vụ: ${escapeHtml(r.ChucVu)}` : ''}.</p>
+      <p>Tôi làm giấy này xin được <b>${escapeHtml(loai.toLowerCase())}</b> từ ngày <b>${ddmm(r.TuNgay)}</b> đến hết ngày <b>${ddmm(r.DenNgay)}</b> (<b>${num(r.SoNgay)}</b> ngày làm việc, không tính Chủ nhật và ngày lễ).</p>
+      <p>Lý do: ${escapeHtml(r.LyDo || '........................................................................')}</p>
+      <p>Tôi đã bàn giao công việc trong thời gian nghỉ và cam kết trở lại làm việc đúng hạn. Kính mong Ban Giám đốc và Trưởng bộ phận xem xét, chấp thuận.</p>
+      <p style="text-align:right;margin-top:10px;"><i>Ngày ${d.getDate()} tháng ${d.getMonth() + 1} năm ${d.getFullYear()}</i></p>
+      <table style="width:100%;margin-top:10px;font-size:13px;text-align:center;border:0;"><tr>
+        <td style="width:50%;border:0;"><b>TRƯỞNG BỘ PHẬN</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br>${escapeHtml(r.NguoiDuyet || '')}</td>
+        <td style="width:50%;border:0;"><b>NGƯỜI XIN NGHỈ</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br>${escapeHtml(r.HoTen || '')}</td>
+      </tr></table>`;
+  }
+  /* === v9.55 NGHI LE + PHIEU NGHI — KET THUC === */
+
   /* v5.60: CHI TIẾT ĐÃ KÉO VỀ — từng lần quẹt (không gộp), xóa 1 dòng sai hoặc xóa cả tháng để KÉO LẠI. */
   async function openRawChamCong(maChamCong) {
     let rows = [];
@@ -775,16 +1069,27 @@ window.ModulePayroll = (function () {
       ${coSuaChamCong ? `<h4 style="margin:14px 0 6px;">Thêm / sửa 1 ngày</h4>
       <form id="ccForm"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px;">
         <div class="form-row" style="margin:0;"><label>Ngày *</label><input type="date" id="d_ngay" required></div>
-        <div class="form-row" style="margin:0;"><label>Mã (x / P / TS / KL / LT)</label><input id="d_ma" value="x"></div>
-        <div class="form-row" style="margin:0;"><label>Số công</label><input type="number" step="0.5" id="d_cong" value="1"></div>
-        <div class="form-row" style="margin:0;"><label>Giờ TC thường</label><input type="number" step="0.5" id="d_tcT" value="0"></div>
-        <div class="form-row" style="margin:0;"><label>Giờ TC chủ nhật</label><input type="number" step="0.5" id="d_tcCN" value="0"></div>
-        <div class="form-row" style="margin:0;"><label>Giờ TC lễ</label><input type="number" step="0.5" id="d_tcLe" value="0"></div>
+        <div class="form-row" style="margin:0;"><label>Mã (x / P phép / KL không lương / TS thai sản / TN tai nạn / LT lễ hưởng lương)</label><input id="d_ma" value="x"></div>
+        ${/* v10.01 (Nguyen 23/11: "Số công đang chỉ nhập được 1 và 0.5, có thể nhập 0.7 0.8"):
+             step="0.5" khiến trình duyệt CHẶN mọi số không chia hết cho 0,5 — gõ 0.7 là báo "không hợp lệ"
+             và không lưu được. Đổi sang step="any" ⇒ nhập số bất kỳ. Cột trong CSDL vốn đã chịu được:
+             ChamCongNgay.SoCong DECIMAL(4,2), GioTangCa* DECIMAL(5,2) — nên KHÔNG cần migration.
+             min="0" vì công / giờ tăng ca âm không có nghĩa (sửa sai thì ghi đè, không ghi số âm). */''}
+        <div class="form-row" style="margin:0;"><label>Số công</label><input type="number" step="any" min="0" id="d_cong" value="1"></div>
+        <div class="form-row" style="margin:0;"><label>Giờ TC thường</label><input type="number" step="any" min="0" id="d_tcT" value="0"></div>
+        <div class="form-row" style="margin:0;"><label>Giờ TC chủ nhật</label><input type="number" step="any" min="0" id="d_tcCN" value="0"></div>
+        <div class="form-row" style="margin:0;"><label>Giờ TC lễ</label><input type="number" step="any" min="0" id="d_tcLe" value="0"></div>
       </div>
-      <div class="modal-actions">${nutXuatExcel}<button type="button" class="btn secondary" id="btnClose">Đóng</button><button type="submit" class="btn">Lưu ngày</button></div></form>`
+      <div class="modal-actions">${nutXuatExcel}<button type="button" class="btn small secondary" id="btnPNcuaNV" title="Sang tab Tạo giấy nghỉ phép / Nghỉ cá nhân, chọn sẵn người này">🏖️ Tạo giấy nghỉ cho người này</button><button type="button" class="btn secondary" id="btnClose">Đóng</button><button type="submit" class="btn">Lưu ngày</button></div></form>`
       : `<div class="modal-actions">${nutXuatExcel}<button type="button" class="btn secondary" id="btnClose">Đóng</button></div>`}`;
     const modal = openModal(html);
     modal.querySelector('#btnClose').addEventListener('click', closeModal);
+    /* v9.57: giấy nghỉ là tab riêng — đóng modal, nhớ người đang xem rồi chuyển tab (switchModule của app.js). */
+    const bPNnv = modal.querySelector('#btnPNcuaNV');
+    if (bPNnv) bPNnv.addEventListener('click', () => {
+      closeModal(); nvMacDinhNghiPhep = nhanVienId;
+      if (typeof switchModule === 'function') switchModule('PAYROLL', 'nghiphep'); else render(container, currentUser, 'nghiphep');
+    });
     // v7.97: người chỉ có quyền XEM thì không có #ccForm — phải kiểm, không thì throw giữa chừng và
     // modal "không có gì xảy ra" (đúng họ lỗi async handler tắt lặng đã ghi nhận nhiều lần).
     const fCC = modal.querySelector('#ccForm');
@@ -800,9 +1105,153 @@ window.ModulePayroll = (function () {
     });
   }
 
+  /* ================================================================================================
+     2b. NGÀY NGHỈ THEO NĂM (v10.01 — Nguyen 23/11: "Thêm chức năng xem ngày nghỉ phép của nhân viên
+     trong 1 năm. Tổng cộng bao nhiêu ngày đã nghỉ.")
+     ------------------------------------------------------------------------------------------------
+     Một hàng một người: 12 tháng PHÉP + tổng phép + KL/TS/TN + TỔNG ĐÃ NGHỈ. Bấm một hàng ra danh
+     sách TỪNG NGÀY. Số đếm do máy chủ gộp từ `ChamCongNgay` theo đúng luật của bảng lương
+     (`soNgayNghiCuaDong`: có SoCong > 0 thì lấy chính nó — giấy nửa ngày = 0,5 — không thì trọn 1).
+     Hiện CẢ người chưa nghỉ ngày nào (số 0 cũng là câu trả lời), nên không lọc bớt hàng.
+     ================================================================================================ */
+  const soNgay = (v) => { const n = Math.round((Number(v) || 0) * 100) / 100; return n ? String(n).replace('.', ',') : ''; };
+  async function renderNghiPhepNam() {
+    container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
+    let d;
+    try { d = (await apiGet(`/api/payroll/chamcong/nghiphepnam?nam=${selNam}`)).data; }
+    catch (e) {
+      container.innerHTML = periodBarYearOnly() + `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`;
+      wireNamNghi(); return;
+    }
+    const rows = d.rows || [], tc = d.tongCong || {};
+    const THANG = Array.from({ length: 12 }, (_, i) => i + 1);
+    /* 🔴 v10.02 (Nguyen 23/11: "Cố định phần này... cố định phần tiêu đề trở lên thành 1 khối khi cuộn trang"):
+       bọc ô chọn năm + tiêu đề + dòng tổng vào .toolbar — common.js (capNhatThanhCongCuDinh) tự gắn
+       class .sticky-bar cho thanh NẰM Ở ĐẦU vùng cuộn và đo chiều cao vào biến --bar-h, nên dòng tiêu
+       đề bảng dính NGAY DƯỚI khối này. Dùng đúng cơ chế sẵn có, KHÔNG viết position:sticky lần thứ hai.
+       ⚠️ Vì vậy bảng KHÔNG được bọc trong div overflow:auto nữa — vùng cuộn phải là chính .content,
+       nếu không common.js sẽ đặt lại --bar-h = 0 cho div đó và tiêu đề bảng hết dính. */
+    container.innerHTML = `<div class="toolbar" style="display:block;">
+      ${periodBarYearOnly()}
+      <h4 style="margin:4px 0;">Ngày nghỉ năm ${d.nam} <span style="font-weight:400;font-size:12px;color:#5f6368;">(bấm một dòng để xem từng ngày nghỉ)</span></h4>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;">
+        <div>Tổng <b>phép</b> cả công ty: <b style="color:#1a73e8;">${soNgay(tc.P) || '0'}</b> ngày</div>
+        <div>Không lương: <b>${soNgay(tc.KL) || '0'}</b></div>
+        <div>Thai sản: <b>${soNgay(tc.TS) || '0'}</b></div>
+        <div>Tai nạn: <b>${soNgay(tc.TN) || '0'}</b></div>
+        <div style="color:#c0392b;">Không phép: <b>${soNgay(tc.khongPhep) || '0'}</b></div>
+        <div>TỔNG đã nghỉ: <b>${soNgay(tc.tong) || '0'}</b> ngày</div>
+      </div></div>
+      <table style="font-size:13px;"><thead>
+        <tr><th style="width:38px;">STT</th><th>Mã NV</th><th>Họ tên</th><th>Bộ phận</th>
+        ${THANG.map(t => `<th style="text-align:right;width:34px;" title="Phép tháng ${t}">T${t}</th>`).join('')}
+        <th style="text-align:right;">Tổng phép</th><th style="text-align:right;">KL</th><th style="text-align:right;">TS</th><th style="text-align:right;">TN</th>
+        <th style="text-align:right;" title="Ngày làm việc mà máy chấm công không kéo về dòng nào và cũng không có giấy nghỉ">Không phép</th>
+        <th style="text-align:right;" title="Chủ nhật của người có hợp đồng ghi bộ phận nghỉ CN">Nghỉ CN</th>
+        <th style="text-align:right;">TỔNG đã nghỉ</th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr data-nv="${r.NhanVienID}" data-ten="${escapeHtml(r.HoTen || '')}" style="cursor:pointer;">
+        <td style="text-align:center;">${i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen || '')}</td><td>${escapeHtml(r.TenBoPhan || '')}</td>
+        ${THANG.map(t => `<td style="text-align:right;">${soNgay((r.thangPhep || [])[t - 1])}</td>`).join('')}
+        <td style="text-align:right;font-weight:600;color:#1a73e8;">${soNgay(r.theoMa && r.theoMa.P)}</td>
+        <td style="text-align:right;">${soNgay(r.theoMa && r.theoMa.KL)}</td>
+        <td style="text-align:right;">${soNgay(r.theoMa && r.theoMa.TS)}</td>
+        <td style="text-align:right;">${soNgay(r.theoMa && r.theoMa.TN)}</td>
+        <td style="text-align:right;color:#c0392b;font-weight:600;">${soNgay(r.khongPhep)}</td>
+        <td style="text-align:right;color:#5f6368;" title="${r.lamCaCN ? 'Hợp đồng tính cả chủ nhật — CN không phải ngày nghỉ' : 'Bộ phận nghỉ CN'}">${r.lamCaCN ? '—' : soNgay(r.nghiCN)}</td>
+        <td style="text-align:right;font-weight:700;">${soNgay(r.tongTatCa)}</td></tr>`).join('')
+        || '<tr><td colspan="23" class="empty-hint">Không có nhân viên nào đang làm việc.</td></tr>'}</tbody>
+      ${rows.length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td>
+        ${THANG.map(t => `<td style="text-align:right;">${soNgay(rows.reduce((s, r) => s + Number((r.thangPhep || [])[t - 1] || 0), 0))}</td>`).join('')}
+        <td style="text-align:right;">${soNgay(tc.P)}</td><td style="text-align:right;">${soNgay(tc.KL)}</td><td style="text-align:right;">${soNgay(tc.TS)}</td><td style="text-align:right;">${soNgay(tc.TN)}</td>
+        <td style="text-align:right;color:#c0392b;">${soNgay(tc.khongPhep)}</td><td style="text-align:right;color:#5f6368;">${soNgay(tc.nghiCN)}</td>
+        <td style="text-align:right;">${soNgay(tc.tong)}</td></tr></tfoot>` : ''}</table>
+      ${Number(d.ngayNghiViecBoQua) ? `<p style="color:#b06000;font-size:12px;margin-top:8px;">Có <b>${soNgay(d.ngayNghiViecBoQua)}</b> ngày nghỉ trong năm ${d.nam} thuộc về người <b>đã nghỉ việc</b> — bảng này chỉ liệt kê nhân viên đang làm nên không cộng vào.</p>` : ''}
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Phép / KL / TS / TN gộp từ <b>bảng chấm công</b> — cùng nguồn, cùng cách đếm với bảng lương nên khớp dòng "Ngày phép" trên phiếu lương; giấy nghỉ <b>nửa ngày</b> tính <b>0,5</b>.
+      <b>Không phép</b> = ngày làm việc (T2…T7, trừ lễ) mà máy chấm công <b>không kéo về dòng nào</b> và cũng <b>không có giấy nghỉ</b> — đúng bộ đếm của cột "Không phép" trên bảng lương từng tháng; chỉ tính tới <b>hôm nay</b> và từ <b>ngày vào làm</b>.
+      <b>Nghỉ CN</b> chỉ đếm cho người có hợp đồng tích <i>bộ phận nghỉ CN</i>; người làm cả CN hiện "—". Nghỉ CN <b>không</b> cộng vào TỔNG (là ngày nghỉ theo lịch, không phải nghỉ việc riêng). Cột T1…T12 chỉ là <b>phép</b>.</p>`;
+    wireNamNghi();
+    themOTimTuDong(container);
+    /* Ô tìm do themOTimTuDong sinh ra nằm NGAY TRÊN bảng ⇒ kéo nó vào khối cố định để cả cụm cùng
+       đứng yên khi cuộn (đúng vùng Nguyen khoanh trong ảnh). */
+    const tb = container.querySelector('table');
+    const hopTim = tb && tb.dataset.oTimHop ? container.querySelector('#' + tb.dataset.oTimHop) : null;
+    const khoi = container.querySelector('.toolbar');
+    if (hopTim && khoi) khoi.appendChild(hopTim);
+    container.querySelectorAll('tbody tr[data-nv]').forEach(tr => tr.addEventListener('click', () => moChiTietNghiNam(tr.dataset.nv, tr.dataset.ten)));
+  }
+  function wireNamNghi() {
+    const o = container.querySelector('#ccNam');
+    if (o) o.addEventListener('change', e => { selNam = parseInt(e.target.value, 10); renderNghiPhepNam(); });
+  }
+  async function moChiTietNghiNam(nhanVienId, ten) {
+    let d;
+    try { d = (await apiGet(`/api/payroll/chamcong/nghiphepnam/${nhanVienId}?nam=${selNam}`)).data; }
+    catch (e) { toast(e.message, 'error'); return; }
+    const rows = d.rows || [], loai = d.loai || {}, tm = d.theoMa || {};
+    const nv = d.nhanVien || {};
+    /* v10.02: "hiện rõ phép, ko phép" — ô tóm tắt từng loại ở đầu, rồi danh sách ngày đã TRỘN cả
+       ngày không phép và nghỉ CN, sắp theo ngày; mỗi loại một màu để nhìn là biết. */
+    const o = (nhan, so, mau) => `<div style="border:1px solid #e0e0e0;border-radius:6px;padding:6px 10px;min-width:104px;">
+      <div style="font-size:11.5px;color:#5f6368;">${nhan}</div><div style="font-weight:700;font-size:16px;${mau ? 'color:' + mau + ';' : ''}">${soNgay(so) || '0'}</div></div>`;
+    const MAU = { P: '#1a73e8', KL: '#5f6368', TS: '#5f6368', TN: '#5f6368', KP: '#c0392b', CN: '#8a8f98' };
+    const m = openModal(`<h3>Ngày nghỉ năm ${d.nam} — ${escapeHtml(ten || nv.HoTen || '')}${nv.TenBoPhan ? ` <span style="font-weight:400;font-size:13px;color:#5f6368;">(${escapeHtml(nv.TenBoPhan)})</span>` : ''}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        ${o('Phép', tm.P, MAU.P)}${o('Không lương', tm.KL)}${o('Thai sản', tm.TS)}${o('Tai nạn', tm.TN)}
+        ${o('KHÔNG PHÉP', d.khongPhep, MAU.KP)}${d.lamCaCN ? '' : o('Nghỉ CN', d.nghiCN, MAU.CN)}
+        ${o('TỔNG đã nghỉ', d.tongTatCa)}
+      </div>
+      <div class="empty-hint" style="text-align:left;line-height:1.6;">
+        <b>Không phép</b> = ngày làm việc mà máy chấm công không kéo về dòng nào và không có giấy nghỉ (chỉ tính tới hôm nay, từ ngày vào làm).
+        ${d.lamCaCN
+          ? 'Hợp đồng của người này <b>tính cả chủ nhật</b> nên CN không được xem là ngày nghỉ.'
+          : 'Hợp đồng ghi <b>bộ phận nghỉ CN</b> nên chủ nhật xếp vào "nghỉ CN", không phải không phép.'}
+        Nghỉ CN <b>không</b> cộng vào TỔNG.</div>
+      <div style="overflow:auto;max-height:55vh;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Ngày</th><th>Loại</th><th style="text-align:right;">Số ngày</th><th>Nguồn</th><th>Ghi chú</th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr><td style="text-align:center;">${i + 1}</td><td>${fmtDate(r.Ngay)}</td>
+        <td style="color:${MAU[r.Ma] || '#202124'};font-weight:${r.Ma === 'KP' ? '700' : '400'};">${escapeHtml(loai[r.Ma] || r.Ma || '')}</td><td style="text-align:right;">${soNgay(r.SoNgay)}</td>
+        <td>${escapeHtml(r.Nguon || '')}</td><td style="font-size:12px;color:#5f6368;">${escapeHtml(r.GhiChu || '')}</td></tr>`).join('')
+        || '<tr><td colspan="6" class="empty-hint">Không có ngày nghỉ nào trong năm này.</td></tr>'}</tbody></table></div>
+      <div class="modal-actions"><button type="button" class="btn secondary" id="btnDongNghiNam">Đóng</button></div>`);
+    m.querySelector('#btnDongNghiNam').addEventListener('click', closeModal);
+  }
+
   /* ================================================================
      3. LUONG CONG NHAT
      ================================================================ */
+  /* === v9.53 TU TINH LAI — BAT DAU === */
+  /* v9.53 (Nguyen 14/11: "có biến động ngày công, phiếu thu chi hay ký hợp đồng thì tự động tính lương
+     luôn, không cần bấm"): máy chủ tự tính lại NGAY TRONG GET /bangluong khi có cờ biến động (hoặc tháng
+     này / tháng trước chưa có bảng), trả `tuDong` để nói đã làm gì. Hàm dưới THUẦN TÚY (HTML từ tuDong)
+     để bộ kiểm chạy được.
+       · daTinhLai  → xanh: "⟳ Đã tự tính lại lúc … vì: …" (+ số người thiếu HĐ / cảnh báo, bấm xem)
+       · daChot     → cam: bảng ĐÃ CHỐT nhưng có biến động sau đó — KHÔNG tự tính (luật v9.32)
+       · loi        → đỏ: tự tính thất bại, cờ còn, bấm Tính lương để thấy lỗi đầy đủ
+       · chuaCoBang → xám: tháng cũ chưa từng có bảng — máy chủ không tự tạo
+       · lanCuoi    → xám: lần tính gần nhất (tự động / bấm tay) */
+  function fmtLucTuDong(s) {   // 'yyyy-mm-dd hh:mi' (giờ máy chủ, chuỗi) → 'hh:mi dd/mm'
+    const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})$/.exec(String(s || ''));
+    return m ? `${m[4]} ${m[3]}/${m[2]}` : escapeHtml(String(s || ''));
+  }
+  function dongTuTinh(td) {
+    if (!td) return '';
+    const lyDo = (ds) => (Array.isArray(ds) ? ds : []).map(x => escapeHtml(String(x))).join('; ');
+    const hop = (st, nd) => `<div id="blTuDong" style="margin:-4px 0 10px;padding:6px 10px;border-radius:6px;font-size:12.5px;line-height:1.5;${st}">${nd}</div>`;
+    if (td.daTinhLai) {
+      const kq = td.ketQua || {};
+      const thieu = (kq.thieuHopDong || []).length, cb = (kq.canhBao || []).length;
+      return hop('background:#e6f4ea;color:#137333;', `⟳ <b>Bảng đã tự tính lại</b> lúc ${fmtLucTuDong(td.luc)} vì: ${lyDo(td.lyDo) || 'có biến động'}.`
+        + (thieu || cb ? ` <a href="#" id="blXemKq" style="color:#b06000;font-weight:600;">${thieu ? thieu + ' người chưa có hợp đồng' : ''}${thieu && cb ? ', ' : ''}${cb ? cb + ' cảnh báo' : ''} — xem</a>` : ''));
+    }
+    if (td.daChot) return hop('background:#fef3e0;color:#b06000;', `⚠ Bảng <b>đã chốt</b> nhưng có biến động sau đó (${fmtLucTuDong(td.luc)}): ${lyDo(td.lyDo)}. Bảng <b>không</b> tự tính lại — số đã chốt giữ nguyên; muốn cập nhật thì bấm <b>🔓 Bỏ chốt</b> (ghi lý do) rồi mở lại tab.`);
+    if (td.loi) return hop('background:#fce8e6;color:#c0392b;', `⚠ Tự tính lại <b>thất bại</b>: ${escapeHtml(String(td.loi))}. Biến động chưa vào bảng (${lyDo(td.lyDo)}) — bấm <b>Tính lương</b> để thử lại và xem lỗi.`);
+    if (td.chuaCoBang) return hop('background:#f1f3f4;color:#5f6368;', `Tháng này chưa từng có bảng lương nên không tự tạo (chỉ tháng này và tháng trước mới tự tạo) — bấm <b>Tính lương</b> nếu cần.`);
+    if (td.lanCuoi && td.lanCuoi.luc) {
+      const lc = td.lanCuoi;
+      return hop('background:#f1f3f4;color:#5f6368;', `Số liệu đang là mới nhất — tính lần cuối ${fmtLucTuDong(lc.luc)} (${lc.cach === 'tay' ? 'bấm Tính lương' : 'tự động'}${(lc.lyDo || []).length ? ': ' + lyDo(lc.lyDo) : ''}). Bảng tự tính lại khi có biến động chấm công / phiếu chi tạm ứng / hợp đồng / KPI.`);
+    }
+    return '';
+  }
+  /* === v9.53 TU TINH LAI — KET THUC === */
   async function renderLuong() {
     container.innerHTML = '<div class="empty-hint">Đang tải...</div>';
     let d;
@@ -810,35 +1259,44 @@ window.ModulePayroll = (function () {
     const daChot = d.header && d.header.TrangThai === 'Đã chốt';
     const tong = (d.rows || []).reduce((s, r) => s + num(r.ThucLinh), 0);
     const actions = `
-      ${perm.canEdit && !daChot ? `<button class="btn small" id="btnTinh">🧮 Tính lương</button>` : ''}
+      ${perm.canEdit && !daChot ? `<button class="btn small" id="btnTinh" title="Tính lại ngay. Bình thường không cần: bảng tự tính lại khi có biến động (v9.53).">🧮 Tính lương</button>` : ''}
       ${d.header && perm.canEdit && !daChot ? `<button class="btn small secondary" id="btnChot">🔒 Chốt bảng lương</button>` : ''}
+      ${/* v9.54: bỏ chốt — có lý do, ghi dấu vết vào GhiChu; mở lại tab là tự tính nếu có biến động (v9.53). */''}
+      ${d.header && perm.canEdit && daChot ? `<button class="btn small secondary" id="btnBoChot" title="Bỏ chốt để tính lại / sửa — phải ghi lý do">🔓 Bỏ chốt</button>` : ''}
       ${d.header ? `<button class="btn small secondary" id="btnExcel">📊 Xuất Excel</button>
                     <button class="btn small secondary" id="btnCK">🏦 Xuất file CK</button>` : ''}
       ${(d.rows || []).length ? '<button class="btn small secondary" id="btnInCN">🖨️ In bảng lương</button>' : ''}
-      ${d.header ? `<span style="margin-left:8px;color:${daChot ? '#137333' : '#b06000'};font-weight:600;">${daChot ? '● Đã chốt' : '● Nháp'}</span>` : ''}`;
+      ${d.header ? `<span style="margin-left:8px;color:${daChot ? '#137333' : '#b06000'};font-weight:600;" title="${escapeHtml(d.header.GhiChu || '')}">${daChot ? '● Đã chốt' : '● Nháp'}</span>` : ''}
+      ${d.header && d.header.GhiChu ? `<span style="font-size:11.5px;color:#5f6368;margin-left:6px;" title="${escapeHtml(d.header.GhiChu)}">📝 ${escapeHtml(String(d.header.GhiChu).split('\n')[0]).slice(0, 90)}</span>` : ''}`;
     /* v9.45: cột theo BẢNG THỰC TẾ T10/2026 (sheet 2) — kiểu lương, công TV/CT, phép, OT, KPI, xăng,
        chức vụ, chuyên cần, BH, thuế (hiện luôn, cột "trừ" nói có vào thực lĩnh không), tạm ứng, điều
        chỉnh có lý do. Dòng chưa có cột v890 (bảng tính trước migration) thì các ô mới trống. */
     const tongTU = (d.rows || []).reduce((s, r) => s + num(r.TamUng), 0);
     const tongDC = (d.rows || []).reduce((s, r) => s + num(r.DieuChinh), 0);
     const coV890 = (d.rows || []).some(r => r.KieuLuong != null);
-    container.innerHTML = periodBar(null, actions) + `
+    /* v9.73: KieuThuong là chuỗi tập hợp "KPI,SanPham,ChuyenCan" — nhãn ngắn KPI+SP+CC, tooltip đủ chữ. */
+    const nhanKT = (k) => String(k || '').split(/[,;|\s]+/).filter(Boolean).map(x => x === 'KPI' ? 'KPI' : x === 'SanPham' ? 'SP' : x === 'ChuyenCan' ? 'CC' : x).join('+');
+    const coKT = (k, x) => String(k || '').includes(x);
+    container.innerHTML = periodBar(null, actions) + dongTuTinh(d.tuDong) + `
       <div style="overflow:auto;"><table style="font-size:12px;min-width:1700px;"><thead><tr><th style="width:38px;">STT</th>
         <th>Mã NV</th><th>Họ tên</th><th>Kiểu</th><th title="Công thử việc (× tỷ lệ thử việc)">Công TV</th><th title="Công chính thức (gồm lễ hưởng lương)">Công CT</th><th>Phép</th><th title="Số ngày đi muộn — một ngày là mất chuyên cần">Muộn</th>
+        <th title="v9.55: ngày làm việc (T2–T7, trừ CN + lễ chung, từ ngày vào làm, tới hôm nay) không có chấm công, không phép, không nghỉ KL/TS/TN. Chỉ để đối chiếu, không trừ tiền.">Không phép</th>
         <th title="Lương tháng (kiểu Tháng) hoặc đơn giá ngày (kiểu Ngày)">Lương CB / ĐG ngày</th><th>Lương</th><th>Giờ OT</th><th>Tiền OT</th>
-        <th>Thưởng KPI/SP</th><th>Xăng xe</th><th>Chức vụ</th><th>Chuyên cần</th><th title="10,5% × mức đóng BH khai ở hợp đồng">BH</th>
+        <th title="Theo Kiểu thưởng trên hợp đồng: KPI / sản phẩm / chuyên cần bậc thang (CC)">Thưởng KPI/SP/CC</th><th>Xăng xe</th><th>Chức vụ</th><th title="Phụ cấp chuyên cần cố định — hợp đồng kiểu thưởng Chuyên cần bậc thang thì khoản này bỏ qua">Chuyên cần</th><th title="10,5% × mức đóng BH khai ở hợp đồng">BH</th>
         <th title="Thuế TNCN TÍNH ra. Có trừ vào thực lĩnh hay không là công tắc ở Cấu hình lương.">Thuế TNCN</th><th>Tạm ứng</th><th>Điều chỉnh</th><th>Thực lĩnh</th>
       </tr></thead><tbody>${(d.rows || []).map((r, __i) => `<tr class="cn-nv" data-id="${r.ID}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td>
-        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}${r.KieuThuong ? ` <span style="font-size:10px;color:#5f6368;">(${r.KieuThuong === 'KPI' ? 'KPI' : 'SP'})</span>` : ''}</td>
+        <td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}${nhanKT(r.KieuThuong) ? ` <span style="font-size:10px;color:#5f6368;">(${nhanKT(r.KieuThuong)})</span>` : ''}</td>
         <td style="text-align:center;">${r.KieuLuong === 'Ngay' ? 'Ngày' : (r.KieuLuong ? 'Tháng' : '')}</td>
         <td style="text-align:right;">${r.CongThuViec != null ? num(r.CongThuViec) : ''}</td>
         <td style="text-align:right;">${r.CongChinhThuc != null ? num(r.CongChinhThuc) : num(r.Cong)}</td>
         <td style="text-align:right;${num(r.SoPhep) > 0 ? 'color:#b06000;' : ''}">${r.SoPhep != null ? num(r.SoPhep) : ''}</td>
         <td style="text-align:right;${num(r.SoNgayMuon) > 0 ? 'color:#c0392b;' : ''}">${r.SoNgayMuon != null ? num(r.SoNgayMuon) : ''}</td>
+        ${/* v9.55: không phép — đỏ khi > 0; dòng tính trước migration_v892 thì trống. v9.58: rê chuột thấy ĐÚNG những ngày bị đếm. */''}
+        <td style="text-align:right;${num(r.SoKhongPhep) > 0 ? 'color:#c0392b;font-weight:600;' : ''}" title="${(r.ngayKhongPhep || []).length ? 'Không phép: ' + r.ngayKhongPhep.map(ddmm).join(', ') : (r.SoKhongPhep != null ? 'Không có ngày không phép' : '')}">${r.SoKhongPhep != null ? num(r.SoKhongPhep) : ''}</td>
         <td style="text-align:right;">${r.KieuLuong === 'Ngay' ? money(r.DonGiaNgay) : money(r.LuongCoBan)}</td>
         <td style="text-align:right;">${money(r.LuongNgayCong)}</td>
         <td style="text-align:right;">${r.GioOT != null ? num(r.GioOT) : ''}</td><td style="text-align:right;">${money(r.TangCa)}</td>
-        <td style="text-align:right;" title="${r.DiemKPI != null ? 'Điểm KPI ' + num(r.DiemKPI) + '/100' : ''}">${money(r.Thuong)}${r.KieuThuong === 'KPI' && r.DiemKPI == null && num(r.Thuong) === 0 ? ' <span title="Chưa chấm KPI tháng này" style="color:#c0392b;">⚠️</span>' : ''}</td>
+        <td style="text-align:right;" title="${[r.DiemKPI != null ? 'Điểm KPI ' + num(r.DiemKPI) + '/100' : '', coKT(r.KieuThuong, 'SanPham') ? 'có thưởng theo sản phẩm' : '', coKT(r.KieuThuong, 'ChuyenCan') ? 'có thưởng chuyên cần bậc thang' : ''].filter(Boolean).join(' · ')}">${money(r.Thuong)}${coKT(r.KieuThuong, 'KPI') && r.DiemKPI == null ? ' <span title="Chưa chấm KPI tháng này" style="color:#c0392b;">⚠️</span>' : ''}</td>
         <td style="text-align:right;">${money(r.PcXangXe)}</td><td style="text-align:right;">${money(r.PcChucVu)}</td><td style="text-align:right;">${money(r.ChuyenCan)}</td>
         <td style="text-align:right;">${money(r.TongBH)}</td>
         <td style="text-align:right;color:${r.ThueDaTru ? 'inherit' : '#8a8a8a'};" title="${r.ThueDaTru ? 'ĐÃ trừ vào thực lĩnh' : 'CHƯA trừ vào thực lĩnh (công tắc đang tắt)'}">${money(r.ThueTNCN)}${r.ThueDaTru ? '' : ' <span style="font-size:10px;">(không trừ)</span>'}</td>
@@ -852,19 +1310,24 @@ window.ModulePayroll = (function () {
         ${/* v9.32: thực lĩnh ÂM (ứng nhiều hơn lương) phải đỏ và nói lý do — bị loại khỏi file CK. */''}
         <td style="text-align:right;font-weight:600;${num(r.ThucLinh) < 0 ? 'color:#c0392b;' : ''}"
             ${num(r.ThucLinh) < 0 ? 'title="Tạm ứng nhiều hơn lương — dòng này KHÔNG vào file chuyển khoản"' : ''}>${money(r.ThucLinh)}${num(r.ThucLinh) < 0 ? ' ⚠️' : ''}</td>
-      </tr>`).join('') || `<tr><td colspan="21" class="empty-hint">Chưa có bảng lương. Bấm "Tính lương" để tạo.</td></tr>`}</tbody>
-      ${(d.rows || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="17" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongTU)}</td><td style="text-align:right;">${tongDC ? money(tongDC) : ''}</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}
+      </tr>`).join('') || `<tr><td colspan="22" class="empty-hint">${d.header ? 'Bảng lương chưa có dòng nào — chưa ai có hợp đồng hiệu lực tháng này (Nhân sự → Hợp đồng lao động).' : 'Chưa có bảng lương tháng này. Bấm "Tính lương" để tạo.'}</td></tr>`}</tbody>
+      ${(d.rows || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="18" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tongTU)}</td><td style="text-align:right;">${tongDC ? money(tongDC) : ''}</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}
       </table></div>
       <p style="color:#5f6368;font-size:12px;margin-top:8px;">
-        <b>Nguồn số:</b> thông số lương lấy từ <b>hợp đồng đang hiệu lực</b> (Nhân sự → Hợp đồng: kiểu lương Ngày/Tháng, đơn giá ngày hoặc lương CB, mức đóng BH, quỹ KPI, chức vụ, chuyên cần, xăng xe, ngày hết thử việc) — <b>người chưa có hợp đồng thì KHÔNG có trong bảng</b> (danh sách hiện lên sau khi Tính lương).
+        <b>Nguồn số:</b> thông số lương lấy từ <b>hợp đồng đang hiệu lực</b> (Nhân sự → Hợp đồng: kiểu lương Ngày/Tháng, đơn giá ngày hoặc lương CB, mức đóng BH, quỹ KPI, chức vụ, chuyên cần, xăng xe, ngày hết thử việc) — <b>người chưa có hợp đồng thì KHÔNG có trong bảng</b> (danh sách hiện lên sau mỗi lần tính).
         Công, phép, đi muộn, giờ OT lấy từ <b>Chấm công</b>. Điểm KPI / số sản phẩm lấy từ tab <b>Đánh giá KPI</b>.
-        <br><b>OT</b> = lương cơ bản ÷ số giờ một ngày × hệ số (cấu hình, mặc định 1,5) × giờ OT — một công thức cho mọi người. <b>Chuyên cần</b> mất khi có phép, thiếu công chuẩn, hoặc đi muộn dù một ngày. <b>Xăng</b> = đơn giá/ngày × ngày đi làm (không tính phép).
+        <b>Bảng tự tính lại</b> khi mở tab này sau mỗi biến động (chấm công, phiếu chi tạm ứng, hợp đồng, KPI, cấu hình) — trừ bảng đã chốt. Nút Tính lương chỉ để tính lại ngay khi muốn.
+        <br><b>OT</b> = lương cơ bản ÷ số giờ một ngày × hệ số (cấu hình, mặc định 1,5) × giờ OT — một công thức cho mọi người. <b>Chuyên cần</b> mất khi có phép, thiếu công chuẩn, hoặc đi muộn dù một ngày. <b>Xăng</b> = phụ cấp xăng xe (đ/NGÀY, khai trên hợp đồng) × ngày đi làm thực tế (không tính phép, lễ).
         <br><b>Tạm ứng</b> lấy tự động từ <b>Công nợ → Phiếu chi</b> loại Tạm ứng — bấm con số để xem từng phiếu. <b>Điều chỉnh</b> ± bắt buộc ghi lý do, được giữ nguyên khi tính lại. Thực lĩnh làm tròn theo cấu hình (mặc định nghìn đồng).
       </p>`;
     wirePeriod(container, renderLuong);
     themOTimTuDong(container);   // v9.05: ô tìm Mã NV / Họ tên trên bảng lương công nhật
     const bTinh = container.querySelector('#btnTinh'); if (bTinh) bTinh.addEventListener('click', tinhLuong);
     const bChot = container.querySelector('#btnChot'); if (bChot) bChot.addEventListener('click', () => chotLuong(d.header.BangLuongID));
+    const bBoChot = container.querySelector('#btnBoChot'); if (bBoChot) bBoChot.addEventListener('click', () => boChotLuong(d.header));   // v9.54
+    // v9.53: bảng vừa tự tính lại mà có người thiếu hợp đồng / cảnh báo thì xem được đúng hộp như lúc bấm Tính lương.
+    const aXemKq = container.querySelector('#blXemKq');
+    if (aXemKq) aXemKq.addEventListener('click', (e) => { e.preventDefault(); hienKetQuaTinh((d.tuDong && d.tuDong.ketQua) || {}, 'Bảng đã tự tính lại'); });
     const bEx = container.querySelector('#btnExcel'); if (bEx) bEx.addEventListener('click', () => downloadFile(`/api/payroll/bangluong/excel?nam=${selNam}&thang=${selThang}`, `BangLuong_T${selThang}_${selNam}.xlsx`));
     const bCK = container.querySelector('#btnCK'); if (bCK) bCK.addEventListener('click', () => downloadFile(`/api/payroll/bangluong/ck?nam=${selNam}&thang=${selThang}`, `CK_Luong_T${selThang}_${selNam}.xlsx`));
     /* v9.32: bấm vào số tạm ứng -> xem ĐÚNG những phiếu chi tạo nên con số đó. "Tự tính" mà không
@@ -885,7 +1348,7 @@ window.ModulePayroll = (function () {
           <td style="text-align:right;">${money(x.SoTien)}</td></tr>`).join('')
           || '<tr><td colspan="6" class="empty-hint">Không có phiếu chi tạm ứng nào.</td></tr>'}</tbody>
         <tfoot><tr style="font-weight:700;"><td colspan="5" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(kq.tong)}</td></tr></tfoot></table>
-        <div class="empty-hint" style="text-align:left;margin-top:6px;">Sửa số ở <b>Công nợ → Phiếu chi</b> rồi bấm <b>Tính lương</b> lại.</div>
+        <div class="empty-hint" style="text-align:left;margin-top:6px;">Sửa số ở <b>Công nợ → Phiếu chi</b> — mở lại tab này là bảng tự tính lại (v9.53).</div>
         <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Đóng</button></div>`);
       m.querySelector('#btnCancel').addEventListener('click', closeModal);
     }));
@@ -901,7 +1364,7 @@ window.ModulePayroll = (function () {
           <div class="form-group" style="grid-column:1/-1;"><label>Lý do <span style="color:#c0392b;">*</span></label>
             <input type="text" id="dcLyDo" maxlength="255" value="${escapeHtml(r.LyDoDieuChinh || '')}" placeholder="VD: Nghỉ nhiều không xin phép"></div>
         </div>
-        <div class="empty-hint" style="text-align:left;">Thực lĩnh hiện tại: <b>${money(r.ThucLinh)}</b>. Khoản này được <b>giữ nguyên</b> khi bấm Tính lương lại. Đặt 0 để bỏ.</div>
+        <div class="empty-hint" style="text-align:left;">Thực lĩnh hiện tại: <b>${money(r.ThucLinh)}</b>. Khoản này được <b>giữ nguyên</b> qua mọi lần tính lại (tự động hay bấm Tính lương). Đặt 0 để bỏ.</div>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="dcHuy">Hủy</button>
           <button type="button" class="btn" id="dcLuu">💾 Lưu</button>
@@ -939,20 +1402,20 @@ window.ModulePayroll = (function () {
     const coThue = rows.some(r => r.ThueDaTru);
     const sum = (k) => rows.reduce((s, r) => s + num(r[k]), 0);
     const td = (v) => `<td style="text-align:right;">${v}</td>`;
-    const nCot = 17 + (coThue ? 1 : 0);
+    const nCot = 18 + (coThue ? 1 : 0);   // v9.55: + Không phép
     return `<h2 style="text-align:center;margin-bottom:2px;">BẢNG LƯƠNG CÔNG NHẬT — Tháng ${selThang}/${selNam}</h2>
       <table style="width:100%;border-collapse:collapse;font-size:11px;" border="1" cellpadding="3"><thead><tr><th style="width:30px;">STT</th>
-        <th>Họ tên</th><th>Kiểu</th><th>Công TV</th><th>Công CT</th><th>Phép</th><th>Lương CB / ĐG</th><th>Lương</th><th>Giờ OT</th><th>Tiền OT</th>
+        <th>Họ tên</th><th>Kiểu</th><th>Công TV</th><th>Công CT</th><th>Phép</th><th>Không phép</th><th>Lương CB / ĐG</th><th>Lương</th><th>Giờ OT</th><th>Tiền OT</th>
         <th>Thưởng</th><th>Xăng xe</th><th>Chức vụ</th><th>Chuyên cần</th><th>BH</th>${coThue ? '<th>Thuế TNCN</th>' : ''}<th>Tạm ứng</th><th>Điều chỉnh</th><th>Thực lĩnh</th>
       </tr></thead><tbody>${rows.map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td>
         <td>${escapeHtml(r.HoTen)}</td><td style="text-align:center;">${r.KieuLuong === 'Ngay' ? 'Ngày' : (r.KieuLuong ? 'Tháng' : '')}</td>
-        ${td(r.CongThuViec != null ? num(r.CongThuViec) : '')}${td(r.CongChinhThuc != null ? num(r.CongChinhThuc) : num(r.Cong))}${td(r.SoPhep != null ? num(r.SoPhep) : '')}
+        ${td(r.CongThuViec != null ? num(r.CongThuViec) : '')}${td(r.CongChinhThuc != null ? num(r.CongChinhThuc) : num(r.Cong))}${td(r.SoPhep != null ? num(r.SoPhep) : '')}${td(r.SoKhongPhep != null ? num(r.SoKhongPhep) : '')}
         ${td(r.KieuLuong === 'Ngay' ? money(r.DonGiaNgay) : money(r.LuongCoBan))}${td(money(r.LuongNgayCong))}
         ${td(r.GioOT != null ? num(r.GioOT) : '')}${td(money(r.TangCa))}${td(money(r.Thuong))}${td(money(r.PcXangXe))}${td(money(r.PcChucVu))}${td(money(r.ChuyenCan))}
         ${td(money(r.TongBH))}${coThue ? td(money(r.ThueDaTru ? r.ThueTNCN : 0)) : ''}${td(money(r.TamUng))}
         <td style="text-align:right;" title="${escapeHtml(r.LyDoDieuChinh || '')}">${num(r.DieuChinh) ? money(r.DieuChinh) : ''}</td>
         <td style="text-align:right;font-weight:600;">${money(r.ThucLinh)}</td></tr>`).join('') || `<tr><td colspan="${nCot + 1}" style="text-align:center;">—</td></tr>`}
-        <tr data-tong style="font-weight:bold;"><td></td><td colspan="6" style="text-align:right;">TỔNG</td>
+        <tr data-tong style="font-weight:bold;"><td></td><td colspan="7" style="text-align:right;">TỔNG</td>
           ${td(money(sum('LuongNgayCong')))}<td></td>${td(money(sum('TangCa')))}${td(money(sum('Thuong')))}${td(money(sum('PcXangXe')))}${td(money(sum('PcChucVu')))}${td(money(sum('ChuyenCan')))}
           ${td(money(sum('TongBH')))}${coThue ? td(money(rows.reduce((s, r) => s + (r.ThueDaTru ? num(r.ThueTNCN) : 0), 0))) : ''}${td(money(sum('TamUng')))}${td(money(sum('DieuChinh')))}${td(money(tong))}</tr>
       </tbody></table>
@@ -963,6 +1426,12 @@ window.ModulePayroll = (function () {
         <td style="width:33%;"><b>GIÁM ĐỐC</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td>
       </tr></table>`;
   }
+  /* v9.73: mỗi kiểu thưởng một dòng (KPI / sản phẩm / chuyên cần bậc thang) — luật ở common.js cacDongThuongPhieuLuong.
+     Có đúng một dòng thì ẩn khi 0 như cũ; nhiều dòng thì in cả (kể cả 0) để người đọc thấy khoản nào không đạt. */
+  function dongThuongPhieu(r, dong) {
+    const ds = cacDongThuongPhieuLuong(r);
+    return ds.map(x => dong(x.nhan, money(x.tien), ds.length === 1 && !num(x.tien))).join('');
+  }
   function buildLuongCongNhatNVBody(r) {
     const dong = (nhan, gt, an) => an ? '' : `<tr><td style="width:52%;background:#f5f6f8;"><b>${nhan}</b></td><td style="text-align:right;">${gt}</td></tr>`;
     const coV890 = r.KieuLuong != null;
@@ -972,12 +1441,17 @@ window.ModulePayroll = (function () {
         ${coV890
           ? dong('Công thử việc', num(r.CongThuViec), !num(r.CongThuViec)) + dong('Công chính thức (gồm lễ hưởng lương)', num(r.CongChinhThuc))
             + dong('Ngày phép (không lương)', num(r.SoPhep), !num(r.SoPhep)) + dong('Ngày đi muộn', num(r.SoNgayMuon), !num(r.SoNgayMuon))
+            + dong('Ngày nghỉ không phép' + ((r.ngayKhongPhep || []).length ? ' (' + r.ngayKhongPhep.map(ddmm).join(', ') + ')' : ''), num(r.SoKhongPhep), !num(r.SoKhongPhep))   // v9.55 / v9.58 liệt kê ngày
           : dong('Số công trong tháng', num(r.Cong))}
         ${r.KieuLuong === 'Ngay' ? dong('Đơn giá ngày', money(r.DonGiaNgay)) : dong('Lương cơ bản', money(r.LuongCoBan))}
         ${dong('Lương theo ngày công', money(r.LuongNgayCong))}
         ${dong(`Tăng ca (${num(r.GioOT)} giờ × ${money(r.DonGiaGioOT)})`, money(r.TangCa), !num(r.TangCa))}
-        ${dong(r.KieuThuong === 'SanPham' ? 'Thưởng theo sản phẩm' : `Thưởng KPI${r.DiemKPI != null ? ` (${num(r.DiemKPI)}/100 điểm)` : ''}`, money(r.Thuong), !num(r.Thuong))}
+        ${dongThuongPhieu(r, dong)}
         ${dong('Phụ cấp ăn ca', money(r.PcAnCa), !num(r.PcAnCa))}
+        ${/* v9.78: nếu hợp đồng khai số km thì nói rõ km × đ/km (số km lấy từ hợp đồng hiện tại — bảng lương
+             không chụp km, nên phiếu của tháng cũ chỉ hiện số tiền đã chốt). */''}
+        ${/* v9.79: BangLuongChiTiet chỉ lưu SỐ TIỀN xăng, không lưu đơn giá ngày ⇒ không bịa chú thích "x đ/ngày"
+             (chia PcXangXe cho Cong là SAI: Cong có cả phép và lễ, xăng thì không). Muốn biết đơn giá thì xem hợp đồng. */''}
         ${dong('Phụ cấp xăng xe', money(r.PcXangXe), !num(r.PcXangXe))}
         ${dong('Phụ cấp điện thoại', money(r.PcDienThoai), !num(r.PcDienThoai))}
         ${dong('Phụ cấp chức vụ', money(r.PcChucVu), !num(r.PcChucVu))}
@@ -1002,7 +1476,7 @@ window.ModulePayroll = (function () {
     modal.querySelector('#btnInNVCN').addEventListener('click', () => printHtml(`Luong cong nhat - ${r.HoTen || ''} - T${selThang}/${selNam}`, buildLuongCongNhatNVBody(r)));
   }
   async function tinhLuong() {
-    if (!confirm(`Tính lương công nhật tháng ${selThang}/${selNam}? (Sẽ tính lại toàn bộ theo hợp đồng + chấm công + KPI hiện tại. Điều chỉnh đã ghi được giữ nguyên.)`)) return;
+    if (!confirm(`Tính lương công nhật tháng ${selThang}/${selNam} ngay bây giờ? (Sẽ tính lại toàn bộ theo hợp đồng + chấm công + KPI hiện tại. Điều chỉnh đã ghi được giữ nguyên. Bình thường bảng đã tự tính lại khi có biến động — nút này chỉ để tính lại ngay.)`)) return;
     let r;
     try { r = (await apiPost('/api/payroll/bangluong/tinh', { nam: selNam, thang: selThang })).data || {}; }
     catch (e) { toast(e.message, 'error'); return; }
@@ -1011,19 +1485,44 @@ window.ModulePayroll = (function () {
     const thieu = r.thieuHopDong || [], cb = r.canhBao || [];
     if (!thieu.length && !cb.length) { toast(`Đã tính lương cho ${r.soNhanVien} nhân viên.`, 'success'); renderLuong(); return; }
     renderLuong();
-    const m = openModal(`<h3>Đã tính lương cho ${r.soNhanVien} nhân viên — có ${thieu.length + cb.length} điều cần xem</h3>
+    hienKetQuaTinh(r, `Đã tính lương cho ${r.soNhanVien} nhân viên`);
+  }
+  /* v9.53: tách hộp kết quả ra — dùng cả khi bấm Tính lương lẫn khi bảng tự tính lại (link "xem" ở dòng trạng thái). */
+  function hienKetQuaTinh(r, tieuDe) {
+    const thieu = r.thieuHopDong || [], cb = r.canhBao || [];
+    const m = openModal(`<h3>${escapeHtml(tieuDe)} — có ${thieu.length + cb.length} điều cần xem</h3>
       ${thieu.length ? `<p style="margin:6px 0;"><b style="color:#c0392b;">${thieu.length} người KHÔNG có trong bảng</b> vì chưa có hợp đồng hiệu lực (Nhân sự → Hợp đồng lao động → Thêm, khai kiểu lương + đơn giá):</p>
         <div style="max-height:160px;overflow:auto;border:1px solid #e0e0e0;padding:6px;font-size:13px;">${thieu.map(x => `${escapeHtml(x.MaNhanVien || '')} ${escapeHtml(x.HoTen || '')}`).join('<br>')}</div>` : ''}
       ${cb.length ? `<p style="margin:10px 0 6px;"><b style="color:#b06000;">${cb.length} cảnh báo</b> (dòng vẫn có trong bảng nhưng số có thể thiếu):</p>
         <div style="max-height:200px;overflow:auto;border:1px solid #e0e0e0;padding:6px;font-size:13px;">${cb.map(x => '• ' + escapeHtml(x)).join('<br>')}</div>` : ''}
-      <p class="empty-hint" style="text-align:left;margin-top:8px;">Thuế TNCN: ${r.truThue ? '<b>ĐANG trừ</b> vào thực lĩnh' : 'chỉ tính để xem, <b>KHÔNG trừ</b> (bật ở Cấu hình lương nếu muốn trừ)'}. Sửa xong bấm <b>Tính lương</b> lại.</p>
+      <p class="empty-hint" style="text-align:left;margin-top:8px;">Thuế TNCN: ${r.truThue ? '<b>ĐANG trừ</b> vào thực lĩnh' : 'chỉ tính để xem, <b>KHÔNG trừ</b> (bật ở Cấu hình lương nếu muốn trừ)'}. Sửa xong, mở lại tab là bảng tự tính lại (hoặc bấm <b>Tính lương</b>).</p>
       <div class="modal-actions"><button type="button" class="btn" id="btnCancel">Đã hiểu</button></div>`);
     m.querySelector('#btnCancel').addEventListener('click', closeModal);
   }
   async function chotLuong(id) {
-    if (!confirm('Chốt bảng lương? Sau khi chốt sẽ không tính lại/sửa tạm ứng được.')) return;
+    if (!confirm('Chốt bảng lương? Sau khi chốt sẽ không tính lại/sửa được (muốn sửa phải Bỏ chốt, có ghi lý do). Biến động về sau (chấm công, phiếu chi tạm ứng, hợp đồng) chỉ được BÁO trên bảng, không tự tính lại.')) return;
     try { await apiPut('/api/payroll/bangluong/' + id + '/chot', {}); toast('Đã chốt bảng lương.', 'success'); renderLuong(); }
     catch (e) { toast(e.message, 'error'); }
+  }
+  /* v9.54: bỏ chốt — lý do bắt buộc (máy chủ cũng chặn), ghi vào ghi chú bảng lương. Sau khi bỏ, tab tự tải
+     lại: có biến động chờ sẵn (v9.53) thì bảng tự tính lại ngay lúc đó và nói rõ vì sao. */
+  function boChotLuong(header) {
+    const m = openModal(`<h3>🔓 Bỏ chốt bảng lương tháng ${selThang}/${selNam}</h3>
+      <p style="margin:6px 0;">Bảng sẽ về <b>Nháp</b>: tính lại / sửa điều chỉnh được; nếu đã có biến động (chấm công, phiếu chi tạm ứng, hợp đồng, KPI) thì mở lại tab là <b>tự tính lại</b> theo số mới nhất. Số đã trả cho nhân viên <b>không</b> tự đổi theo — anh/chị tự đối chiếu.</p>
+      <div class="form-group"><label>Lý do bỏ chốt <span style="color:#c0392b;">*</span></label>
+        <input type="text" id="bcLyDo" maxlength="200" placeholder="VD: Sửa chấm công ngày 12/11 cho Ngọc" style="width:100%;"></div>
+      ${header && header.GhiChu ? `<div class="empty-hint" style="text-align:left;white-space:pre-line;">Dấu vết cũ:\n${escapeHtml(header.GhiChu)}</div>` : ''}
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="bcHuy">Hủy</button>
+        <button type="button" class="btn" id="bcLuu">🔓 Bỏ chốt</button>
+      </div>`);
+    m.querySelector('#bcHuy').addEventListener('click', closeModal);
+    m.querySelector('#bcLuu').addEventListener('click', async () => {
+      const lyDo = m.querySelector('#bcLyDo').value.trim();
+      if (!lyDo) { toast('Phải ghi lý do bỏ chốt.', 'error'); return; }
+      try { await apiPut('/api/payroll/bangluong/' + header.BangLuongID + '/bochot', { lyDo }); closeModal(); toast('Đã bỏ chốt — bảng về Nháp.', 'success'); renderLuong(); }
+      catch (e) { toast(e.message, 'error'); }
+    });
   }
 
   /* ================================================================
@@ -1040,16 +1539,30 @@ window.ModulePayroll = (function () {
     try { d = (await apiGet(`/api/payroll/kpi?nam=${selNam}&thang=${selThang}`)).data; }
     catch (e) { container.innerHTML = periodBar(null, '') + `<div class="empty-hint">Lỗi: ${escapeHtml(e.message)}</div>`; wirePeriod(container, renderKPI); return; }
     const rows = d.rows || [];
-    const tongSP = (r) => (r.sanPhamThang || []).reduce((s, x) => s + num(x.ThanhTien), 0);
+    /* v9.67: thưởng SP = phần TỰ ĐỘNG từ lệnh SX (may mẫu / ảnh / video — r.sanPhamTuLenh, sửa ở QLSX › Sản lượng
+       theo lệnh) + phần nhập tay (r.sanPhamThang). Dòng từ lệnh không khớp tên hợp đồng ⇒ 0 đồng, báo đỏ. */
+    const tongSP = (r) => (r.sanPhamThang || []).reduce((s, x) => s + num(x.ThanhTien), 0) + num(r.tienTuLenh);
+    const tuLenhHtml = (r) => {
+      const ds = r.sanPhamTuLenh || [];
+      if (!ds.length) return '';
+      return `<div><span style="color:#1a73e8;">Từ lệnh SX:</span> ${ds.map(x => `${escapeHtml(x.TenSanPham)} × ${num(x.SoLuong)}${x.khop ? '' : ' <span style="color:#c0392b;" title="Tên không có trong danh mục sản phẩm của hợp đồng — 0 đồng. Thêm đúng tên này vào hợp đồng.">(không khớp HĐ)</span>'}`).join('; ')}</div>`;
+    };
     container.innerHTML = periodBar(null, `<span style="color:#5f6368;font-size:12px;">Chỉ hiện người có <b>Kiểu thưởng</b> ở hợp đồng hiệu lực.</span>`) + `
       <div style="overflow:auto;"><table style="font-size:13px;min-width:900px;"><thead><tr><th style="width:38px;">STT</th>
         <th>Mã NV</th><th>Họ tên</th><th>Kiểu thưởng</th><th>Quỹ KPI / Danh mục SP</th><th style="width:90px;">Điểm (0–100)</th><th style="width:120px;" title="Để trống = tính theo điểm. Điền = lấy đúng số này.">Tiền ghi đè</th><th>Nhận xét</th><th style="width:110px;">Tiền thưởng</th><th style="width:90px;"></th>
-      </tr></thead><tbody>${rows.map((r, i) => {
-        const laKPI = r.KieuThuong === 'KPI';
+      </tr></thead><tbody>${rows.flatMap((r, i) => {
+        /* v9.73: Kiểu thưởng là TẬP HỢP ("KPI,SanPham") — người có cả hai thì vẽ HAI dòng: dòng KPI
+           (chấm điểm) + dòng Sản phẩm (nhập SL). Chuyên cần không chấm ở đây (tự tính theo chấm công). */
+        const kieu = String(r.KieuThuong || '');
+        const coKPI = kieu.includes('KPI'), coSP = kieu.includes('SanPham');
+        const cacDong = [];
+        if (coKPI) cacDong.push(true);
+        if (coSP || !coKPI) cacDong.push(false);
+        return cacDong.map((laKPI, j) => {
         const duKien = laKPI ? (r.TienGhiDe != null ? num(r.TienGhiDe) : Math.round(num(r.QuyKPI) * num(r.DiemKPI) / 100)) : tongSP(r);
         return `<tr data-nv="${r.NhanVienID}">
-          <td style="text-align:center;">${i + 1}</td><td>${escapeHtml(r.MaNhanVien || '')}</td><td>${escapeHtml(r.HoTen)}</td>
-          <td style="text-align:center;">${laKPI ? 'KPI' : 'Sản phẩm'}</td>
+          <td style="text-align:center;">${j ? '' : i + 1}</td><td>${j ? '' : escapeHtml(r.MaNhanVien || '')}</td><td>${j ? '<span style="color:#5f6368;">(cùng người)</span>' : escapeHtml(r.HoTen)}</td>
+          <td style="text-align:center;">${laKPI ? 'KPI' : 'Sản phẩm'}${cacDong.length > 1 ? ' <span style="font-size:10px;color:#5f6368;">(' + (j + 1) + '/' + cacDong.length + ')</span>' : ''}</td>
           <td>${laKPI ? money(r.QuyKPI) : (r.danhMucSanPham || []).map(x => `${escapeHtml(x.TenSanPham)} <span style="color:#5f6368;">(${money(x.DonGia)})</span>`).join(', ') || '<span style="color:#c0392b;">chưa khai SP ở hợp đồng</span>'}</td>
           ${laKPI ? `
           <td><input type="number" class="k-diem" min="0" max="100" step="1" value="${r.DiemKPI != null ? num(r.DiemKPI) : ''}" style="width:80px;" ${perm.canEdit ? '' : 'disabled'}></td>
@@ -1058,12 +1571,13 @@ window.ModulePayroll = (function () {
           <td style="text-align:right;" class="k-tien" title="Mức khi đủ công chuẩn — bộ tính nhân thêm tổng công/công chuẩn">${r.DiemKPI == null && r.TienGhiDe == null ? '<span style="color:#c0392b;">chưa chấm</span>' : money(duKien)}${r.TienGhiDe == null && r.DiemKPI != null && num(r.DiemKPI) === 0 ? ' <span title="Điểm 0 ⇒ thưởng 0. Nếu từng điền Tiền ghi đè rồi xóa, điểm vẫn là 0 — chấm lại." style="color:#b06000;">(0 điểm)</span>' : ''}</td>
           <td>${perm.canEdit ? `<button class="btn small k-luu" data-nv="${r.NhanVienID}">💾 Lưu</button>` : ''}</td>`
           : `
-          <td colspan="3" style="color:#5f6368;">${(r.sanPhamThang || []).length ? (r.sanPhamThang || []).map(x => `${escapeHtml(x.TenSanPham)} × ${num(x.SoLuong)}`).join('; ') : 'chưa nhập sản phẩm tháng này'}</td>
+          <td colspan="3" style="color:#5f6368;">${tuLenhHtml(r)}${(r.sanPhamThang || []).length ? `<div>${(r.sanPhamTuLenh || []).length ? 'Nhập tay: ' : ''}${(r.sanPhamThang || []).map(x => `${escapeHtml(x.TenSanPham)} × ${num(x.SoLuong)}`).join('; ')}</div>` : ((r.sanPhamTuLenh || []).length ? '' : 'chưa có sản phẩm tháng này')}</td>
           <td style="text-align:right;">${money(duKien)}</td>
           <td>${perm.canEdit ? `<button class="btn small secondary k-sp" data-nv="${r.NhanVienID}">📝 Sản phẩm</button>` : ''}</td>`}
         </tr>`;
+        });
       }).join('') || '<tr><td colspan="10" class="empty-hint">Chưa có ai khai Kiểu thưởng (KPI / Sản phẩm) ở hợp đồng lao động hiệu lực.</td></tr>'}</tbody></table></div>
-      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Tiền KPI = quỹ KPI (hợp đồng) × điểm/100 × tổng công/công chuẩn. Điền <b>Tiền ghi đè</b> khi muốn ấn định số bất kể điểm. Lưu xong sang tab <b>Lương công nhật</b> bấm <b>Tính lương</b> lại thì mới vào bảng.</p>`;
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Tiền KPI = quỹ KPI (hợp đồng) × điểm/100 × tổng công/công chuẩn. Điền <b>Tiền ghi đè</b> khi muốn ấn định số bất kể điểm. Lưu xong sang tab <b>Lương công nhật</b> là bảng tự tính lại (v9.53), không cần bấm Tính lương.</p>`;
     wirePeriod(container, renderKPI);
     themOTimTuDong(container);
     container.querySelectorAll('.k-luu').forEach(b => b.addEventListener('click', async () => {
@@ -1081,28 +1595,54 @@ window.ModulePayroll = (function () {
       if (r) openSanPhamThangModal(r);
     }));
   }
-  /* Bảng sản phẩm tháng của MỘT người: chọn tên từ danh mục hợp đồng (đơn giá tự điền) hoặc gõ tay
-     (đơn giá gõ tay). Lưu = ghi lại toàn bộ dòng (PUT /kpi/sanpham). */
+  /* Bảng sản phẩm tháng của MỘT người.
+     v9.48 (Nguyen 12/11: "bên đánh giá KPI phần nhập sản phẩm lấy list danh mục từ hợp đồng"): DANH MỤC
+     SẢN PHẨM LẤY TỪ HỢP ĐỒNG — mỗi sản phẩm hợp đồng đã khai là MỘT DÒNG sẵn, tên + đơn giá KHÓA (đúng
+     cái đã in ở điều khoản e)/3.4), người chấm chỉ gõ SỐ LƯỢNG. Dòng để trống SL thì không lưu. Dòng
+     tháng trước đã nhập mà KHÔNG còn trong danh mục hợp đồng vẫn hiện (đánh dấu "ngoài danh mục") để
+     không mất dữ liệu; "＋ Thêm dòng" cho sản phẩm phát sinh ngoài hợp đồng (tên + đơn giá gõ tay).
+     Lưu = ghi lại toàn bộ dòng có SL > 0 (PUT /kpi/sanpham). */
   function openSanPhamThangModal(r) {
-    const dm = r.danhMucSanPham || [];
-    const rowHtml = (x) => `<tr>
-      <td><input type="text" class="sp-ten" list="spDM_${r.NhanVienID}" value="${escapeHtml((x && x.TenSanPham) || '')}" placeholder="Tên sản phẩm" style="width:100%;min-width:160px;"></td>
-      <td><input type="number" class="sp-dg" step="1000" value="${x && x.DonGia != null ? num(x.DonGia) : ''}" style="width:110px;"></td>
-      <td><input type="number" class="sp-sl" step="1" value="${x && x.SoLuong != null ? num(x.SoLuong) : ''}" style="width:80px;"></td>
+    const dm = (r.danhMucSanPham || []).filter(x => x && String(x.TenSanPham || '').trim());
+    const khoa = (ten) => String(ten || '').trim().toLowerCase();
+    const daCo = r.sanPhamThang || [];
+    const timDaCo = (ten) => daCo.find(x => khoa(x.TenSanPham) === khoa(ten));
+    const rowHtml = (x, theoHD) => `<tr data-hd="${theoHD ? 1 : 0}">
+      <td>${theoHD
+        ? `<input type="text" class="sp-ten" value="${escapeHtml(x.TenSanPham || '')}" readonly style="width:100%;min-width:160px;background:#f1f3f4;" title="Theo danh mục hợp đồng">`
+        : `<input type="text" class="sp-ten" list="spDM_${r.NhanVienID}" value="${escapeHtml((x && x.TenSanPham) || '')}" placeholder="Tên sản phẩm" style="width:100%;min-width:160px;">`}
+        ${!theoHD && x ? '<div style="font-size:11px;color:#b06000;">ngoài danh mục hợp đồng</div>' : ''}</td>
+      <td><input type="number" class="sp-dg" step="1000" value="${x && x.DonGia != null ? num(x.DonGia) : ''}" ${theoHD ? 'readonly style="width:110px;background:#f1f3f4;" title="Đơn giá theo hợp đồng"' : 'style="width:110px;"'}></td>
+      <td><input type="number" class="sp-sl" step="1" min="0" value="${x && x.SoLuong != null && num(x.SoLuong) ? num(x.SoLuong) : ''}" style="width:80px;" placeholder="0"></td>
       <td style="text-align:right;" class="sp-tt">${x ? money(num(x.DonGia) * num(x.SoLuong)) : '0'}</td>
       <td><input type="text" class="sp-gc" maxlength="255" value="${escapeHtml((x && x.GhiChu) || '')}" style="width:100%;min-width:100px;"></td>
-      <td><button type="button" class="btn small secondary sp-xoa" title="Bỏ dòng">✕</button></td></tr>`;
+      <td>${theoHD ? '' : '<button type="button" class="btn small secondary sp-xoa" title="Bỏ dòng">✕</button>'}</td></tr>`;
+    /* Dòng theo hợp đồng: đơn giá của HỢP ĐỒNG, số lượng (và ghi chú) lấy từ bản đã nhập tháng này nếu có. */
+    const dongHD = dm.map(sp => { const c = timDaCo(sp.TenSanPham); return rowHtml({ TenSanPham: sp.TenSanPham, DonGia: sp.DonGia, SoLuong: c ? c.SoLuong : null, GhiChu: c ? c.GhiChu : '' }, true); });
+    const dongNgoai = daCo.filter(x => !dm.some(sp => khoa(sp.TenSanPham) === khoa(x.TenSanPham))).map(x => rowHtml(x, false));
+    /* v9.67: phần TỰ ĐỘNG từ lệnh SX — chỉ xem, không lưu ở đây (không nằm trong #spBody nên không vào PUT). */
+    const tuLenh = r.sanPhamTuLenh || [];
+    const tienTuLenh = num(r.tienTuLenh);
+    const khoiTuLenh = tuLenh.length ? `<div style="margin-bottom:8px;padding:6px 8px;background:#e8f0fe;border-radius:6px;font-size:13px;">
+        <b>Tự động từ lệnh sản xuất</b> (may mẫu / ảnh / video — sửa ở <b>QLSX › Sản lượng theo lệnh</b>, không sửa ở đây):
+        <table style="font-size:13px;margin-top:4px;"><thead><tr><th>Sản phẩm</th><th>Số lệnh</th><th>Số lượng</th><th>Đơn giá HĐ</th><th>Thành tiền</th></tr></thead><tbody>
+        ${tuLenh.map(x => `<tr><td>${escapeHtml(x.TenSanPham)}${x.khop ? '' : ' <span style="color:#c0392b;">(không có trong hợp đồng — 0 đ)</span>'}</td><td style="text-align:center;">${num(x.SoLenh)}</td><td style="text-align:right;">${num(x.SoLuong)}</td><td style="text-align:right;">${money(x.DonGia)}</td><td style="text-align:right;">${money(x.ThanhTien)}</td></tr>`).join('')}
+        </tbody><tfoot><tr style="font-weight:700;"><td colspan="4" style="text-align:right;">Cộng tự động</td><td style="text-align:right;">${money(tienTuLenh)}</td></tr></tfoot></table></div>` : '';
     const m = openModal(`<h3>Sản phẩm tháng ${selThang}/${selNam} — ${escapeHtml(r.HoTen || '')}</h3>
+      ${khoiTuLenh}
       <datalist id="spDM_${r.NhanVienID}">${dm.map(x => `<option value="${escapeHtml(x.TenSanPham)}">`).join('')}</datalist>
+      ${tuLenh.length ? '<div style="font-weight:600;margin-bottom:4px;">Nhập tay (sản phẩm ngoài lệnh SX — cộng thêm vào phần tự động)</div>' : ''}
       <div style="max-height:50vh;overflow:auto;"><table style="font-size:13px;"><thead><tr><th>Tên sản phẩm</th><th>Đơn giá</th><th>Số lượng</th><th>Thành tiền</th><th>Ghi chú</th><th></th></tr></thead>
-        <tbody id="spBody">${(r.sanPhamThang || []).map(rowHtml).join('')}</tbody>
-        <tfoot><tr style="font-weight:700;"><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;" id="spTong">${money((r.sanPhamThang || []).reduce((s, x) => s + num(x.ThanhTien), 0))}</td><td colspan="2"></td></tr></tfoot></table></div>
-      <div style="margin-top:6px;"><button type="button" class="btn small secondary" id="spThem">＋ Thêm dòng</button>
-        <span style="color:#5f6368;font-size:12px;margin-left:8px;">${dm.length ? 'Chọn tên trong danh mục hợp đồng thì đơn giá tự điền; gõ tên khác thì tự nhập đơn giá.' : 'Hợp đồng chưa khai danh mục sản phẩm — nhập tay tên + đơn giá.'}</span></div>
+        <tbody id="spBody">${dongHD.join('')}${dongNgoai.join('')}</tbody>
+        <tfoot><tr style="font-weight:700;"><td colspan="3" style="text-align:right;">TỔNG${tuLenh.length ? ' (tự động + nhập tay)' : ''}</td><td style="text-align:right;" id="spTong">${money(daCo.reduce((s, x) => s + num(x.ThanhTien), 0) + tienTuLenh)}</td><td colspan="2"></td></tr></tfoot></table></div>
+      <div style="margin-top:6px;"><button type="button" class="btn small secondary" id="spThem">＋ Thêm dòng ngoài danh mục</button>
+        <span style="color:#5f6368;font-size:12px;margin-left:8px;">${dm.length
+          ? `${dm.length} sản phẩm theo <b>hợp đồng</b> (tên + đơn giá khóa) — chỉ gõ số lượng; để trống là không tính. Thêm sản phẩm vào hợp đồng ở Nhân sự → Hợp đồng.`
+          : 'Hợp đồng chưa khai danh mục sản phẩm — nhập tay tên + đơn giá (nên khai ở hợp đồng để in ra điều khoản thưởng).'}</span></div>
       <div class="modal-actions"><button type="button" class="btn secondary" id="spHuy">Hủy</button><button type="button" class="btn" id="spLuu">💾 Lưu</button></div>`);
     const body = m.querySelector('#spBody');
     const tinhLai = () => {
-      let tong = 0;
+      let tong = tienTuLenh;   // v9.67: cộng sẵn phần tự động từ lệnh SX
       body.querySelectorAll('tr').forEach(tr => {
         const tt = num(tr.querySelector('.sp-dg').value) * num(tr.querySelector('.sp-sl').value);
         tr.querySelector('.sp-tt').textContent = money(tt); tong += tt;
@@ -1111,20 +1651,23 @@ window.ModulePayroll = (function () {
     };
     const wireRow = (tr) => {
       tr.querySelector('.sp-ten').addEventListener('change', (e) => {
-        const hit = dm.find(x => String(x.TenSanPham).trim().toLowerCase() === e.target.value.trim().toLowerCase());
+        if (tr.dataset.hd === '1') return;
+        const hit = dm.find(x => khoa(x.TenSanPham) === khoa(e.target.value));
         if (hit) tr.querySelector('.sp-dg').value = num(hit.DonGia);
         tinhLai();
       });
       tr.querySelector('.sp-dg').addEventListener('input', tinhLai);
       tr.querySelector('.sp-sl').addEventListener('input', tinhLai);
-      tr.querySelector('.sp-xoa').addEventListener('click', () => { tr.remove(); tinhLai(); });
+      const xoa = tr.querySelector('.sp-xoa');
+      if (xoa) xoa.addEventListener('click', () => { tr.remove(); tinhLai(); });
     };
     body.querySelectorAll('tr').forEach(wireRow);
     m.querySelector('#spThem').addEventListener('click', () => {
-      body.insertAdjacentHTML('beforeend', rowHtml(null));
+      body.insertAdjacentHTML('beforeend', rowHtml(null, false));
       const tr = body.lastElementChild; wireRow(tr); tr.querySelector('.sp-ten').focus();
     });
     if (!body.children.length) m.querySelector('#spThem').click();
+    else { const slDau = body.querySelector('.sp-sl'); if (slDau) slDau.focus(); }
     m.querySelector('#spHuy').addEventListener('click', closeModal);
     m.querySelector('#spLuu').addEventListener('click', async () => {
       const ds = [...body.querySelectorAll('tr')].map(tr => ({
@@ -1133,7 +1676,7 @@ window.ModulePayroll = (function () {
       })).filter(x => x.tenSanPham && x.soLuong > 0);
       try {
         const kq = await apiPut('/api/payroll/kpi/sanpham', { nam: selNam, thang: selThang, nhanVienId: r.NhanVienID, rows: ds });
-        closeModal(); toast(`Đã lưu ${ds.length} dòng — thưởng SP ${money(kq.data && kq.data.tong)}.`, 'success'); renderKPI();
+        closeModal(); toast(`Đã lưu ${ds.length} dòng nhập tay — ${money(kq.data && kq.data.tong)}${tienTuLenh ? ` (+ tự động từ lệnh ${money(tienTuLenh)})` : ''}.`, 'success'); renderKPI();
       } catch (e) { toast(e.message, 'error'); }
     });
   }
@@ -1189,17 +1732,22 @@ window.ModulePayroll = (function () {
 
   // v5.36/v5.37 (Payroll P4): Lương/chi phí gia công ngoài + in thêu (tổng hợp theo nhà, từ QLSX SL nhận).
   // v5.37: hàng nhà bấm được → xem/in chi tiết từng nhà; "In tổng hợp" chỉ in phần tổng-hợp-theo-nhà.
+  /* v9.52 (Nguyen 14/11: "Chi tiết gia công thêm cột sl giao"): cột SL GIAO đặt cạnh SL NHẬN ở mọi bảng
+     của tab này (tổng hợp theo nhà, chi tiết, modal + bản in từng nhà). SL giao = ct.SoLuong (ghi ở Giao
+     gia công) / it.SoLuongGiao (Giao in thêu) — CHỈ ĐỂ ĐỐI CHIẾU hao hụt, tiền vẫn = SL NHẬN × đơn giá.
+     Dòng giao mà CHƯA nhận không nằm trong bảng này (util lọc SoLuongNhan > 0 — tiền chỉ phát sinh khi
+     hàng về), nên "SL giao" ở đây là của những dòng đã nhận. */
   function gcItSectionTongHop(tongHop, tong, kind) {
-    return `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà</th><th>Tổng SL nhận</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(tongHop || []).map((r, __i) => `<tr class="gcit-nha" data-nhaid="${r.NhaGiaCongID}" data-kind="${kind}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="3" class="empty-hint">—</td></tr>`}</tbody>
-      ${(tongHop || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="2" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}</table>`;
+    return `<table><thead><tr><th style="width:38px;">STT</th><th>Nhà</th><th>Tổng SL giao</th><th>Tổng SL nhận</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(tongHop || []).map((r, __i) => `<tr class="gcit-nha" data-nhaid="${r.NhaGiaCongID}" data-kind="${kind}" style="cursor:pointer;"><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;font-weight:600;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="4" class="empty-hint">—</td></tr>`}</tbody>
+      ${(tongHop || []).length ? `<tfoot><tr style="font-weight:700;background:#f1f3f4;"><td></td><td colspan="3" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tfoot>` : ''}</table>`;
   }
   // In TỔNG HỢP: chỉ 2 bảng tổng-hợp-theo-nhà (KHÔNG in từng đơn hàng).
   function buildGcItTongHopBody(d, gcTong, itTong) {
     const sec = (title, tongHop, tong) => `<h3>${title}</h3>
-      <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Nhà</th><th>Tổng SL nhận</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(tongHop || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;">—</td></tr>'}
-      <tr data-tong style="font-weight:bold;"><td style="text-align:right;">TỔNG</td><td></td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
+      <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th><th>Nhà</th><th>Tổng SL giao</th><th>Tổng SL nhận</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(tongHop || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || '<tr><td colspan="4" style="text-align:center;">—</td></tr>'}
+      <tr data-tong style="font-weight:bold;"><td colspan="4" style="text-align:right;">TỔNG</td><td style="text-align:right;">${money(tong)}</td></tr></tbody></table>`;
     return `<h2 style="text-align:center;">TỔNG HỢP LƯƠNG GIA CÔNG / IN THÊU — Tháng ${selThang}/${selNam}</h2>
       ${sec('Gia công ngoài (theo nhà)', d.giaCong.tongHop, gcTong)}
       ${sec('In thêu (theo nhà)', d.inThe.tongHop, itTong)}`;
@@ -1216,11 +1764,12 @@ window.ModulePayroll = (function () {
   // In CHI TIẾT 1 nhà (các đơn hàng của nhà đó).
   function buildGcItNhaBody(tenNha, kind, rows) {
     const tong = rows.reduce((s, r) => s + num(r.ThanhTien), 0);
-    const head = kind === 'gc' ? '<th>Mã ĐH</th><th>Tên sản phẩm</th><th>Hạng mục</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th>' : '<th>Mã ĐH</th><th>Tên sản phẩm</th><th>Hạng mục in thêu</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th>';
-    const span = 5;
+    // v9.52: thêm cột SL giao trước SL nhận (span = số cột giữa STT và Thành tiền: 6).
+    const head = kind === 'gc' ? '<th>Mã ĐH</th><th>Tên sản phẩm</th><th>Hạng mục</th><th>SL giao</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th>' : '<th>Mã ĐH</th><th>Tên sản phẩm</th><th>Hạng mục in thêu</th><th>SL giao</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th>';
+    const span = 6;
     const body = rows.map((r, __i) => kind === 'gc'
-      ? `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenHangMuc || '')}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`
-      : `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${oHangMucInThe(r)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="${span + 1}" style="text-align:center;">—</td></tr>`;
+      ? `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${escapeHtml(r.TenHangMuc || '')}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`
+      : `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenSanPham || '')}</td><td>${oHangMucInThe(r)}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="${span + 2}" style="text-align:center;">—</td></tr>`;
     return `<h2 style="text-align:center;">CHI TIẾT ${kind === 'gc' ? 'GIA CÔNG' : 'IN THÊU'} — ${escapeHtml(tenNha)}</h2>
       <p style="text-align:center;">Tháng ${selThang}/${selNam}</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6"><thead><tr><th style="width:38px;">STT</th>${head}</tr></thead>
@@ -1245,13 +1794,13 @@ window.ModulePayroll = (function () {
     container.innerHTML = periodBar(null, `<button class="btn small secondary" id="btnInGcIt">🖨️ In</button>`) + `
       <h4 style="margin:4px 0;">Gia công ngoài — theo nhà (SL nhận × đơn giá hạng mục)</h4>
       ${gcItSectionTongHop(d.giaCong.tongHop, gcTong, 'gc')}
-      <div style="overflow:auto;margin-top:6px;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Nhà gia công</th><th>Mã ĐH</th><th>Hạng mục</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(d.giaCong.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenHangMuc || '')}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Không có dữ liệu gia công tháng này.</td></tr>`}</tbody></table></div>
+      <div style="overflow:auto;margin-top:6px;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Nhà gia công</th><th>Mã ĐH</th><th>Hạng mục</th><th>SL giao</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(d.giaCong.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${escapeHtml(r.TenHangMuc || '')}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Không có dữ liệu gia công tháng này.</td></tr>`}</tbody></table></div>
       <h4 style="margin:16px 0 4px;">In thêu — theo nhà (SL nhận × đơn giá hạng mục in thêu)</h4>
       ${gcItSectionTongHop(d.inThe.tongHop, itTong, 'inthe')}
-      <div style="overflow:auto;margin-top:6px;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Mã ĐH</th><th>Hạng mục in thêu</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
-      <tbody>${(d.inThe.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${oHangMucInThe(r)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty-hint">Không có dữ liệu in thêu tháng này.</td></tr>`}</tbody></table></div>
-      <p style="color:#5f6368;font-size:12px;margin-top:8px;">Lọc theo tháng tạo dòng giao (CreatedAt). Gia công = SL nhận × đơn giá hạng mục. In thêu: dòng giao ĐÃ chọn hạng mục thì = SL nhận × đơn giá CỦA hạng mục đó; dòng để trống (dữ liệu cũ) thì = SL nhận × TỔNG đơn giá in thêu của đơn (khai ở Tài liệu kỹ thuật → Đơn giá in thêu). Chọn hạng mục ở công đoạn Giao in thêu (GIT); SL nhận nhập ở Nhận gia công (NGC) / Nhận in thêu (NIT).</p>`;
+      <div style="overflow:auto;margin-top:6px;"><table style="font-size:13px;"><thead><tr><th style="width:38px;">STT</th><th>Nhà in thêu</th><th>Mã ĐH</th><th>Hạng mục in thêu</th><th>SL giao</th><th>SL nhận</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+      <tbody>${(d.inThe.rows || []).map((r, __i) => `<tr><td style="text-align:center;">${__i + 1}</td><td>${escapeHtml(r.TenNha)}</td><td>${escapeHtml(r.MaDH || '')}</td><td>${oHangMucInThe(r)}</td><td style="text-align:right;">${num(r.SoLuongGiao)}</td><td style="text-align:right;">${num(r.SoLuongNhan)}</td><td style="text-align:right;">${money(r.DonGia)}</td><td style="text-align:right;">${money(r.ThanhTien)}</td></tr>`).join('') || `<tr><td colspan="8" class="empty-hint">Không có dữ liệu in thêu tháng này.</td></tr>`}</tbody></table></div>
+      <p style="color:#5f6368;font-size:12px;margin-top:8px;"><b>SL giao</b> (ghi ở Giao gia công / Giao in thêu) chỉ để đối chiếu với SL nhận — tiền vẫn tính theo <b>SL nhận</b>; dòng giao mà chưa nhận không nằm trong bảng. Lọc theo tháng QC. Gia công = SL nhận × đơn giá hạng mục. In thêu: dòng giao ĐÃ chọn hạng mục thì = SL nhận × đơn giá CỦA hạng mục đó; dòng để trống (dữ liệu cũ) thì = SL nhận × TỔNG đơn giá in thêu của đơn (khai ở Tài liệu kỹ thuật → Đơn giá in thêu). Chọn hạng mục ở công đoạn Giao in thêu (GIT); SL nhận nhập ở Nhận gia công (NGC) / Nhận in thêu (NIT).</p>`;
     wirePeriod(container, renderLuongGcInThe);
     themOTimTuDong(container);   // v9.05: ô tìm cho 4 bảng (tổng hợp + chi tiết, gia công + in thêu)
     const bIn = container.querySelector('#btnInGcIt'); if (bIn) bIn.addEventListener('click', () => printHtml(`Tổng hợp lương gia công / in thêu T${selThang}/${selNam}`, buildGcItTongHopBody(d, gcTong, itTong)));
@@ -1340,11 +1889,18 @@ window.ModulePayroll = (function () {
       </table></div>`;
   }
   // Bản in: chi tiết từng lệnh SX có bao nhiêu sơ đồ + thành tiền từng sơ đồ + tổng bàn cắt.
+  /* v9.60: kỳ in trên phiếu lấy từ DỮ LIỆU (d.thang / d.nam — route trả về) rồi mới lùi về kỳ đang chọn.
+     Lý do: "Bảng lương của tôi" (module.mypay.js) nay dựng phiếu lương trải vải cắt của nhân viên bằng
+     chính buildLuongCatNVBody ở đây (ModulePayroll.buildLuongCatNVBody) với kỳ CỦA PHÂN HỆ ĐÓ — không
+     phải selThang/selNam của tab kế toán. Ở tab kế toán d.thang luôn = selThang nên không đổi gì. */
+  const kyCua = (d) => `${(d && d.thang) || selThang}/${(d && d.nam) || selNam}`;
   /* v9.20 — Nguyen 2026-11-04: phiếu lương của MỘT nhân viên Cắt "chỉ hiển thị bàn cắt nhân viên đó
      trải vải hoặc cắt".
      🔴 Lọc theo ID, KHÔNG theo tên (hai người trùng họ tên là phiếu hiện nhầm bàn của nhau).
      `NhanVienTraiVaiIDs` là chuỗi id nối dấu phẩy (một bàn có thể nhiều người trải vải) — backend
-     loadSoDoCat v9.20 trả về, lùi về td.NhanVienTraiVaiID cho bàn ghi theo kiểu cũ. */
+     loadSoDoCat v9.20 trả về, lùi về td.NhanVienTraiVaiID cho bàn ghi theo kiểu cũ.
+     v9.60: route tự phục vụ /luongtraivaicat/cuatoi có BẢN BACKEND của hàm này (routes/payroll.js) —
+     đổi luật thì đổi CẢ HAI, bộ kiểm kiem_mypay_luong_trai_vai_cat so hai bản. */
   function laBanCuaNV(s, nvId) {
     const id = String(nvId || '');
     if (!id) return true;
@@ -1389,7 +1945,7 @@ window.ModulePayroll = (function () {
     /* v9.20: bản của MỘT nhân viên — đổi tiêu đề + nhãn dòng tổng, và NÓI RÕ lương không tính theo
        tổng tiền các bàn này (chia theo giờ công trên quỹ cả bộ phận). Thiếu câu đó là người xem
        cộng cột Thành tiền rồi hỏi "sao lương tôi không bằng số này". */
-    return `<h2 style="text-align:center;">${nvId ? `BÀN CẮT CÓ ${escapeHtml((nv.HoTen || '').toUpperCase())} THAM GIA` : 'QUỸ LƯƠNG TRẢI VẢI CẮT'} — Tháng ${selThang}/${selNam}</h2>
+    return `<h2 style="text-align:center;">${nvId ? `BÀN CẮT CÓ ${escapeHtml((nv.HoTen || '').toUpperCase())} THAM GIA` : 'QUỸ LƯƠNG TRẢI VẢI CẮT'} — Tháng ${kyCua(d)}</h2>
       <p style="text-align:center;font-size:13px;">Công thức 1 sơ đồ: mét sơ đồ × tổng số lớp × khổ vải × ${money(d.donGia)} · kỳ = tháng ghi sổ cắt (không chờ QC — v9.18)</p>
       ${nvId ? `<p style="text-align:center;font-size:12px;color:#5f6368;">Chỉ liệt kê bàn cắt nhân viên này <b>trải vải hoặc cắt</b>. Lương khoán tháng <b>KHÔNG</b> bằng tổng tiền các bàn dưới đây — nó chia theo <b>giờ công</b> trên quỹ của cả bộ phận Cắt (xem bảng trên).</p>` : ''}
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="5"><thead><tr><th style="width:38px;">STT</th>
@@ -1402,7 +1958,7 @@ window.ModulePayroll = (function () {
   }
   // Bản in phiếu lương 1 nhân viên: kèm luôn bảng quỹ (để công nhân đối chiếu cách chia).
   function buildLuongCatNVBody(nv, d) {
-    return `<h2 style="text-align:center;">PHIẾU LƯƠNG TRẢI VẢI CẮT — Tháng ${selThang}/${selNam}</h2>
+    return `<h2 style="text-align:center;">PHIẾU LƯƠNG TRẢI VẢI CẮT — Tháng ${kyCua(d)}</h2>
       <p><b>Nhân viên:</b> ${escapeHtml(nv.HoTen || '')} (${escapeHtml(nv.MaNhanVien || '')})</p>
       <table style="width:100%;border-collapse:collapse;" border="1" cellpadding="6">
         <tr><td style="width:45%;background:#f5f6f8;"><b>Tổng giờ công trong tháng</b></td><td>${num(nv.TongGioLam)} giờ${nv.TongCong != null ? ` (${num(nv.TongCong)} công / ${num(nv.SoNgay)} ngày)` : ''}</td></tr>
@@ -1558,5 +2114,7 @@ window.ModulePayroll = (function () {
       ${buildLuongCatQuyBody(d)}`;
   }
 
-  return { render, getTabs };
+  /* v9.60: buildLuongCatNVBody dùng chung cho "Bảng lương của tôi" (module.mypay.js) — phiếu lương trải
+     vải cắt của nhân viên tự xem phải nói đúng một thứ với phiếu kế toán in (cùng hàm, không bản hai). */
+  return { render, getTabs, buildLuongCatNVBody };
 })();

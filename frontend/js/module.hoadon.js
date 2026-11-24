@@ -121,6 +121,8 @@ window.ModuleHoaDon = (function () {
         <label style="font-size:13px;">Đến ngày <input type="date" id="hdDen" value="${ky.denNgay}" style="width:auto;"></label>
         <button type="button" class="btn small secondary hd-nhanh" data-loai="thang">Tháng này</button>
         <button type="button" class="btn small secondary hd-nhanh" data-loai="thangtruoc">Tháng trước</button>
+        <button type="button" class="btn small secondary hd-nhanh" data-loai="nam" title="01/01 năm nay → hôm nay (xem trong phần mềm; tải từ TCT cả năm sẽ lâu)">Năm nay</button>
+        <button type="button" class="btn small secondary hd-nhanh" data-loai="namtruoc" title="01/01 → 31/12 năm trước">Năm trước</button>
         <button type="button" class="btn small secondary" id="hdXem">Xem</button>
         ${/* v8.40: GỘP 1 NÚT — tải danh sách xong tải luôn XML+PDF, không bắt bấm 2 lần. */''}
         ${/* v8.41: XML+PDF áp cho CẢ đầu ra (Nguyen đổi ý so với lần chốt "đầu ra chỉ cần Excel"). */''}
@@ -143,9 +145,15 @@ window.ModuleHoaDon = (function () {
     box.querySelectorAll('.hd-nhanh').forEach(b => b.addEventListener('click', () => {
       const h = new Date();
       const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const truoc = b.dataset.loai === 'thangtruoc';
-      const dau = new Date(h.getFullYear(), h.getMonth() - (truoc ? 1 : 0), 1);
-      const cuoi = truoc ? new Date(h.getFullYear(), h.getMonth(), 0) : h;
+      const l = b.dataset.loai;
+      let dau, cuoi;
+      if (l === 'nam') { dau = new Date(h.getFullYear(), 0, 1); cuoi = h; }                                   // v9.65
+      else if (l === 'namtruoc') { dau = new Date(h.getFullYear() - 1, 0, 1); cuoi = new Date(h.getFullYear() - 1, 11, 31); }   // v9.65
+      else {
+        const truoc = l === 'thangtruoc';
+        dau = new Date(h.getFullYear(), h.getMonth() - (truoc ? 1 : 0), 1);
+        cuoi = truoc ? new Date(h.getFullYear(), h.getMonth(), 0) : h;
+      }
       oTu.value = iso(dau); oDen.value = iso(cuoi); nhoKy();
       napBang(loai);
     }));

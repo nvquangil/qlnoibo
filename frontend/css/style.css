@@ -518,3 +518,131 @@ table.phieu-ke input, table.phieu-ke select {
 table.phieu-ke input[type="checkbox"], table.phieu-ke input[type="radio"] {
   min-height: 0; padding: 0; width: 18px; height: 18px;
 }
+
+/* ================================================================================================
+   v9.89 — BỐ CỤC PHIẾU 2 CỘT (Nguyen 23/11, theo giao diện KiotViet)
+
+   Dùng cho phiếu BÁN HÀNG (module.khohang.js) và phiếu NHẬP KHO HÀNG HOÁ (module.nhapkho.js):
+   dòng hàng chiếm hết bên TRÁI, thông tin phiếu + tổng tiền + nút Lưu dồn vào CỘT PHẢI.
+
+   🔴 Vì sao chỉ là CSS + bọc thêm 2 thẻ div: hai màn này là màn TIỀN (banhang.js là nơi DUY NHẤT
+   ghi XuatCai) và có 24 bộ tự kiểm bám vào id/class/thứ tự phần tử bằng so chuỗi. Đổi bố cục bằng
+   cách bọc lại thì MỌI id, class, hàm, payload giữ nguyên — bộ kiểm không vỡ, bản in không đụng.
+
+   Tự xuống MỘT cột khi hẹp (flex-wrap + flex-basis), không cần media query: máy bàn 2 cột, điện
+   thoại 1 cột y như cũ. min-width:0 ở cột trái là BẮT BUỘC — thiếu nó thì bảng rộng làm phình
+   flex item và cả modal tràn ngang thay vì cuộn trong .table-wrap. */
+.phieu-2cot { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.phieu-2cot > .p2-trai { flex: 1 1 520px; min-width: 0; }
+.phieu-2cot > .p2-phai {
+  flex: 0 1 340px; min-width: 280px;
+  background: #f7f9fb; border: 1px solid #dde4ea; border-radius: 6px; padding: 10px;
+}
+/* Cột phải hẹp ⇒ bảng thông tin phiếu xếp DỌC (nhãn trên, ô nhập dưới), không kẻ ô cho đỡ rối. */
+.phieu-2cot .p2-phai .phieu-form { margin-bottom: 8px; }
+.phieu-2cot .p2-phai .phieu-form th,
+.phieu-2cot .p2-phai .phieu-form td {
+  display: block; width: 100%; border: 0; padding: 0; background: transparent;
+}
+.phieu-2cot .p2-phai .phieu-form th {
+  font-size: 12px; color: #5f6368; font-weight: 600; text-align: left; padding: 8px 0 3px;
+}
+.phieu-2cot .p2-phai .phieu-form input,
+.phieu-2cot .p2-phai .phieu-form select,
+.phieu-2cot .p2-phai .phieu-form textarea { width: 100%; }
+/* .form-grid vốn 2 cột; trong cột phải hẹp thì xếp DỌC lại (phiếu bán hàng). */
+.phieu-2cot .p2-phai .form-grid { grid-template-columns: 1fr; }
+.phieu-2cot .p2-phai .form-row { grid-column: 1 / -1 !important; }
+/* Hàng tổng tiền trong cột phải: nhãn trái — số phải, số cuối cùng to và đậm. */
+.p2-tien { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; font-size: 13.5px; }
+.p2-tien > span:last-child { font-weight: 600; white-space: nowrap; }
+.p2-tien input { width: 86px; text-align: right; }
+.p2-chot { border-top: 2px solid #cfd8dc; margin-top: 6px; padding-top: 8px; font-size: 15px; }
+.p2-chot > span:last-child { font-weight: 800; color: #0b57d0; font-size: 17px; }
+/* Nút Lưu nằm cuối cột phải, luôn thấy khi cuộn bảng hàng bên trái. */
+.p2-phai .p2-luu { width: 100%; justify-content: center; margin-top: 10px; }
+
+/* ================================================================================================
+   v9.91 — PHIẾU BÁN HÀNG: 2 CỘT CỐ ĐỊNH, CUỘN RIÊNG (Nguyen 23/11)
+
+   *"Phiếu bán hàng phom nhập lúc nào cũng cố định 2 cột giống như kiotviet... Cột thông tin khách
+   hàng giữ nguyên không xuống dưới bất kể độ phân giải nào. 2 cột cuộn lên cuộn xuống riêng nhau."*
+
+   Khác với .phieu-2cot thường (v9.89, phiếu nhập kho vẫn dùng): bản "co-dinh" KHÔNG wrap. Hệ quả
+   CỐ Ý trên màn hẹp: cuộn NGANG chứ không xếp chồng — đúng yêu cầu "không xuống dưới bất kể độ
+   phân giải nào". Nếu sau này thấy khó dùng trên điện thoại thì bỏ class "co-dinh", không sửa ở đây.
+   ================================================================================================ */
+.phieu-2cot.co-dinh { flex-wrap: nowrap; overflow-x: auto; align-items: stretch; }
+.phieu-2cot.co-dinh > .p2-trai { flex: 1 1 520px; min-width: 460px; }
+.phieu-2cot.co-dinh > .p2-phai { flex: 0 0 340px; }
+/* Mỗi cột một vùng cuộn riêng. Cao theo màn hình, trừ chỗ cho tiêu đề + thanh tab + thanh kéo. */
+.phieu-2cot.co-dinh > .p2-trai,
+.phieu-2cot.co-dinh > .p2-phai {
+  max-height: calc(100vh - 260px); min-height: 260px; overflow-y: auto;
+}
+/* Bảng dòng hàng tự cao theo cột trái — đừng để nó có thêm một tầng cuộn thứ hai bên trong. */
+.phieu-2cot.co-dinh #bhDong { overflow-y: visible; }
+
+/* v9.92: ô Ghi chú GHIM ở đáy cột trái — cuộn bảng hàng dài đến đâu vẫn thấy và gõ được.
+   Nền đặc + viền trên để nó không "trôi đè" lên dòng hàng phía dưới khi đang cuộn. */
+.phieu-2cot .p2-trai > .p2-ghichu {
+  position: sticky; bottom: 0; z-index: 3;
+  background: #fff; border-top: 2px solid #dde4ea;
+  margin: 8px 0 0; padding: 8px 0 2px;
+}
+
+/* ---- Thanh tab nhiều hoá đơn (KiotViet: "Hoá đơn 1 ✕ ⊕") ---- */
+.bh-tabbar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; border-bottom: 2px solid #dde4ea; margin-bottom: 10px; padding-bottom: 0; }
+.bh-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid #dde4ea; border-bottom: 0; background: #f1f3f4; color: #3c4043;
+  border-radius: 6px 6px 0 0; padding: 7px 10px; font-size: 13px; cursor: pointer; margin-bottom: -2px;
+}
+.bh-tab.dang-xem { background: #fff; color: #0b57d0; font-weight: 700; border-color: #0b57d0; border-bottom: 2px solid #fff; }
+.bh-tab-x { color: #80868b; font-weight: 700; padding: 0 2px; border-radius: 3px; }
+.bh-tab-x:hover { background: #f8d7da; color: #c62828; }
+.bh-tab-them { border: 1px dashed #9aa0a6; background: transparent; color: #0b57d0; border-radius: 6px; padding: 6px 12px; font-size: 15px; cursor: pointer; }
+.bh-tab-them:hover { background: #e8f0fe; }
+/* Pane ẩn phải ẩn HẲN — các pane giữ nguyên DOM (giữ state) nên cái nào không xem phải display:none. */
+.bh-pane { display: block; }
+
+/* ================================================================================================
+   v10.04 — PHIẾU BÁN HÀNG DÙNG HẾT MÀN HÌNH (Nguyen 24/11: *"phiếu bán hàng cho rộng hơn cho kích
+   thước 1657x865"*).
+
+   1657×865 là màn RỘNG nhưng THẤP, nên phải xử lý hai chiều khác nhau:
+     · NGANG — `.modal` chung khoá `max-width: 1240px` ⇒ bỏ phí hơn 400px, bảng hàng phải cuộn ngang
+       trong khi màn hình còn thừa chỗ.
+     · DỌC  — 865px là thấp: đệm 40px trên/dưới của backdrop cộng với 260px chừa cho `.co-dinh` ăn
+       mất gần 1/3 chiều cao, bảng hàng chỉ còn ~600px rồi phải cuộn.
+
+   🔴 Vì sao gắn class vào BACKDROP chứ không vào `.modal`: cần sửa CẢ phần đệm của backdrop (lớp
+   CHA) lẫn bề rộng của modal (lớp CON). CSS không chọn ngược lên cha được, nên class phải nằm ở cha
+   ngay từ đầu — `openModal()` trả về chính backdrop nên gắn được bằng một dòng.
+   ⛔ TUYỆT ĐỐI không nới `.modal` chung: hơn 200 cửa sổ khác đang dựa vào mốc 1240px.
+   ================================================================================================ */
+.modal-backdrop.bh-rong { padding: 8px; }
+/* v10.05: Nguyen *"Cho cao và rộng hơn nữa"* ⇒ BỎ HẲN trần 1700px, lấy trọn bề ngang khung nhìn. */
+.modal-backdrop.bh-rong > .modal {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
+/* Phần dư dồn hết cho CỘT TRÁI (bảng hàng — chỗ thật sự thiếu). Cột phải chỉ nới nhẹ 340→380px:
+   nới nữa thì nhãn và ô nhập xa nhau, đọc mỏi mắt chứ không lợi gì. */
+.modal-backdrop.bh-rong .phieu-2cot.co-dinh > .p2-phai { flex: 0 0 380px; }
+/* Màn THẤP: v10.04 chừa 190px, v10.05 rút còn 150px (thanh kéo ~43 + tiêu đề + thanh tab + nút Hủy).
+   Nếu rút nữa thì chính .modal phải cuộn ⇒ sinh HAI thanh cuộn lồng nhau, khó dùng hơn là được việc. */
+.modal-backdrop.bh-rong .phieu-2cot.co-dinh > .p2-trai,
+.modal-backdrop.bh-rong .phieu-2cot.co-dinh > .p2-phai { max-height: calc(100vh - 150px); }
+/* Điện thoại / máy tính bảng: giữ đệm nhỏ, không đổi luật 2 cột cố định (v9.91 cố ý). */
+@media (max-width: 900px) { .modal-backdrop.bh-rong { padding: 6px; } }
+
+/* 🔴 v10.05 — Ô MÀU TRÊN DÒNG HÀNG: cho XUỐNG DÒNG.
+   `table th/td` chung đặt `white-space` mặc định, nhưng chuỗi tên màu dài ("Xanh rêu nhạt phối
+   trắng") sẽ đòi bề ngang lớn và đẩy cả bảng phình ra. Cho ngắt chữ ⇒ tên dài tự xuống dòng trong
+   bề ngang đã ghim (min-width tính theo tên màu dài nhất, xem veDong() trong module.khohang.js),
+   không phải nới cột thêm nữa — đúng hai lựa chọn Nguyen đưa ra ("cho rộng theo tên HOẶC xuống dòng").
+   `select` không tự xuống dòng được (hạn chế của trình duyệt) nên phần XUỐNG DÒNG chỉ áp cho dòng
+   chữ "khách đặt: …" bên dưới; phần RỘNG THEO TÊN mới là cái cứu ô chọn. */
+.bh-o-mau { white-space: normal; word-break: break-word; }
+.bh-o-mau .bh-mau { min-width: 110px; }

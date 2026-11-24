@@ -955,6 +955,50 @@ router.put('/items/:id/congkhai', requireAuth, requirePermission('KHOHANG', 'edi
   res.json({ success: true, data: { MaHangID: Number(req.params.id), CongKhai: bat ? 1 : 0 } });
 });
 
+/* ================================================================================================
+   v9.51 — GHI MÃ VẠCH cho MỘT mã hàng ngay tại dòng Thẻ kho (Nguyen 13/11: "danh mục hàng hóa chưa có
+   cột mã vạch"). Trước đây MaBarcode chỉ sửa được trong form Sửa thẻ kho (không thấy ở danh sách, không
+   có cách điền nhanh cho hàng trăm mã trước khi dùng quét mã vạch v9.50).
+   · Chỉ đụng ĐÚNG MỘT cột MaBarcode — KHÔNG đi qua PUT /items/:id (câu UPDATE 15 cột + vòng màu, đã
+     từng làm mất ảnh màu — v9.03). Gửi rỗng = XÓA mã vạch (NULL); PUT /items/:id bọc ISNULL nên không
+     xóa được, đây là đường xóa duy nhất.
+   · Trùng với mã hàng khác ⇒ 409 kèm tên mã đang giữ. So TRÙNG bằng chuanHoa() của tra cứu Zalo (bỏ
+     dấu, hoa, bỏ ký tự không phải chữ số) — cùng luật với quét v9.50 ("8938-000111" và "8938000111" là
+     một); quét từ chối chọn khi trùng nên phải chặn từ lúc nhập.
+   · Xóa chỉ mục tra cứu Zalo (traCuuHangCongKhai) để mã vạch mới dùng được ngay, không đợi 60 s.
+   ================================================================================================ */
+/* === v9.51 MA VACH THE KHO — BAT DAU === */
+router.put('/items/:id/mavach', requireAuth, requirePermission('KHOHANG', 'edit'), requireChucNang('KHOHANG', 'items'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const id = parseInt(req.params.id, 10);
+    if (!(id > 0)) return res.status(400).json({ success: false, message: 'Thiếu mã hàng.' });
+    const b = req.body || {};
+    const maVach = String(b.maBarcode == null ? '' : b.maBarcode).trim();
+    if (maVach.length > 50) return res.status(400).json({ success: false, message: 'Mã vạch tối đa 50 ký tự.' });
+    const traCuu = require('../utils/traCuuHangCongKhai');
+    if (maVach) {
+      const chuan = traCuu.chuanHoa(maVach);
+      if (!chuan) return res.status(400).json({ success: false, message: 'Mã vạch phải có chữ hoặc số.' });
+      const khac = (await pool.request().input('id', sql.Int, id)
+        .query('SELECT MaHangID, MaHang, MaBarcode FROM TheKhoHangHoa WHERE MaBarcode IS NOT NULL AND MaHangID <> @id')).recordset;
+      const trung = khac.find(r => traCuu.chuanHoa(r.MaBarcode) === chuan);
+      if (trung) {
+        return res.status(409).json({ success: false, message: `Mã vạch "${maVach}" đang gắn cho mã hàng ${trung.MaHang} — một mã vạch chỉ thuộc một mã hàng. Sửa bên đó trước nếu muốn chuyển.` });
+      }
+    }
+    const kq = await pool.request().input('id', sql.Int, id).input('b', sql.NVarChar, maVach || null)
+      .query('UPDATE TheKhoHangHoa SET MaBarcode = @b WHERE MaHangID = @id');
+    if (!kq.rowsAffected[0]) return res.status(404).json({ success: false, message: 'Không tìm thấy mã hàng.' });
+    try { traCuu.xoaChiMuc(); } catch (e) { /* tra cứu Zalo tự nạp lại sau 60 s */ }
+    res.json({ success: true, data: { MaHangID: id, MaBarcode: maVach || null } });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ success: false, message: 'Lỗi khi ghi mã vạch: ' + err.message });
+  }
+});
+/* === v9.51 MA VACH THE KHO — KET THUC === */
+
 // v8.24: Chuyển danh mục thẻ kho HÀNG LOẠT — Nguyen: đổi Danh mục thẻ kho (TheKhoDanhMucID) cho nhiều
 // mã hàng cùng lúc từ danh sách Thẻ kho hàng hóa (tick checkbox), thay vì mở form Sửa từng mã một.
 // LƯU Ý NGHIỆP VỤ: Danh mục thẻ kho CŨNG LÀ danh mục hiển thị trên Catalogue công khai (xem public.js,

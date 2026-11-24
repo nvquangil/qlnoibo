@@ -50,7 +50,9 @@ window.ModuleBaoCao = (function () {
       <button type="button" class="btn small secondary bc-nhanh" data-loai="thang">Tháng này</button>
       <button type="button" class="btn small secondary bc-nhanh" data-loai="thangtruoc">Tháng trước</button>
       <button type="button" class="btn small secondary bc-nhanh" data-loai="quy">Quý này</button>
+      <button type="button" class="btn small secondary bc-nhanh" data-loai="quytruoc">Quý trước</button>
       <button type="button" class="btn small secondary bc-nhanh" data-loai="nam">Năm nay</button>
+      <button type="button" class="btn small secondary bc-nhanh" data-loai="namtruoc" title="01/01 → 31/12 năm trước">Năm trước</button>
       <span style="margin-left:auto;display:flex;gap:6px;">
         ${themNut || ''}
         <button type="button" class="btn small secondary" id="bcIn">🖨️ In</button>
@@ -77,6 +79,10 @@ window.ModuleBaoCao = (function () {
       if (l === 'thang') ky = { tuNgay: iso(new Date(h.getFullYear(), h.getMonth(), 1)), denNgay: iso(h) };
       else if (l === 'thangtruoc') ky = { tuNgay: iso(new Date(h.getFullYear(), h.getMonth() - 1, 1)), denNgay: iso(new Date(h.getFullYear(), h.getMonth(), 0)) };
       else if (l === 'quy') { const q = Math.floor(h.getMonth() / 3) * 3; ky = { tuNgay: iso(new Date(h.getFullYear(), q, 1)), denNgay: iso(h) }; }
+      /* v9.65: Quý trước / Năm trước (Nguyen 16/11: "các kỳ xem báo cáo chưa có xem năm trước"). Quý trước: tháng đầu quý này − 3
+         → new Date(y, q-3, 1) tự lùi năm khi q = 0; đến ngày = ngày 0 của tháng đầu quý này = ngày cuối quý trước. */
+      else if (l === 'quytruoc') { const q = Math.floor(h.getMonth() / 3) * 3; ky = { tuNgay: iso(new Date(h.getFullYear(), q - 3, 1)), denNgay: iso(new Date(h.getFullYear(), q, 0)) }; }
+      else if (l === 'namtruoc') ky = { tuNgay: iso(new Date(h.getFullYear() - 1, 0, 1)), denNgay: iso(new Date(h.getFullYear() - 1, 11, 31)) };
       else ky = { tuNgay: iso(new Date(h.getFullYear(), 0, 1)), denNgay: iso(h) };
       render(container, currentUser, activeTab).catch(err => toast(err.message, 'error'));
     }));
@@ -518,7 +524,13 @@ window.ModuleBaoCao = (function () {
         <div style="flex:1;min-width:210px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#e6f4ea;">
           <div style="font-size:13px;">📥 <b>Phải thu khách hàng</b></div>
           <div style="font-size:22px;font-weight:bold;color:#137333;">${fmtNumber(cn.PhaiThu)} đ</div>
-          <div style="font-size:12px;color:#5f6368;">Bán hàng ${fmtNumber(cn.PhaiThu_BanHang)} − đã thu ${fmtNumber(cn.PhaiThu_DaThu)}</div>
+          ${/* v9.86: dòng phụ đề cũ chỉ in "Bán hàng − đã thu" nên NHÌN KHÔNG BAO GIỜ RA SỐ — còn thiếu
+               Điều chỉnh công nợ và (từ v9.86) Hàng khách trả. In đủ bốn vế đúng theo công thức. */''}
+          <div style="font-size:12px;color:#5f6368;">Bán hàng ${fmtNumber(cn.PhaiThu_BanHang)}${
+            Number(cn.PhaiThu_DieuChinh) ? ` + điều chỉnh ${fmtNumber(cn.PhaiThu_DieuChinh)}` : ''
+          } − đã thu ${fmtNumber(cn.PhaiThu_DaThu)}${
+            Number(cn.PhaiThu_TraLai) ? ` − khách trả hàng ${fmtNumber(cn.PhaiThu_TraLai)}` : ''
+          }</div>
         </div>
         <div style="flex:1;min-width:210px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#fdecea;">
           <div style="font-size:13px;">📤 <b>Phải trả nhà cung cấp</b></div>
@@ -575,6 +587,9 @@ window.ModuleBaoCao = (function () {
         <tr><td style="padding-left:24px;">Tổng phiếu bán hàng (lũy kế đến cuối kỳ)</td>${oTien(cn.PhaiThu_BanHang)}</tr>
         <tr><td style="padding-left:24px;">Điều chỉnh công nợ</td>${oTien(cn.PhaiThu_DieuChinh)}</tr>
         <tr><td style="padding-left:24px;">Đã thu của khách</td><td style="text-align:right;">−${fmtNumber(cn.PhaiThu_DaThu)}</td></tr>
+        ${/* v9.86: hàng khách trả lại (PhieuNhapLai) GIẢM công nợ — trước đây mục B quên vế này nên
+             phải thu khai khống, lệch hẳn với màn Công nợ khách hàng và Dashboard. */''}
+        <tr><td style="padding-left:24px;">Hàng khách trả lại</td><td style="text-align:right;">−${fmtNumber(cn.PhaiThu_TraLai || 0)}</td></tr>
         <tr style="font-weight:bold;background:#fdecea;"><td>PHẢI TRẢ NHÀ CUNG CẤP</td>${oTien(cn.PhaiTra)}</tr>
         <tr><td style="padding-left:24px;">Tiền nhập vải</td>${oTien(cn.PhaiTra_Vai)}</tr>
         <tr><td style="padding-left:24px;">Tiền nhập phụ kiện</td>${oTien(cn.PhaiTra_PhuKien)}</tr>
@@ -638,7 +653,7 @@ window.ModuleBaoCao = (function () {
         <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#e8f0fe;">
           <div style="font-size:13px;">💵 <b>Doanh thu thuần</b></div>
           <div style="font-size:22px;font-weight:bold;">${fmtNumber(t.DoanhThuThuan)} đ</div>
-          <div style="font-size:12px;color:#5f6368;">${t.SoPhieu || 0} phiếu · ${fmtNumber(t.TongSLCai)} cái</div>
+          <div style="font-size:12px;color:#5f6368;">${t.SoPhieu || 0} phiếu · ${fmtNumber(t.TongSLCai)} cái${t.SoPhieuTra ? ` − ${t.SoPhieuTra} phiếu trả lại (${fmtNumber(t.TongSLCaiTra)} cái, ${fmtNumber(t.HangTraLai)} đ)` : ''}</div>
         </div>
         <div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#fff8e1;">
           <div style="font-size:13px;">📦 <b>Giá vốn hàng bán</b></div>
@@ -662,17 +677,21 @@ window.ModuleBaoCao = (function () {
       <table data-nostt data-khongtim style="max-width:760px;"><thead><tr><th style="width:65%;">Chỉ tiêu</th><th>Số tiền</th></tr></thead><tbody>
         ${dongCT('Tổng tiền hàng (đã trừ chiết khấu shop)', t.TongTienHang, false, false, false)}
         ${dongCT('Chiết khấu NPP', t.TienCKNPP, false, true, true)}
-        ${dongCT('DOANH THU THUẦN <span style="font-weight:normal;font-size:11px;">(chưa gồm thuế GTGT)</span>', t.DoanhThuThuan, true, false, false)}
-        ${dongCT('Giá vốn hàng bán', t.GiaVon, false, true, true)}
+        ${dongCT('Doanh thu bán hàng <span style="font-weight:normal;font-size:11px;">(chưa gồm thuế GTGT)</span>', t.DoanhThuBan == null ? t.DoanhThuThuan : t.DoanhThuBan, false, false, false)}
+        ${/* v9.63: hàng khách trả lại trong kỳ (phiếu nhập lại) trừ vào doanh thu — cùng cách tính với Dashboard. */''}
+        ${dongCT(`Hàng bán bị trả lại <span style="font-weight:normal;font-size:11px;">(${t.SoPhieuTra || 0} phiếu nhập lại · ${fmtNumber(t.TongSLCaiTra || 0)} cái, chưa VAT${d.coBangNhapLai === false ? ' — chưa chạy migration_v676' : ''})</span>`, t.HangTraLai || 0, false, true, true)}
+        ${dongCT('DOANH THU THUẦN <span style="font-weight:normal;font-size:11px;">(chưa gồm thuế GTGT, đã trừ hàng trả lại — bằng Dashboard kinh doanh)</span>', t.DoanhThuThuan, true, false, false)}
+        ${dongCT('Giá vốn hàng bán <span style="font-weight:normal;font-size:11px;">(số cái bán − trả lại)</span>', t.GiaVon, false, true, true)}
         ${dongCT('LÃI GỘP' + (t.TyLeLaiGop == null ? '' : ` <span style="font-weight:normal;font-size:11px;">(${t.TyLeLaiGop}% doanh thu)</span>`), t.LaiGop, true, false, false)}
         ${dongCT('Chi phí kinh doanh', t.ChiPhiKD, false, true, true)}
         ${dongCT(Number(t.LoiNhuan) < 0 ? 'LỖ' : 'LỢI NHUẬN', t.LoiNhuan, true, false, false)}
         <tr><td colspan="2" style="border:none;height:8px;"></td></tr>
         <tr><td style="color:#5f6368;">Thuế GTGT đầu ra <span style="font-size:11px;">(thu hộ nhà nước — không phải doanh thu)</span></td>${oTien(t.TienVAT)}</tr>
-        <tr><td style="color:#5f6368;">Tổng thanh toán ghi trên phiếu bán hàng</td>${oTien(t.TongThanhToan)}</tr>
+        <tr><td style="color:#5f6368;">Tổng thanh toán ghi trên phiếu bán hàng <span style="font-size:11px;">(gồm VAT — số vào công nợ)</span></td>${oTien(t.TongThanhToan)}</tr>
+        ${t.SoPhieuTra ? `<tr><td style="color:#5f6368;">Tổng trừ công nợ trên phiếu nhập lại <span style="font-size:11px;">(gồm VAT)</span></td>${oTien(t.TongThanhToanTra)}</tr>` : ''}
       </tbody></table>
 
-      <h3 style="margin:16px 0 6px;font-size:15px;">B. Lãi gộp theo mã hàng</h3>
+      <h3 style="margin:16px 0 6px;font-size:15px;">B. Lãi gộp theo mã hàng <span style="font-weight:normal;font-size:12px;color:#5f6368;">(SL và doanh thu đã trừ hàng trả lại; dòng âm = khách trả hàng bán từ kỳ trước)</span></h3>
       <div class="bang-cuon" style="max-height:400px;">
       <table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>SL bán (cái)</th><th>Doanh thu</th>
         <th>Giá vốn 1 cái</th><th>Giá vốn</th><th>Lãi gộp</th><th>Tỷ lệ lãi</th><th>Nguồn giá vốn</th></tr></thead>
@@ -683,7 +702,7 @@ window.ModuleBaoCao = (function () {
           <td style="text-align:right;">${t.TyLeLaiGop == null ? '' : t.TyLeLaiGop + '%'}</td><td></td></tr>` : ''}
         ${ct.map(r => `<tr${r.ThieuGiaVon ? ' style="background:#fff4f4;"' : ''}>
         <td>${escapeHtml(r.MaHang)}</td><td>${escapeHtml(r.TenHang)}</td>
-        ${oSo(r.SLCai)}${oTien(r.DoanhThu)}
+        <td style="text-align:right;"${r.SLCaiTra ? ` title="Bán ${fmtNumber(r.SLCaiBan)} − trả lại ${fmtNumber(r.SLCaiTra)}"` : ''}>${fmtNumber(r.SLCai)}${r.SLCaiTra ? ` <span style="font-size:11px;color:#e65100;">(−${fmtNumber(r.SLCaiTra)} trả)</span>` : ''}</td>${oTien(r.DoanhThu)}
         <td style="text-align:right;">${r.ThieuGiaVon ? '<span style="color:#c0392b;">chưa khai</span>' : fmtNumber(r.GiaVon1)}</td>
         ${oTien(r.GiaVon)}
         <td style="text-align:right;color:${mau(r.LaiGop)};"><b>${fmtNumber(r.LaiGop)}</b></td>
@@ -742,7 +761,9 @@ window.ModuleBaoCao = (function () {
         <b>lãi gộp của các kỳ đã chốt cũng đổi theo</b>. Đã in báo cáo gửi đi thì giữ lại bản in đó để đối chiếu.</div>
       <div class="bang-cuon" style="max-height:calc(100vh - 280px);">
       <table><thead><tr><th>Mã hàng</th><th>Tên hàng</th><th>Loại</th><th>Lệnh SX</th>
-        <th>Giá bán (1 cái)</th><th>Giá vốn (1 cái)</th><th>Lãi gộp 1 cái</th><th>Nguồn</th><th>Cập nhật</th>
+        <th title="Giá niêm yết trong Thẻ kho hàng hóa — chỉ để tham khảo">Giá niêm yết</th>
+        <th title="v9.64: bình quân thực thu 1 cái theo mọi phiếu bán hàng chưa hủy — sau CK shop VÀ CK NPP của từng phiếu, chưa VAT">Giá thực thu (1 cái)</th>
+        <th>Giá vốn (1 cái)</th><th title="Giá thực thu − giá vốn (mã chưa bán lần nào: tạm theo giá niêm yết)">Lãi gộp 1 cái</th><th>Nguồn</th><th>Cập nhật</th>
         ${perm.canEdit ? '<th>Thao tác</th>' : ''}</tr></thead>
       <tbody id="gvBody">${rows.map(r => dongGiaVonHtml(r, perm)).join('')
         || `<tr><td colspan="${soCotGiaVon(perm)}" class="empty-hint">Chưa có mã hàng nào</td></tr>`}</tbody></table></div>`;
@@ -783,16 +804,18 @@ window.ModuleBaoCao = (function () {
     });
   }
 
-  const soCotGiaVon = perm => perm.canEdit ? 10 : 9;
+  const soCotGiaVon = perm => perm.canEdit ? 11 : 10;
   function dongGiaVonHtml(r, perm) {
     const thieu = r.GiaVon == null;
+    /* v9.64: lãi tính trên GIÁ THỰC THU (sau CK shop + CK NPP từng phiếu); mã chưa bán thì tạm theo giá niêm yết, ghi rõ. */
     return `<tr${thieu ? ' style="background:#fff4f4;"' : ''}>
       <td>${escapeHtml(r.MaHang)}</td><td>${escapeHtml(r.TenHang || '')}</td>
       <td>${r.LoaiHang === 'NhaSanXuat' ? 'Nhà SX' : 'Đặt ngoài'}</td>
       <td>${escapeHtml(r.MaDH || '')}</td>
-      ${oTien(r.GiaBan)}
+      <td style="text-align:right;color:#5f6368;">${fmtNumber(r.GiaBan)}</td>
+      <td style="text-align:right;"${r.GiaBanTT != null ? ` title="Đã bán ${fmtNumber(r.SLBan)} cái${r.LanBanCuoi ? ', lần cuối ' + fmtDate(r.LanBanCuoi) : ''}"` : ''}>${r.GiaBanTT != null ? `<b>${fmtNumber(r.GiaBanTT)}</b>` : '<span style="color:#9aa0a6;">chưa bán</span>'}</td>
       <td style="text-align:right;">${thieu ? '<span style="color:#c0392b;">chưa khai</span>' : `<b>${fmtNumber(r.GiaVon)}</b>`}</td>
-      <td style="text-align:right;color:${Number(r.LaiGop1) < 0 ? '#c0392b' : '#137333'};">${r.LaiGop1 == null ? '' : fmtNumber(r.LaiGop1)}</td>
+      <td style="text-align:right;color:${Number(r.LaiGop1) < 0 ? '#c0392b' : '#137333'};">${r.LaiGop1 == null ? '' : fmtNumber(r.LaiGop1) + (r.TyLeLai1 != null ? ` <span style="font-size:11px;color:#5f6368;">(${r.TyLeLai1}%)</span>` : '') + (r.TheoNiemYet ? ' <span style="font-size:11px;color:#9aa0a6;" title="Mã chưa bán lần nào — tạm tính theo giá niêm yết">niêm yết</span>' : '')}</td>
       <td>${escapeHtml(r.NguonGia || '')}${r.MaDHNguon ? ` <span style="font-size:11px;color:#5f6368;">(${escapeHtml(r.MaDHNguon)})</span>` : ''}</td>
       <td>${r.NgayCapNhat ? fmtDate(r.NgayCapNhat) : ''}</td>
       ${perm.canEdit ? `<td><button class="btn small secondary gv-sua" data-id="${r.MaHangID}">Khai giá vốn</button></td>` : ''}</tr>`;
@@ -803,7 +826,7 @@ window.ModuleBaoCao = (function () {
     const form = openModal(`<h3>Khai giá vốn — ${escapeHtml(r.MaHang)}</h3>
       <form id="gvForm">
         <div class="empty-hint" style="margin-bottom:8px;">${escapeHtml(r.TenHang || '')}${r.MaDH ? ` · lệnh SX ${escapeHtml(r.MaDH)}` : ' · không có lệnh SX (hàng đặt ngoài)'}
-          ${r.GiaBan ? `<br>Giá bán 1 cái: <b>${fmtNumber(r.GiaBan)} đ</b>` : ''}</div>
+          ${r.GiaBan ? `<br>Giá niêm yết 1 cái: <b>${fmtNumber(r.GiaBan)} đ</b>` : ''}${r.GiaBanTT != null ? ` · Giá thực thu bình quân (sau CK shop + CK NPP): <b>${fmtNumber(r.GiaBanTT)} đ</b>` : ''}</div>
         <div class="form-grid">
           <label>Giá vốn 1 cái (đ) <input type="number" name="giaVon" min="0" step="1" required value="${r.GiaVon == null ? '' : r.GiaVon}"></label>
           <label>Ghi chú <input type="text" name="ghiChu" maxlength="255" value="${escapeHtml(r.GhiChu || '')}"></label>

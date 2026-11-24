@@ -11,6 +11,13 @@ async function loadUserContext(userId) {
             WHERE u.UserID = @UserID`);
   if (!userResult.recordset.length) return null;
   const u = userResult.recordset[0];
+  /* v9.71 (Nguyen 16/11: "tạo user mới không có mật khẩu thì đăng nhập lần đầu yêu cầu đổi mật khẩu"): cờ Users.PhaiDoiMatKhau
+     (migration_v897). Truy vấn RIÊNG + try/catch — bản chưa migration (hoặc bộ kiểm với CSDL giả) vẫn chạy, cờ = false. */
+  let phaiDoiMatKhau = false;
+  try {
+    const r = (await pool.request().input('UserID', sql.Int, userId).query('SELECT PhaiDoiMatKhau FROM Users WHERE UserID = @UserID')).recordset[0];
+    phaiDoiMatKhau = !!(r && r.PhaiDoiMatKhau);
+  } catch (e) { phaiDoiMatKhau = false; }
 
   const groupsResult = await pool.request()
     .input('UserID', sql.Int, userId)
@@ -90,6 +97,10 @@ async function loadUserContext(userId) {
   // DE TREN phan quyen theo nhom da tinh o tren. Chi ap dung khi co dong tuong ung; khong co dong nao
   // thi giu nguyen ket qua tinh theo nhom (an toan, khong lam mat quyen ai khi chua cau hinh gi them).
   // Ap dung ke ca khi user KHONG thuoc nhom nao (cho phep cap quyen rieng ma khong can tao nhom).
+  // v9.59: ghi nho phan he / chuc nang nao CO dong ghi de rieng — luat MYPAY ben duoi chi nhuong
+  // nhung dong nay (quan tri co y dat), khong nhuong dong theo nhom.
+  const ghiDeRiengPhanHe = new Set();
+  const ghiDeRiengChucNang = new Set();
   if (!isAdmin) {
     try {
       const upResult = await pool.request().input('uid', sql.Int, userId).query(`
@@ -100,6 +111,7 @@ async function loadUserContext(userId) {
         permissions[r.ModuleCode] = {
           canView: !!r.CanView, canCreate: !!r.CanCreate, canEdit: !!r.CanEdit, canDelete: !!r.CanDelete
         };
+        ghiDeRiengPhanHe.add(r.ModuleCode);
       });
     } catch (e) {
       // Bang UserPermissions chua duoc tao (chua chay migration_v5_userperm.sql) - bo qua.
@@ -116,11 +128,53 @@ async function loadUserContext(userId) {
         chucNangPerm[r.ModuleCode + ':' + r.MaChucNang] = {
           canView: !!r.CanView, canEdit: !!r.CanEdit, canDelete: !!r.CanDelete
         };
+        ghiDeRiengChucNang.add(r.ModuleCode + ':' + r.MaChucNang);
       });
     } catch (e) {
       // Bang UserChucNangPermissions chua duoc tao (chua chay migration_v5_userperm.sql) - bo qua.
     }
   }
+
+  /* ================================================================================================
+     v9.59 — Nguyen 14/11/2026: "Bảng lương của tôi mặc định tự phân quyền cho user được gán mã nhân viên".
+     v9.52 mới chỉ GHI DÒNG ghi đè riêng đúng lúc gắn (tạo / sửa user — routes/users.js moBangLuongCuaToi):
+     người gắn TRƯỚC v9.52 không có dòng; nhóm nào từng mở Ma trận phân quyền rồi bấm Lưu thì bị MERGE
+     CanView=0 cho MỌI phân hệ chưa tick (PUT /permissions/:groupId) ⇒ vẫn "gắn rồi mà không thấy".
+     Nay là LUẬT LÚC NẠP PHIÊN, không cần dòng nào trong CSDL: có Users.NhanVienID ⇒ phân hệ MYPAY
+     canView=true và tab luongcuatoi không bị ẩn, bất kể nhóm. Chỉ NHƯỜNG dòng GHI ĐÈ RIÊNG THEO USER
+     đang CanView=0 — quản trị phải cố ý tick "Ghi đè riêng" rồi bỏ "Xem" cho đúng người đó (màn Phân
+     quyền riêng hiện đúng dòng ấy, nên màn hình và máy chủ không nói hai kiểu). Dòng theo NHÓM không
+     được coi là "cấm" vì lý do ở trên (ma trận ghi 0 hàng loạt, không phải cố ý).
+     Route /bangluong/cuatoi và /luongmay/cuatoi vốn chỉ requireAuth và tự lọc theo NhanVienID của chính
+     phiên ⇒ luật này chỉ MỞ MENU, không mở thêm dữ liệu của ai khác. Admin bỏ qua (thấy hết sẵn).
+     Quyền nạp lúc đăng nhập (middleware/auth.js) ⇒ gắn xong, người đó đăng nhập lại mới thấy — như v9.52.
+     myPayTuDong trả về để màn hình / bộ kiểm biết quyền đó là tự mở chứ không do dòng cấu hình nào.
+     ================================================================================================ */
+  /* === v9.59 MYPAY MAC DINH THEO NHAN VIEN — BAT DAU === */
+  let myPayTuDong = false;
+  if (!isAdmin && u.NhanVienID) {
+    const mp = permissions.MYPAY;
+    if (!(mp && mp.canView) && !ghiDeRiengPhanHe.has('MYPAY')) {
+      permissions.MYPAY = Object.assign({ canCreate: false, canEdit: false, canDelete: false }, mp || {}, { canView: true });
+      myPayTuDong = true;
+    }
+    /* v9.99: DANH SÁCH TRẮNG các chức năng TỰ PHỤC VỤ của MYPAY — mỗi mục chỉ xem dữ liệu của
+       CHÍNH người đang đăng nhập (máy chủ lọc theo Users.NhanVienID của phiên), nên mở menu không
+       mở thêm dữ liệu của ai. Trước v9.99 chỗ này ghi cứng mỗi 'luongcuatoi'; từ khi bảng chấm công
+       tách thành chức năng riêng (migration_v908) mà không thêm vào đây thì nhóm nào từng bấm Lưu ở
+       Ma trận phân quyền sẽ mất mục chấm công trong khi vẫn thấy phiếu lương — hai mục cùng tính
+       chất mà xử sự khác nhau. Với 'congdoanmaycuatoi' hậu quả nặng hơn: thợ may MẤT ĐƯỜNG TỰ GHI
+       công đoạn ⇒ mất lương khoán, im lặng — đúng loại thiệt hại mà luật v9.59 sinh ra để chặn.
+       ⛔ KHÔNG thêm 'sanluongcuatoi' / 'congdoanmaytatca' vào đây: đó là NĂNG LỰC MacDinhCho = 0
+          (phải tick mới có), tự mở là phá đúng ý nghĩa opt-in của chúng. */
+    ['MYPAY:luongcuatoi', 'MYPAY:chamcongcuatoi', 'MYPAY:congdoanmaycuatoi'].forEach(kTab => {
+      if (chucNangPerm[kTab] && chucNangPerm[kTab].canView === false && !ghiDeRiengChucNang.has(kTab)) {
+        chucNangPerm[kTab] = Object.assign({}, chucNangPerm[kTab], { canView: true });
+        myPayTuDong = true;
+      }
+    });
+  }
+  /* === v9.59 MYPAY MAC DINH THEO NHAN VIEN — KET THUC === */
 
   // hiddenChucNang duoc SUY RA tu chucNangPerm (canView=false) - giu lai de tuong thich nguoc voi
   // app.js (visibleTabsOf) dang doc truong nay de an/hien tab tren menu, khong can sua app.js.
@@ -160,7 +214,9 @@ async function loadUserContext(userId) {
     congDoan,
     congDoanIds,
     hiddenChucNang,
-    chucNangPerm
+    chucNangPerm,
+    phaiDoiMatKhau,   // v9.71: true = phải đổi mật khẩu trước khi dùng (app.js chặn màn hình)
+    myPayTuDong   // v9.59: true = MYPAY mở tự động vì gắn nhân viên (không do dòng cấu hình nào)
   };
 }
 

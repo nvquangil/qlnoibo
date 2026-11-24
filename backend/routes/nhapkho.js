@@ -1,9 +1,10 @@
 /* ================================================================================================
    PHIEU NHAP KHO HANG HOA  (v6.89)  - module KHOHANG, chuc nang 'nhapkho', migration_v681 + v682.
 
-   HAI LOAI NHAP:
+   BA LOAI NHAP (v9.66 them loai 3):
      - NhaCungCap : hang mua ngoai, CO don gia -> TANG CONG NO PHAI TRA cho NCC.
      - SanXuat    : hang xuong minh lam ra, gan LENH SX, KHONG sinh cong no.
+     - TonDauKy   : ton dau ky / nhap khac, CO don gia (gia von) nhung KHONG NCC, KHONG cong no.
 
    LUU PHIEU LAM DUNG 3 VIEC — khong hon:
      1. Tao MA HANG trong danh muc neu chua co (de xuat/ban duoc ngay).
@@ -55,6 +56,14 @@ const router = express.Router();
 });
 
 const CN = 'nhapkho';
+
+/* v9.66 (Nguyen 16/11: "Nhập tồn kho hàng hoá đầu kỳ không tính vào công nợ trả nhà cung cấp") — LOAI NHAP THU BA:
+     TonDauKy : ton dau ky / nhap khac — KHONG NCC, KHONG lenh SX, KHONG cong no (congno.js chi cong LoaiNhap = 'NhaCungCap');
+                CO don gia (= gia von ke toan khai) nen van vao gia nhap binh quan (utils/giaNhapHangHoa.js).
+   Truoc v9.66 chi co 2 loai, ke toan phai chon "Tu nha cung cap" + mot NCC bat ky de nhap ton dau -> cong no NCC do bi
+   cong them ca kho hang. Cot LoaiNhap NVARCHAR(20) khong co CHECK -> khong can migration. */
+const TEN_LOAI_NHAP = { NhaCungCap: 'Từ nhà cung cấp', SanXuat: 'Từ sản xuất', TonDauKy: 'Tồn đầu kỳ / nhập khác' };
+const docLoaiNhap = (v) => (v === 'SanXuat' || v === 'TonDauKy') ? v : 'NhaCungCap';
 
 /* Quy SL nguoi dung go ve DON VI CHINH cua ma hang (giong slSangDonViChinh ben banHangCommon,
    nhung o day nhan san doi tuong ma hang da doc tu CSDL). */
@@ -333,7 +342,7 @@ router.get('/phieu/export', requireAuth, requirePermission('KHOHANG', 'view'), r
   hdr.alignment = { horizontal: 'center', vertical: 'middle' };
   const d1 = hdr.number + 1;
   ds.forEach((r, i) => ws.addRow([i + 1, r.SoPhieu, r.NgayNhap ? new Date(r.NgayNhap) : null,
-    r.LoaiNhap === 'SanXuat' ? 'Từ sản xuất' : 'Từ nhà cung cấp',
+    TEN_LOAI_NHAP[r.LoaiNhap] || 'Từ nhà cung cấp',
     r.LoaiNhap === 'SanXuat' ? (r.MaDH || '') : (r.TenNCC || ''),
     r.SoHoaDon || '', so(r.TongSLCai), so(r.TongTien), r.TrangThai]));
   const d2 = ws.rowCount;
@@ -371,8 +380,8 @@ router.get('/phieu/:id/export', requireAuth, requirePermission('KHOHANG', 'view'
   ws.getCell('A2').value = `Số phiếu: ${h.SoPhieu}     Ngày: ${h.NgayNhap ? new Date(h.NgayNhap).toLocaleDateString('vi-VN') : ''}`;
   ws.getCell('A2').alignment = { horizontal: 'center' };
   ws.addRow([]);
-  ws.addRow(['Loại nhập:', h.LoaiNhap === 'SanXuat' ? 'Từ sản xuất' : 'Từ nhà cung cấp']);
-  ws.addRow([h.LoaiNhap === 'SanXuat' ? 'Lệnh sản xuất:' : 'Nhà cung cấp:', h.LoaiNhap === 'SanXuat' ? (h.MaDH || '') : (h.TenNCC || '')]);
+  ws.addRow(['Loại nhập:', TEN_LOAI_NHAP[h.LoaiNhap] || 'Từ nhà cung cấp']);
+  if (h.LoaiNhap !== 'TonDauKy') ws.addRow([h.LoaiNhap === 'SanXuat' ? 'Lệnh sản xuất:' : 'Nhà cung cấp:', h.LoaiNhap === 'SanXuat' ? (h.MaDH || '') : (h.TenNCC || '')]);
   ws.addRow(['Số hóa đơn:', h.SoHoaDon || '']);
   ws.addRow(['Ghi chú:', h.GhiChu || '']);
   ws.addRow([]);
@@ -574,7 +583,8 @@ async function chuanDong(pool, tran, d, loai) {
      dang co ton la DVT/ty le cua no bi ghi de am tham => moi phep quy doi ton kho sai gap <ty le> lan.
      Ma da co thi sua o Danh muc -> Hang hoa (ma hang). Ma MOI thi INSERT ben tren da ghi day du.
      ⚠️ KHONG mo lai duong nay. */
-  const donGia = loai === 'NhaCungCap' ? so(d.donGia) : 0;
+  /* v9.66: 'TonDauKy' cung co don gia (= gia von ke toan khai) — vao gia nhap binh quan, KHONG vao cong no. */
+  const donGia = loai === 'SanXuat' ? 0 : so(d.donGia);
   const chung = {
     soLuong: so(d.soLuong), donGia, thanhTien: tien(donGia * so(d.soLuong)),
     ghiChu: d.ghiChu || null, laMaMoi: !!mh.laMoi
@@ -686,11 +696,11 @@ async function ghiDong(pool, tran, phieuId, d) {
 router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requireChucNang('KHOHANG', CN), async (req, res) => {
   const pool = await getPool();
   const b = req.body || {};
-  const loai = b.loaiNhap === 'SanXuat' ? 'SanXuat' : 'NhaCungCap';
+  const loai = docLoaiNhap(b.loaiNhap);
   const dong = Array.isArray(b.dong) ? b.dong.filter(d => d && so(d.soLuong) > 0) : [];
   if (!dong.length) return res.status(400).json({ success: false, message: 'Phiếu chưa có dòng hàng nào có số lượng > 0.' });
   if (loai === 'NhaCungCap' && !b.nccId) {
-    return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp — số tiền này sẽ vào công nợ phải trả.' });
+    return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp — số tiền này sẽ vào công nợ phải trả. Nhập TỒN ĐẦU KỲ (không nợ ai) thì chọn loại "Tồn đầu kỳ / nhập khác".' });
   }
   /* v9.09: doi xung voi phep tren. Thieu phep nay thi phieu tu san xuat luu duoc voi DonHangID = NULL,
      va dau hieu duy nhat la mot cau canh bao noi vao toast THANH CONG, lai noi ve "gia von" chu khong
@@ -738,8 +748,9 @@ router.post('/phieu', requireAuth, requirePermission('KHOHANG', 'create'), requi
     await tran.commit();
     const maMoi = dsGhi.filter(d => d.laMaMoi).map(d => d.maHang);
     // v8.07: hang tu NCC -> tu nap gia von tu gia nhap. Loi o day KHONG duoc chan phieu da luu xong.
+    // v9.66: 'TonDauKy' cung vao gia nhap binh quan (utils/giaNhapHangHoa.js) -> cung nhanh.
     let gvMsg = '';
-    if (loai === 'NhaCungCap') {
+    if (loai === 'NhaCungCap' || loai === 'TonDauKy') {
       try {
         const kqGv = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
         if (kqGv.capNhat) gvMsg = ` Đã tự cập nhật giá vốn cho ${kqGv.capNhat} mã.`;
@@ -787,11 +798,11 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
   if (!cu) return res.status(404).json({ success: false, message: 'Không tìm thấy phiếu nhập kho.' });
   if (cu.TrangThai === 'Đã hủy') return res.status(400).json({ success: false, message: 'Phiếu đã hủy — không sửa được. Hãy lập phiếu mới.' });
 
-  const loai = b.loaiNhap === 'SanXuat' ? 'SanXuat' : 'NhaCungCap';
+  const loai = docLoaiNhap(b.loaiNhap);
   const dong = Array.isArray(b.dong) ? b.dong.filter(d => d && so(d.soLuong) > 0) : [];
   if (!dong.length) return res.status(400).json({ success: false, message: 'Phiếu chưa có dòng hàng nào có số lượng > 0.' });
   if (loai === 'NhaCungCap' && !b.nccId) {
-    return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp.' });
+    return res.status(400).json({ success: false, message: 'Nhập từ nhà cung cấp thì phải chọn nhà cung cấp. Phiếu tồn đầu kỳ thì chọn loại "Tồn đầu kỳ / nhập khác" — không vào công nợ.' });
   }
   // v9.09: xem ghi chu o POST /phieu — mat lien ket lenh SX la loi am tham, phai chan ngay.
   if (loai === 'SanXuat' && !b.donHangId) {
@@ -835,7 +846,7 @@ router.put('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'edit'), requ
        sang SanXuat thi khong cham vao gia von cu (gia nhap cua ma do se tu giam theo BQGQ o lan
        phieu NCC KHAC gan nhat, khong can lam gi them o day). Loi o day KHONG duoc chan phieu da sua. */
     let gvMsg2 = '';
-    if (loai === 'NhaCungCap') {
+    if (loai === 'NhaCungCap' || loai === 'TonDauKy') {   // v9.66
       try {
         const kqGv2 = await napGiaVonTuMaHang(pool, dsGhi.map(d => d.maHangId), req.session.user.userId);
         if (kqGv2.capNhat) gvMsg2 = ` Đã tự cập nhật giá vốn cho ${kqGv2.capNhat} mã.`;
@@ -890,7 +901,7 @@ router.put('/phieu/:id/huy', requireAuth, requirePermission('KHOHANG', 'edit'), 
     /* v8.07: phieu tu NCC bi huy -> BQGQ gia nhap cua cac ma tren phieu nay THAY DOI (cong thuc loai
        phieu Da huy), nen tinh lai gia von cho dung nhung ma do. Loi o day KHONG duoc chan viec huy. */
     let gvMsg3 = '';
-    if (h.LoaiNhap === 'NhaCungCap') {
+    if (h.LoaiNhap === 'NhaCungCap' || h.LoaiNhap === 'TonDauKy') {   // v9.66
       try {
         const idsCt = (await pool.request().input('id', sql.Int, req.params.id)
           .query('SELECT DISTINCT MaHangID FROM PhieuNhapKhoHangChiTiet WHERE PhieuNKID=@id')).recordset.map(x => x.MaHangID);
@@ -1025,7 +1036,7 @@ router.delete('/phieu/:id', requireAuth, requirePermission('KHOHANG', 'delete'),
        vao BQGQ gia nhap -> tinh lai gia von cho dung. Ma DA XOA thi GiaVonHangHoa da mat theo CASCADE
        roi, khong can dong gi them. Loi o day KHONG duoc chan viec xoa phieu (da commit xong). */
     let gvMsg4 = '';
-    if (h.LoaiNhap === 'NhaCungCap' && giuLaiIds.length) {
+    if ((h.LoaiNhap === 'NhaCungCap' || h.LoaiNhap === 'TonDauKy') && giuLaiIds.length) {   // v9.66
       try {
         const kqGv4 = await napGiaVonTuMaHang(pool, giuLaiIds, req.session.user.userId);
         if (kqGv4.capNhat) gvMsg4 = ' Đã cập nhật lại giá vốn cho ' + kqGv4.capNhat + ' mã.';

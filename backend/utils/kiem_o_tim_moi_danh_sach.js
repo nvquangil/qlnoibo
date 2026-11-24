@@ -73,7 +73,8 @@ kiem(dauCoOTim > iWTS && dauThoatRong > dauCoOTim,
 console.log('\n=== 4. themOTim: gan lai khi bang da ve lai dong ===');
 const iTO = mCommon.indexOf('function themOTim(goc');
 const fTO = iTO >= 0 ? mCommon.slice(iTO, mCommon.indexOf('\nfunction themOTimTuDong', iTO)) : '';
-kiem(/dongDau\.dataset\.tim/.test(fTO), 'nhan ra dong moi chua co data-tim => phai gan lai o tim');
+// Ma da doi sang hasAttribute('data-tim') (data-tim="" van la DA GAN) — phep kiem cu so dataset.tim nen do oan.
+kiem(/dongDau\.(dataset\.tim|hasAttribute\('data-tim'\))/.test(fTO), 'nhan ra dong moi chua co data-tim => phai gan lai o tim');
 kiem(/table\.dataset\.oTimHop/.test(fTO) && /removeChild\(hopCu\)/.test(fTO),
   'go dung o tim cu truoc khi gan o moi (khong chong o)');
 kiem(/data-khongtim/.test(fTO), 'ton trong co data-khongtim de man nao muon tu loai');
@@ -104,7 +105,7 @@ kiem(/hasAttribute\('data-tim'\)/.test(mCommon),
 
 console.log('\n=== 5. Cac man da goi ham moi ===');
 const GOI = [
-  ['module.payroll.js', 6], ['module.hrm.js', 4], ['module.users.js', 2], ['module.mypay.js', 1],
+  ['module.payroll.js', 8], ['module.hrm.js', 4], ['module.users.js', 2], ['module.mypay.js', 1],   // payroll 7 tu v9.45 (tab Danh gia KPI), 8 tu v9.57 (tab Giay nghi phep)
   ['module.qlsx.js', 4], ['module.khohang.js', 3], ['module.khovai.js', 2], ['module.phukien.js', 3],
   ['module.congno.js', 1], ['module.baocao.js', 2], ['module.dms.js', 7], ['module.nhaplai.js', 1],
   ['module.hoadon.js', 1], ['module.dashboard.js', 1]

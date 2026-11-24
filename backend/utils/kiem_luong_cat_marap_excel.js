@@ -201,7 +201,7 @@ kiem('ban loc ghi ro "tham gia / cả lệnh" de khong tuong thieu so do',
      /sơ đồ \(tham gia \/ cả lệnh\)/.test(fe));
 
 console.log('\n=== 7. BUMP ===');
-kiem('index.html bump module.payroll.js?v=9.20', html.includes('module.payroll.js?v=9.20'));
+kiem('index.html bump module.payroll.js?v >= 9.20', (() => { const m = /module\.payroll\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.20; })());
 
 console.log('\n' + '='.repeat(70));
 console.log(sai === 0 ? `✅ ${dat} phep DAT, 0 sai` : `❌ ${sai} SAI / ${dat + sai} phep`);

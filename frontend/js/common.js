@@ -88,6 +88,20 @@ function anhMauThuNhoHtml(url, canh) {
     + `style="width:${c}px;height:${c}px;object-fit:cover;border-radius:4px;border:1px solid #dce3ea;vertical-align:middle;"></a>`;
 }
 
+/* v9.73 — DÒNG THƯỞNG trên phiếu lương công nhật (dùng chung Tính lương + Bảng lương của tôi).
+   Nguyen 17/11: "phiếu lương tách Thưởng KPI (100/100 điểm) + Thưởng chuyên cần (bậc thang) 2 dòng riêng biệt".
+   Trả MẢNG { nhan, tien } — mỗi kiểu thưởng của hợp đồng một dòng, lấy từ ảnh chụp ThuongKPI/ThuongSP/ThuongCC
+   (migration_v899). Dòng tính TRƯỚC v9.73 không có 3 cột đó ⇒ một dòng gộp nhãn ghép như cũ (không đoán cách chia).
+   Hợp đồng không kiểu thưởng ⇒ một dòng "Thưởng" (tiền thường = 0, nơi gọi tự ẩn). */
+function cacDongThuongPhieuLuong(r) {
+  const kieu = String((r && r.KieuThuong) || '').split(/[,;|\s]+/).filter(Boolean);
+  const diem = r && r.DiemKPI != null ? ` (${Number(r.DiemKPI)}/100 điểm)` : '';
+  const nhanCua = (k) => k === 'SanPham' ? 'Thưởng theo sản phẩm' : k === 'ChuyenCan' ? 'Thưởng chuyên cần (bậc thang)' : 'Thưởng KPI' + diem;
+  const coPhan = r && (r.ThuongKPI != null || r.ThuongSP != null || r.ThuongCC != null);
+  if (!kieu.length || !coPhan) return [{ nhan: kieu.map(nhanCua).join(' + ') || 'Thưởng', tien: Number(r && r.Thuong) || 0 }];
+  return kieu.map(k => ({ nhan: nhanCua(k), tien: Number(k === 'SanPham' ? r.ThuongSP : k === 'ChuyenCan' ? r.ThuongCC : r.ThuongKPI) || 0 }));
+}
+
 /* v8.95: + tham số `ms` (thời gian hiện). Mặc định 3.200 ms như cũ; thông báo dài về TIỀN (giá thành
    vừa chốt + kết quả nạp giá vốn) cần lâu hơn. Toast là MỘT phần tử dùng chung — gọi hai lần liên
    tiếp là cái sau đè cái trước, nên nơi gọi phải GỘP nội dung chứ không gọi hai lần. */
@@ -2551,9 +2565,37 @@ function printHtml(title, bodyHtml, opts) {
    phieu xuat". Overlay rieng nay khong dung/khong dung toi #__modal nen mo/dong khong dung cham gi den
    modal dang mo phia sau - cac diem goi (.x-qr, .xe-qr, .gva-qr trong module.khovai.js/qlsx.js va nut
    "Quét QR" o tab Tồn theo cây) deu khong can sua gi them, tu dong het loi vi dung chung ham nay. */
+/* ================================================================================================
+   v9.50 — MỞ RỘNG CHO QUÉT MÃ VẠCH ĐẾM RI Ở PHIẾU BÁN HÀNG (Nguyen 13/11/2026). Các tùy chọn MỚI, mọi
+   chỗ gọi cũ (chỉ truyền onDecode + {continuous}) chạy y hệt như trước:
+     opts.quetLai   : (chỉ khi continuous) cho phép ĐẾM LẠI CÙNG MỘT MÃ sau khi khung hình TRỐNG LIÊN TỤC
+                      ≥ opts.nghiMs (mặc định 800 ms, chế độ mã vạch 1 200 ms). Cần cho việc đếm N ri cùng
+                      mã hàng: tem nào cũng cùng một mã vạch, chế độ cũ chỉ nhận lần đầu rồi im. Vẫn chặn
+                      được "camera đọc lại 10 lần/giây cùng một tem" vì tem còn trong khung thì chưa bao
+                      giờ có chuỗi khung trống dài như vậy.
+     opts.maVach    : chế độ mã vạch 1D — khung quét NGANG (rộng, thấp) thay cho khung vuông, và chỉ giải
+                      các loại mã in trên tem (QR + Code128/39, EAN/UPC, ITF, Codabar) cho nhanh.
+     opts.amThanh   : bíp (WebAudio) + rung khi gọi ctx.keu(ok) — người quét không phải nhìn màn hình.
+     opts.tieuDe / opts.huongDan : tiêu đề và câu hướng dẫn (HTML nội bộ) thay cho chữ "Quét mã QR".
+     opts.truocKhiDong() : gọi trước khi đóng (nút Đóng / Esc / ctx.dong); trả false = giữ camera mở.
+   onDecode(text, ctx) nhận thêm `ctx` (tham số thứ hai, chỗ gọi cũ không dùng tới):
+     ctx.baoCao(html, 'ok'|'loi'|'info')  : dòng trạng thái NGAY DƯỚI khung camera (kết quả lần quét)
+     ctx.datKhuChon(html) -> phần tử      : khu nút bấm của bên gọi (nút chọn màu…) giữa trạng thái và tóm tắt
+     ctx.datTomTat(html)                  : khối tóm tắt dưới cùng (đang có gì trên phiếu)
+     ctx.keu(ok)                          : bíp/rung (chỉ khi opts.amThanh)
+     ctx.dong()                           : đóng camera
+   ================================================================================================ */
 function openQrScanner(onDecode, opts) {
   opts = opts || {};
   const continuous = !!opts.continuous;
+  const quetLai = continuous && !!opts.quetLai;
+  const maVach = !!opts.maVach;
+  /* Khoảng trống LIÊN TỤC tối thiểu trước khi cùng một mã được đếm lại. Mã vạch 1D qua ZXing hay hỏng
+     vài khung liên tiếp (lấy nét, lóa, rung tay) dù tem chưa rời khung — để 1,2 s cho mã vạch, 0,8 s
+     cho QR. Chỉnh bằng opts.nghiMs nếu đo thực tế thấy đếm trùng / đếm chậm. */
+  const nghiMs = Number(opts.nghiMs) > 0 ? Number(opts.nghiMs) : (maVach ? 1200 : 800);
+  const tieuDe = opts.tieuDe ? String(opts.tieuDe) : 'Quét mã QR';
+  const coDongTrangThai = !!(opts.maVach || opts.tieuDe || opts.huongDan);   // chỗ gọi cũ: không thêm khoảng trắng
   if (typeof Html5Qrcode === 'undefined') {
     toast('Không tải được thư viện quét QR (kiểm tra kết nối internet).', 'error');
     return;
@@ -2574,20 +2616,61 @@ function openQrScanner(onDecode, opts) {
   backdrop.className = 'modal-backdrop';
   backdrop.id = '__qrScanner';
   backdrop.innerHTML = `<div class="modal">
-      <div class="modal-dragbar" title="Quét mã QR">
+      <div class="modal-dragbar" title="${escapeHtml(tieuDe)}">
         <span class="modal-dragbar-spacer"></span>
         <button type="button" class="modal-btn-close" title="Đóng (Esc)">✕</button>
       </div>
       <div class="modal-body">
-        <h3>Quét mã QR</h3>
+        <h3>${escapeHtml(tieuDe)}</h3>
         <div id="qrReaderBox" style="width:100%;min-height:280px;"></div>
-        <p style="font-size:12px;color:#5f6368;">${continuous
+        ${coDongTrangThai ? `<div id="qrTrangThai" style="min-height:22px;font-size:14px;font-weight:600;margin:6px 0 2px;line-height:1.35;"></div>
+        <div id="qrKhuChon"></div>
+        <div id="qrTomTat" style="font-size:12px;color:#3c4043;line-height:1.4;"></div>` : ''}
+        <p style="font-size:12px;color:#5f6368;">${opts.huongDan ? opts.huongDan : (continuous
           ? 'Chế độ quét liên tục: lần lượt đưa từng mã QR vào camera — mỗi cây tìm thấy sẽ tự thêm vào danh sách. Camera vẫn mở để quét cây tiếp theo, bấm "Đóng" khi quét xong.'
-          : 'Đưa camera vào mã QR trên cây vải. Cần cấp quyền truy cập camera cho trình duyệt.'}</p>
+          : 'Đưa camera vào mã QR trên cây vải. Cần cấp quyền truy cập camera cho trình duyệt.')}</p>
         <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancelQr">Đóng</button></div>
       </div>
     </div>`;
   document.body.appendChild(backdrop);
+
+  /* v9.50: bíp + rung. AudioContext phải được TẠO TRONG cú bấm của người dùng (iOS/Chrome chặn âm
+     thanh tự phát) — openQrScanner luôn được gọi từ một nút bấm nên tạo ngay ở đây, KHÔNG đợi tới lúc
+     giải mã (callback của camera không còn là cử chỉ người dùng). Thiếu WebAudio/bị chặn thì im lặng. */
+  let amThanh = null;
+  if (opts.amThanh) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) { amThanh = new AC(); if (amThanh.state === 'suspended') amThanh.resume().catch(() => {}); }
+    } catch (e) { amThanh = null; }
+  }
+  function keu(ok) {
+    if (amThanh) {
+      try {
+        const o = amThanh.createOscillator(), g = amThanh.createGain();
+        o.type = 'square'; o.frequency.value = ok ? 1300 : 300;
+        g.gain.value = 0.08;
+        o.connect(g); g.connect(amThanh.destination);
+        const t = amThanh.currentTime;
+        o.start(t); o.stop(t + (ok ? 0.09 : 0.32));
+      } catch (e) { /* không có âm thanh thì thôi */ }
+    }
+    try { if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 60, 120]); } catch (e) { /* bỏ qua */ }
+  }
+  const ctx = {
+    baoCao(html, loai) {
+      const o = backdrop.querySelector('#qrTrangThai');
+      if (!o) return;
+      o.style.color = loai === 'loi' ? '#c0392b' : (loai === 'ok' ? '#137333' : '#3c4043');
+      o.innerHTML = html || '';
+    },
+    datTomTat(html) { const o = backdrop.querySelector('#qrTomTat'); if (o) o.innerHTML = html || ''; },
+    /* Khu nút bấm của bên gọi (vd nút chọn MÀU cho tem vừa quét) — trả về phần tử để bên gọi tự nối sự
+       kiện; null khi chỗ gọi cũ (không có khu này). */
+    datKhuChon(html) { const o = backdrop.querySelector('#qrKhuChon'); if (o) o.innerHTML = html || ''; return o; },
+    keu,
+    dong() { stopAndClose(); }
+  };
 
   // Bat capture-phase + stopPropagation de Esc chi dong overlay QR nay, khong lam kich hoat luon
   // __modalEscHandler cua modal cha (dang lang nghe bubble-phase tren cung document).
@@ -2596,13 +2679,36 @@ function openQrScanner(onDecode, opts) {
   function removeOverlay() {
     document.removeEventListener('keydown', escHandler, true);
     backdrop.remove();
+    if (amThanh) { try { amThanh.close().catch(() => {}); } catch (e) { /* bỏ qua */ } amThanh = null; }
   }
 
-  const qr = new Html5Qrcode('qrReaderBox');
+  /* v9.50: chế độ mã vạch chỉ giải các loại mã in trên tem (bớt việc cho bộ giải mã ZXing trên máy tính
+     bảng). Thư viện cũ không có Html5QrcodeSupportedFormats thì dùng mặc định (mọi loại) như trước. */
+  let cauHinhBo = null;
+  if (maVach && typeof Html5QrcodeSupportedFormats !== 'undefined') {
+    const F = Html5QrcodeSupportedFormats;
+    cauHinhBo = {
+      formatsToSupport: [F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR].filter(x => x != null),
+      verbose: false
+    };
+  }
+  const qr = cauHinhBo ? new Html5Qrcode('qrReaderBox', cauHinhBo) : new Html5Qrcode('qrReaderBox');
   let stopped = false;
   let lastCode = null; // v5.12: chi dung khi continuous=true - xem giai thich trong callback qr.start() ben duoi
+  /* v9.50 (quetLai): mốc KHUNG TRỐNG ĐẦU TIÊN kể từ lần cuối thấy mã. Đo khoảng trống LIÊN TỤC giữa
+     các khung trống, KHÔNG đo "kể từ lần thấy cuối": onDecode có thể chặn luồng vài giây (hộp confirm
+     của phiếu bán hàng) — đo kiểu kia thì khung trống đầu tiên sau hộp thoại đã đủ "lâu" và tem vẫn
+     trong tay bị đếm thêm một lần ma. */
+  let trongTu = null;
   function stopAndClose() {
     if (stopped) return;
+    /* v9.50: opts.truocKhiDong() trả false = chưa đóng (vd phiếu bán hàng còn tem đã quét nhưng chưa bấm
+       màu — đóng là mất). Áp cho nút Đóng, phím Esc và ctx.dong(); lỗi mở camera thì gỡ thẳng, không hỏi. */
+    if (typeof opts.truocKhiDong === 'function') {
+      let choPhep = true;
+      try { choPhep = opts.truocKhiDong() !== false; } catch (e) { choPhep = true; }
+      if (!choPhep) return;
+    }
     stopped = true;
     qr.stop().catch(() => {}).finally(removeOverlay);
   }
@@ -2619,19 +2725,36 @@ function openQrScanner(onDecode, opts) {
       // thuoc LUON nho hon/bang khung hinh that (70% canh ngan nhat) - responsive theo dung man hinh.
       qrbox: (viewfinderWidth, viewfinderHeight) => {
         const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+        if (maVach) {
+          /* v9.50: mã vạch 1D nằm NGANG — khung rộng/thấp để canh tem dễ; thư viện chỉ giải mã TRONG
+             khung này nên khung vuông cũ hay cắt cụt hai đầu vạch, đọc mãi không ra. */
+          const w = Math.min(viewfinderWidth, Math.max(200, Math.floor(viewfinderWidth * 0.86)));
+          const h = Math.min(viewfinderHeight, Math.max(90, Math.floor(minEdge * 0.32)));
+          return { width: w, height: h };
+        }
         const size = Math.max(150, Math.floor(minEdge * 0.7));
         return { width: size, height: size };
       }
     },
     (decodedText) => {
-      if (!continuous) { stopAndClose(); onDecode(decodedText); return; }
+      if (!continuous) { stopAndClose(); onDecode(decodedText, ctx); return; }
       // v5.12: che do quet lien tuc - KHONG dung/dong camera o day (khac nhanh mac dinh o tren). Bo qua
       // neu giai ma ra CUNG 1 chuoi nhu lan quet lien truoc do (xem giai thich o dau file).
+      trongTu = null;   // v9.50: còn thấy mã (kể cả lần bị bỏ qua vì trùng) -> chuỗi khung trống bị cắt
       if (decodedText === lastCode) return;
       lastCode = decodedText;
-      onDecode(decodedText);
+      onDecode(decodedText, ctx);
     },
-    () => {}
+    () => {
+      /* v9.50 (quetLai): thư viện gọi hàm này cho MỖI khung hình KHÔNG có mã (~10 lần/giây). Khung
+         trống LIÊN TỤC ≥ nghiMs thì quên "mã vừa thấy" — đưa tem kế tiếp CÙNG mã vào là tính thêm một
+         lần. Tem còn nằm trong khung thì không bao giờ có chuỗi khung trống dài như vậy ⇒ không đếm
+         trùng. Khung trống đầu tiên chỉ đặt mốc, chưa reset (xem ghi chú ở biến trongTu). */
+      if (!quetLai || lastCode === null) return;
+      const bayGio = Date.now();
+      if (trongTu === null) { trongTu = bayGio; return; }
+      if (bayGio - trongTu >= nghiMs) { lastCode = null; trongTu = null; }
+    }
   ).catch((err) => {
     // Phan biet ro nguyen nhan thay vi 1 thong bao chung chung, de nguoi dung tu xu ly dung huong:
     // NotAllowedError = da tu choi quyen (hoac trinh duyet/OS chan quyen camera cho site nay) ->

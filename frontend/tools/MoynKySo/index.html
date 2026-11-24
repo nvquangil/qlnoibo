@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>MOYN Ký số — công cụ ký bằng USB token</title>
+<style>body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;max-width:760px;margin:0 auto;padding:16px;line-height:1.5;color:#202124}h1{font-size:22px}code{background:#f1f3f4;padding:2px 5px;border-radius:4px}.nut{display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}.chu{background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px}</style></head>
+<body>
+<h1>MOYN Ký số — ký hợp đồng bằng USB token ngay trên trang web</h1>
+<p>Trình duyệt không đọc được USB token, nên để <b>ký số ngay trên trang web</b> cần chạy công cụ nhỏ này trên máy tính Windows có cắm token (giống "công cụ ký" của các nền tảng hợp đồng điện tử khác).</p>
+<p><a class="nut" href="/tools/MoynKySo/MoynKySo.exe">⬇ Tải MoynKySo.exe</a></p>
+<ol>
+  <li>Cắm USB token, chắc chắn phần mềm của nhà cung cấp chữ ký số (VNPT-CA, Viettel-CA, FPT-CA, MISA, BKAV…) đã cài — token phải hiện trong kho chứng thư Windows (như khi kê khai thuế).</li>
+  <li>Mở <code>MoynKySo.exe</code>. Lần đầu Windows SmartScreen có thể hỏi — chọn <i>More info → Run anyway</i>. Chương trình nằm ở khay hệ thống (biểu tượng khiên), không cần làm gì thêm.</li>
+  <li>Quay lại trang ký hợp đồng, chọn tab <b>Ký bằng chữ ký số → Ký bằng USB token</b>, chọn chứng thư, nhập PIN khi token hỏi.</li>
+</ol>
+<div class="chu"><b>An toàn:</b> công cụ chỉ lắng nghe <code>http://localhost:8765</code> trên máy bạn, chỉ trả lời trang web của MOYN, chỉ ký đúng dữ liệu băm của hợp đồng bạn đang mở và luôn hỏi bạn xác nhận trước khi gọi token. Khóa riêng không rời token, không gì được gửi đi ngoài trang web bạn đang ký. Mã nguồn: thư mục <code>tools/MoynKySo</code> của phần mềm.</div>
+<p>Không muốn cài gì? Dùng <b>Cách 2</b> trên trang ký: tải PDF về, ký bằng phần mềm của nhà cung cấp chữ ký số (hoặc Adobe Acrobat Reader), rồi tải lên.</p>
+<p style="color:#5f6368;font-size:13px">Cần .NET 8 Desktop Runtime (Windows 10/11 thường có sẵn; nếu thiếu, Windows sẽ hướng dẫn tải).</p>
+</body></html>

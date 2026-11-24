@@ -100,7 +100,8 @@ kiem('hai nut co handler', /#bgChonHet'\)\.addEventListener\('click'/.test(feSrc
 console.log('\n=== 5. NHAN + BUMP ===');
 kiem('nhan o chon ma doi thanh "(giá bán: …)" — het nhan "(sau CK: …)" cu',
      feSrc.includes('(giá bán: ') && !feSrc.includes('(sau CK: '));
-kiem('index.html bump module.khohang.js?v=9.16', html.includes('module.khohang.js?v=9.16'));
+// >= chu khong phai ==: ban sau bump tiep la do oan (14/11 chay kiem_tat_ca thay 4 bo cung loi nay).
+kiem('index.html bump module.khohang.js?v >= 9.16', (() => { const m = /module\.khohang\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.16; })());
 
 console.log('\n' + '='.repeat(70));
 console.log(sai === 0 ? `✅ ${dat} phep DAT, 0 sai` : `❌ ${sai} SAI / ${dat + sai} phep`);

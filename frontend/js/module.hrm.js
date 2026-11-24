@@ -782,7 +782,14 @@ window.ModuleHRM = (function () {
         ['Chức vụ', h.ChucVu], ['Nơi làm việc', h.NoiLamViec],
         ['Lương cơ bản', money(h.LuongCoBan) + ' đ'], ['Hệ số lương', h.HeSoLuong],
         ['Phụ cấp ăn ca', money(h.PhuCapAnCa) + ' đ'], ['Phụ cấp trang phục', money(h.PhuCapTrangPhuc) + ' đ'],
-        ['Phụ cấp xăng xe', money(h.PhuCapXangXe) + ' đ'], ['Phụ cấp điện thoại', money(h.PhuCapDienThoai) + ' đ'],
+        // v9.79 (chốt lại): xăng = đ/NGÀY × công — màn xem nói đúng cái đang tính; cảnh báo luôn số nghi là SỐ THÁNG.
+        ['Phụ cấp xăng xe', Number(h.PhuCapXangXe) >= 100000
+          ? money(h.PhuCapXangXe) + ' đ/ngày ⚠️ số này quá lớn cho MỘT NGÀY — có phải số THÁNG kiểu cũ?'
+          : money(h.PhuCapXangXe) + ' đ/ngày × ngày công đi làm thực tế'],
+        ['Phụ cấp điện thoại', money(h.PhuCapDienThoai) + ' đ'],
+        // v9.48: màn xem phải nói hợp đồng này lương kiểu gì, thưởng kiểu gì — đúng cái sẽ in ở e)/3.4.
+        ['Kiểu lương', h.KieuLuong === 'Ngay' ? 'Ngày — ' + money(h.DonGiaNgay) + ' đ/ngày' : (h.KieuLuong ? 'Tháng' : '')],
+        ['Thưởng (điều khoản e / 3.4)', nhanKieuThuong(h)],
         // v9.35: hiện ở màn xem, không thì phải mở form sửa mới biết hợp đồng này khai nội dung gì.
         ['Nội dung công việc (mục 1.5)', h.NoiDungCongViec],
         ['Ghi chú', h.GhiChu]
@@ -869,7 +876,7 @@ window.ModuleHRM = (function () {
         <td>${escapeHtml(h.HoTen || '')} <span style="color:#5f6368;">(${escapeHtml(h.MaNhanVien || '')})</span></td>
         <td>${escapeHtml(h.LoaiHopDong || '')}</td><td>${fmtDate(h.TuNgay)}</td><td>${h.DenNgay ? fmtDate(h.DenNgay) : '—'}</td>
         ${/* v9.45: kiểu Ngày thì hiện đơn giá ngày — nhìn danh sách biết ngay ai tính theo gì */''}
-        <td style="text-align:right;">${h.KieuLuong === 'Ngay' ? `${money(h.DonGiaNgay)} <span style="color:#5f6368;font-size:11px;">/ngày</span>` : money(h.LuongCoBan)}${h.KieuThuong ? ` <span style="color:#5f6368;font-size:11px;">(${h.KieuThuong === 'KPI' ? 'KPI' : 'SP'})</span>` : ''}</td><td>${escapeHtml(h.TrangThai || '')}</td>
+        <td style="text-align:right;">${h.KieuLuong === 'Ngay' ? `${money(h.DonGiaNgay)} <span style="color:#5f6368;font-size:11px;">/ngày</span>` : money(h.LuongCoBan)}${tachKieu(h.KieuThuong).length ? ` <span style="color:#5f6368;font-size:11px;">(${tachKieu(h.KieuThuong).map(k => k === 'KPI' ? 'KPI' : k === 'SanPham' ? 'SP' : 'CC').join('+')})</span>` : ''}</td><td>${escapeHtml(h.TrangThai || '')}</td>
         <td>
           <button class="btn small secondary act-print" data-id="${h.HopDongID}">🖨 In</button>
           ${perm.canEdit ? `<button class="btn small secondary act-edit" data-id="${h.HopDongID}">Sửa</button>` : ''}
@@ -887,6 +894,7 @@ window.ModuleHRM = (function () {
     if (id) { try { h = (await apiGet('/api/hrm/hopdong?')).data.find(x => x.HopDongID == id) || {}; } catch (e) { } }
     const nvId = h.NhanVienID || presetNvId || '';
     const f = (label, inner) => `<div class="form-row" style="margin:0;"><label>${label}</label>${inner}</div>`;
+    const ktDs = tachKieu(h.KieuThuong);   // v9.73: ['KPI','SanPham',...]
     const html = `
       <h3>${id ? 'Sửa hợp đồng lao động' : 'Tạo hợp đồng lao động'}</h3>
       <form id="hdForm"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;">
@@ -902,7 +910,12 @@ window.ModuleHRM = (function () {
         ${f('Hệ số lương', `<input type="number" step="0.0001" id="f_heso" value="${h.HeSoLuong != null ? h.HeSoLuong : ''}">`)}
         ${f('Phụ cấp ăn ca', `<input type="number" id="f_anca" value="${h.PhuCapAnCa != null ? h.PhuCapAnCa : ''}">`)}
         ${f('Phụ cấp trang phục', `<input type="number" id="f_tp" value="${h.PhuCapTrangPhuc != null ? h.PhuCapTrangPhuc : ''}">`)}
-        ${f('Phụ cấp xăng xe', `<input type="number" id="f_xang" value="${h.PhuCapXangXe != null ? h.PhuCapXangXe : ''}">`)}
+        ${/* v9.79 (Nguyen 19/11 CHỐT LẠI: "xăng xe điền theo số tiền /1 ngày × ngày công thực tế") — một công thức
+             duy nhất, khai thẳng SỐ TIỀN MỘT NGÀY ở đây. Cách tính theo km (v9.78) đã bỏ: ô "Số km đi làm" gỡ khỏi
+             form, cột SoKmDiLam để nguyên trong CSDL cho khỏi mất số đã nhập, không ai đọc.
+             🔴 Nhập ĐƠN GIÁ NGÀY (vd 20.000), KHÔNG phải số tháng — khai 540.000 là trả 540.000 × số công. */''}
+        ${f('Phụ cấp xăng xe (đ / 1 NGÀY công đi làm thực tế)', `<input type="number" id="f_xang" step="1000" value="${h.PhuCapXangXe != null ? h.PhuCapXangXe : ''}" placeholder="VD: 20000 / ngày"> <span style="color:#5f6368;font-size:12px;">× số ngày công đi làm thực tế (không tính phép, lễ). <b style="color:#c5221f;">Là tiền MỘT NGÀY, không phải một tháng.</b></span>`)}
+        <input type="hidden" id="f_sokm" value="${h.SoKmDiLam != null ? h.SoKmDiLam : ''}">
         ${f('Phụ cấp điện thoại', `<input type="number" id="f_dt" value="${h.PhuCapDienThoai != null ? h.PhuCapDienThoai : ''}">`)}
         ${/* v8.82 — các ô dưới đây phục vụ IN theo đúng mẫu hợp đồng của công ty.
              v9.45 — từ bản này chuyên cần / chức vụ / quỹ KPI / số công xăng xe / tỷ lệ thử việc
@@ -912,8 +925,8 @@ window.ModuleHRM = (function () {
         ${f('Phụ cấp chuyên cần', `<input type="number" id="f_chuyencan" value="${h.PhuCapChuyenCan != null ? h.PhuCapChuyenCan : ''}">`)}
         ${f('Phụ cấp chức vụ / trách nhiệm', `<input type="number" id="f_chucvu_pc" value="${h.PhuCapChucVu != null ? h.PhuCapChucVu : ''}">`)}
         ${f('Quỹ KPI tối đa / tháng', `<input type="number" id="f_kpi" value="${h.QuyKPI != null ? h.QuyKPI : ''}">`)}
-        ${f('Số công chuẩn — xăng xe', `<input type="number" step="0.5" id="f_congxang" value="${h.SoCongXangXe != null ? h.SoCongXangXe : ''}" placeholder="VD: 26">`)}
-        ${f('Số công chuẩn — ăn trưa', `<input type="number" step="0.5" id="f_congan" value="${h.SoCongAnTrua != null ? h.SoCongAnTrua : ''}" placeholder="VD: 26">`)}
+        ${/* v9.68 (Nguyen 16/11): BỎ hai ô "Số công chuẩn — xăng xe / ăn trưa" — xăng xe, ăn trưa chia theo CÔNG CHUẨN
+             CỦA THÁNG ở Cấu hình lương (payroll getCongChuan), không khai riêng trên hợp đồng nữa. Cột CSDL để nguyên. */''}
         ${f('Tỷ lệ lương thử việc (%)', `<input type="number" step="0.01" id="f_tlthuviec" value="${h.TyLeThuViec != null ? h.TyLeThuViec : (h.HopDongID ? '' : 85)}" placeholder="Trống = theo Cấu hình lương (85)">`)}
         ${oFileVanBanHtml(h.FileDinhKem)}
       </div>
@@ -929,15 +942,44 @@ window.ModuleHRM = (function () {
           ${f('Mức đóng BHXH (đ/tháng, trống = không đóng)', `<input type="number" id="f_mucdongbh" step="1000" value="${h.MucDongBH != null ? h.MucDongBH : ''}" placeholder="VD: 5000000">`)}
           ${f('Lương cố định / tháng (đ) — không theo công', `<input type="number" id="f_luongcodinh" step="1000" value="${h.LuongCoDinhThang != null ? h.LuongCoDinhThang : ''}" placeholder="Trống = tính theo công">`)}
           ${f('Ngày hết thử việc (trống = không thử việc)', `<input type="date" id="f_nghetthuviec" value="${dInput(h.NgayHetThuViec)}">`)}
-          ${f('Kiểu thưởng', `<select id="f_kieuthuong"><option value="" ${!h.KieuThuong ? 'selected' : ''}>Không</option><option value="KPI" ${h.KieuThuong === 'KPI' ? 'selected' : ''}>Theo KPI (quỹ KPI × điểm/100)</option><option value="SanPham" ${h.KieuThuong === 'SanPham' ? 'selected' : ''}>Theo sản phẩm (SL × đơn giá)</option></select>`)}
+          ${/* v9.73 (Nguyen 17/11): chọn MỘT HOẶC NHIỀU kiểu — bảng lương CỘNG mọi kiểu đã chọn. Lưu chuỗi "KPI,SanPham" (hidden
+               #f_kieuthuong, cùng luật utils/kieuThuong.js ở máy chủ). Không tích gì = Không. */''}
+          ${f('Kiểu thưởng (tích một hoặc nhiều — lương CỘNG mọi kiểu đã chọn)', `<div id="f_kieuthuong_box" style="display:flex;gap:14px;flex-wrap:wrap;padding-top:6px;">
+            <label style="font-weight:normal;"><input type="checkbox" class="f-kt" value="KPI" ${ktDs.includes('KPI') ? 'checked' : ''}> Theo KPI (quỹ KPI × điểm/100)</label>
+            <label style="font-weight:normal;"><input type="checkbox" class="f-kt" value="SanPham" ${ktDs.includes('SanPham') ? 'checked' : ''}> Theo sản phẩm (SL × đơn giá)</label>
+            <label style="font-weight:normal;"><input type="checkbox" class="f-kt" value="ChuyenCan" ${ktDs.includes('ChuyenCan') ? 'checked' : ''}> Chuyên cần bậc thang (theo số ngày nghỉ)</label>
+          </div><input type="hidden" id="f_kieuthuong" value="${ktDs.join(',')}">`)}
         </div>
-        <div id="spKhung" style="margin-top:8px;${h.KieuThuong === 'SanPham' ? '' : 'display:none;'}">
+        <div id="spKhung" style="margin-top:8px;${ktDs.includes('SanPham') ? '' : 'display:none;'}">
           <div style="font-weight:600;margin-bottom:4px;">Danh mục sản phẩm & đơn giá (một người nhiều SP, mỗi SP một đơn giá)</div>
           <table style="font-size:13px;"><thead><tr><th>Tên sản phẩm</th><th style="width:140px;">Đơn giá (đ)</th><th style="width:40px;"></th></tr></thead>
             <tbody id="spBody">${(h.sanPham || []).map(x => `<tr><td><input type="text" class="hd-sp-ten" maxlength="150" value="${escapeHtml(x.TenSanPham || '')}" style="width:100%;"></td><td><input type="number" class="hd-sp-dg" step="1000" value="${x.DonGia != null ? x.DonGia : ''}" style="width:130px;"></td><td><button type="button" class="btn small secondary hd-sp-xoa">✕</button></td></tr>`).join('')}</tbody></table>
           <button type="button" class="btn small secondary" id="spThem" style="margin-top:4px;">＋ Thêm sản phẩm</button>
+          ${/* v9.67: số lượng tự vào từ lệnh SX (QLSX › Sản lượng theo lệnh, ô Nhân viên may mẫu) — khớp theo TÊN, nên tên ở đây là chìa khóa. */''}
+          <div style="font-size:12px;color:#5f6368;margin-top:4px;">Số lượng tự lấy từ lệnh sản xuất (QLSX › <b>Sản lượng theo lệnh</b>: ảnh, video…; ô <b>Nhân viên may mẫu</b> của lệnh = 1 sản phẩm có chữ "mẫu"). Tên ở đây phải khớp tên khi ghi sản lượng — vd <i>Ảnh</i>, <i>Video</i>, <i>May mẫu</i>.</div>
         </div>
-        <div class="empty-hint" style="text-align:left;margin-top:6px;">Bảng lương công nhật lấy <b>toàn bộ</b> thông số ở đây (kể cả chuyên cần, chức vụ, xăng xe, quỹ KPI phía trên) — người <b>không có hợp đồng hiệu lực thì không có trong bảng lương</b>. Thử việc: các ngày trước <i>Ngày hết thử việc</i> nhân tỷ lệ thử việc. BH = 10,5% × mức đóng BHXH.${h.HopDongID && h.KieuLuong === undefined ? ' <b style="color:#c0392b;">Máy chủ chưa chạy migration_v890 — khối này chưa lưu được.</b>' : ''}</div>
+        ${/* v9.55 (Nguyen 14/11): "kiểu thưởng thêm phần chuyên cần: tự tạo danh sách". Anh chốt (14/11, nói lại lần 2):
+             đạt 28 công thưởng 300.000, đạt 30 công thưởng 500.000 — KHÔNG cộng dồn: bộ tính lấy BẬC CAO NHẤT đạt được
+             và trả đúng số tiền ghi ở bậc đó. Công = công đi làm (không tính phép), không xét đi muộn. Chọn kiểu này
+             thì ô "Phụ cấp chuyên cần" cố định phía trên BỎ QUA — cảnh báo ở ktCanhBao. KHÔNG đặt dấu backtick trong
+             comment này. */''}
+        ${/* v9.72 (Nguyen 17/11): ĐỊNH NGHĨA LẠI — bậc theo SỐ NGÀY NGHỈ trong tháng (tháng 30/31 ngày tính CẢ chủ nhật; lễ chung
+             không tính là nghỉ): nghỉ 0 ngày → 500.000, nghỉ ≤ 2 ngày → 300.000. Ô nhập là "nghỉ tối đa (ngày)", lưu cột
+             SoNgayNghiToiDa (migration_v898). Hợp đồng cũ còn bậc theo số công hiện ở ô này là TRỐNG + nhắc khai lại. */''}
+        <div id="ccKhung" style="margin-top:8px;${ktDs.includes('ChuyenCan') ? '' : 'display:none;'}">
+          <div style="font-weight:600;margin-bottom:4px;">Bậc thưởng chuyên cần theo SỐ NGÀY NGHỈ trong tháng (lễ chung không tính là nghỉ)</div>
+          ${/* v9.74: văn phòng nghỉ CN theo lịch — bỏ tích thì CN không phải ngày phải đi làm (không phải ngày nghỉ, cũng không bù). Mặc định tích = khối sản xuất. */''}
+          <label style="font-weight:normal;display:block;margin-bottom:6px;"><input type="checkbox" id="f_cc_tinhcn" ${h.ChuyenCanTinhCN === false || Number(h.ChuyenCanTinhCN) === 0 ? '' : 'checked'}> Tính cả chủ nhật (khối sản xuất — đếm mọi ngày của tháng). <span style="color:#5f6368;">Bỏ tích cho bộ phận nghỉ chủ nhật: tháng 4 hay 5 chủ nhật đều không tính là nghỉ.</span></label>
+          <table style="font-size:13px;"><thead><tr><th style="width:190px;">Nghỉ tối đa (ngày / tháng)</th><th style="width:160px;">Tiền thưởng (đ)</th><th style="width:40px;"></th></tr></thead>
+            <tbody id="ccBody">${(h.bacChuyenCan || []).map(x => `<tr><td><input type="number" class="hd-cc-nghi" step="1" min="0" value="${x.SoNgayNghiToiDa != null ? x.SoNgayNghiToiDa : ''}" placeholder="${x.SoNgayNghiToiDa == null && x.SoCong ? 'bậc cũ: đạt ' + x.SoCong + ' công — khai lại' : '0 = đi đủ'}" style="width:170px;"></td><td><input type="number" class="hd-cc-tien" step="1000" value="${x.TienThuong != null ? x.TienThuong : ''}" style="width:150px;"></td><td><button type="button" class="btn small secondary hd-cc-xoa">✕</button></td></tr>`).join('')}</tbody></table>
+          <button type="button" class="btn small secondary" id="ccThem" style="margin-top:4px;">＋ Thêm bậc</button>
+          <span class="empty-hint" style="padding:0 0 0 8px;">VD: nghỉ 0 ngày (đi đủ tháng) → 500.000; nghỉ tối đa 2 ngày → 300.000. Nhận ĐÚNG tiền của bậc chặt nhất còn đạt, không cộng dồn; nghỉ nhiều hơn mọi bậc → 0.</span>
+        </div>
+        ${/* v9.48: điều khoản e)/3.4 của hợp đồng in THEO Kiểu thưởng này. Quỹ KPI khai ở ô phía trên mà
+             kiểu không phải KPI, hoặc kiểu KPI mà chưa khai quỹ ⇒ nói ngay tại form, không để đến lúc in. */''}
+        <div id="ktCanhBao" style="display:none;margin-top:6px;color:#c0392b;font-size:12px;"></div>
+        <div class="empty-hint" style="text-align:left;margin-top:6px;">Điều khoản thưởng (e / 3.4) trên hợp đồng in ra <b>theo đúng Kiểu thưởng</b> chọn ở đây: KPI → câu quỹ KPI 100 điểm; Sản phẩm → liệt kê sản phẩm + đơn giá; Không → ghi không áp dụng.
+        Bảng lương công nhật lấy <b>toàn bộ</b> thông số ở đây (kể cả chuyên cần, chức vụ, xăng xe, quỹ KPI phía trên) — người <b>không có hợp đồng hiệu lực thì không có trong bảng lương</b>. Thử việc: các ngày trước <i>Ngày hết thử việc</i> nhân tỷ lệ thử việc. BH = 10,5% × mức đóng BHXH.${h.HopDongID && h.KieuLuong === undefined ? ' <b style="color:#c0392b;">Máy chủ chưa chạy migration_v890 — khối này chưa lưu được.</b>' : ''}</div>
         ${/* Hợp đồng MỚI thì không biết máy chủ đã có cột chưa (h = {}); máy chủ sẽ trả canhBao sau khi lưu
              nếu thiếu migration — toast đỏ, không nuốt im lặng. KHÔNG đặt dấu backtick trong comment này. */''}
       </fieldset>
@@ -958,36 +1000,80 @@ window.ModuleHRM = (function () {
     const spKhung = modal.querySelector('#spKhung'), spBody = modal.querySelector('#spBody');
     const wireSpRow = (tr) => tr.querySelector('.hd-sp-xoa').addEventListener('click', () => tr.remove());
     spBody.querySelectorAll('tr').forEach(wireSpRow);
-    modal.querySelector('#f_kieuthuong').addEventListener('change', (e) => { spKhung.style.display = e.target.value === 'SanPham' ? '' : 'none'; });
+    // v9.55: khung bậc chuyên cần — cùng cách với khung sản phẩm.
+    const ccKhung = modal.querySelector('#ccKhung'), ccBody = modal.querySelector('#ccBody');
+    const wireCcRow = (tr) => tr.querySelector('.hd-cc-xoa').addEventListener('click', () => tr.remove());
+    ccBody.querySelectorAll('tr').forEach(wireCcRow);
+    /* v9.48: cảnh báo lệch giữa Kiểu thưởng và ô Quỹ KPI — hai ô ở hai khối, dễ khai một bên quên bên kia. */
+    const ktCanhBao = modal.querySelector('#ktCanhBao');
+    /* v9.73: nhiều kiểu — đọc từ các ô tích, ghi vào hidden #f_kieuthuong ("KPI,SanPham"), khung SP/bậc hiện theo từng kiểu. */
+    const docKieuTich = () => [...modal.querySelectorAll('.f-kt')].filter(c => c.checked).map(c => c.value);
+    const capNhatCanhBaoKT = () => {
+      const ds = docKieuTich(), quy = Number(val(modal, 'f_kpi')) || 0;
+      const pcCC = Number(val(modal, 'f_chuyencan')) || 0;
+      let tin = '';
+      if (!ds.includes('KPI') && quy > 0) tin = 'Quỹ KPI ' + money(quy) + ' đ đã khai nhưng KHÔNG tích "Theo KPI" ⇒ bảng lương KHÔNG tính KPI, hợp đồng in ra KHÔNG có điều khoản KPI.';
+      else if (ds.includes('KPI') && !(quy > 0)) tin = 'Có tích "Theo KPI" nhưng chưa khai "Quỹ KPI tối đa / tháng" (ô phía trên) ⇒ tiền KPI = 0, hợp đồng in dấu chấm.';
+      /* v9.55: bậc thang THAY THẾ phụ cấp chuyên cần cố định (Nguyen chốt) — khai cả hai là bỏ qua ô cố định. */
+      else if (ds.includes('ChuyenCan') && pcCC > 0) tin = 'Có tích Chuyên cần bậc thang ⇒ ô "Phụ cấp chuyên cần" cố định (' + money(pcCC) + ' đ) phía trên sẽ KHÔNG tính nữa — chỉ tính bậc thang. Xóa ô đó cho khỏi nhầm.';
+      ktCanhBao.textContent = tin;
+      ktCanhBao.style.display = tin ? '' : 'none';
+    };
+    modal.querySelectorAll('.f-kt').forEach(c => c.addEventListener('change', () => {
+      const ds = docKieuTich();
+      modal.querySelector('#f_kieuthuong').value = ds.join(',');
+      spKhung.style.display = ds.includes('SanPham') ? '' : 'none';
+      ccKhung.style.display = ds.includes('ChuyenCan') ? '' : 'none';   // v9.55
+      capNhatCanhBaoKT();
+    }));
+    modal.querySelector('#f_kpi').addEventListener('input', capNhatCanhBaoKT);
+    modal.querySelector('#f_chuyencan').addEventListener('input', capNhatCanhBaoKT);   // v9.55
+    capNhatCanhBaoKT();
     modal.querySelector('#spThem').addEventListener('click', () => {
       spBody.insertAdjacentHTML('beforeend', '<tr><td><input type="text" class="hd-sp-ten" maxlength="150" style="width:100%;" placeholder="VD: Áo thun"></td><td><input type="number" class="hd-sp-dg" step="1000" style="width:130px;" placeholder="đ/cái"></td><td><button type="button" class="btn small secondary hd-sp-xoa">✕</button></td></tr>');
       wireSpRow(spBody.lastElementChild); spBody.lastElementChild.querySelector('.hd-sp-ten').focus();
     });
+    modal.querySelector('#ccThem').addEventListener('click', () => {   // v9.55
+      ccBody.insertAdjacentHTML('beforeend', '<tr><td><input type="number" class="hd-cc-nghi" step="1" min="0" style="width:170px;" placeholder="0 = đi đủ"></td><td><input type="number" class="hd-cc-tien" step="1000" style="width:150px;" placeholder="VD: 500000"></td><td><button type="button" class="btn small secondary hd-cc-xoa">✕</button></td></tr>');
+      wireCcRow(ccBody.lastElementChild); ccBody.lastElementChild.querySelector('.hd-cc-nghi').focus();
+    });
     modal.querySelector('#hdForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const kieuLuong = val(modal, 'f_kieuluong'), kieuThuong = val(modal, 'f_kieuthuong');
+      const kieuLuong = val(modal, 'f_kieuluong');
+      /* v9.73: kieuThuong = mảng kiểu đã tích; các câu hỏi/payload dùng includes(). */
+      const dsKT = docKieuTich(), kieuThuong = dsKT.join(',');
+      const coKT = (k) => dsKT.includes(k);
       const sanPham = [...spBody.querySelectorAll('tr')].map(tr => ({ tenSanPham: tr.querySelector('.hd-sp-ten').value.trim(), donGia: Number(tr.querySelector('.hd-sp-dg').value) || 0 })).filter(x => x.tenSanPham);
+      // v9.55: bậc chuyên cần — bỏ dòng không có số công; máy chủ sắp theo công và bỏ bậc trùng.
+      /* v9.72: bậc theo số ngày nghỉ tối đa (0 hợp lệ = đi đủ); ô trống = bỏ dòng. */
+      const bacChuyenCan = [...ccBody.querySelectorAll('tr')].map(tr => ({ soNgayNghiToiDa: tr.querySelector('.hd-cc-nghi').value === '' ? null : Number(tr.querySelector('.hd-cc-nghi').value), tienThuong: Number(tr.querySelector('.hd-cc-tien').value) || 0 })).filter(x => x.soNgayNghiToiDa != null && x.soNgayNghiToiDa >= 0);
       if (kieuLuong === 'Ngay' && !(Number(val(modal, 'f_dongiangay')) > 0) && !(Number(val(modal, 'f_luongcodinh')) > 0)) { toast('Kiểu lương NGÀY thì phải khai đơn giá ngày.', 'error'); return; }
       if (kieuLuong === 'Thang' && !(Number(val(modal, 'f_luong')) > 0) && !(Number(val(modal, 'f_luongcodinh')) > 0)) { toast('Kiểu lương THÁNG thì phải khai lương cơ bản (hoặc lương cố định).', 'error'); return; }
-      if (kieuThuong === 'SanPham' && !sanPham.length && !confirm('Thưởng theo sản phẩm nhưng chưa khai sản phẩm nào — tháng nào cũng phải gõ tay tên + đơn giá. Vẫn lưu?')) return;
-      // Đổi khỏi "Sản phẩm" thì máy chủ XÓA danh mục SP của hợp đồng — hỏi trước, đừng xóa im lặng.
-      if (kieuThuong !== 'SanPham' && (h.sanPham || []).length && !confirm(`Kiểu thưởng không còn là "Sản phẩm" — ${(h.sanPham || []).length} sản phẩm đã khai sẽ bị XÓA khỏi hợp đồng. Tiếp tục?`)) return;
+      if (coKT('SanPham') && !sanPham.length && !confirm('Thưởng theo sản phẩm nhưng chưa khai sản phẩm nào — tháng nào cũng phải gõ tay tên + đơn giá. Vẫn lưu?')) return;
+      if (coKT('ChuyenCan') && !bacChuyenCan.length && !confirm('Thưởng chuyên cần bậc thang nhưng chưa khai bậc nào — bảng lương sẽ tính 0. Vẫn lưu?')) return;
+      // Bỏ tích "Sản phẩm" thì máy chủ XÓA danh mục SP của hợp đồng — hỏi trước, đừng xóa im lặng.
+      if (!coKT('SanPham') && (h.sanPham || []).length && !confirm(`Không còn tích "Theo sản phẩm" — ${(h.sanPham || []).length} sản phẩm đã khai sẽ bị XÓA khỏi hợp đồng. Tiếp tục?`)) return;
+      if (!coKT('ChuyenCan') && (h.bacChuyenCan || []).length && !confirm(`Không còn tích "Chuyên cần bậc thang" — ${(h.bacChuyenCan || []).length} bậc đã khai sẽ bị XÓA khỏi hợp đồng. Tiếp tục?`)) return;
       const payload = {
         // v9.45 — thông số tính lương công nhật (migration_v890)
         kieuLuong, donGiaNgay: val(modal, 'f_dongiangay'), mucDongBH: val(modal, 'f_mucdongbh'),
         luongCoDinhThang: val(modal, 'f_luongcodinh'), ngayHetThuViec: val(modal, 'f_nghetthuviec'),
-        kieuThuong: kieuThuong || null, sanPham: kieuThuong === 'SanPham' ? sanPham : [],
+        kieuThuong: kieuThuong || null, sanPham: coKT('SanPham') ? sanPham : [],   // v9.73: chuỗi "KPI,SanPham"
+        bacChuyenCan: coKT('ChuyenCan') ? bacChuyenCan : [],   // v9.55
+        chuyenCanTinhCN: !!(modal.querySelector('#f_cc_tinhcn') && modal.querySelector('#f_cc_tinhcn').checked),   // v9.74
         nhanVienId: id ? h.NhanVienID : val(modal, 'f_nv'), soHopDong: val(modal, 'f_so'), loaiHopDong: val(modal, 'f_loai'),
         trangThai: val(modal, 'f_tt'), tuNgay: val(modal, 'f_tu'), denNgay: val(modal, 'f_den'), chucVu: val(modal, 'f_cv'),
         noiLamViec: val(modal, 'f_nlv'), luongCoBan: val(modal, 'f_luong'), heSoLuong: val(modal, 'f_heso'),
-        phuCapAnCa: val(modal, 'f_anca'), phuCapTrangPhuc: val(modal, 'f_tp'), phuCapXangXe: val(modal, 'f_xang'),
+        phuCapAnCa: val(modal, 'f_anca'), phuCapTrangPhuc: val(modal, 'f_tp'),
+        phuCapXangXe: val(modal, 'f_xang'),   // v9.79: ĐỒNG / 1 NGÀY công đi làm — công thức xăng DUY NHẤT
+        soKmDiLam: val(modal, 'f_sokm'),      // v9.79: input ẨN — chỉ chép lại số km cũ, KHÔNG ai tính theo nó nữa
         phuCapDienThoai: val(modal, 'f_dt'), ghiChu: val(modal, 'f_gc'),
         fileDinhKem: val(modal, 'f_file') || null,  // v8.80: cột đã có từ v6.00, nay frontend mới gửi
         // v8.82 — 8 trường phục vụ in theo mẫu công ty
         ngayKy: val(modal, 'f_ngayKy'), quanLyTrucTiep: val(modal, 'f_qltt'),
         phuCapChuyenCan: val(modal, 'f_chuyencan'), phuCapChucVu: val(modal, 'f_chucvu_pc'),
-        quyKPI: val(modal, 'f_kpi'), soCongXangXe: val(modal, 'f_congxang'),
-        soCongAnTrua: val(modal, 'f_congan'), tyLeThuViec: val(modal, 'f_tlthuviec'),
+        quyKPI: val(modal, 'f_kpi'), tyLeThuViec: val(modal, 'f_tlthuviec'),
+        // v9.68: soCongXangXe / soCongAnTrua KHÔNG gửi nữa (máy chủ ghi NULL; bộ tính chia theo công chuẩn tháng)
         // v9.35 — nội dung công việc in vào mục 1.5
         noiDungCongViec: val(modal, 'f_ndcv')
       };
@@ -1052,10 +1138,23 @@ window.ModuleHRM = (function () {
     const laThuViec = String(h.LoaiHopDong || '') === 'Thử việc';
     // v9.35: truyền mã mẫu vào để mục 1.5 lùi về ĐÚNG câu gốc của mẫu đó khi bỏ trống.
     const maMau = laThuViec ? 'HDLD_THUVIEC' : 'HDLD_CHINHTHUC';
+    const ktDs = tachKieu(h.KieuThuong);   // v9.73: tập hợp kiểu
+    const kieu = ktDs.length === 1 ? ktDs[0] : (ktDs.length ? 'NhieuKieu' : 'Khong');
+    /* v9.48: khai quỹ KPI mà Kiểu thưởng không có KPI ⇒ bản in KHÔNG có điều khoản KPI (và bảng
+       lương cũng không tính). Nói trước khi in, kẻo ký xong mới thấy thiếu. */
+    if (!ktDs.includes('KPI') && Number(h.QuyKPI) > 0) {
+      toast('Hợp đồng khai quỹ KPI ' + money(h.QuyKPI) + ' đ nhưng Kiểu thưởng = '
+        + (ktDs.length ? ktDs.map(k => k === 'SanPham' ? 'Sản phẩm' : 'Chuyên cần').join(' + ') : 'Không') + ' ⇒ bản in KHÔNG có điều khoản KPI, bảng lương không tính KPI. '
+        + 'Muốn KPI thì sửa hợp đồng, tích thêm Kiểu thưởng = Theo KPI.', 'error', 7000);
+    }
     inVanBan(maMau, bienChoHopDong(h, nv, maMau),
       (laThuViec ? 'Hop dong thu viec - ' : 'Hop dong lao dong - ') + (h.SoHopDong || h.HoTen || ''),
-      // v9.35: mẫu đã sửa mà thiếu chỗ cắm thì phải BÁO, đừng in ra câu cũ rồi im (xem inVanBan).
-      ['NoiDungCongViec']);
+      /* v9.35: mẫu đã sửa mà thiếu chỗ cắm thì phải BÁO, đừng in ra câu cũ rồi im (xem inVanBan).
+         v9.48: thêm DieuKhoanThuong — nhưng CHỈ khi kiểu không phải KPI: mẫu cũ người dùng đã sửa
+         (câu KPI cứng + chỗ cắm QuyKPI) in hợp đồng KPI vẫn đúng, báo là làm phiền oan. */
+      /* v9.78 (sửa): xăng chỉ còn MỘT công thức ⇒ mọi bản in đều phải có {{HoTroXangXe}}. Mẫu người dùng tự sửa
+         mà còn câu xăng kiểu cũ (không khớp regex nâng cấp) sẽ in số đ/ngày đã bỏ — báo ngay, đừng in lặng lẽ. */
+      (kieu === 'KPI' ? ['NoiDungCongViec'] : ['NoiDungCongViec', 'DieuKhoanThuong']).concat(['HoTroXangXe']));
   }
 
   /* Ghép bản ghi nhân viên đầy đủ (từ refs) với tên/mã nằm sẵn trên chính phiếu.
@@ -1398,10 +1497,52 @@ window.ModuleHRM = (function () {
     return dangNapMau;
   }
 
-  // Lấy nội dung mẫu: bản đã sửa nếu có, không thì bản gốc trong code.
+  /* ================================================================================================
+     v9.48b — NÂNG CẤP TẠI CHỖ mẫu hợp đồng người dùng ĐÃ SỬA (bản trong CSDL) sang biến mới.
+
+     Nguyen 12/11, ngay sau deploy v9.48: "phần ký hợp đồng chưa in theo cách chọn kiểu thưởng, vẫn cố
+     định KPI". Nguyên nhân: mẫu HĐLĐ đã được sửa trong tab Mẫu văn bản TRƯỚC v9.48 ⇒ bản trong CSDL
+     còn nguyên câu KPI cứng + chỗ cắm {{QuyKPI}}, mà layMau() ưu tiên bản đó hơn MAU_GOC. Cảnh báo
+     "thiếu chỗ cắm" của inVanBan chỉ nói, không chữa — và với hợp đồng KPI thì còn im luôn.
+
+     Chữa ngay lúc ĐỌC mẫu: nhận dạng câu KPI cũ NGUYÊN VĂN (chịu được khoảng trắng / &nbsp; do ô soạn
+     thảo sinh ra, {{ QuyKPI }} có dấu cách) và thay bằng {{DieuKhoanThuong}}. Bản in ra đúng kiểu
+     thưởng mà không bắt ai đi sửa mẫu; mở ô Sửa mẫu cũng thấy biến mới, bấm Lưu là thành bản chính thức.
+     KHÔNG tự ghi vào CSDL (sửa văn bản pháp lý sau lưng người dùng là không được). Câu đã bị người
+     dùng viết khác đi thì không nhận ra ⇒ vẫn còn cảnh báo "thiếu chỗ cắm" ở inVanBan như cũ.
+     ================================================================================================ */
+  /* Đuôi câu: bản v8.85 kết "…của Công ty trong từng thời kỳ."; bản cũ hơn có thể kết "…của Công ty."
+     — nhận cả hai, lấy đến dấu chấm đầu tiên sau "của Công ty". */
+  /* Giữa "KPI:" và "Quỹ" cho phép gạch đầu dòng / xuống dòng / thẻ danh sách: bản in Nguyen gửi 12/11
+     có "KPI: - Quỹ KPI…" (người sửa mẫu đã tách thành hai gạch đầu dòng rồi chèn thêm biến mới). */
+  const NOI_CACH = '(?:\\s|&nbsp;|-|–|<br\\s*\\/?>|<\\/?(?:li|ul|p|span|b|i)[^>]*>)*';
+  const CAU_KPI_CU = new RegExp(
+    'Thưởng\\/thu nhập hiệu suất KPI:' + NOI_CACH + 'Quỹ KPI tham chiếu tối đa là(?:\\s|&nbsp;)*\\{\\{\\s*QuyKPI\\s*\\}\\}(?:\\s|&nbsp;)*đồng\\/tháng tương ứng 100 điểm\\.[\\s\\S]{0,320}?Quy chế lương,(?:\\s|&nbsp;)*thưởng\\/KPI của Công ty(?:(?:\\s|&nbsp;)+trong từng thời kỳ)?\\.?', 'g');
+  /* Biến xuất hiện NHIỀU lần (người dùng chèn tay cạnh câu cũ, rồi câu cũ lại được nâng cấp thành biến)
+     ⇒ giữ lần đầu, bỏ các lần sau cùng gạch đầu dòng / khoảng trắng đi kèm. Một điều khoản in MỘT lần. */
+  const BIEN_THUONG_LAP = new RegExp(NOI_CACH + '\\{\\{\\s*DieuKhoanThuong\\s*\\}\\}', 'g');
+  /* v9.68: mẫu đã sửa trong CSDL còn "đồng/tháng {{SoCongXangXe}} công." / "{{SoCongAnTrua}} công." — bỏ ô khai nên
+     thay NGUYÊN CỤM bằng câu mới (cùng bài học v9.48b: đổi MAU_GOC thì phải lo bản đã sửa trong CSDL). */
+  const CUM_SO_CONG_CU = /(?:\s|&nbsp;)*\{\{\s*SoCong(?:XangXe|AnTrua)\s*\}\}(?:\s|&nbsp;)*công\s*\./g;
+  function nangCapMauCu(maMau, noiDung) {
+    if (maMau !== 'HDLD_CHINHTHUC' && maMau !== 'HDLD_THUVIEC') return noiDung;
+    let ra = String(noiDung || '').replace(CAU_KPI_CU, '{{DieuKhoanThuong}}');
+    let dem = 0;
+    ra = ra.replace(BIEN_THUONG_LAP, (m) => (++dem === 1 ? m : ''));
+    ra = ra.replace(CUM_SO_CONG_CU, ', tính theo số công chuẩn của tháng.');
+    /* v9.72: xăng xe thành đơn giá NGÀY — câu b) mẫu CSDL (bản v9.68 hoặc cũ hơn vừa được nâng ở dòng trên) đổi theo. */
+    ra = ra.replace(CAU_XANG_THANG, '$1 đồng/ngày, nhân với số ngày công làm việc thực tế trong tháng.');
+    /* v9.78: cả câu xăng xe gom vào MỘT biến {{HoTroXangXe}} (luôn theo km). Nâng cả hai dạng câu cũ — bản v9.72
+       (đồng/ngày) và bản vừa nâng ở dòng trên — về biến mới, nếu không bản in sẽ nói mức đ/ngày đã bỏ. */
+    ra = ra.replace(CAU_XANG_NGAY, '{{HoTroXangXe}}');
+    return ra;
+  }
+  const CAU_XANG_NGAY = /\{\{\s*PhuCapXangXe\s*\}\}(?:\s|&nbsp;)*đồng\/ngày,(?:\s|&nbsp;)*nhân với số ngày công làm việc thực tế trong tháng\s*\./g;
+  const CAU_XANG_THANG = /(\{\{\s*PhuCapXangXe\s*\}\})(?:\s|&nbsp;)*đồng\/tháng(?:,(?:\s|&nbsp;)*tính theo số công chuẩn của tháng)?\s*\./g;
+  // Lấy nội dung mẫu: bản đã sửa nếu có (đã nâng cấp biến), không thì bản gốc trong code.
   function layMau(maMau) {
     const sua = mauDaSua && mauDaSua[maMau];
-    return (sua && String(sua).trim()) ? sua : (MAU_GOC[maMau] ? MAU_GOC[maMau].than : '');
+    return (sua && String(sua).trim()) ? nangCapMauCu(maMau, sua) : (MAU_GOC[maMau] ? MAU_GOC[maMau].than : '');
   }
 
   /* Thay {{Bien}} bằng giá trị. Biến KHÔNG có trong bảng thì giữ nguyên {{Bien}} để người sửa mẫu
@@ -1491,6 +1632,105 @@ window.ModuleHRM = (function () {
     HDLD_CHINHTHUC: 'thực hiện công việc theo chức danh nêu trên, Bản mô tả công việc (nếu có), tiêu chuẩn kỹ thuật/quy trình liên quan và các phân công hợp pháp, hợp lý, có liên quan đến phạm vi công việc.',
     HDLD_THUVIEC: 'theo chức danh nêu trên, Bản mô tả công việc và các phân công hợp pháp, hợp lý trong phạm vi công việc.'
   };
+  /* ================================================================================================
+     v9.48 — ĐIỀU KHOẢN THƯỞNG IN THEO ĐÚNG "KIỂU THƯỞNG" ĐÃ CHỌN TRÊN HỢP ĐỒNG.
+
+     Nguyen 12/11/2026: "chỗ kiểu thưởng chọn kiểu gì thì khi nội dung và in ra phải theo cái đó.
+     Hiện tại đang cố định [câu e) Thưởng/thu nhập hiệu suất KPI…]".
+     Trước: câu e) (HĐLĐ) / 3.4 (HĐ thử việc) trong MAU_GOC là chữ CỨNG kiểu KPI, in ra cả cho người
+     thưởng theo sản phẩm lẫn người không có thưởng. Nay là biến {{DieuKhoanThuong}}:
+       KPI      -> đúng nguyên văn câu cũ (quỹ KPI tham chiếu 100 điểm);
+       SanPham  -> liệt kê sản phẩm + đơn giá khai ở hợp đồng (HopDongSanPham), thiếu thì dấu chấm;
+       Không    -> nói thẳng là không áp dụng thưởng KPI / sản phẩm cố định.
+     🔴 Theo ĐÚNG KieuThuong, cùng luật với bộ tính lương (utils/luongCongNhat.js): khai quỹ KPI mà
+     Kiểu thưởng để "Không" thì cả lương lẫn bản in đều coi là KHÔNG — form và lúc in có cảnh báo,
+     không âm thầm "đoán" là KPI rồi in một đằng tính một nẻo.
+     ================================================================================================ */
+  /* v9.73: Kiểu thưởng là TẬP HỢP — CSDL lưu chuỗi "KPI,SanPham" (gương của utils/kieuThuong.js).
+     tachKieu(v) -> mảng canonical theo thứ tự KPI / SanPham / ChuyenCan, bỏ rác, bỏ trùng. */
+  const THU_TU_KIEU = ['KPI', 'SanPham', 'ChuyenCan'];
+  function tachKieu(v) {
+    const ds = Array.isArray(v) ? v : String(v || '').split(/[,;|\s]+/);
+    const co = new Set(ds.map(x => String(x || '').trim()).filter(Boolean));
+    return THU_TU_KIEU.filter(k => co.has(k));
+  }
+  /* Một kiểu -> 'KPI' | 'SanPham' | 'ChuyenCan' (như trước v9.73, bộ kiểm cũ vẫn đúng);
+     nhiều kiểu -> 'KPI,SanPham'; không có -> 'Khong'. */
+  function kieuThuongCua(h) {
+    const ds = tachKieu(h && h.KieuThuong);
+    return ds.length ? ds.join(',') : 'Khong';
+  }
+  /* v9.55: bậc chuyên cần của hợp đồng, sắp theo số công tăng dần, bỏ dòng rác. */
+  /* v9.72: bậc kiểu MỚI có `nghi` (số ngày nghỉ tối đa, 0 hợp lệ), sắp nghỉ tăng dần; bậc kiểu cũ chỉ có soCong. */
+  function bacChuyenCanCua(h) {
+    const doc = (x, a, b) => (x && (x[a] != null ? x[a] : x[b]));
+    return (Array.isArray(h && h.bacChuyenCan) ? h.bacChuyenCan : [])
+      .map(x => { const n = doc(x, 'SoNgayNghiToiDa', 'soNgayNghiToiDa'); return { soCong: Number(doc(x, 'SoCong', 'soCong')) || 0, nghi: n == null || n === '' ? null : Number(n), tien: Number(doc(x, 'TienThuong', 'tienThuong')) || 0 }; })
+      .filter(x => x.nghi != null ? x.nghi >= 0 : x.soCong > 0)
+      .sort((a, b) => (a.nghi != null && b.nghi != null) ? a.nghi - b.nghi : a.soCong - b.soCong);
+  }
+  const moTaBac = (x) => (x.nghi != null ? (x.nghi === 0 ? 'đi làm đủ các ngày trong tháng' : 'nghỉ không quá <b>' + chTien(x.nghi) + '</b> ngày/tháng') : 'đạt từ <b>' + chTien(x.soCong) + '</b> công trở lên');
+  /* v9.73: mỗi kiểu một câu; chọn nhiều kiểu thì nối các câu lại (một kiểu -> đúng câu cũ). */
+  function cauThuongMotKieu(h, kieu) {
+    if (kieu === 'KPI') {
+      return 'Thưởng/thu nhập hiệu suất KPI: Quỹ KPI tham chiếu tối đa là ' + chTien(h.QuyKPI)
+        + ' đồng/tháng tương ứng 100 điểm. Mức hưởng thực tế được xác định căn cứ kết quả đánh giá KPI'
+        + ' và Quy chế lương, thưởng/KPI của Công ty trong từng thời kỳ.';
+    }
+    if (kieu === 'SanPham') {
+      const ds = (Array.isArray(h.sanPham) ? h.sanPham : []).filter(x => x && String(x.TenSanPham || '').trim());
+      const bangGia = ds.length
+        ? ds.map(x => escapeHtml(String(x.TenSanPham).trim()) + ': <b>' + chTien(x.DonGia) + '</b> đồng/sản phẩm').join('; ')
+        : '..................................................';
+      return 'Thưởng theo sản phẩm: Người lao động được hưởng thưởng theo số lượng sản phẩm hoàn thành'
+        + ' đạt yêu cầu nghiệm thu trong tháng, với đơn giá: ' + bangGia + '. Mức hưởng thực tế bằng số'
+        + ' lượng sản phẩm nghiệm thu nhân với đơn giá, thực hiện theo Quy chế lương, thưởng của Công ty'
+        + ' trong từng thời kỳ.';
+    }
+    /* ChuyenCan — v9.55: liệt kê bậc tăng dần; chưa khai thì dấu chấm (cùng cách với sản phẩm). */
+    const ds = bacChuyenCanCua(h);
+    const bang = ds.length
+      ? ds.map(x => moTaBac(x) + ': <b>' + chTien(x.tien) + '</b> đồng').join('; ')
+      : '..................................................';
+    /* v9.72: câu theo SỐ NGÀY NGHỈ khi bậc kiểu mới; bậc cũ giữ câu theo số công. */
+    if (ds.some(x => x.nghi != null)) {
+      /* v9.74: câu đếm ngày theo ChuyenCanTinhCN — văn phòng nghỉ CN thì nói rõ "không kể chủ nhật". */
+      const khongCN = h.ChuyenCanTinhCN === false || Number(h.ChuyenCanTinhCN) === 0;
+      return 'Thưởng chuyên cần theo số ngày nghỉ: Người lao động được hưởng thưởng chuyên cần căn cứ số ngày nghỉ'
+        + ' trong tháng (tính trên ' + (khongCN ? 'các ngày làm việc trong tháng, không kể chủ nhật và' : 'tất cả các ngày của tháng, không kể') + ' ngày nghỉ lễ chung), theo bậc: ' + bang
+        + '. Chỉ hưởng mức của bậc đạt được cao nhất, thực hiện theo Quy chế lương, thưởng của Công ty trong từng thời kỳ.';
+    }
+    return 'Thưởng chuyên cần theo số ngày công: Người lao động được hưởng thưởng chuyên cần theo số ngày công làm việc'
+      + ' thực tế trong tháng (không tính ngày nghỉ phép), theo bậc: ' + bang + '. Chỉ hưởng mức của bậc cao nhất'
+      + ' đạt được, thực hiện theo Quy chế lương, thưởng của Công ty trong từng thời kỳ.';
+  }
+  function dieuKhoanThuong(h) {
+    h = h || {};
+    const ds = tachKieu(h.KieuThuong);
+    if (!ds.length) {
+      return 'Thưởng/thu nhập hiệu suất: Không áp dụng thưởng KPI hay thưởng theo sản phẩm cố định.'
+        + ' Các khoản thưởng khác (nếu có) thực hiện theo Quy chế lương, thưởng của Công ty trong từng thời kỳ.';
+    }
+    return ds.map(k => cauThuongMotKieu(h, k)).join(' ');
+  }
+  // Nhãn ngắn cho màn Xem hợp đồng (chữ thường, được escapeHtml ở nơi vẽ).
+  function nhanMotKieu(h, kieu) {
+    if (kieu === 'KPI') return 'Theo KPI — quỹ ' + money(h.QuyKPI) + ' đ/tháng (100 điểm)';
+    if (kieu === 'SanPham') {
+      const ds = (Array.isArray(h.sanPham) ? h.sanPham : []).filter(x => x && String(x.TenSanPham || '').trim());
+      return 'Theo sản phẩm — ' + (ds.length ? ds.map(x => String(x.TenSanPham).trim() + ' ' + money(x.DonGia) + ' đ').join('; ') : 'CHƯA khai sản phẩm nào');
+    }
+    const ds = bacChuyenCanCua(h);
+    return 'Chuyên cần bậc thang — ' + (ds.length ? ds.map(x => (x.nghi != null ? 'nghỉ ≤ ' + x.nghi + ' ngày: ' : 'từ ' + x.soCong + ' công (bậc cũ): ') + money(x.tien) + ' đ').join('; ') : 'CHƯA khai bậc nào')
+      + (ds.some(x => x.nghi != null) && (h.ChuyenCanTinhCN === false || Number(h.ChuyenCanTinhCN) === 0) ? ' (không tính chủ nhật)' : '')   // v9.74
+      + (Number(h.PhuCapChuyenCan) > 0 ? ' ⚠️ phụ cấp chuyên cần cố định ' + money(h.PhuCapChuyenCan) + ' đ bị bỏ qua' : '');
+  }
+  function nhanKieuThuong(h) {
+    const ds = tachKieu(h && h.KieuThuong);
+    if (!ds.length) return 'Không' + (Number(h.QuyKPI) > 0 ? ' ⚠️ có khai quỹ KPI ' + money(h.QuyKPI) + ' đ nhưng không chọn kiểu KPI — không tính, không in' : '');
+    return ds.map(k => nhanMotKieu(h, k)).join(' + ');   // v9.73: nhiều kiểu nối bằng " + "
+  }
+
   /* `maMau` quyết định câu lùi về. Mặc định là mẫu chính thức để BIEN_THEO_MAU (gọi với ({},{}))
      vẫn sinh ra khóa NoiDungCongViec, nhờ đó màn sửa mẫu có nút chèn {{NoiDungCongViec}}. */
   function bienChoHopDong(h, nv, maMau) {
@@ -1521,12 +1761,19 @@ window.ModuleHRM = (function () {
       PhuCapAnCa: chTien(h.PhuCapAnCa),
       PhuCapTrangPhuc: chTien(h.PhuCapTrangPhuc),
       PhuCapXangXe: chTien(h.PhuCapXangXe),
+      /* v9.79 (Nguyen chốt lại): CHỈ MỘT câu — số tiền MỘT NGÀY × số ngày công thực tế. Giữ nguyên chỗ cắm
+         {{HoTroXangXe}} của v9.78 (đổi nội dung, không đổi tên biến) để mẫu đã nâng trong CSDL khỏi phải nâng
+         lần nữa — mỗi lần đổi tên biến là một vòng "mẫu cũ in ra câu sai". */
+      HoTroXangXe: `<b>${chTien(h.PhuCapXangXe)}</b> đồng/ngày, nhân với số ngày công làm việc thực tế trong tháng.`,
       PhuCapDienThoai: chTien(h.PhuCapDienThoai),
       PhuCapChuyenCan: chTien(h.PhuCapChuyenCan),
       PhuCapChucVu: chTien(h.PhuCapChucVu),
       QuyKPI: chTien(h.QuyKPI),
-      SoCongXangXe: ch(h.SoCongXangXe, 4),
-      SoCongAnTrua: ch(h.SoCongAnTrua, 4),
+      DieuKhoanThuong: dieuKhoanThuong(h),   // v9.48 — câu e)/3.4 theo Kiểu thưởng; QuyKPI vẫn giữ cho mẫu người dùng tự sửa
+      /* v9.68: hai biến này KHÔNG còn trong MAU_GOC (bỏ ô khai trên hợp đồng; lương chia theo công chuẩn tháng).
+         Giữ để mẫu người dùng tự sửa còn chứa chúng không in ra nguyên {{X}} — in chữ thay cho con số. */
+      SoCongXangXe: 'theo công chuẩn tháng',
+      SoCongAnTrua: 'theo công chuẩn tháng',
       TyLeThuViec: String(tyLe),
       // Câu mô tả thời hạn đổi theo loại — để trong biến thay vì bắt người sửa mẫu tự viết điều kiện.
       CauThoiHan: khongThoiHan
@@ -1655,10 +1902,10 @@ window.ModuleHRM = (function () {
         <p style="margin:0 0 2px;">3.2. Hình thức trả lương: Theo thời gian, trả lương theo tháng.</p>
         <p style="margin:0 0 2px;">3.3. Các khoản phụ cấp và chế độ khác.</p>
         <p style="margin:0 0 2px 20px;">a) Chuyên cần: Người lao động được hưởng {{PhuCapChuyenCan}} đồng/tháng khi đáp ứng đầy đủ điều kiện chuyên cần theo quy định của Công ty.</p>
-        <p style="margin:0 0 2px 20px;">b) Hỗ trợ xăng xe: {{PhuCapXangXe}} đồng/tháng {{SoCongXangXe}} công.</p>
-        <p style="margin:0 0 2px 20px;">c) Ăn trưa: {{PhuCapAnCa}} đồng/tháng {{SoCongAnTrua}} công.</p>
+        <p style="margin:0 0 2px 20px;">b) Hỗ trợ xăng xe: {{HoTroXangXe}}</p>
+        <p style="margin:0 0 2px 20px;">c) Ăn trưa: {{PhuCapAnCa}} đồng/tháng, tính theo số công chuẩn của tháng.</p>
         <p style="margin:0 0 2px 20px;">d) Phụ cấp chức vụ/trách nhiệm: <b>{{PhuCapChucVu}}</b> đồng/tháng. Người lao động được hưởng phụ cấp chức vụ/trách nhiệm theo vị trí công việc và theo quyết định hoặc chính sách của Công ty.</p>
-        <p style="margin:0 0 10px 20px;">e) Thưởng/thu nhập hiệu suất KPI: Quỹ KPI tham chiếu tối đa là {{QuyKPI}} đồng/tháng tương ứng 100 điểm. Mức hưởng thực tế được xác định căn cứ kết quả đánh giá KPI và Quy chế lương, thưởng/KPI của Công ty trong từng thời kỳ.</p>
+        <p style="margin:0 0 10px 20px;">e) {{DieuKhoanThuong}}</p>
 
         <p><b>Điều 4. Bảo hiểm, thuế và các chế độ bắt buộc</b></p>
         <p style="margin:0 0 2px;">4.1. Hai bên thực hiện BHXH, BHYT, BHTN và các chế độ bảo hiểm bắt buộc khác theo đúng đối tượng, mức đóng, căn cứ đóng và thời điểm tham gia do pháp luật quy định; căn cứ đóng được xác định theo các thành phần tiền lương thuộc diện tính đóng tại từng thời kỳ.</p>
@@ -1738,11 +1985,11 @@ window.ModuleHRM = (function () {
         <p style="margin:0 0 2px;">3.2. Trong thời gian thử việc, Người lao động được hưởng <b>{{TyLeThuViec}}%</b> mức lương theo công việc/chức danh nêu trên. Khoản này được tính theo ngày công thực tế trong tháng.</p>
         <p style="margin:0 0 2px;">3.3. Các khoản phụ cấp, hỗ trợ và phúc lợi được tính riêng theo quy định của Công ty, không áp dụng mức {{TyLeThuViec}}%.</p>
         <p style="margin:0 0 2px 20px;">a) Chuyên cần: Người lao động được hưởng {{PhuCapChuyenCan}} đồng/tháng khi đáp ứng đầy đủ điều kiện chuyên cần theo quy định của Công ty.</p>
-        <p style="margin:0 0 2px 20px;">b) Hỗ trợ xăng xe: {{PhuCapXangXe}} đồng/tháng {{SoCongXangXe}} công.</p>
-        <p style="margin:0 0 2px 20px;">c) Ăn trưa: {{PhuCapAnCa}} đồng/tháng {{SoCongAnTrua}} công.</p>
+        <p style="margin:0 0 2px 20px;">b) Hỗ trợ xăng xe: {{HoTroXangXe}}</p>
+        <p style="margin:0 0 2px 20px;">c) Ăn trưa: {{PhuCapAnCa}} đồng/tháng, tính theo số công chuẩn của tháng.</p>
         <p style="margin:0 0 2px 20px;">d) Phụ cấp chức vụ/trách nhiệm: {{PhuCapChucVu}} đồng.</p>
         <p style="margin:0 0 2px 20px;">e) Nguyên tắc áp dụng: Các khoản phụ cấp, hỗ trợ và phúc lợi trên được tính riêng, không áp dụng mức {{TyLeThuViec}}% của lương thử việc.</p>
-        <p style="margin:0 0 10px;">3.4. Thưởng/thu nhập hiệu suất KPI: Quỹ KPI tham chiếu tối đa là {{QuyKPI}} đồng/tháng tương ứng 100 điểm. Mức hưởng thực tế được xác định căn cứ kết quả đánh giá KPI và Quy chế lương, thưởng/KPI của Công ty trong từng thời kỳ.</p>
+        <p style="margin:0 0 10px;">3.4. {{DieuKhoanThuong}}</p>
 
         <p><b>Điều 4. Quyền và nghĩa vụ của hai bên</b></p>
         <p style="margin:0 0 2px;">4.1. Người thử việc có trách nhiệm thực hiện đúng công việc, tiêu chuẩn chất lượng, tiến độ, Nội quy lao động, quy trình an toàn, 5S; bảo quản tài sản, công cụ và nguyên phụ liệu được giao; báo ngay cho quản lý khi phát hiện sự cố hoặc nguy cơ mất an toàn.</p>
@@ -2162,5 +2409,6 @@ window.ModuleHRM = (function () {
     });
   }
 
-  return { render, getTabs };
+  /* v9.55: module.payroll.js in phiếu nghỉ phép cần tên công ty — dùng chung MỘT hằng, không chép sang file khác. */
+  return { render, getTabs, congTy: () => Object.assign({}, COMPANY) };
 })();

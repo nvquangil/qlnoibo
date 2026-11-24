@@ -70,9 +70,15 @@ router.put('/change-password', async (req, res) => {
   if (!result.recordset.length) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản.' });
   const ok = await bcrypt.compare(currentPassword, result.recordset[0].PasswordHash);
   if (!ok) return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không đúng.' });
+  /* v9.71: mật khẩu mới không được trùng mật khẩu tạm (= tên đăng nhập) — "đổi" mà giữ nguyên thì cờ bắt đổi vô nghĩa. */
+  if (String(newPassword).trim().toLowerCase() === String(req.session.user.username || '').trim().toLowerCase()) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu mới không được trùng tên đăng nhập.' });
+  }
   const hash = await bcrypt.hash(newPassword, 10);
+  const coCo = (await pool.request().query("SELECT COL_LENGTH('Users','PhaiDoiMatKhau') AS c")).recordset[0].c != null;
   await pool.request().input('id', sql.Int, userId).input('h', sql.NVarChar, hash)
-    .query('UPDATE Users SET PasswordHash=@h, UpdatedAt=SYSDATETIME() WHERE UserID=@id');
+    .query(`UPDATE Users SET PasswordHash=@h, UpdatedAt=SYSDATETIME()${coCo ? ', PhaiDoiMatKhau=0' : ''} WHERE UserID=@id`);
+  req.session.user.phaiDoiMatKhau = false;   // v9.71: hạ cờ trong phiên, không bắt đăng nhập lại
   res.json({ success: true, message: 'Đã đổi mật khẩu.' });
 });
 

@@ -107,6 +107,7 @@ async function loadGiaCong(pool, sql, ky) {
     SELECT ncc.NhaGiaCongID, ncc.TenNha, d.MaDH, d.TenSanPham, hm.TenHangMuc,
            ds.TenDai,                      -- v8.59: NULL khi lenh khong tach dai
            qc.NgayQC AS Ngay,              -- v8.61: NGAY QC, khong con la ct.CreatedAt
+           ISNULL(ct.SoLuong,0) AS SoLuongGiao,   -- v9.52: SL GIAO (ghi o Giao gia cong GC) — chi de doi chieu, KHONG vao tien
            ISNULL(ct.SoLuongNhan,0) AS SoLuongNhan,
            ISNULL(dhg.DonGia, hm.DonGiaMacDinh) AS DonGia,
            ISNULL(ct.SoLuongNhan,0) * ISNULL(ISNULL(dhg.DonGia, hm.DonGiaMacDinh),0) AS ThanhTien
@@ -142,6 +143,7 @@ async function loadInThe(pool, sql, ky) {
     SELECT ncc.NhaGiaCongID, ncc.TenNha, d.MaDH, d.TenSanPham,
            qc.NgayQC AS Ngay,              -- v8.61: NGAY QC, khong con la it.CreatedAt
            ${hmCol} AS HangMucInThe,
+           ISNULL(it.SoLuongGiao,0) AS SoLuongGiao,   -- v9.52: SL GIAO (Giao in theu GIT) — chi de doi chieu
            ISNULL(it.SoLuongNhan,0) AS SoLuongNhan,
            CASE WHEN LTRIM(RTRIM(ISNULL(${hmCol}, N''))) <> N'' THEN ISNULL(hm.DonGia, 0)
                 ELSE ISNULL(dg.TongDonGia, 0) END AS DonGia,
@@ -169,7 +171,8 @@ function tongHopTheoNha(rows) {
   const m = {};
   (rows || []).forEach(r => {
     const k = r.NhaGiaCongID;
-    if (!m[k]) m[k] = { NhaGiaCongID: k, TenNha: r.TenNha, SoLuongNhan: 0, ThanhTien: 0 };
+    if (!m[k]) m[k] = { NhaGiaCongID: k, TenNha: r.TenNha, SoLuongGiao: 0, SoLuongNhan: 0, ThanhTien: 0 };
+    m[k].SoLuongGiao += Number(r.SoLuongGiao) || 0;   // v9.52: tong SL giao de doi chieu voi SL nhan
     m[k].SoLuongNhan += Number(r.SoLuongNhan) || 0;
     m[k].ThanhTien += Number(r.ThanhTien) || 0;
   });

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Ký hợp đồng điện tử</title>
+<!-- v9.61: trang KÝ HỢP ĐỒNG cho khách (link gửi qua email/SMS). Độc lập với phần mềm nội bộ: không common.js,
+     không đăng nhập; mọi dữ liệu qua token trong link (/api/public/ky/...). Mở được trên điện thoại. -->
+<style>
+  :root { --xanh:#1a73e8; --xam:#5f6368; --nen:#f5f7fa; --vien:#dadce0; --do:#c5221f; --luc:#137333; --cam:#b06000; }
+  * { box-sizing:border-box; } body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif; background:var(--nen); color:#202124; font-size:15px; line-height:1.45; }
+  .khung { max-width:900px; margin:0 auto; padding:12px; } .the { background:#fff; border:1px solid var(--vien); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:12px 0 6px; } .nho { font-size:13px; color:var(--xam); }
+  table { width:100%; border-collapse:collapse; font-size:14px; } th, td { border-bottom:1px solid #eee; padding:7px 6px; text-align:left; vertical-align:top; } th { background:#f1f3f4; font-weight:600; } .phai { text-align:right; white-space:nowrap; }
+  .nut { display:inline-block; border:0; border-radius:8px; padding:12px 18px; font-size:16px; font-weight:600; cursor:pointer; background:var(--xanh); color:#fff; } .nut:disabled { opacity:.55; cursor:default; }
+  .nut.phu { background:#fff; color:var(--xanh); border:1px solid var(--xanh); } .nut.lon { width:100%; padding:16px; font-size:18px; } .nut.nho { padding:8px 12px; font-size:14px; }
+  .kenh.dang { background:var(--xanh) !important; color:#fff !important; }
+  .tab { display:flex; gap:6px; margin:10px 0; } .tab button { flex:1; padding:10px; border:1px solid var(--vien); background:#fff; border-radius:8px; font-size:15px; cursor:pointer; } .tab button.dang { background:var(--xanh); color:#fff; border-color:var(--xanh); }
+  input[type=text], input[type=file], textarea { width:100%; padding:10px; border:1px solid var(--vien); border-radius:8px; font-size:16px; }
+  .otp { font-size:30px; letter-spacing:12px; text-align:center; font-family:monospace; width:100%; padding:10px; border:2px solid var(--xanh); border-radius:10px; }
+  .nhan { display:inline-block; padding:3px 10px; border-radius:12px; color:#fff; font-size:13px; } .an { display:none !important; }
+  .bao { padding:10px 12px; border-radius:8px; margin:8px 0; font-size:14px; } .bao.loi { background:#fdecea; color:var(--do); } .bao.ok { background:#e6f4ea; color:var(--luc); } .bao.chu { background:#fff8e1; color:var(--cam); }
+  canvas.ky { width:100%; height:160px; border:1px dashed var(--vien); border-radius:8px; background:#fff; touch-action:none; }
+  .dong { display:flex; gap:8px; flex-wrap:wrap; align-items:center; } .dong > * { flex:1; }
+  iframe.pdf { width:100%; height:520px; border:1px solid var(--vien); border-radius:8px; background:#fff; }
+  @media (max-width:600px) { iframe.pdf { height:360px; } .the { padding:12px; } }
+  .dau { display:flex; justify-content:space-between; align-items:center; gap:10px; } .logo { font-weight:800; font-size:18px; color:var(--xanh); }
+</style>
+</head>
+<body>
+<div class="khung" id="app"><div class="the">Đang tải…</div></div>
+<script src="/js/kysoclient.js?v=9.62"></script>
+<script src="/js/ky.js?v=9.62"></script>
+</body>
+</html>

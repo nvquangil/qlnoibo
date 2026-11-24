@@ -17,6 +17,10 @@ const { requireAuth, requirePermission, requireChucNang } = require('../middlewa
 const multer = require('multer');
 const XLSX = require('xlsx');
 const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });   // v5.38: import hồ sơ nhân sự
+/* v9.53: hợp đồng / trạng thái lao động đổi ⇒ đánh dấu bảng lương công nhật cần tính lại (xem đầu file util).
+   Mọi hàm danhDau* KHÔNG ném — hỏng cờ không được làm hỏng việc lưu hợp đồng. */
+const bangLuongTuDong = require('../utils/bangLuongTuDong');
+const { tachKieuThuong, ghepKieuThuong } = require('../utils/kieuThuong');   // v9.73: nhiều kiểu thưởng
 
 const router = express.Router();
 
@@ -248,6 +252,11 @@ router.get('/nhanvien/:id', requireAuth, requirePermission('HRM', 'view'), requi
     const hopDong = (await pool.request().input('id', sql.Int, id).query(
       `SELECT * FROM HopDongLaoDong WHERE NhanVienID = @id ORDER BY TuNgay DESC, HopDongID DESC`)).recordset;
     const hopDongIds = hopDong.map(h => h.HopDongID);
+    /* v9.48: kèm danh mục sản phẩm của từng hợp đồng (HopDongSanPham, v9.45) — màn Hồ sơ in hợp đồng
+       từ chính mảng này; thiếu thì điều khoản "thưởng theo sản phẩm" in ra dấu chấm dù đã khai. */
+    const spMapHS = await docSanPhamHopDong(pool, hopDongIds);
+    const bacMapHS = await docBacChuyenCan(pool, hopDongIds);   // v9.55: in điều khoản chuyên cần bậc thang từ màn Hồ sơ
+    hopDong.forEach(h => { h.sanPham = spMapHS.get(h.HopDongID) || []; h.bacChuyenCan = bacMapHS.get(h.HopDongID) || []; });
     let phuLuc = [];
     if (hopDongIds.length) {
       phuLuc = (await pool.request().query(
@@ -296,6 +305,13 @@ router.put('/nhanvien/:id', requireAuth, requirePermission('HRM', 'edit'), requi
     const pool = await getPool();
     const id = parseInt(req.params.id, 10);
     const b = req.body;
+    /* v9.53: trạng thái lao động đổi (đi làm ⇄ đã nghỉ việc) thì người đó vào/ra bảng lương ⇒ đọc giá trị
+       cũ trước khi ghi đè để so. Đọc hỏng ⇒ null ⇒ không đánh dấu (không chặn việc sửa hồ sơ). */
+    let ttCu;   // undefined = không đọc được / không có người; '' = cột NULL (bảng lương coi là đang làm)
+    try {
+      const rCu = (await pool.request().input('id', sql.Int, id).query('SELECT TrangThaiLaoDong FROM NhanVien WHERE NhanVienID=@id')).recordset[0];
+      ttCu = rCu ? (rCu.TrangThaiLaoDong == null ? '' : String(rCu.TrangThaiLaoDong)) : undefined;
+    } catch (e) { ttCu = undefined; }
     const reqDb = pool.request().input('id', sql.Int, id);
     bindNhanVien(reqDb, b);
     // Ma NV: cho phep sua neu gui len (giu nguyen neu de trong).
@@ -332,6 +348,11 @@ router.put('/nhanvien/:id', requireAuth, requirePermission('HRM', 'edit'), requi
         ${coAnh ? ', AnhDaiDien = CASE WHEN @GhiDeAnh = 1 THEN @AnhDaiDien ELSE AnhDaiDien END' : ''}
         ${coQT ? ', QuocTich = CASE WHEN @GhiDeQT = 1 THEN @QuocTich ELSE QuocTich END' : ''}
       WHERE NhanVienID=@id`);
+    /* v9.53: so theo luật lọc của bảng lương (ISNULL(...) <> 'Đã nghỉ việc'): chỉ chuyển qua lại ranh giới
+       "đã nghỉ việc" mới đổi danh sách người có lương; Thử việc ⇄ Chính thức không đánh dấu. */
+    const nghi = (v) => String(v || '').trim() === 'Đã nghỉ việc';
+    if (ttCu !== undefined && nghi(ttCu) !== nghi(nn(b.trangThaiLaoDong) || 'Thử việc'))
+      await bangLuongTuDong.danhDauGanDay(pool, `Đổi trạng thái lao động: ${String(b.hoTen || ('NV #' + id)).trim()}`);
     res.json({ success: true });
   } catch (err) {
     console.error(err);
@@ -982,15 +1003,43 @@ async function coCotHopDongV890(pool) {
 }
 function bindHopDongV890(reqDb, b) {
   const kieuLuong = String(b.kieuLuong || '').trim() === 'Ngay' ? 'Ngay' : (String(b.kieuLuong || '').trim() === 'Thang' ? 'Thang' : null);
-  const kt = String(b.kieuThuong || '').trim();
-  const kieuThuong = kt === 'KPI' ? 'KPI' : (kt === 'SanPham' ? 'SanPham' : null);
+  /* v9.55: + 'ChuyenCan'. v9.73: NHIỀU kiểu — client gửi mảng hoặc chuỗi "KPI,SanPham"; lưu chuỗi chuẩn (utils/kieuThuong).
+     Cột còn NVARCHAR(10) (chưa migration_v899) mà chọn ≥ 2 kiểu ⇒ máy chủ ném lỗi rõ ở caller (kiemCotKieuThuongRong). */
+  const kieuThuong = ghepKieuThuong(b.kieuThuong);
   reqDb.input('KieuLuong', sql.NVarChar(10), kieuLuong)
     .input('DonGiaNgay', sql.Decimal(14, 2), nn(b.donGiaNgay))
     /* 🔴 MucDongBH: trong/0 = KHONG dong BH. Tien BH 10,5% tinh tren cot nay, KHONG tren LuongCoBan. */
     .input('MucDongBH', sql.Decimal(14, 2), nn(b.mucDongBH))
     .input('LuongCoDinhThang', sql.Decimal(14, 2), nn(b.luongCoDinhThang))
     .input('NgayHetThuViec', sql.Date, nn(b.ngayHetThuViec))
-    .input('KieuThuong', sql.NVarChar(10), kieuThuong);
+    .input('KieuThuong', sql.NVarChar(50), kieuThuong);
+}
+/* v9.73: ≥ 2 kiểu thưởng cần cột rộng (migration_v899 nới NVARCHAR(50)). Cột cũ 10 ký tự: 'KPI,SanPham' bị cắt ⇒ lưu rác —
+   nên chặn trước bằng lời rõ. */
+async function kiemCotKieuThuongRong(pool, b) {
+  if (tachKieuThuong(b.kieuThuong).length < 2) return;
+  const r = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','KieuThuong') AS c")).recordset[0] || {};
+  if (r.c != null && r.c < 100) throw new Error('Chưa chạy database/migration_v899.sql — cột Kiểu thưởng chưa chứa được nhiều kiểu. Chạy migration rồi pm2 restart, lưu lại.');
+}
+/* v9.78 (migration_v904): SoKmDiLam — số km nhà → công ty của NGƯỜI này; xăng = km × đơn giá/km (Cấu hình lương)
+   × ngày công thực tế. Client không gửi ⇒ không đụng; gửi rỗng ⇒ NULL (quay về luật đ/ngày của v9.72).
+   Cột chưa có (chưa chạy v904) mà client gửi số ⇒ ném lỗi rõ, không lưu im lặng rồi lương tính thiếu. */
+async function luuSoKmDiLam(pool, hopDongId, gt) {
+  if (gt === undefined) return;
+  const co = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','SoKmDiLam') AS c")).recordset[0].c != null;
+  const km = (gt === null || gt === '' ? null : Math.max(0, Number(gt) || 0));
+  if (!co) { if (km) throw new Error('Chưa chạy database/migration_v904.sql — chưa lưu được Số km đi làm (xăng theo km).'); return; }
+  await pool.request().input('id', sql.Int, hopDongId).input('km', sql.Decimal(6, 2), km)
+    .query('UPDATE HopDongLaoDong SET SoKmDiLam=@km WHERE HopDongID=@id');
+}
+/* v9.74: ChuyenCanTinhCN (migration_v900) — chuyên cần theo ngày nghỉ có đếm CN không. Client không gửi (undefined) ⇒ không đụng;
+   gửi false ⇒ 0 (văn phòng nghỉ CN). Cột chưa có: client gửi false thì ném lỗi rõ (lưu im lặng = sản xuất vẫn tính CN là nghỉ). */
+async function luuChuyenCanTinhCN(pool, hopDongId, gt) {
+  if (gt === undefined || gt === null) return;
+  const co = (await pool.request().query("SELECT COL_LENGTH('HopDongLaoDong','ChuyenCanTinhCN') AS c")).recordset[0].c != null;
+  const bit = (gt === false || gt === 0 || gt === '0' || gt === 'false') ? 0 : 1;
+  if (!co) { if (bit === 0) throw new Error('Chưa chạy database/migration_v900.sql — chưa lưu được "không tính chủ nhật" cho chuyên cần.'); return; }
+  await pool.request().input('id', sql.Int, hopDongId).input('v', sql.Bit, bit).query('UPDATE HopDongLaoDong SET ChuyenCanTinhCN=@v WHERE HopDongID=@id');
 }
 const cotHDV890 = (co) => (co ? ', ' + COT_HD_V890.join(', ') : '');
 const thamSoHDV890 = (co) => (co ? ', ' + COT_HD_V890.map(c => '@' + c).join(', ') : '');
@@ -1022,6 +1071,50 @@ async function docSanPhamHopDong(pool, hopDongIds) {
   rows.forEach(r => { if (!m.has(r.HopDongID)) m.set(r.HopDongID, []); m.get(r.HopDongID).push(r); });
   return m;
 }
+/* === v9.55 BAC CHUYEN CAN HOP DONG — BAT DAU === */
+/* v9.55 (Nguyen 14/11): Kiểu thưởng 'ChuyenCan' = bậc thang theo công: [{ soCong, tienThuong }] — đạt ≥ SoCong thì
+   hưởng TienThuong, bộ tính lấy bậc cao nhất (mỗi bậc là số TỔNG — anh chốt). Cùng khuôn với HopDongSanPham:
+   ghi lại TOÀN BỘ mỗi lần lưu, CHỈ khi client có gửi mảng (JS cũ không gửi ⇒ giữ nguyên), bảng chưa có ⇒ bỏ qua. */
+async function luuBacChuyenCan(pool, hopDongId, ds) {
+  if (!Array.isArray(ds)) return;
+  const co = (await pool.request().query("SELECT OBJECT_ID('HopDongChuyenCan') AS o")).recordset[0] || {};
+  if (co.o == null) return;
+  await pool.request().input('id', sql.Int, hopDongId).query('DELETE FROM HopDongChuyenCan WHERE HopDongID=@id');
+  /* v9.72 (Nguyen 17/11): bậc theo SỐ NGÀY NGHỈ TỐI ĐA (0 = đi đủ, 2 = nghỉ 2 ngày) — cột SoNgayNghiToiDa (migration_v898);
+     SoCong ghi 0 cho dòng kiểu mới (cột NOT NULL; bộ tính luật cũ bỏ qua mốc 0). Dòng kiểu cũ (soCong) vẫn nhận. */
+  const coNghi = (await pool.request().query("SELECT COL_LENGTH('HopDongChuyenCan','SoNgayNghiToiDa') AS c")).recordset[0].c != null;
+  const docNghi = (b) => { const v = b && (b.soNgayNghiToiDa != null ? b.soNgayNghiToiDa : b.SoNgayNghiToiDa); return v == null || v === '' ? null : Number(v); };
+  /* v9.73 (Nguyen 17/11: "bậc theo số ngày nghỉ đang không lưu, lưu xong quay lại mất"): form 9.72 gửi soNgayNghiToiDa mà máy
+     chủ CHƯA có cột (chưa chạy migration_v898) ⇒ trước đây lọc im lặng ⇒ 0 bậc. Nay NÓI RÕ, không nuốt. */
+  if (!coNghi && ds.some(b => docNghi(b) != null)) throw new Error('Chưa chạy database/migration_v898.sql — bậc chuyên cần theo SỐ NGÀY NGHỈ chưa lưu được. Chạy migration rồi pm2 restart, lưu lại hợp đồng.');
+  /* Sắp theo mốc tăng dần, bỏ dòng rác và bậc TRÙNG mốc (giữ dòng đầu). */
+  const sach = ds.map(b => ({ soCong: Number(b && (b.soCong != null ? b.soCong : b.SoCong)) || 0, nghi: docNghi(b), tien: Number(b && (b.tienThuong != null ? b.tienThuong : b.TienThuong)) || 0 }))
+    .filter(b => (b.nghi != null && b.nghi >= 0 && coNghi) || b.soCong > 0)
+    .sort((a, b) => (a.nghi != null && b.nghi != null) ? a.nghi - b.nghi : a.soCong - b.soCong);
+  const daCo = new Set();
+  let thuTu = 0;
+  for (const b of sach) {
+    const khoa = b.nghi != null && coNghi ? 'N' + b.nghi : 'C' + b.soCong;
+    if (daCo.has(khoa)) continue;
+    daCo.add(khoa);
+    const rq = pool.request().input('id', sql.Int, hopDongId).input('sc', sql.Decimal(5, 1), b.nghi != null && coNghi ? 0 : b.soCong)
+      .input('tien', sql.Decimal(14, 2), b.tien).input('tt', sql.Int, thuTu++);
+    if (coNghi) rq.input('nghi', sql.Decimal(5, 1), b.nghi);
+    await rq.query(`INSERT INTO HopDongChuyenCan (HopDongID, SoCong, TienThuong, ThuTu${coNghi ? ', SoNgayNghiToiDa' : ''}) VALUES (@id, @sc, @tien, @tt${coNghi ? ', @nghi' : ''})`);
+  }
+}
+async function docBacChuyenCan(pool, hopDongIds) {
+  const co = (await pool.request().query("SELECT OBJECT_ID('HopDongChuyenCan') AS o")).recordset[0] || {};
+  if (co.o == null || !hopDongIds.length) return new Map();
+  const coNghi = (await pool.request().query("SELECT COL_LENGTH('HopDongChuyenCan','SoNgayNghiToiDa') AS c")).recordset[0].c != null;   // v9.72
+  const rows = (await pool.request().query(
+    `SELECT ID, HopDongID, SoCong, TienThuong, ThuTu, ${coNghi ? 'SoNgayNghiToiDa' : 'CAST(NULL AS DECIMAL(5,1)) AS SoNgayNghiToiDa'} FROM HopDongChuyenCan
+     WHERE HopDongID IN (${hopDongIds.map(n => Number(n) || 0).join(',')}) ORDER BY HopDongID, ThuTu, SoCong, ID`)).recordset;
+  const m = new Map();
+  rows.forEach(r => { if (!m.has(r.HopDongID)) m.set(r.HopDongID, []); m.get(r.HopDongID).push(r); });
+  return m;
+}
+/* === v9.55 BAC CHUYEN CAN HOP DONG — KET THUC === */
 
 // v8.82: QuyetDinhNhanSu.NgayKy (tách khỏi NgayHieuLuc — mẫu quyết định có cả hai ngày).
 let __coNgayKyQD = null;
@@ -1090,9 +1183,10 @@ router.get('/hopdong', requireAuth, requirePermission('HRM', 'view'), requireChu
       SELECT hd.*, nv.HoTen, nv.MaNhanVien FROM HopDongLaoDong hd
       JOIN NhanVien nv ON nv.NhanVienID = hd.NhanVienID
       ${where} ORDER BY hd.TuNgay DESC, hd.HopDongID DESC`)).recordset;
-    /* v9.45: gan danh sach san pham vao tung hop dong (mang rong neu khong co / chua migration). */
+    /* v9.45: gan danh sach san pham vao tung hop dong (mang rong neu khong co / chua migration). v9.55: + bac chuyen can. */
     const spMap = await docSanPhamHopDong(pool, rows.map(r => r.HopDongID));
-    rows.forEach(r => { r.sanPham = spMap.get(r.HopDongID) || []; });
+    const bacMap = await docBacChuyenCan(pool, rows.map(r => r.HopDongID));
+    rows.forEach(r => { r.sanPham = spMap.get(r.HopDongID) || []; r.bacChuyenCan = bacMap.get(r.HopDongID) || []; });
     res.json({ success: true, data: rows });
   } catch (err) { console.error(err); res.status(500).json({ success: false, message: err.message }); }
 });
@@ -1114,7 +1208,7 @@ router.post('/hopdong', requireAuth, requirePermission('HRM', 'create'), require
     const coV890 = await coCotHopDongV890(pool);
     const guiV890 = b.kieuLuong !== undefined;
     const ghiV890 = coV890 && guiV890;
-    if (ghiV890) bindHopDongV890(reqDb, b);
+    if (ghiV890) { await kiemCotKieuThuongRong(pool, b); bindHopDongV890(reqDb, b); }   // v9.73
     const r = await reqDb.query(`
       INSERT INTO HopDongLaoDong (NhanVienID, SoHopDong, LoaiHopDong, TuNgay, DenNgay, ChucVu, NoiLamViec,
         LuongCoBan, HeSoLuong, PhuCapAnCa, PhuCapTrangPhuc, PhuCapXangXe, PhuCapDienThoai, TrangThai, FileDinhKem, GhiChu, NguoiTaoID${cotHDThem(coV882)}${cotNDCV(coNDCV)}${cotHDV890(ghiV890)})
@@ -1123,6 +1217,11 @@ router.post('/hopdong', requireAuth, requirePermission('HRM', 'create'), require
         @LuongCoBan, @HeSoLuong, @PhuCapAnCa, @PhuCapTrangPhuc, @PhuCapXangXe, @PhuCapDienThoai, @TrangThai, @FileDinhKem, @GhiChu, @NguoiTaoID${thamSoHDThem(coV882)}${thamSoNDCV(coNDCV)}${thamSoHDV890(ghiV890)})`);
     const hopDongId = r.recordset[0].HopDongID;
     if (ghiV890) await luuSanPhamHopDong(pool, hopDongId, b.sanPham);
+    if (ghiV890) await luuBacChuyenCan(pool, hopDongId, b.bacChuyenCan);   // v9.55
+    if (ghiV890) await luuChuyenCanTinhCN(pool, hopDongId, b.chuyenCanTinhCN);   // v9.74
+    if (ghiV890) await luuSoKmDiLam(pool, hopDongId, b.soKmDiLam);   // v9.78
+    /* v9.53: hợp đồng là NGUỒN THÔNG SỐ LƯƠNG (v9.45) ⇒ mọi tháng từ ngày hiệu lực tới nay cần tính lại. */
+    await bangLuongTuDong.danhDauTuNgay(pool, nn(b.tuNgay), 'Thêm hợp đồng ' + tenHopDongChoLyDo(b.soHopDong, hopDongId));
     res.json({ success: true, data: { HopDongID: hopDongId },
       canhBao: guiV890 && !coV890 ? 'Máy chủ CHƯA chạy migration_v890.sql — hợp đồng đã lưu nhưng THÔNG SỐ TÍNH LƯƠNG CÔNG NHẬT (kiểu lương, đơn giá, BH, thưởng, sản phẩm) KHÔNG được lưu.' : null });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
@@ -1131,6 +1230,8 @@ router.post('/hopdong', requireAuth, requirePermission('HRM', 'create'), require
 router.put('/hopdong/:id', requireAuth, requirePermission('HRM', 'edit'), requireChucNang('HRM', 'hopdong'), async (req, res) => {
   try {
     const pool = await getPool();
+    /* v9.53: đọc ngày hiệu lực CŨ trước khi ghi đè — đổi TuNgay thì cả tháng cũ lẫn tháng mới đều cần tính lại. */
+    const hdCu = await docHopDongChoLyDo(pool, parseInt(req.params.id, 10));
     const reqDb = pool.request().input('id', sql.Int, parseInt(req.params.id, 10));
     bindHopDong(reqDb, req.body);
     const coV882 = await coCotHopDongV882(pool);   // v8.82
@@ -1141,7 +1242,7 @@ router.put('/hopdong/:id', requireAuth, requirePermission('HRM', 'edit'), requir
     const coV890 = await coCotHopDongV890(pool);
     const guiV890 = req.body.kieuLuong !== undefined;
     const ghiV890 = coV890 && guiV890;
-    if (ghiV890) bindHopDongV890(reqDb, req.body);
+    if (ghiV890) { await kiemCotKieuThuongRong(pool, req.body); bindHopDongV890(reqDb, req.body); }   // v9.73
     await reqDb.query(`
       UPDATE HopDongLaoDong SET SoHopDong=@SoHopDong, LoaiHopDong=@LoaiHopDong, TuNgay=@TuNgay, DenNgay=@DenNgay,
         ChucVu=@ChucVu, NoiLamViec=@NoiLamViec, LuongCoBan=@LuongCoBan, HeSoLuong=@HeSoLuong, PhuCapAnCa=@PhuCapAnCa,
@@ -1149,6 +1250,12 @@ router.put('/hopdong/:id', requireAuth, requirePermission('HRM', 'edit'), requir
         TrangThai=@TrangThai, FileDinhKem=@FileDinhKem, GhiChu=@GhiChu, UpdatedAt=SYSDATETIME()${ganHDThem(coV882)}${ganNDCV(coNDCV)}${ganHDV890(ghiV890)}
       WHERE HopDongID=@id`);
     if (ghiV890) await luuSanPhamHopDong(pool, parseInt(req.params.id, 10), req.body.sanPham);
+    if (ghiV890) await luuBacChuyenCan(pool, parseInt(req.params.id, 10), req.body.bacChuyenCan);   // v9.55
+    if (ghiV890) await luuChuyenCanTinhCN(pool, parseInt(req.params.id, 10), req.body.chuyenCanTinhCN);   // v9.74
+    if (ghiV890) await luuSoKmDiLam(pool, parseInt(req.params.id, 10), req.body.soKmDiLam);   // v9.78
+    /* v9.53: từ tháng SỚM HƠN giữa ngày hiệu lực cũ và mới (chuỗi 'yyyy-mm-dd' so được bằng sort). */
+    const mocSom = [hdCu && hdCu.TuNgay, nn(req.body.tuNgay)].filter(Boolean).map(String).sort()[0] || null;
+    await bangLuongTuDong.danhDauTuNgay(pool, mocSom, 'Sửa hợp đồng ' + tenHopDongChoLyDo(req.body.soHopDong || (hdCu && hdCu.SoHopDong), req.params.id));
     res.json({ success: true,
       canhBao: guiV890 && !coV890 ? 'Máy chủ CHƯA chạy migration_v890.sql — hợp đồng đã lưu nhưng THÔNG SỐ TÍNH LƯƠNG CÔNG NHẬT (kiểu lương, đơn giá, BH, thưởng, sản phẩm) KHÔNG được lưu.' : null });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
@@ -1157,10 +1264,27 @@ router.put('/hopdong/:id', requireAuth, requirePermission('HRM', 'edit'), requir
 router.delete('/hopdong/:id', requireAuth, requirePermission('HRM', 'delete'), requireChucNang('HRM', 'hopdong'), async (req, res) => {
   try {
     const pool = await getPool();
-    await pool.request().input('id', sql.Int, parseInt(req.params.id, 10)).query('DELETE FROM HopDongLaoDong WHERE HopDongID=@id');
+    const hdCu = await docHopDongChoLyDo(pool, parseInt(req.params.id, 10));   // v9.53: đọc TRƯỚC khi xóa
+    const r = await pool.request().input('id', sql.Int, parseInt(req.params.id, 10)).query('DELETE FROM HopDongLaoDong WHERE HopDongID=@id');
+    if (r.rowsAffected[0]) await bangLuongTuDong.danhDauTuNgay(pool, hdCu && hdCu.TuNgay, 'Xóa hợp đồng ' + tenHopDongChoLyDo(hdCu && hdCu.SoHopDong, req.params.id));
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
+/* === v9.53 HOP DONG DANH DAU BANG LUONG — BAT DAU === */
+/* Đọc số hợp đồng + ngày hiệu lực (CHUỖI yyyy-mm-dd, không qua Date của driver) để đánh dấu. Không ném:
+   đọc hỏng thì đánh dấu theo tháng hiện tại, hợp đồng vẫn lưu/xóa bình thường. */
+async function docHopDongChoLyDo(pool, hopDongId) {
+  try {
+    if (!hopDongId) return null;
+    return (await pool.request().input('id', sql.Int, hopDongId)
+      .query('SELECT SoHopDong, CONVERT(varchar(10), TuNgay, 23) AS TuNgay FROM HopDongLaoDong WHERE HopDongID=@id')).recordset[0] || null;
+  } catch (e) { console.warn('[hrm docHopDongChoLyDo] ' + e.message); return null; }
+}
+function tenHopDongChoLyDo(soHopDong, hopDongId) {
+  const so = String(soHopDong || '').trim();
+  return so ? `số ${so}` : `#${hopDongId}`;
+}
+/* === v9.53 HOP DONG DANH DAU BANG LUONG — KET THUC === */
 
 /* ================================================================
    3. PHU LUC HOP DONG
@@ -1353,6 +1477,8 @@ router.post('/thanhly', requireAuth, requirePermission('HRM', 'create'), require
     // Dong bo trang thai nhan vien sang "Da nghi viec" (+ TrangThai cu = "Da nghi" cho QLSX).
     await pool.request().input('id', sql.Int, b.nhanVienId)
       .query(`UPDATE NhanVien SET TrangThaiLaoDong=N'Đã nghỉ việc', TrangThai=N'Đã nghỉ' WHERE NhanVienID=@id`);
+    /* v9.53: người nghỉ việc ra khỏi bảng lương (lọc ISNULL(TrangThaiLaoDong,'') <> 'Đã nghỉ việc'). */
+    await bangLuongTuDong.danhDauGanDay(pool, 'Thanh lý hợp đồng — nghỉ việc NV #' + b.nhanVienId);
     res.json({ success: true, data: { ThanhLyID: r.recordset[0].ThanhLyID } });
   } catch (err) { console.error(err); res.status(400).json({ success: false, message: err.message }); }
 });
@@ -1385,3 +1511,6 @@ router.delete('/thanhly/:id', requireAuth, requirePermission('HRM', 'delete'), r
 });
 
 module.exports = router;
+/* v9.61: routes/hopdong.js (mẫu hợp đồng mua bán) dùng CHUNG bộ lọc HTML danh sách trắng ở trên —
+   một bộ lọc, một chỗ vá. Gắn lên router (export mặc định vẫn là router, server.js không đổi). */
+router.locMauAnToan = locMauAnToan;

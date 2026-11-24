@@ -8,14 +8,16 @@ const router = express.Router();
 // ============ USERS ============
 router.get('/', requireAuth, requirePermission('USERS', 'view'), async (req, res) => {
   const pool = await getPool();
+  // v9.59: + u.NhanVienID — màn Phân quyền riêng theo user cần biết tài khoản đã gắn nhân viên chưa
+  // để nói "Bảng lương của tôi tự có" (luật ở utils/loadUserContext.js).
   const result = await pool.request().query(`
-    SELECT u.UserID, u.Username, u.HoTen, u.Email, u.IsActive, u.BoPhanID, b.TenBoPhan,
+    SELECT u.UserID, u.Username, u.HoTen, u.Email, u.IsActive, u.BoPhanID, u.NhanVienID, b.TenBoPhan,
            STRING_AGG(g.TenNhom, ', ') AS Nhom
     FROM Users u
     LEFT JOIN BoPhan b ON b.BoPhanID = u.BoPhanID
     LEFT JOIN UserGroups ug ON ug.UserID = u.UserID
     LEFT JOIN Groups g ON g.GroupID = ug.GroupID
-    GROUP BY u.UserID, u.Username, u.HoTen, u.Email, u.IsActive, u.BoPhanID, b.TenBoPhan
+    GROUP BY u.UserID, u.Username, u.HoTen, u.Email, u.IsActive, u.BoPhanID, u.NhanVienID, b.TenBoPhan
     ORDER BY u.UserID`);
   res.json({ success: true, data: result.recordset });
 });
@@ -34,25 +36,34 @@ router.get('/:id', requireAuth, requirePermission('USERS', 'view'), async (req, 
 router.post('/', requireAuth, requirePermission('USERS', 'create'), async (req, res) => {
   try {
     const { username, password, hoTen, email, boPhanId, groupIds, stageIds, isActive, nhanVienId } = req.body;
-    if (!username || !password || !hoTen) {
-      return res.status(400).json({ success: false, message: 'Thiếu tên đăng nhập / mật khẩu / họ tên.' });
+    if (!username || !hoTen) {
+      return res.status(400).json({ success: false, message: 'Thiếu tên đăng nhập / họ tên.' });
     }
     const pool = await getPool();
-    const hash = await bcrypt.hash(password, 10);
+    /* v9.71 (Nguyen 16/11: "tạo user mới nếu không có mật khẩu thì đăng nhập lần đầu yêu cầu đổi mật khẩu"):
+       ô mật khẩu để trống ⇒ MẬT KHẨU TẠM = chính tên đăng nhập + cờ PhaiDoiMatKhau = 1 (migration_v897) — đăng nhập xong
+       app.js chặn màn hình bắt đổi. Chưa migration mà để trống ⇒ từ chối rõ (không tạo tài khoản mật khẩu tạm mà không bắt đổi). */
+    const tenDN = String(username).trim();
+    const khongCoMatKhau = !password;
+    const coCoBatDoi = (await pool.request().query("SELECT COL_LENGTH('Users','PhaiDoiMatKhau') AS c")).recordset[0].c != null;
+    if (khongCoMatKhau && !coCoBatDoi) return res.status(400).json({ success: false, message: 'Chưa chạy migration_v897.sql — hãy nhập mật khẩu, hoặc chạy migration để dùng "mật khẩu tạm, bắt đổi lần đầu".' });
+    const hash = await bcrypt.hash(khongCoMatKhau ? tenDN : password, 10);
     const result = await pool.request()
-      .input('Username', sql.NVarChar, username.trim())
+      .input('Username', sql.NVarChar, tenDN)
       .input('PasswordHash', sql.NVarChar, hash)
       .input('HoTen', sql.NVarChar, hoTen)
       .input('Email', sql.NVarChar, email || null)
       .input('BoPhanID', sql.Int, boPhanId || null)
       .input('IsActive', sql.Bit, isActive !== false)
       .input('NhanVienID', sql.Int, nhanVienId || null)
-      .query(`INSERT INTO Users (Username, PasswordHash, HoTen, Email, BoPhanID, IsActive, NhanVienID)
+      .input('PhaiDoi', sql.Bit, khongCoMatKhau ? 1 : 0)
+      .query(`INSERT INTO Users (Username, PasswordHash, HoTen, Email, BoPhanID, IsActive, NhanVienID${coCoBatDoi ? ', PhaiDoiMatKhau' : ''})
               OUTPUT INSERTED.UserID
-              VALUES (@Username, @PasswordHash, @HoTen, @Email, @BoPhanID, @IsActive, @NhanVienID)`);
+              VALUES (@Username, @PasswordHash, @HoTen, @Email, @BoPhanID, @IsActive, @NhanVienID${coCoBatDoi ? ', @PhaiDoi' : ''})`);
     const userId = result.recordset[0].UserID;
     await assignGroupsAndStages(pool, userId, groupIds, stageIds);
-    res.json({ success: true, data: { userId } });
+    const daMoMyPay = nhanVienId ? await moBangLuongCuaToi(pool, userId) : false;   // v9.52
+    res.json({ success: true, data: { userId, daMoMyPay, matKhauTam: khongCoMatKhau ? tenDN : null } });
   } catch (err) {
     console.error(err);
     const dup = /UNIQUE|duplicate/i.test(err.message);
@@ -60,11 +71,56 @@ router.post('/', requireAuth, requirePermission('USERS', 'create'), async (req, 
   }
 });
 
+/* ================================================================================================
+   v9.52 — Nguyen 14/11/2026: "Khi thêm user mới gắn với mã nhân viên auto có chức năng bảng lương của tôi".
+   Tài khoản vừa GẮN hồ sơ nhân viên (Users.NhanVienID) phải thấy phân hệ MYPAY ngay, không phụ thuộc
+   nhóm: migration_v620 chỉ cấp MYPAY cho các nhóm CÓ LÚC ĐÓ, nhóm tạo sau không có; user không thuộc
+   nhóm nào thì không có phân hệ nào cả ⇒ "liên kết rồi mà vẫn không thấy Bảng lương của tôi".
+   Cách làm — hai lớp GHI ĐÈ RIÊNG THEO USER (đè lên nhóm, áp cả khi không có nhóm — loadUserContext):
+     1. UserPermissions cho module MYPAY: CanView=1, ba cờ kia 0 (MYPAY chỉ có xem). MERGE: đã có dòng
+        thì cũng bật CanView lên 1 (người dùng vừa cố ý gắn nhân viên = muốn họ xem được lương).
+     2. UserChucNangPermissions cho MYPAY/luongcuatoi: CanView=1 — kẻo nhóm đang ẩn tab đó.
+   Chỉ gọi khi CÓ nhanVienId (tạo mới) hoặc nhanVienId ĐỔI sang giá trị mới (sửa). Gỡ liên kết KHÔNG
+   tự thu hồi (quyền riêng là việc của quản trị — xem màn Phân quyền riêng theo user).
+   Thiếu bảng (chưa chạy migration_v5_userperm) thì bỏ qua, KHÔNG làm hỏng việc tạo/sửa user.
+   v9.59 (Nguyen 14/11: "mặc định tự phân quyền cho user được gán mã nhân viên"): việc này nay là LUẬT
+   LÚC NẠP PHIÊN ở utils/loadUserContext.js — mọi tài khoản có NhanVienID đều thấy MYPAY, kể cả gắn
+   trước v9.52 hay nhóm bị ma trận ghi CanView=0. Hàm này GIỮ LẠI: vô hại (dòng CanView=1 trùng luật),
+   và vẫn là dấu vết "đã gắn" nhìn thấy được ở màn Phân quyền riêng.
+   ================================================================================================ */
+/* === v9.52 MYPAY TU DONG — BAT DAU === */
+async function moBangLuongCuaToi(pool, userId) {
+  try {
+    const m = (await pool.request().query("SELECT ModuleID FROM Modules WHERE ModuleCode = N'MYPAY'")).recordset[0];
+    if (!m) return false;
+    await pool.request().input('uid', sql.Int, userId).input('mid', sql.Int, m.ModuleID)
+      .query(`MERGE UserPermissions AS t USING (SELECT @uid AS UserID, @mid AS ModuleID) AS s
+              ON t.UserID = s.UserID AND t.ModuleID = s.ModuleID
+              WHEN MATCHED THEN UPDATE SET CanView = 1
+              WHEN NOT MATCHED THEN INSERT (UserID, ModuleID, CanView, CanCreate, CanEdit, CanDelete) VALUES (@uid, @mid, 1, 0, 0, 0);`);
+    const cn = (await pool.request().query("SELECT ChucNangID FROM ChucNang WHERE ModuleCode = N'MYPAY' AND MaChucNang = N'luongcuatoi'")).recordset[0];
+    if (cn) {
+      await pool.request().input('uid', sql.Int, userId).input('cnid', sql.Int, cn.ChucNangID)
+        .query(`MERGE UserChucNangPermissions AS t USING (SELECT @uid AS UserID, @cnid AS ChucNangID) AS s
+                ON t.UserID = s.UserID AND t.ChucNangID = s.ChucNangID
+                WHEN MATCHED THEN UPDATE SET CanView = 1
+                WHEN NOT MATCHED THEN INSERT (UserID, ChucNangID, CanView, CanEdit, CanDelete) VALUES (@uid, @cnid, 1, 0, 0);`);
+    }
+    return true;
+  } catch (e) {
+    console.warn('[users] không tự mở "Bảng lương của tôi" cho user ' + userId + ' (chưa chạy migration_v5_userperm?): ' + e.message);
+    return false;
+  }
+}
+/* === v9.52 MYPAY TU DONG — KET THUC === */
+
 router.put('/:id', requireAuth, requirePermission('USERS', 'edit'), async (req, res) => {
   try {
     const id = req.params.id;
     const { password, hoTen, email, boPhanId, groupIds, stageIds, isActive, nhanVienId } = req.body;
     const pool = await getPool();
+    // v9.52: NhanVienID TRƯỚC khi sửa — chỉ tự mở MYPAY khi liên kết MỚI (null → có, hoặc đổi người).
+    const truoc = (await pool.request().input('id', sql.Int, id).query('SELECT NhanVienID FROM Users WHERE UserID=@id')).recordset[0] || {};
     if (password) {
       const hash = await bcrypt.hash(password, 10);
       await pool.request().input('id', sql.Int, id).input('h', sql.NVarChar, hash)
@@ -80,7 +136,9 @@ router.put('/:id', requireAuth, requirePermission('USERS', 'edit'), async (req, 
       .query(`UPDATE Users SET HoTen=@HoTen, Email=@Email, BoPhanID=@BoPhanID, IsActive=@IsActive, NhanVienID=@NhanVienID, UpdatedAt=SYSDATETIME()
               WHERE UserID=@id`);
     await assignGroupsAndStages(pool, id, groupIds, stageIds);
-    res.json({ success: true });
+    const lienKetMoi = !!nhanVienId && String(nhanVienId) !== String(truoc.NhanVienID || '');
+    const daMoMyPay = lienKetMoi ? await moBangLuongCuaToi(pool, id) : false;
+    res.json({ success: true, data: { daMoMyPay } });
   } catch (err) {
     console.error(err);
     res.status(400).json({ success: false, message: 'Lỗi khi cập nhật user.' });

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- v9.61 — MOYN Ký số: công cụ nhỏ chạy trên máy người ký (Windows), cầu nối giữa trang web ký hợp đồng và USB token.
+       Build (máy có .NET SDK 8):  dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+       Kết quả: bin\Release\net8.0-windows\win-x64\publish\MoynKySo.exe  → chép vào frontend\tools\MoynKySo\MoynKySo.exe
+       Máy khách cần .NET 8 Desktop Runtime (hoặc build --self-contained true để khỏi cài, file ~70 MB). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <AssemblyName>MoynKySo</AssemblyName>
+    <RootNamespace>MoynKySo</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>

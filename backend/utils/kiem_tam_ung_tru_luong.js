@@ -144,9 +144,16 @@ function poolGia(coCot = true) {
        'giữ giá trị cũ = sửa phiếu sang loại khác mà tiền vẫn bị trừ lương');
   kiem('danh sách nhân viên gác bằng quyền CONGNO, KHÔNG bắt phải có quyền DANHMUC',
        /router\.get\('\/nhanvien', requireAuth, requirePermission\('CONGNO', 'view'\)/.test(nguonCN));
+  /* SQL that: `nv.NhanVienID, nv.MaNhanVien, nv.HoTen, bp.TenBoPhan AS BoPhan` (NhanVien khong co cot
+     BoPhan — ra cheo sua, phep kiem cu so chuoi cu nen do oan tu do). */
   kiem('…và chỉ trả 4 trường cho ô chọn, không kèm lương/hồ sơ',
-       /SELECT NhanVienID, MaNhanVien, HoTen, BoPhan/.test(nguonCN)
-         && !/LuongCoBan[\s\S]{0,80}FROM NhanVien WHERE ISNULL\(TrangThaiLaoDong/.test(nguonCN));
+       /SELECT nv\.NhanVienID, nv\.MaNhanVien, nv\.HoTen, bp\.TenBoPhan AS BoPhan\s+FROM NhanVien nv/.test(nguonCN)
+         && !/LuongCoBan[\s\S]{0,200}FROM NhanVien nv/.test(nguonCN));
+  /* v9.45 doi route tinh luong sang ISNULL(...) <> 'Đã nghỉ việc' (NULL = dang lam); o chon ung phai cung luat
+     (14/11: congno.js doi theo — truoc do NULL co luong ma khong ung duoc). */
+  kiem('ô chọn nhân viên lọc CÙNG LUẬT với route tính lương v9.45 (ISNULL(TrangThaiLaoDong) <> Đã nghỉ việc)',
+       /WHERE ISNULL\(nv\.TrangThaiLaoDong, N''\) <> N'Đã nghỉ việc'\s+ORDER BY nv\.HoTen/.test(nguonCN)
+         && /WHERE ISNULL\(nv\.TrangThaiLaoDong, N''\) <> N'Đã nghỉ việc'/.test(nguonPR));
 
   console.log('\n=== 5. GIAO DIỆN ===');
   kiem('phiếu chi lấy nhân viên qua /api/congno/nhanvien', /apiGet\('\/api\/congno\/nhanvien'\)/.test(nguonFeCN));

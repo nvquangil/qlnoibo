@@ -118,11 +118,16 @@ const khoiXoa = sHrm.slice(sHrm.indexOf("router.delete('/nguoiphuthuoc/:id'"),
 kiem(khoiXoa.indexOf('SELECT NhanVienID') < khoiXoa.indexOf('DELETE FROM NguoiPhuThuoc'),
   'duong xoa lay NhanVienID TRUOC khi DELETE');
 
-console.log('\n=== 2b. payroll.js KHONG bi sua (ky luong da chot khong duoc doi) ===');
-kiem(/giamTruNPT = \(Number\(cfg\.GiamTruNPT\) \|\| 0\) \* \(Number\(e\.SoNguoiPhuThuoc\) \|\| 0\)/.test(sPayroll),
-  'payroll.js van tinh theo NhanVien.SoNguoiPhuThuoc nhu cu');
-kiem(!/FROM NguoiPhuThuoc/.test(sPayroll),
-  'payroll.js KHONG doc bang NguoiPhuThuoc (doc se hoi to vao ky luong da chot)');
+console.log('\n=== 2b. Giam tru NPT van tinh theo NhanVien.SoNguoiPhuThuoc (khong doc bang NguoiPhuThuoc) ===');
+/* v9.45 (12/11/2026): bo tinh luong cong nhat doi sang utils/luongCongNhat.js; payroll.js chi SELECT
+   nv.SoNguoiPhuThuoc roi dua vao bo tinh. Phep kiem cu ghim dong `giamTruNPT = (Number(cfg...` cua ban
+   v6.1 nen DO OAN sau v9.45 — nay kiem dung chuoi: payroll SELECT cot do, bo tinh nhan tu e.SoNguoiPhuThuoc. */
+const sBoTinh = fs.existsSync(path.join(G, 'utils', 'luongCongNhat.js')) ? doc('utils/luongCongNhat.js') : '';
+kiem(/ISNULL\(nv\.SoNguoiPhuThuoc,\s*0\) AS SoNguoiPhuThuoc/.test(sPayroll)
+     && /giamTruNPT = so\(cfg\.GiamTruNPT\) \* so\(e\.SoNguoiPhuThuoc\)/.test(sBoTinh),
+  'giam tru NPT = cfg.GiamTruNPT x NhanVien.SoNguoiPhuThuoc (payroll.js SELECT, luongCongNhat.js nhan)');
+kiem(!/FROM NguoiPhuThuoc/.test(sPayroll) && !/FROM NguoiPhuThuoc/.test(sBoTinh),
+  'payroll.js / luongCongNhat.js KHONG doc bang NguoiPhuThuoc (doc se hoi to vao ky luong da chot)');
 
 /* ------------------------------------------------------------------------------------------------
    3. AnhDaiDien — CSDL chua chay migration van phai chay duoc
@@ -223,10 +228,13 @@ kiem(/const chTien = \(v\) => \(v == null \|\| v === '' \|\| Number\(v\) === 0 \
 kiem(/const chNgay = \(d\) => \(d \? dmy\(d\) : /.test(sFe), 'chNgay(): ngay rong -> in o trong');
 kiem(/docSoTienBangChu\(h\.LuongCoBan\)/.test(sFe), 'muc 3.1 in "Bang chu" cua luong co ban');
 
-console.log('\n=== 6d. payroll.js VAN khong doc cac phu cap moi ===');
-/* Cac khoan nay CHI de in hop dong. Doc chung trong payroll la doi luong ky da chot. */
+console.log('\n=== 6d. v9.45: payroll.js NAY DOC cac phu cap nay vao bang luong cong nhat ===');
+/* Truoc v9.45 ba khoan nay CHI de in hop dong (phep kiem cu doi payroll KHONG doc). Nguyen chot 11/11:
+   bang luong cong nhat lay TOAN BO thong so tu hop dong (luongCongNhat.js) => doi chieu phep kiem.
+   Ky da chot khong bi doi: POST /bangluong/tinh chan khi TrangThai = 'Da chot' (v9.32). */
 ['PhuCapChuyenCan', 'PhuCapChucVu', 'QuyKPI'].forEach(c =>
-  kiem(!new RegExp(c).test(sPayroll), `payroll.js KHONG doc ${c} (chi de in hop dong)`));
+  kiem(new RegExp('hd\\.' + c).test(sPayroll), `payroll.js SELECT hd.${c} tu hop dong hieu luc (v9.45)`));
+kiem(/ĐÃ CHỐT nên không tính lại được/.test(sPayroll), 'tinh lai bi chan khi bang luong da chot (ky da chot khong doi)');
 
 /* ------------------------------------------------------------------------------------------------
    6e. 🔴 /refs PHAI TRA DU THONG TIN NHAN VIEN — ban in doc tu day
@@ -292,8 +300,9 @@ kiem(!/DROP TABLE|UPDATE HopDongLaoDong|UPDATE QuyetDinhNhanSu/.test(sMig878Code
 kiem(!/\/\*[^*]*\*\/[^*]*\*\//.test(sMig878), 'migration_v878 khong co khoi comment long nhau');
 
 console.log('\n=== 7b. CSDL chua chay migration van in duoc (luoi an toan) ===');
-kiem(/return \(sua && String\(sua\)\.trim\(\)\) \? sua : \(MAU_GOC\[maMau\] \? MAU_GOC\[maMau\]\.than : ''\)/.test(sFe),
-  'layMau(): co ban sua thi dung, khong thi roi ve mau goc trong code');
+/* v9.48b: ban da sua di qua nangCapMauCu() (thay cau KPI cu bang bien moi) truoc khi dung. */
+kiem(/return \(sua && String\(sua\)\.trim\(\)\) \? nangCapMauCu\(maMau, sua\) : \(MAU_GOC\[maMau\] \? MAU_GOC\[maMau\]\.than : ''\)/.test(sFe),
+  'layMau(): co ban sua thi dung (qua nangCapMauCu), khong thi roi ve mau goc trong code');
 const khoiNap = sFe.slice(sFe.indexOf('async function napMauDaSua()'),
   sFe.indexOf('async function napMauDaSua()') + 500);
 kiem(/catch \(e\) \{/.test(khoiNap) && !/throw/.test(khoiNap),
@@ -392,7 +401,8 @@ const BIEN_RIENG = {
     'HeSoLuong', 'PhuCapAnCa', 'PhuCapTrangPhuc', 'PhuCapXangXe', 'PhuCapDienThoai',
     'PhuCapChuyenCan', 'PhuCapChucVu', 'QuyKPI', 'SoCongXangXe', 'SoCongAnTrua', 'TyLeThuViec',
     'CauThoiHan',
-    'NoiDungCongViec'],   // v9.35 — muc 1.5 nhap tay (dung chung ca HDLD_THUVIEC, xem dong duoi)
+    'NoiDungCongViec',    // v9.35 — muc 1.5 nhap tay (dung chung ca HDLD_THUVIEC, xem dong duoi)
+    'DieuKhoanThuong'],   // v9.48 — cau e)/3.4 theo Kieu thuong (KPI / San pham / Khong)
   QD_TANGLUONG: ['SoQuyetDinh', 'LoaiQuyetDinh', 'NgayKy', 'NgayHieuLuc', 'GiaTriCu', 'GiaTriMoi',
     'NoiDung', 'KhoiNoiDung', 'BoPhanChucVu'],
   PHULUC: ['SoPhuLuc', 'SoHopDong', 'NgayKy', 'NgayHieuLuc', 'LuongCoBanMoi',
@@ -429,9 +439,12 @@ const sFeKhongComment = sFe.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\/
 kiem(!/^\s*ten: '/m.test(sFe.slice(sFe.indexOf('const MAU_GOC = {'), sFe.indexOf('const BIEN_THEO_MAU'))),
   'MAU_GOC khong giu ban sao ten mau (ten hien thi chi o TEN_MAU)');
 /* Ca 4 duong in deu phai di qua inVanBan() — sot mot cai la cai do khong an mau da sua. */
+/* v9.48: printHopDong dai hon 400 ky tu (co canh bao quy KPI truoc khi in) => cat den dau dong "  }"
+   ket thuc ham (ham o muc 2 khoang trang, khoi ben trong sau hon) thay vi 400 ky tu cung. */
 ['printHopDong', 'printPhuLuc', 'printQuyetDinh', 'printThanhLy'].forEach(f => {
   const i = sFe.indexOf(`function ${f}(`);
-  kiem(i > 0 && /inVanBan\(/.test(sFe.slice(i, i + 400)), `${f}() goi inVanBan()`);
+  const j = i > 0 ? sFe.indexOf('\n  }', i) : -1;
+  kiem(i > 0 && j > i && /inVanBan\(/.test(sFe.slice(i, j)), `${f}() goi inVanBan()`);
 });
 
 console.log('\n=== 7h. v8.86 — sua bang trong o soan thao ===');

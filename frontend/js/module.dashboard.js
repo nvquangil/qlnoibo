@@ -76,7 +76,11 @@
         <div><label>Đến ngày</label><input type="date" id="dbDen" value="${k.den}"></div>
         <button class="btn secondary" id="dbLoc">Xem</button>
         <button class="btn secondary" id="dbKy">Tháng này</button>
+        <button class="btn secondary" id="dbKyThangTruoc">Tháng trước</button>
         <button class="btn secondary" id="dbKyNam">Năm nay</button>
+        <button class="btn secondary" id="dbKyNamTruoc" title="01/01 → 31/12 năm trước">Năm trước</button>
+        ${/* v9.77: lọc theo NHÓM khách hàng (Danh mục › Nhóm khách hàng). Danh sách nhóm nạp sau, ở napNhom(). */''}
+        <div><label>Nhóm khách hàng</label><select id="dbNhom" style="min-width:170px;"><option value="">— Tất cả nhóm —</option></select></div>
         <div style="flex:1"></div>
         <button class="btn" id="dbChonKhach">👥 Chọn khách theo dõi</button>
       </div>
@@ -89,14 +93,30 @@
       const n = new Date();
       dat(`${n.getFullYear()}-01-01`, ngayISO(n));   // v7.72: không qua UTC nữa
     };
+    /* v9.65: Tháng trước / Năm trước (Nguyen 16/11). new Date(y, m-1, 1) tự lùi năm khi m = 0; ngày 0 tháng này = cuối tháng trước. */
+    document.getElementById('dbKyThangTruoc').onclick = () => {
+      const n = new Date();
+      dat(ngayISO(new Date(n.getFullYear(), n.getMonth() - 1, 1)), ngayISO(new Date(n.getFullYear(), n.getMonth(), 0)));
+    };
+    document.getElementById('dbKyNamTruoc').onclick = () => {
+      const y = new Date().getFullYear() - 1;
+      dat(`${y}-01-01`, `${y}-12-31`);
+    };
     function dat(tu, den) {
       document.getElementById('dbTu').value = tu;
       document.getElementById('dbDen').value = den;
       taiSoLieu();
     }
+    document.getElementById('dbNhom').onchange = taiSoLieu;   // v9.77
     // Nạp danh sách khách theo dõi TRƯỚC khi gọi số liệu, không thì lần vẽ đầu ra "tất cả khách".
     await napKhachTheoDoi();
-    dsKhachTatCa = (await apiGet('/api/dashboard/khach')).data || [];
+    const kqKhach = await apiGet('/api/dashboard/khach');
+    dsKhachTatCa = kqKhach.data || [];
+    /* v9.77: đổ danh sách nhóm vào ô lọc. Chưa chạy migration_v903 ⇒ `nhom` rỗng, chỉ còn "Chưa gán nhóm". */
+    const selN = document.getElementById('dbNhom');
+    selN.innerHTML = '<option value="">— Tất cả nhóm —</option>'
+      + (kqKhach.nhom || []).map(n => `<option value="${n.id}">${escapeHtml(n.ten)}</option>`).join('')
+      + '<option value="0">— Chưa gán nhóm —</option>';
     await taiSoLieu();
   }
 
@@ -110,6 +130,8 @@
     p.set('denNgay', document.getElementById('dbDen').value);
     const ds = khachTheoDoi();
     if (ds.length) p.set('khach', ds.join('|'));
+    const nhomChon = (document.getElementById('dbNhom') || {}).value || '';   // v9.77 ('' = tất cả, '0' = chưa gán)
+    if (nhomChon !== '') p.set('nhom', nhomChon);
     /* ============================================================================================
        v7.78 — LẤY LUÔN SỔ QUỸ để xem cùng dashboard ("chỉ cần số tiền hiện tại").
        Gọi lại ĐÚNG route sẵn có `/api/congno/soquy` — KHÔNG viết lại phép tính số dư ở đây. Số dư
@@ -165,22 +187,46 @@
   function veBody() {
     const t = soLieu.tong, rows = soLieu.rows || [];
     const body = document.getElementById('dbBody');
+    /* 🔴 v9.87 (Nguyen 19–20/11): MỌI thẻ ở đây — kể cả "CÒN NỢ (lũy kế)" — đều CHỊU bộ lọc khách
+       theo dõi / nhóm, nhưng trước nay màn hình KHÔNG nói ra. Hậu quả thật: đối chiếu với Báo cáo
+       kinh doanh thấy lệch 416.320.577 đ, mất hai vòng truy nguyên mới ra là Dashboard đang xem
+       142/174 khách. Nay đang lọc thì BÁO TO ngay đầu màn, kèm nút bỏ lọc. */
+    const dangLoc = Number(t.dangLocKhach) > 0 || t.dangLocNhom;
+    const bangLoc = !dangLoc ? '' : `
+      <div class="empty-hint" style="color:#e65100;background:#fff8e1;border:1px solid #ffe0b2;border-radius:8px;padding:8px 10px;margin-bottom:10px;text-align:left;">
+        ⚠️ <b>Đang LỌC — mọi số dưới đây chỉ của phần đang xem, không phải toàn bộ.</b>
+        ${Number(t.dangLocKhach) > 0 ? `Đang theo dõi <b>${fmtNumber(t.soKhach)}</b>/<b>${fmtNumber(t.soKhachTatCa)}</b> khách. ` : ''}
+        ${t.dangLocNhom ? 'Đang lọc theo nhóm khách. ' : ''}
+        Muốn so với <b>Báo cáo kinh doanh</b> thì bỏ lọc trước.
+        <button type="button" class="btn small secondary" id="dbBoLoc" style="margin-left:6px;">Bỏ lọc, xem tất cả</button>
+      </div>`;
     body.innerHTML = `
+      ${bangLoc}
       ${soLieu.canhBao ? `<div class="empty-hint" style="color:#e65100;">${escapeHtml(soLieu.canhBao)}</div>` : ''}
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-        ${the('Doanh thu trong kỳ', fmtTien(t.doanhThu) + ' đ', '#1565c0', `${rows.reduce((s, r) => s + r.SoPhieu, 0)} phiếu bán`)}
-        ${the('Hàng khách trả', fmtTien(t.traLai) + ' đ', '#e65100', 'trừ vào doanh thu')}
-        ${the('Doanh thu thuần', fmtTien(t.doanhThuThuan) + ' đ', '#2e7d32', 'bán − trả lại')}
+        ${/* v9.63: ba thẻ này CHƯA gồm VAT — cùng định nghĩa với Báo cáo kinh doanh; số gồm VAT (= số vào công nợ) ghi ở dòng phụ. */''}
+        ${the('Doanh thu trong kỳ <span style="font-weight:normal;">(chưa VAT)</span>', fmtTien(t.doanhThu) + ' đ', '#1565c0', `${rows.reduce((s, r) => s + r.SoPhieu, 0)} phiếu bán · gồm VAT ${fmtTien(t.doanhThuGomVAT == null ? t.doanhThu : t.doanhThuGomVAT)} đ`)}
+        ${the('Hàng khách trả <span style="font-weight:normal;">(chưa VAT)</span>', fmtTien(t.traLai) + ' đ', '#e65100', `trừ vào doanh thu${t.traLaiGomVAT ? ' · gồm VAT ' + fmtTien(t.traLaiGomVAT) + ' đ' : ''}`)}
+        ${the('Doanh thu thuần', fmtTien(t.doanhThuThuan) + ' đ', '#2e7d32', 'bán − trả lại, chưa VAT — khớp Báo cáo kinh doanh')}
         ${the('Đã thu trong kỳ', fmtTien(t.daThuKy) + ' đ', '#00838f', '')}
-        ${the('CÒN NỢ (lũy kế)', fmtTien(t.conNo) + ' đ', '#c62828', 'tính đến hiện tại, không theo kỳ')}
-        ${the('Số khách', fmtNumber(t.soKhach), '#455a64', '')}
+        ${/* v9.87: phụ đề phải nói rõ đây là số của phần ĐANG XEM, nếu không người đọc tưởng là tổng. */''}
+        ${the('CÒN NỢ (lũy kế)', fmtTien(t.conNo) + ' đ', '#c62828',
+          dangLoc ? '⚠️ CHỈ của phần đang lọc — không phải toàn bộ' : 'tính đến hiện tại, không theo kỳ — khớp Báo cáo kinh doanh')}
+        ${the('Số khách', dangLoc ? `${fmtNumber(t.soKhach)} / ${fmtNumber(t.soKhachTatCa)}` : fmtNumber(t.soKhach),
+          '#455a64', dangLoc ? 'đang xem / tổng có phát sinh' : '')}
       </div>
       ${daiSoQuy()}
+      ${/* v9.78: hai vòng theo NHÓM hiện LUÔN cạnh hai vòng theo khách — không phải chọn nhóm mới thấy. */''}
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        ${bieuDoTron(soLieu.theoNhom || [], 'DoanhThuThuan', 'Tỷ lệ doanh thu thuần theo NHÓM khách', 'nhóm')}
+        ${bieuDoTron(soLieu.theoNhom || [], 'ConNo', 'Tỷ lệ công nợ theo NHÓM khách', 'nhóm')}
+      </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
         ${bieuDoTron(rows, 'DoanhThuThuan', 'Tỷ lệ doanh thu thuần theo khách')}
         ${bieuDoTron(rows, 'ConNo', 'Tỷ lệ công nợ theo khách')}
       </div>
       ${bieuDoThang()}
+      ${bangNhom()}
       ${bangKhach(rows)}`;
     /* ============================================================================================
        v7.44: BẤM TÊN KHÁCH -> MỞ SỔ CHI TIẾT CÔNG NỢ CỦA CHÍNH KHÁCH ĐÓ.
@@ -191,6 +237,17 @@
        Tên khách khớp được vì CẢ HAI backend đều nhóm theo LTRIM(RTRIM(TenKhach)).
        ============================================================================================ */
     themOTimTuDong(body);   // v9.05: ô tìm Khách hàng trên bảng phát sinh của Dashboard
+    /* v9.87: nút ở băng cảnh báo — xoá cả hai bộ lọc rồi nạp lại, để đối chiếu với Báo cáo KD ngay.
+       Xoá danh sách theo dõi bằng luuKhachTheoDoi([]) (ghi cả máy chủ lẫn localStorage) chứ không
+       chỉ gán biến, nếu không mở lại màn là bộ lọc cũ quay về. */
+    const nutBoLoc = body.querySelector('#dbBoLoc');
+    if (nutBoLoc) nutBoLoc.onclick = async () => {
+      nutBoLoc.disabled = true;
+      const oNhom = document.getElementById('dbNhom');
+      if (oNhom) oNhom.value = '';
+      await luuKhachTheoDoi([]);
+      taiSoLieu();
+    };
     body.querySelectorAll('.db-congno').forEach(a => a.onclick = (e) => {
       e.preventDefault();
       const khach = a.dataset.khach || '';
@@ -229,9 +286,14 @@
     const k = i - MAU_TRON.length;
     return `hsl(${(k * 137) % 360}, 62%, ${k % 2 ? 38 : 52}%)`;
   }
-  function bieuDoTron(rows, cot, tieuDe) {
+  /* v9.78 (Nguyen 19/11: "làm thêm theo nhóm khách ở đây luôn, không phải chọn"): dùng chung cho cả vòng
+     theo KHÁCH lẫn vòng theo NHÓM — `dv` là đơn vị đếm ở giữa vòng ('khách' / 'nhóm'), tên dòng lấy
+     TenKhach hoặc TenNhom. Nhóm thì KHÔNG gộp đuôi (vài nhóm, gộp là mất ý nghĩa). */
+  function bieuDoTron(rows, cot, tieuDe, dv) {
+    const donVi = dv || 'khách';
+    const laNhom = donVi === 'nhóm';
     const duong = rows.filter(r => Number(r[cot]) > 0)
-      .map(r => ({ ten: r.TenKhach, gt: Number(r[cot]) }))
+      .map(r => ({ ten: laNhom ? r.TenNhom : r.TenKhach, gt: Number(r[cot]) }))
       .sort((a, b) => b.gt - a.gt);
     const tong = duong.reduce((s, x) => s + x.gt, 0);
     if (!tong) {
@@ -245,7 +307,7 @@
     const dangChonKhach = khachTheoDoi().length > 0;
     const TOI_DA = 12;
     let mieng = duong;
-    if (!dangChonKhach && duong.length > TOI_DA) {
+    if (!laNhom && !dangChonKhach && duong.length > TOI_DA) {
       mieng = duong.slice(0, TOI_DA);
       const con = duong.slice(TOI_DA);
       mieng = mieng.concat([{ ten: `${con.length} khách khác`, gt: con.reduce((s, x) => s + x.gt, 0) }]);
@@ -267,7 +329,7 @@
       <div style="display:flex;gap:14px;align-items:center;margin-top:8px;flex-wrap:wrap;">
         <svg width="160" height="160" viewBox="0 0 160 160" style="flex:0 0 auto;">
           ${vong}
-          <text x="80" y="76" text-anchor="middle" style="font-size:11px;fill:#5f6368;">${mieng.length} khách</text>
+          <text x="80" y="76" text-anchor="middle" style="font-size:11px;fill:#5f6368;">${mieng.length} ${donVi}</text>
           <text x="80" y="92" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#263238;">${fmtNumber(Math.round(tong / 1000000))} tr</text>
         </svg>
         <div style="flex:1;min-width:170px;font-size:12.5px;max-height:200px;overflow:auto;">
@@ -304,13 +366,51 @@
       </div>`;
   }
 
+  /* ================================================================================================
+     v9.77 — TỔNG HỢP THEO NHÓM KHÁCH HÀNG (Nguyen 19/11). Số cộng từ CHÍNH các dòng khách bên dưới
+     (máy chủ gom từ `rows`), nên tổng nhóm luôn khớp tổng bảng — không có phép tính thứ hai để lệch.
+     Nhóm gán ở Danh mục › Nhóm khách hàng (hoặc ô "Nhóm khách hàng" trên từng khách). Khách chưa gán
+     nhóm, hoặc tên trên phiếu không có trong danh mục khách, rơi vào dòng "Chưa gán nhóm".
+     ================================================================================================ */
+  function bangNhom() {
+    const ds = soLieu.theoNhom || [];
+    if (!ds.length) return '';
+    const t = soLieu.tong;
+    const pct = (v) => (t.doanhThuThuan ? Math.round(v / t.doanhThuThuan * 100) : 0);
+    return `
+      <div class="table-wrap" style="margin-bottom:12px;">
+      <table class="data-table phieu-ke"><thead><tr>
+        <th>Nhóm khách hàng</th><th class="num" style="width:90px;">Số khách</th><th class="num" style="width:90px;">Số phiếu</th>
+        <th class="num">Doanh thu <span style="font-weight:normal;font-size:11px;">(chưa VAT)</span></th><th class="num">Hàng trả</th>
+        <th class="num">Doanh thu thuần</th><th class="num" style="width:70px;">Tỷ lệ</th><th class="num">Đã thu trong kỳ</th><th class="num">CÒN NỢ</th>
+      </tr></thead><tbody>
+        ${ds.map(n => `<tr>
+          <td><b>${escapeHtml(n.TenNhom)}</b>${n.NhomID === 0 ? ' <span style="font-size:11px;color:#b06000;">(gán nhóm ở Danh mục › Khách hàng)</span>' : ''}</td>
+          <td class="num">${fmtNumber(n.SoKhach)}</td><td class="num">${fmtNumber(n.SoPhieu)}</td>
+          <td class="num" title="Gồm VAT: ${fmtTien(n.DoanhThuGomVAT)} đ">${fmtTien(n.DoanhThu)}</td>
+          <td class="num">${n.TraLai ? fmtTien(n.TraLai) : ''}</td>
+          <td class="num"><b>${fmtTien(n.DoanhThuThuan)}</b></td>
+          <td class="num">${pct(n.DoanhThuThuan)}%</td>
+          <td class="num">${fmtTien(n.DaThuKy)}</td>
+          <td class="num" style="color:${n.ConNo > 0 ? '#c62828' : '#2e7d32'};font-weight:700;">${fmtTien(n.ConNo)}</td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot><tr data-tong style="font-weight:700;background:#f4f6f8;">
+        <td>TỔNG ${ds.length} nhóm</td><td class="num">${fmtNumber(t.soKhach)}</td>
+        <td class="num">${fmtNumber(ds.reduce((s, n) => s + n.SoPhieu, 0))}</td>
+        <td class="num">${fmtTien(t.doanhThu)}</td><td class="num">${fmtTien(t.traLai)}</td>
+        <td class="num">${fmtTien(t.doanhThuThuan)}</td><td class="num">100%</td>
+        <td class="num">${fmtTien(t.daThuKy)}</td><td class="num">${fmtTien(t.conNo)}</td>
+      </tr></tfoot></table></div>`;
+  }
+
   function bangKhach(rows) {
     if (!rows.length) return '<div class="empty-hint">Chưa có phát sinh nào trong kỳ đã chọn.</div>';
     return `
       <div class="table-wrap">
       <table class="data-table phieu-ke"><thead><tr>
-        <th style="width:50px;">STT</th><th>Khách hàng</th>
-        <th class="num">Số phiếu</th><th class="num">Doanh thu</th><th class="num">Hàng trả</th>
+        <th style="width:50px;">STT</th><th>Khách hàng</th><th style="width:150px;">Nhóm</th>
+        <th class="num">Số phiếu</th><th class="num" title="Chưa gồm thuế GTGT (v9.63) — số gồm VAT xem tooltip từng ô">Doanh thu <span style="font-weight:normal;font-size:11px;">(chưa VAT)</span></th><th class="num">Hàng trả <span style="font-weight:normal;font-size:11px;">(chưa VAT)</span></th>
         <th class="num">Doanh thu thuần</th><th class="num">Đã thu trong kỳ</th><th class="num">CÒN NỢ</th>
       </tr></thead><tbody>
         ${rows.map((r, i) => `<tr>
@@ -318,16 +418,19 @@
           ${/* v7.44: data-khach để handler biết bấm vào KHÁCH NÀO (trước đây không mang tên đi nên
                 bấm ai cũng ra danh sách chung). */''}
           <td><a href="#" class="db-congno" data-khach="${escapeHtml(r.TenKhach)}" title="Xem sổ chi tiết công nợ của ${escapeHtml(r.TenKhach)}"><b>${escapeHtml(r.TenKhach)}</b></a></td>
+          ${/* v9.77: nhóm của khách (Danh mục › Nhóm khách hàng) — chưa gán thì nhạt đi để dễ thấy mà gán nốt. */''}
+          <td${r.NhomID ? '' : ' style="color:#9e9e9e;"'}>${escapeHtml(r.TenNhom || 'Chưa gán nhóm')}</td>
           <td class="num">${fmtNumber(r.SoPhieu)}</td>
-          <td class="num">${fmtTien(r.DoanhThu)}</td>
-          <td class="num">${r.TraLai ? fmtTien(r.TraLai) : ''}</td>
+          <td class="num" title="Gồm VAT: ${fmtTien(r.DoanhThuGomVAT == null ? r.DoanhThu : r.DoanhThuGomVAT)} đ">${fmtTien(r.DoanhThu)}</td>
+          <td class="num" title="${r.TraLaiGomVAT ? 'Gồm VAT: ' + fmtTien(r.TraLaiGomVAT) + ' đ' : ''}">${r.TraLai ? fmtTien(r.TraLai) : ''}</td>
           <td class="num">${fmtTien(r.DoanhThuThuan)}</td>
           <td class="num">${fmtTien(r.DaThuKy)}</td>
           <td class="num" style="color:${r.ConNo > 0 ? '#c62828' : '#2e7d32'};font-weight:700;">${fmtTien(r.ConNo)}</td>
         </tr>`).join('')}
       </tbody>
       <tfoot><tr data-tong style="font-weight:700;background:#f4f6f8;">
-        <td colspan="3">TỔNG CỘNG</td>
+        ${/* v9.77: + cột Nhóm ⇒ colspan 3 → 4 (STT + Khách + Nhóm + Số phiếu). */''}
+        <td colspan="4">TỔNG CỘNG</td>
         <td class="num">${fmtTien(soLieu.tong.doanhThu)}</td>
         <td class="num">${fmtTien(soLieu.tong.traLai)}</td>
         <td class="num">${fmtTien(soLieu.tong.doanhThuThuan)}</td>

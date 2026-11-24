@@ -52,6 +52,8 @@ console.log('\n=== 1. BIEN DICH (vm.Script, khong chay) ===');
 const { tinhLuongV945, gomChamCong } = require('./luongCongNhat');
 
 /* Cau hinh nhu CauHinhLuong sau migration_v890 (BH 8/1,5/1; OT 1,5; KHONG tru thue; lam tron nghin). */
+/* v9.79 (Nguyen 19/11 CHOT LAI): xang = PhuCapXangXe (dong/NGAY) x ngay cong di lam thuc te — quay ve luat v9.72.
+   Cach tinh theo km cua v9.78 da bo; cfg.XangXeDonGiaKm / e.SoKmDiLam khong con duoc doc. */
 const CFG = { BhxhNld: 8, BhytNld: 1.5, BhtnNld: 1, GioChuanNgay: 8, HsTangCaThuong: 1.5,
   GiamTruBanThan: 15500000, GiamTruNPT: 6200000, TruThueTNCN: false, TyLeThuViec: 85,
   LamTronThucLinh: 1000, DiMuonChamChuocPhut: 5 };
@@ -116,7 +118,7 @@ S1.forEach(r => {
     KieuLuong: 'Ngay', DonGiaNgay: r.dg, LuongCoDinhThang: r.codinh || 0, MucDongBH: r.bh,
     QuyKPI: r.quyKPI || 0, KieuThuong: r.quyKPI ? 'KPI' : null, diemKPI: r.quyKPI ? 100 : null,
     PhuCapChucVu: r.tn || 0, PhuCapChuyenCan: r.ccMuc || 0,
-    PhuCapXangXe: r.xangNgay ? r.xangNgay * CC1 : 0, SoCongXangXe: r.xangNgay ? CC1 : 0,
+    PhuCapXangXe: r.xangNgay || 0,   // v9.79: DON GIA NGAY x cong di lam thuc te
     congThuViec: 0, congChinhThuc: ngay, congLe: 0, soPhep: 0, soNgayMuon: 0, gioOT: r.gioOT, conThuViec: false,
     tamUng: r.tu, dieuChinh: r.dc || 0
   };
@@ -158,7 +160,8 @@ const CFG2 = Object.assign({}, CFG, { LamTronThucLinh: 1 });
 const CC2 = 27;
 const S2 = [
   { ten: 'Lan - KTT (1 phep, KPI ghi de 8tr)', cb: 10000000, tv: 16, ct: 9.5, phep: 1, gioOT: 0, quyKPI: 8000000, ghiDe: 8000000, xangNgay: 20000, chucVu: 2000000, ccMuc: 500000, bh: 0,
-    mong: { luong: 8555556, thuong: 8000000, xang: 520000, chucVu: 1962963, cc: 0, bh: 0, tt: 19038519 } },
+    /* v9.72: 25,5 cong x 20k = 510.000 (file Excel T10 lam tron 26 ngay -> 520.000; theo luat moi "x so cong thuc te" so nay doi, co y) */
+    mong: { luong: 8555556, thuong: 8000000, xang: 510000, chucVu: 1962963, cc: 0, bh: 0, tt: 19028519 } },
   { ten: 'Huong - HCNS (dong BH 7tr)', cb: 7000000, tv: 7, ct: 20, phep: 0, gioOT: 0, quyKPI: 2000000, xangNgay: 30000, chucVu: 0, ccMuc: 500000, bh: 7000000,
     mong: { luong: 6727778, thuong: 2000000, xang: 810000, chucVu: 0, cc: 500000, bh: 735000, tt: 9302778 } },
   { ten: 'Thinh - KHSX', cb: 7000000, tv: 18, ct: 9, phep: 0, gioOT: 0, quyKPI: 4000000, xangNgay: 20000, chucVu: 0, ccMuc: 500000, bh: 0,
@@ -176,7 +179,7 @@ const S2 = [
   { ten: 'Ha - May mau', cb: 8000000, tv: 24, ct: 0, phep: 0, gioOT: 0, quyKPI: 3000000, xangNgay: 20000, chucVu: 0, ccMuc: 500000, bh: 0,
     mong: { luong: 6044444, thuong: 2666667, xang: 480000, chucVu: 0, cc: 0, bh: 0, tt: 9191111 } },
   { ten: 'Loan - QC (thu viec, OT 11,5h)', cb: 5400000, tv: 19.5, ct: 0, phep: 0, gioOT: 11.5, conTV: true, quyKPI: 3000000, xangNgay: 20000, chucVu: 1600000, ccMuc: 500000, bh: 0,
-    mong: { luong: 3315000, thuong: 2166667, xang: 400000, chucVu: 1155556, cc: 0, bh: 0, otFile: 244375, otMoi: 366563, dgGioOT: 31875 } },
+    mong: { luong: 3315000, thuong: 2166667, xang: 390000, chucVu: 1155556, cc: 0, bh: 0, otFile: 244375, otMoi: 366563, dgGioOT: 31875 } },   // v9.72: 19,5 x 20k = 390k (file lam tron 20 ngay = 400k)
   { ten: 'Sam - TK da nghi (thu viec 70%)', cb: 8000000, tv: 4, ct: 0, phep: 0, gioOT: 0, tyLeTV: 70, xangNgay: 0, chucVu: 0, ccMuc: 500000, bh: 0,
     mong: { luong: 829630, thuong: 0, xang: 0, chucVu: 0, cc: 0, bh: 0, tt: 829630 } }
 ];
@@ -187,7 +190,7 @@ S2.forEach(r => {
     QuyKPI: r.quyKPI || 0, KieuThuong: r.sanPham ? 'SanPham' : (r.quyKPI ? 'KPI' : null),
     diemKPI: r.quyKPI ? 100 : null, tienKPIGhiDe: r.ghiDe != null ? r.ghiDe : null, thuongSanPham: r.sanPham || 0,
     PhuCapChucVu: r.chucVu, PhuCapChuyenCan: r.ccMuc,
-    PhuCapXangXe: r.xangNgay * CC2, SoCongXangXe: CC2,
+    PhuCapXangXe: r.xangNgay,   // v9.79: DON GIA NGAY x cong di lam thuc te, KHONG lam tron
     congThuViec: r.tv, congChinhThuc: r.ct, congLe: 0, soPhep: r.phep, soNgayMuon: 0, gioOT: r.gioOT, conThuViec: !!r.conTV,
     tamUng: 0, dieuChinh: 0
   };
@@ -213,15 +216,16 @@ S2.forEach(r => {
 kiem(`Sheet 2: ${khop2}/10 dong khong OT khop Thuc nhan file DEN DONG (Loan co OT kiem rieng)`, khop2 === 10);
 /* Excel cong cac o CHUA lam tron (Loan 7.281.597,22; Ha 9.191.111,11…) nen dong tong file 100.312.153
    lech 1đ so voi tong cac o da hien — cho phep ±2đ. */
-kiem('Sheet 2 tong file 100.312.153 = tong 11 dong ±2đ (Loan lay so file 7.281.597)',
-  Math.abs(S2.reduce((s, r) => s + (r.mong.tt != null ? r.mong.tt : 7281597), 0) - 100312153) <= 2);
+/* v9.72: tong file 100.312.153 tru 10.000 (Lan: xang 25,5 ngay khong lam tron) = 100.302.153 — lech co y, da ghi §32. */
+kiem('Sheet 2 tong = 100.302.153 (file 100.312.153 − 10.000 xang Lan theo luat v9.72) ±2đ (Loan lay so file 7.281.597)',
+  Math.abs(S2.reduce((s, r) => s + (r.mong.tt != null ? r.mong.tt : 7281597), 0) - 100302153) <= 2);
 
 /* ================================================================================================
    4. LUAT RIENG — moi luat mot phep, doi mot bien, nhin mot so doi
    ================================================================================================ */
 console.log('\n=== 4. LUAT RIENG ===');
 const goc = { KieuLuong: 'Thang', LuongCoBan: 8100000, MucDongBH: 0, QuyKPI: 2700000, KieuThuong: 'KPI', diemKPI: 100,
-  PhuCapChuyenCan: 500000, PhuCapChucVu: 0, PhuCapXangXe: 540000, SoCongXangXe: 27,
+  PhuCapChuyenCan: 500000, PhuCapChucVu: 0, PhuCapXangXe: 20000,   // v9.79: 20k / NGAY cong di lam
   congThuViec: 0, congChinhThuc: 27, congLe: 0, soPhep: 0, soNgayMuon: 0, gioOT: 0, conThuViec: false, tamUng: 0, dieuChinh: 0 };
 const T = (them, cfg, cc) => tinhLuongV945(Object.assign({}, goc, them), cfg || CFG2, cc || 27, BAC_THUE);
 {
@@ -234,7 +238,46 @@ const T = (them, cfg, cc) => tinhLuongV945(Object.assign({}, goc, them), cfg || 
   kiem('phep KHONG huong luong: 26 CT + 1 phep => luong = 8,1tr/27 x 26', bang(T({ congChinhThuc: 26, soPhep: 1 }).luongNgayCong, 7800000));
   kiem('le huong NGUYEN luong: 26 CT + 1 LT => luong = 8,1tr', bang(T({ congChinhThuc: 26, congLe: 1 }).luongNgayCong, 8100000));
   kiem('xang: phep KHONG tinh (26 di lam + 1 phep => 20k x 26)', T({ congChinhThuc: 26, soPhep: 1 }).pcXangXe === 520000);
-  kiem('xang: lam tron nua len (25,5 ngay => 26 ngay)', T({ congChinhThuc: 25.5 }).pcXangXe === 520000);
+  /* xang = so km x don gia d/km x so cong thuc te, KHONG lam tron (20 km x 1.000 x 25,5 = 510k). Khong phu thuoc CC. */
+  kiem('xang 25,5 cong => 20k/ngay x 25,5 = 510.000 (khong lam tron)', T({ congChinhThuc: 25.5 }).pcXangXe === 510000);
+  kiem('SoCongXangXe cu (13) van bi bo qua; 27 cong => 540k', T({ SoCongXangXe: 13 }).pcXangXe === 540000);
+  kiem('v9.68: an trua VAN chia CC thang, SoCongAnTrua bi bo qua (810k/27 x 27)', T({ PhuCapAnCa: 810000, SoCongAnTrua: 20 }).pcAnCa === 810000);
+  kiem('doi CC 27 -> 26 KHONG anh huong xang (25 ngay => 500.000)', T({ congChinhThuc: 25 }, null, 26).pcXangXe === 500000);
+  /* v9.79 (Nguyen 19/11 CHOT LAI: "xang xe dien theo so tien /1 ngay x ngay cong thuc te"): MOT cong thuc,
+     doc thang PhuCapXangXe. Cach tinh theo km cua v9.78 BI BO — SoKmDiLam / XangXeDonGiaKm khong con duoc doc. */
+  {
+    const cfgKm = Object.assign({}, CFG2, { XangXeDonGiaKm: 5000 });
+    const x1 = T({ PhuCapXangXe: 20000, congChinhThuc: 20, congThuViec: 0 });
+    kiem('v9.79: 20.000 d/ngay x 20 cong = 400.000; tra ve xangNgay cho phieu luong',
+      x1.pcXangXe === 400000 && x1.xangNgay === 20000 && x1.thieuXangNgay === false, { x: x1.pcXangXe, n: x1.xangNgay });
+    /* Km da bi bo: khai km + don gia/km to den may cung KHONG duoc cong them dong nao. */
+    const x2 = T({ PhuCapXangXe: 20000, SoKmDiLam: 7, congChinhThuc: 20, congThuViec: 0 }, cfgKm);
+    kiem('v9.79: SoKmDiLam 7 + 5.000 d/km KHONG con duoc doc -> van 400.000 theo d/ngay', x2.pcXangXe === 400000, x2.pcXangXe);
+    const x3 = T({ PhuCapXangXe: null, SoKmDiLam: 7, congChinhThuc: 20, congThuViec: 0 }, cfgKm);
+    kiem('v9.79: chua khai d/ngay (du co km) -> xang = 0 VA thieuXangNgay = true',
+      x3.pcXangXe === 0 && x3.thieuXangNgay === true, x3.pcXangXe);
+    /* BAY TIEN THAT: hop dong cu ghi SO THANG (540.000). Doc la d/ngay => 540.000 x 27 = 14,58 trieu.
+       Bo tinh KHONG tu chia (khong biet hop dong nao da sua tay) nhung PHAI bat co de bang luong reo ten. */
+    const x4 = T({ PhuCapXangXe: 540000, congChinhThuc: 27, congThuViec: 0 });
+    kiem('v9.79: 540.000 (so THANG cu) -> van tinh 14.580.000 nhung BAT CO xangNghiSoThang de canh bao',
+      x4.pcXangXe === 14580000 && x4.xangNghiSoThang === true, x4.pcXangXe);
+    kiem('v9.79: 20.000 d/ngay la binh thuong, KHONG bat co nghi so thang', x1.xangNghiSoThang === false);
+    kiem('v9.79: xang tinh theo cong DI LAM that (3 ngay phep KHONG cong them xang)',
+      T({ PhuCapXangXe: 20000, congChinhThuc: 20, congThuViec: 0, soPhep: 3 }).pcXangXe === 400000);
+    kiem('v9.79: khong co ngay cong nao thi KHONG bao thieu d/ngay (nghi ca thang, bao la lam phien)',
+      T({ PhuCapXangXe: null, congChinhThuc: 0, congThuViec: 0 }).thieuXangNgay === false);
+  }
+  kiem('v9.72: le huong luong (LT) KHONG tinh xang (26 CT + 1 LT => 20k x 26)', T({ congChinhThuc: 26, congLe: 1 }).pcXangXe === 520000);
+  /* v9.72: chuyen can theo SO NGAY NGHI trong thang (ca CN): bac { SoNgayNghiToiDa, TienThuong }. */
+  const BAC_NGHI = [{ SoNgayNghiToiDa: 0, TienThuong: 500000 }, { SoNgayNghiToiDa: 2, TienThuong: 300000 }];
+  const CCN = (them) => T(Object.assign({ KieuThuong: 'ChuyenCan', bacChuyenCan: BAC_NGHI, soNgayThang: 31, soNgayLeThang: 0 }, them));
+  kiem('v9.72 chuyen can: thang 31 ngay, co mat 31 (ca CN) => nghi 0 => 500k', CCN({ soNgayCoMat: 31 }).thuong === 500000 && CCN({ soNgayCoMat: 31 }).soNgayNghi === 0);
+  kiem('v9.72 chuyen can: co mat 29 => nghi 2 => 300k (bac chat nhat con dat)', CCN({ soNgayCoMat: 29 }).thuong === 300000 && CCN({ soNgayCoMat: 29 }).soNgayNghi === 2);
+  kiem('v9.72 chuyen can: co mat 30 => nghi 1 => van 300k (chua dat bac 0)', CCN({ soNgayCoMat: 30 }).thuong === 300000);
+  kiem('v9.72 chuyen can: co mat 28 => nghi 3 => 0 (qua moi bac)', CCN({ soNgayCoMat: 28 }).thuong === 0);
+  kiem('v9.72 chuyen can: thang 30 ngay, 1 le chung, co mat 29 => nghi 0 => 500k', CCN({ soNgayThang: 30, soNgayLeThang: 1, soNgayCoMat: 29 }).thuong === 500000);
+  kiem('v9.72 chuyen can: khong co soNgayCoMat => dung ROUND(ngay di lam) (TV 0 + CT 27 => nghi 4 => 0)', CCN({}).thuong === 0 && CCN({ congChinhThuc: 31 }).thuong === 500000);
+  kiem('v9.55 bac cu (SoCong) van chay luat cu: 28 cong => 300k; soNgayNghi null', (() => { const x = T({ KieuThuong: 'ChuyenCan', bacChuyenCan: [{ SoCong: 28, TienThuong: 300000 }, { SoCong: 30, TienThuong: 500000 }], congChinhThuc: 28, soNgayThang: 31 }); return x.thuong === 300000 && x.soNgayNghi === null; })());
   kiem('KPI: chua cham => thuong 0 + co chuaDanhGiaKPI (khong bia 100 diem)', (() => { const x = T({ diemKPI: null }); return x.thuong === 0 && x.chuaDanhGiaKPI === true; })());
   kiem('KPI 50 diem => nua quy', T({ diemKPI: 50 }).thuong === 1350000);
   kiem('KPI diem 120 bi chan 100', T({ diemKPI: 120 }).thuong === 2700000);
@@ -243,6 +286,12 @@ const T = (them, cfg, cc) => tinhLuongV945(Object.assign({}, goc, them), cfg || 
   kiem('KPI tien ghi de thang diem', T({ diemKPI: 10, tienKPIGhiDe: 999000 }).thuong === 999000);
   kiem('thuong SAN PHAM = tong SL x don gia, KHONG prorate (6 ngay van nhan du)', T({ KieuThuong: 'SanPham', thuongSanPham: 4940000, congChinhThuc: 6 }).thuong === 4940000);
   kiem('khong khai KieuThuong => thuong 0 du co QuyKPI', T({ KieuThuong: null }).thuong === 0);
+  /* v9.73: KieuThuong la TAP HOP "KPI,SanPham,ChuyenCan" — luong CONG moi kieu da chon. */
+  kiem('v9.73: "KPI,SanPham" => thuong = KPI (2,7tr du cong) + SP 4,94tr', (() => { const x = T({ KieuThuong: 'KPI,SanPham', thuongSanPham: 4940000 }); return x.thuong === 7640000 && x.thuongKPI === 2700000 && x.thuongSP === 4940000 && x.thuongCC === 0; })());
+  kiem('v9.73: ca 3 kieu, co mat 31/31 => KPI + SP + CC 500k', (() => { const x = T({ KieuThuong: 'KPI,SanPham,ChuyenCan', thuongSanPham: 1000000, bacChuyenCan: BAC_NGHI, soNgayThang: 31, soNgayLeThang: 0, soNgayCoMat: 31, congChinhThuc: 27 }); return x.thuong === 2700000 + 1000000 + 500000 && x.thuongCC === 500000; })());
+  kiem('v9.73: thu tu / khoang trang / dau ; trong chuoi khong quan trong ("SanPham; KPI" = "KPI,SanPham")', T({ KieuThuong: 'SanPham; KPI', thuongSanPham: 100000 }).thuong === T({ KieuThuong: 'KPI,SanPham', thuongSanPham: 100000 }).thuong && T({ KieuThuong: 'SanPham; KPI' }).kieuThuong === 'KPI,SanPham');
+  kiem('v9.73: co ChuyenCan trong tap hop => phu cap chuyen can CO DINH bi bo (cung luat mot kieu)', T({ KieuThuong: 'KPI,ChuyenCan', bacChuyenCan: BAC_NGHI, soNgayThang: 31, soNgayCoMat: 31, PhuCapChuyenCan: 200000 }).chuyenCan === 0);
+  kiem('v9.73: mot kieu "SanPham" van nhu cu (khong KPI du co quy)', (() => { const x = T({ KieuThuong: 'SanPham', thuongSanPham: 500000 }); return x.thuong === 500000 && x.thuongKPI === 0; })());
   kiem('luong co dinh thang ghi de phan LUONG, khoan khac van theo cong', (() => { const x = T({ LuongCoDinhThang: 10000000, congChinhThuc: 31 }); return x.luongNgayCong === 10000000 && x.pcXangXe === 620000; })());
   kiem('BH tren MUC DONG, khong tren luong: 5,56tr => 583.800', T({ MucDongBH: 5560000 }).tongBH === 583800);
   kiem('BH: muc dong trong => 0 du luong 8,1tr', T({ MucDongBH: 0 }).tongBH === 0);
@@ -330,14 +379,61 @@ kiem('module.payroll.js: tinhLuong hien thieuHopDong + canhBao', /r\.thieuHopDon
 kiem('module.payroll.js: in 3 chu ky', /NGƯỜI LẬP/.test(fPayrollFE) && /KẾ TOÁN TRƯỞNG/.test(fPayrollFE) && /GIÁM ĐỐC/.test(fPayrollFE));
 kiem('module.payroll.js: KHONG con o sua tam ung tay (tu-inp)', !/tu-inp/.test(codePayrollFE));
 kiem('module.payroll.js: cau hinh co cong tac thue + 3 tham so', /c_truThue/.test(codePayrollFE) && /c_tyLeTV/.test(codePayrollFE) && /c_lamTron/.test(codePayrollFE) && /c_chamChuoc/.test(codePayrollFE));
-kiem('module.hrm.js: form hop dong co 6 o v890 + gui sanPham', ['f_kieuluong', 'f_dongiangay', 'f_mucdongbh', 'f_luongcodinh', 'f_nghetthuviec', 'f_kieuthuong'].every(id => codeHrmFE.indexOf(`id="${id}"`) > -1) && /sanPham: kieuThuong === 'SanPham' \? sanPham : \[\]/.test(codeHrmFE));
+kiem('module.hrm.js: form hop dong co 6 o v890 + gui sanPham', ['f_kieuluong', 'f_dongiangay', 'f_mucdongbh', 'f_luongcodinh', 'f_nghetthuviec', 'f_kieuthuong'].every(id => codeHrmFE.indexOf(`id="${id}"`) > -1) && /sanPham: coKT\('SanPham'\) \? sanPham : \[\]/.test(codeHrmFE));
+kiem('v9.73 module.hrm.js: Kieu thuong = 3 o tich .f-kt (KPI/SanPham/ChuyenCan), docKieuTich ghep chuoi, tachKieu doc lai', ['class="f-kt" value="KPI"', 'class="f-kt" value="SanPham"', 'class="f-kt" value="ChuyenCan"', 'function tachKieu(', 'const docKieuTich'].every(s => codeHrmFE.indexOf(s) > -1) && /kieuThuong = dsKT\.join\(','\)/.test(codeHrmFE) && !/<select[^>]*id="f_kieuthuong"/.test(codeHrmFE));
 kiem('module.hrm.js: bo cau "chỉ dùng để in hợp đồng" (nay co tinh luong that)', !/chỉ dùng để in hợp đồng/.test(codeHrmFE));
 kiem('index.html bump module.payroll.js >= 9.45', (() => { const m = /module\.payroll\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.45; })());
 kiem('index.html bump module.hrm.js >= 9.45', (() => { const m = /module\.hrm\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.45; })());
 kiem('migration_v890: 6 cot HopDongLaoDong + 3 bang + 4 cot CauHinhLuong + ChucNang kpi', ['KieuLuong', 'DonGiaNgay', 'MucDongBH', 'LuongCoDinhThang', 'NgayHetThuViec', 'KieuThuong', 'HopDongSanPham', 'DanhGiaKPI', 'ThuongSanPhamThang', 'TruThueTNCN', 'TyLeThuViec', 'LamTronThucLinh', 'DiMuonChamChuocPhut', "'PAYROLL', 'kpi'"].every(k => mig.indexOf(k) > -1));
 kiem('migration_v890: CHECK o batch rieng sau GO (them cot roi moi CHECK)', (() => { const a = mig.indexOf('ADD KieuLuong'), g = mig.indexOf('\nGO', a), c = mig.indexOf('CHECK (KieuLuong', a); return a > -1 && g > -1 && c > g; })());
-kiem('CAI_DAT_DAY_DU.sql da gop [123/123] migration_v890', /\[123\/123\]\s+migration_v890\.sql/.test(full));
+// So thu tu [i/N] do tao_file_cai_dat.js sinh (Nguyen sinh lai 13/11: [123/124]); khong khoa cung mau so.
+kiem('CAI_DAT_DAY_DU.sql da gop migration_v890 (dong [i/N])', /\[\d+\/\d+\]\s+migration_v890\.sql/.test(full));
 kiem('TRIEN_KHAI doc co muc v9.45', /v9\.45/.test(doc('docs', 'TRIEN_KHAI_v936_v940.md')));
+/* v9.79 (Nguyen CHOT LAI 19/11): xang = d/NGAY x cong. Cot v904 (XangXeDonGiaKm / SoKmDiLam) van ton tai nhung
+   KHONG duoc doc de tinh — hrm van luu SoKmDiLam de khong mat so da nhap.
+   Loc comment truoc khi doi hoi "KHONG chua" — da vap 3 lan vi quen (feedback_qlnoibo_bo_tu_kiem_phai_loc_comment). */
+const codeLCN = boComment(doc('backend', 'utils', 'luongCongNhat.js'));
+kiem('v9.79: migration_v904 van giu nguyen (cot de do, khong xoa); hrm van luu SoKmDiLam ca POST+PUT',
+  /ADD XangXeDonGiaKm DECIMAL\(14,2\) NULL/.test(doc('database', 'migration_v904.sql')) && /ADD SoKmDiLam DECIMAL\(6,2\) NULL/.test(doc('database', 'migration_v904.sql'))
+  && (boComment(fHrmBE).match(/await luuSoKmDiLam\(pool, /g) || []).length === 2);
+kiem('v9.79: bo tinh doc e.PhuCapXangXe va KHONG con doc SoKmDiLam / XangXeDonGiaKm',
+  /e\.PhuCapXangXe/.test(codeLCN) && !/e\.SoKmDiLam/.test(codeLCN) && !/cfg\.XangXeDonGiaKm/.test(codeLCN));
+kiem('v9.79: form hop dong co lai o NHAP d/ngay #f_xang; o km thanh input an',
+  /type="number" id="f_xang"/.test(codeHrmFE) && /<input type="hidden" id="f_sokm"/.test(codeHrmFE)
+  && /phuCapXangXe: val\(modal, 'f_xang'\)/.test(codeHrmFE));
+kiem('v9.79: cau b) van dung MOT bien {{HoTroXangXe}} (doi noi dung, khong doi ten bien) va noi theo d/ngay',
+  /b\) Hỗ trợ xăng xe: \{\{HoTroXangXe\}\}/.test(fHrmFE) && /HoTroXangXe: `<b>\$\{chTien\(h\.PhuCapXangXe\)\}<\/b> đồng\/ngày/.test(fHrmFE)
+  && /ra = ra\.replace\(CAU_XANG_NGAY, '\{\{HoTroXangXe\}\}'\)/.test(fHrmFE));
+kiem('v9.79: Cau hinh luong BO o don gia d/km (khong con c_xangKm, khong gui xangXeDonGiaKm)',
+  !/c_xangKm/.test(boComment(fPayrollFE)));
+kiem('v9.79: bang luong canh bao CA HAI: nghi con la SO THANG (tra thua) va chua khai d/ngay (xang 0)',
+  /nghiXangSoThang\.push\(/.test(codePayrollBE) && /thieuXangNgay\.push\(e\.HoTen\)/.test(codePayrollBE)
+  && /TRẢ THỪA/.test(codePayrollBE) && /sua_phu_cap_xang_xe_theo_ngay_v972\.sql/.test(codePayrollBE));
+kiem('v9.78: picker lenh o Ghi san luong co MA RAP (qlsx + mypay), may chu gan bang maRapTheoDon',
+  /const mrMap = await maRapTheoDon\(pool\);/.test(doc('backend', 'routes', 'qlsx.js'))
+  && (doc('frontend', 'js', 'module.qlsx.js').match(/l\.MaRap \? 'Rập ' \+ escapeHtml\(l\.MaRap\)/g) || []).length === 1
+  && (doc('frontend', 'js', 'module.mypay.js').match(/l\.MaRap \? 'Rập ' \+ escapeHtml\(l\.MaRap\)/g) || []).length === 1);
+
+/* v9.73: phieu luong tach tung dong thuong (Nguyen 17/11) — chay that ham dung chung common.js trong vm. */
+(() => {
+  const fCommon = doc('frontend', 'js', 'common.js').replace(/\r\n/g, '\n');
+  const i = fCommon.indexOf('function cacDongThuongPhieuLuong(r) {'), j = fCommon.indexOf('\n}\n', i);
+  if (i < 0 || j < 0) { kiem('common.js co cacDongThuongPhieuLuong', false); return; }
+  const ctx = {}; vm.createContext(ctx);
+  try { vm.runInContext(fCommon.slice(i, j + 2), ctx, { filename: 'cacDongThuong_gia.js' }); } catch (e) { kiem('cacDongThuongPhieuLuong chay duoc: ' + e.message, false); return; }
+  const F = ctx.cacDongThuongPhieuLuong;
+  const hai = F({ KieuThuong: 'KPI,ChuyenCan', DiemKPI: 100, Thuong: 3200000, ThuongKPI: 2700000, ThuongSP: 0, ThuongCC: 500000 });
+  kiem('v9.73 phieu luong: KPI + ChuyenCan co anh chup tung phan => 2 dong rieng, dung tien, dung nhan', hai.length === 2 && hai[0].nhan === 'Thưởng KPI (100/100 điểm)' && hai[0].tien === 2700000 && hai[1].nhan === 'Thưởng chuyên cần (bậc thang)' && hai[1].tien === 500000, JSON.stringify(hai));
+  const cu = F({ KieuThuong: 'KPI,SanPham', Thuong: 3200000 });
+  kiem('v9.73 phieu luong: dong tinh truoc migration_v899 (khong co ThuongKPI) => 1 dong gop nhan ghep, tien = Thuong', cu.length === 1 && cu[0].tien === 3200000 && /Thưởng KPI \+ Thưởng theo sản phẩm/.test(cu[0].nhan));
+  const mot = F({ KieuThuong: 'SanPham', Thuong: 500000, ThuongKPI: 0, ThuongSP: 500000, ThuongCC: 0 });
+  kiem('v9.73 phieu luong: mot kieu => 1 dong "Thưởng theo sản phẩm"', mot.length === 1 && mot[0].nhan === 'Thưởng theo sản phẩm' && mot[0].tien === 500000);
+  kiem('v9.73 phieu luong: khong kieu => 1 dong "Thưởng" 0', F({ KieuThuong: null, Thuong: 0 }).length === 1 && F({}).length === 1 && F({})[0].nhan === 'Thưởng');
+  kiem('v9.73 payroll.js ghi ThuongKPI/ThuongSP/ThuongCC khi co cot; module.payroll + module.mypay dung cacDongThuongPhieuLuong; migration_v899 them 3 cot; common.js bump >= 9.73',
+    /coBLThuongPhan/.test(codePayrollBE) && /cotThem \+= ',ThuongKPI,ThuongSP,ThuongCC'/.test(codePayrollBE) && (codePayrollBE.match(/await danhDauNeuThieuPhanThuong\(pool, nam, thang\)/g) || []).length === 2 && /cacDongThuongPhieuLuong\(r\)/.test(codePayrollFE) && /cacDongThuongPhieuLuong\(r\)/.test(doc('frontend', 'js', 'module.mypay.js'))
+    && /ADD ThuongKPI DECIMAL\(14,2\) NULL, ThuongSP DECIMAL\(14,2\) NULL, ThuongCC DECIMAL\(14,2\) NULL/.test(doc('database', 'migration_v899.sql'))
+    && (() => { const m = /common\.js\?v=([\d.]+)/.exec(html); return !!m && parseFloat(m[1]) >= 9.73; })());
+})();
 
 console.log(`\n=== KET QUA: ${dat} dat, ${sai} sai ===`);
 process.exit(sai ? 1 : 0);

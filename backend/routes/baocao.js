@@ -650,12 +650,25 @@ async function baoCaoTaiChinh(pool, ky) {
     CoCot: coCQ
   };
 
-  /* ---------- B. CONG NO tai NGAY CUOI KY ---------- */
+  /* ---------- B. CONG NO tai NGAY CUOI KY ----------
+     🔴 v9.86 (Nguyen 19/11: "số phải thu của khách ở dashboard và báo cáo kinh doanh đang lệch"):
+     THIEU VE `- TraLai`. Cong thuc phai thu khach o HE THONG la:
+         ConNo = BanHang + DieuChinh − DaThu − TraLai (hang khach tra, bang PhieuNhapLai)
+     congno.js:1069 (man Cong no khach hang) va dashboard.js:200 deu tru TraLai tu v6.66; RIENG muc B
+     cua bao cao tai chinh van dung cong thuc thoi TRUOC v6.66 (truoc khi co bang PhieuNhapLai) nen
+     KHAI KHONG phai thu dung bang toan bo hang khach da tra tu truoc den nay. Ba man, mot nghiep vu,
+     ba cau SQL chep tay — xem [[feedback_qlnoibo_mot_nghiep_vu_mot_luong]].
+     Gac bang y het congno.js: may chua chay migration_v676 thi bo qua ve nay, khong lam trang man. */
+  const coBangNhapLai = (await pool.request()
+    .query("SELECT OBJECT_ID('PhieuNhapLai', 'U') AS c")).recordset[0].c != null;
   const phaiThu = (await rqKy(pool, ky).query(`
     SELECT
       (SELECT ISNULL(SUM(TongThanhToan),0) FROM PhieuBanHang WHERE TrangThai <> N'Đã hủy' AND NgayBan <= @den) AS BanHang,
       (SELECT ISNULL(SUM(SoTien),0) FROM PhieuThu WHERE LoaiDoiTuong = N'KhachHang' AND NgayThu <= @den) AS DaThu,
-      (SELECT ISNULL(SUM(SoTien),0) FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'KhachHang' AND Ngay <= @den) AS DieuChinh`)).recordset[0];
+      (SELECT ISNULL(SUM(SoTien),0) FROM CongNoDieuChinh WHERE LoaiDoiTuong = N'KhachHang' AND Ngay <= @den) AS DieuChinh,
+      ${coBangNhapLai
+        ? "(SELECT ISNULL(SUM(TongThanhToan),0) FROM PhieuNhapLai WHERE TrangThai <> N'Đã hủy' AND NgayNhap <= @den)"
+        : '0'} AS TraLai`)).recordset[0];
 
   const coGiaVai = await coCot(pool, 'VaiCay', 'DonGiaNhap');
   const coGiaPK = await coCot(pool, 'PhieuPhuKienChiTiet', 'DonGia');
@@ -710,7 +723,8 @@ async function baoCaoTaiChinh(pool, ky) {
     ORDER BY SUM(x.Chi) DESC, SUM(x.Thu) DESC`)).recordset
     .map(r => ({ TenLoai: r.TenLoai, TinhChiPhiKD: !!r.TinhChiPhiKD, Thu: tien(r.Thu), Chi: tien(r.Chi) }));
 
-  const tongPhaiThu = tien(so(phaiThu.BanHang) + so(phaiThu.DieuChinh) - so(phaiThu.DaThu));
+  /* v9.86: − TraLai (hàng khách trả) để khớp congno.js:1069 và dashboard.js:200. */
+  const tongPhaiThu = tien(so(phaiThu.BanHang) + so(phaiThu.DieuChinh) - so(phaiThu.DaThu) - so(phaiThu.TraLai));
   const tongPhaiTra = tien(so(phaiTra.NhapVai) + so(phaiTra.NhapPhuKien) + so(phaiTra.DieuChinh) - so(phaiTra.DaTra));
 
   return {
@@ -723,7 +737,7 @@ async function baoCaoTaiChinh(pool, ky) {
     },
     congNo: {
       PhaiThu: tongPhaiThu, PhaiThu_BanHang: tien(phaiThu.BanHang), PhaiThu_DaThu: tien(phaiThu.DaThu),
-      PhaiThu_DieuChinh: tien(phaiThu.DieuChinh),
+      PhaiThu_DieuChinh: tien(phaiThu.DieuChinh), PhaiThu_TraLai: tien(phaiThu.TraLai),   // v9.86
       PhaiTra: tongPhaiTra, PhaiTra_Vai: tien(phaiTra.NhapVai), PhaiTra_PhuKien: tien(phaiTra.NhapPhuKien),
       PhaiTra_DaTra: tien(phaiTra.DaTra), PhaiTra_DieuChinh: tien(phaiTra.DieuChinh),
       PhaiTra_ThuLaiNCC: tien(phaiTra.ThuLaiNCC)   // v8.78: tien NCC hoan lai, DA tru trong DaTra
@@ -753,22 +767,36 @@ async function baoCaoTaiChinh(pool, ky) {
 /* ================================================================================================
    5. KET QUA KINH DOANH (lai / lo)
    ------------------------------------------------------------------------------------------------
-   DOANH THU THUAN = SUM(PhieuBanHang.TienTruocVAT)   <- KHONG gom thue GTGT (dung chuan ke toan:
+   DOANH THU BAN HANG = SUM(PhieuBanHang.TienTruocVAT)   <- KHONG gom thue GTGT (dung chuan ke toan:
                      thue GTGT dau ra la khoan thu ho nha nuoc, khong phai doanh thu).
-   GIA VON         = SUM(SoLuongCai cua tung dong ban x GiaVonHangHoa.GiaVon cua ma hang do)
-                     Gia von CHOT trong bang GiaVonHangHoa (xem migration_v672).
+   HANG BAN BI TRA LAI = SUM(PhieuNhapLai.TienTruocVAT) theo NgayNhap trong ky   (v9.63 — Nguyen 16/11:
+                     "doanh thu thuan lech giua dashboard va bao cao". Truoc v9.63 bao cao nay KHONG tru
+                     hang tra lai (migration_v676 co y de bang rieng "muon tru thi tru co y thuc" — ma
+                     chua ai tru), con dashboard thi tru nhung lai tinh tren TongThanhToan GOM VAT.
+                     Nay CA HAI cung mot dinh nghia VAS: doanh thu chua VAT − hang tra lai chua VAT.)
+   DOANH THU THUAN = Doanh thu ban hang − Hang ban bi tra lai
+   GIA VON         = SUM((SoLuongCai ban − SoLuongCai tra lai) cua tung ma hang x GiaVonHangHoa.GiaVon)
+                     Gia von CHOT trong bang GiaVonHangHoa (xem migration_v672). Hang tra lai NHAP KHO lai
+                     nen gia von cua no cung phai lui ra khoi gia von hang ban (Có 632 / Nợ 156).
    LAI GOP         = Doanh thu thuan - Gia von
    CHI PHI KD      = SUM(PhieuChi) co tai khoan thuoc loai co TinhChiPhiKD = 1
    LOI NHUAN       = Lai gop - Chi phi KD
    ================================================================================================ */
 async function baoCaoKinhDoanh(pool, ky) {
   const coGiaVon = await coBang(pool, 'GiaVonHangHoa');
+  const coNhapLai = await coBang(pool, 'PhieuNhapLai');   // v9.63
 
   // --- Doanh thu + gia von theo tung MA HANG (chi tiet de biet mat hang nao lai) ---
+  /* v9.64 (Nguyen 16/11: "lai phai lay gia SAU TRU CK NPP, thuc te thu ve theo tung phieu ban hang"):
+     TienSauCK = ThanhTien dong x (TienTruocVAT / TongTienHang) CUA CHINH PHIEU DO — CK NPP cua tung phieu,
+     khong con phan bo mot ty le chung ca ky (v9.63 tro ve truoc). Phieu CK 0% thi dong = ThanhTien; phieu
+     CK 10% thi dong = 90%. FLOAT de khoi vuong gioi han precision DECIMAL khi nhan-chia; lam tron o JS. */
+  const SQL_SAU_CK = 'SUM(ct.ThanhTien * ISNULL(CAST(p.TienTruocVAT AS FLOAT) / NULLIF(CAST(p.TongTienHang AS FLOAT), 0), 1)) AS TienSauCK';
   const rows = (await rqKy(pool, ky).query(`
     SELECT h.MaHangID, h.MaHang, h.TenHang,
            SUM(ct.SoLuongCai) AS SLCai,
-           SUM(ct.ThanhTien)  AS TienHang
+           SUM(ct.ThanhTien)  AS TienHang,
+           ${SQL_SAU_CK}
            ${coGiaVon ? ', MAX(gv.GiaVon) AS GiaVon, MAX(gv.NguonGia) AS NguonGia' : ''}
     FROM PhieuBanHangChiTiet ct
     JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
@@ -778,22 +806,49 @@ async function baoCaoKinhDoanh(pool, ky) {
     GROUP BY h.MaHangID, h.MaHang, h.TenHang
     ORDER BY SUM(ct.ThanhTien) DESC`)).recordset;
 
+  /* v9.63: hang khach TRA LAI theo ma hang (PhieuNhapLai theo NgayNhap trong ky) — cung hinh dang cau tren
+     de co ca dong cho ma hang KHONG ban trong ky ma khach tra (ban ky truoc): dong do SL am. */
+  const rowsTra = coNhapLai ? (await rqKy(pool, ky).query(`
+    SELECT h.MaHangID, h.MaHang, h.TenHang,
+           SUM(ct.SoLuongCai) AS SLCai,
+           SUM(ct.ThanhTien)  AS TienHang,
+           ${SQL_SAU_CK}
+           ${coGiaVon ? ', MAX(gv.GiaVon) AS GiaVon, MAX(gv.NguonGia) AS NguonGia' : ''}
+    FROM PhieuNhapLaiChiTiet ct
+    JOIN PhieuNhapLai p ON p.PhieuNLID = ct.PhieuNLID
+    JOIN TheKhoHangHoa h ON h.MaHangID = ct.MaHangID
+    ${coGiaVon ? 'LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID' : ''}
+    WHERE p.TrangThai <> N'Đã hủy' AND p.NgayNhap BETWEEN @tu AND @den
+    GROUP BY h.MaHangID, h.MaHang, h.TenHang`)).recordset : [];
+
   // --- Tong tren PHIEU (co CK NPP + thue) ---
   const tongPhieu = (await rqKy(pool, ky).query(`
     SELECT ISNULL(SUM(TongTienHang),0) AS TongTienHang, ISNULL(SUM(TienCKNPP),0) AS TienCKNPP,
            ISNULL(SUM(TienTruocVAT),0) AS TienTruocVAT, ISNULL(SUM(TienVAT),0) AS TienVAT,
            ISNULL(SUM(TongThanhToan),0) AS TongThanhToan, COUNT(*) AS SoPhieu, ISNULL(SUM(TongSLCai),0) AS TongSLCai
     FROM PhieuBanHang WHERE TrangThai <> N'Đã hủy' AND NgayBan BETWEEN @tu AND @den`)).recordset[0];
+  const tongTra = coNhapLai ? (await rqKy(pool, ky).query(`
+    SELECT ISNULL(SUM(TongTienHang),0) AS TongTienHang, ISNULL(SUM(TienCKNPP),0) AS TienCKNPP,
+           ISNULL(SUM(TienTruocVAT),0) AS TienTruocVAT, ISNULL(SUM(TienVAT),0) AS TienVAT,
+           ISNULL(SUM(TongThanhToan),0) AS TongThanhToan, COUNT(*) AS SoPhieu, ISNULL(SUM(TongSLCai),0) AS TongSLCai
+    FROM PhieuNhapLai WHERE TrangThai <> N'Đã hủy' AND NgayNhap BETWEEN @tu AND @den`)).recordset[0]
+    : { TongTienHang: 0, TienCKNPP: 0, TienTruocVAT: 0, TienVAT: 0, TongThanhToan: 0, SoPhieu: 0, TongSLCai: 0 };
 
-  /* Ty le chiet khau NPP tren toan ky — dung de phan bo CK NPP xuong tung ma hang, nho vay
-     tong "doanh thu thuan" cua cac dong CONG LAI dung bang TienTruocVAT cua ca ky. */
-  const tongTienHang = so(tongPhieu.TongTienHang);
-  const tyLeSauCK = tongTienHang > 0 ? so(tongPhieu.TienTruocVAT) / tongTienHang : 1;
+  /* v9.64: doanh thu tung ma = TienSauCK (CK NPP cua CHINH phieu) ban − tra. Tong cac dong = TienTruocVAT thuan cua ky,
+     lech toi da vai dong do lam tron tung dong (khong con "ty le CK chung ca ky" nhu v9.63). */
+
+  // v9.63: gop dong tra lai vao dong ban cung ma hang (SL, tien tru di); ma khong ban trong ky thi them dong rieng.
+  const theoMa = new Map(rows.map(r => [r.MaHangID, Object.assign({ SLCaiTra: 0, TienHangTra: 0, TienSauCKTra: 0 }, r)]));
+  rowsTra.forEach(t => {
+    const r = theoMa.get(t.MaHangID) || theoMa.set(t.MaHangID, { MaHangID: t.MaHangID, MaHang: t.MaHang, TenHang: t.TenHang, SLCai: 0, TienHang: 0, TienSauCK: 0, GiaVon: t.GiaVon, NguonGia: t.NguonGia, SLCaiTra: 0, TienHangTra: 0, TienSauCKTra: 0 }).get(t.MaHangID);
+    r.SLCaiTra += so(t.SLCai); r.TienHangTra += so(t.TienHang); r.TienSauCKTra += so(t.TienSauCK);
+  });
 
   const mat = [];   // ma hang thieu gia von
-  const chiTiet = rows.map(r => {
-    const slCai = so(r.SLCai);
-    const doanhThu = tien(so(r.TienHang) * tyLeSauCK);
+  const chiTiet = [...theoMa.values()].map(r => {
+    const slCai = so(r.SLCai) - so(r.SLCaiTra);
+    const tienHang = so(r.TienHang) - so(r.TienHangTra);
+    const doanhThu = tien(so(r.TienSauCK) - so(r.TienSauCKTra));
     /* "Chưa khai" = CHƯA CÓ DÒNG trong GiaVonHangHoa (NULL). Khai đúng bằng 0 là có chủ ý
        (hàng khuyến mại/mẫu) — không đếm là thiếu, để 2 tab hiểu giống nhau. */
     const chuaKhai = !coGiaVon || r.GiaVon == null;
@@ -801,15 +856,15 @@ async function baoCaoKinhDoanh(pool, ky) {
     const giaVon = tien(slCai * giaVon1);
     if (chuaKhai) mat.push(r.MaHang);
     return {
-      MaHang: r.MaHang, TenHang: r.TenHang, SLCai: slCai,
-      TienHang: tien(r.TienHang), DoanhThu: doanhThu,
+      MaHang: r.MaHang, TenHang: r.TenHang, SLCai: slCai, SLCaiBan: so(r.SLCai), SLCaiTra: so(r.SLCaiTra),
+      TienHang: tien(tienHang), TienHangTra: tien(r.TienHangTra), DoanhThu: doanhThu,
       GiaVon1: tien(giaVon1), GiaVon: giaVon,
       LaiGop: tien(doanhThu - giaVon),
       TyLeLai: doanhThu > 0 ? lam2((doanhThu - giaVon) / doanhThu * 100) : null,
       ThieuGiaVon: chuaKhai,
       NguonGia: coGiaVon ? (r.NguonGia || '') : ''
     };
-  });
+  }).sort((a, b) => b.TienHang - a.TienHang);
 
   /* --- Chi phi kinh doanh: phieu chi co tai khoan thuoc loai TinhChiPhiKD = 1 ---
      ⚠️ CAC KHOAN DA NAM TRONG GIA VON (mua nguyen phu lieu, gia cong/in theu, luong may/cat) PHAI
@@ -849,7 +904,9 @@ async function baoCaoKinhDoanh(pool, ky) {
   const loaiCPKD = (await pool.request().query(
     `SELECT TenLoai FROM DanhMucLoaiTaiKhoan WHERE TinhChiPhiKD = 1 ORDER BY TenLoai`)).recordset.map(r => r.TenLoai);
 
-  const doanhThuThuan = tien(tongPhieu.TienTruocVAT);
+  const doanhThuBan = tien(tongPhieu.TienTruocVAT);          // v9.63: doanh thu ban hang (chua VAT, chua tru tra lai)
+  const hangTraLai = tien(tongTra.TienTruocVAT);             // v9.63: hang ban bi tra lai (chua VAT)
+  const doanhThuThuan = tien(doanhThuBan - hangTraLai);      // = dashboard.js "DoanhThuThuan" tu v9.63
   const tongGiaVon = tien(chiTiet.reduce((s, r) => s + r.GiaVon, 0));
   const laiGop = tien(doanhThuThuan - tongGiaVon);
   const tongChiPhi = tien(chiPhi.reduce((s, r) => s + r.SoTien, 0));
@@ -859,6 +916,11 @@ async function baoCaoKinhDoanh(pool, ky) {
     tong: {
       SoPhieu: tongPhieu.SoPhieu, TongSLCai: so(tongPhieu.TongSLCai),
       TongTienHang: tien(tongPhieu.TongTienHang), TienCKNPP: tien(tongPhieu.TienCKNPP),
+      DoanhThuBan: doanhThuBan,
+      // v9.63: hang tra lai trong ky (PhieuNhapLai) — ca tien lan phieu/cai de man hinh ghi ro
+      HangTraLai: hangTraLai, SoPhieuTra: so(tongTra.SoPhieu), TongSLCaiTra: so(tongTra.TongSLCai),
+      TongTienHangTra: tien(tongTra.TongTienHang), TienCKNPPTra: tien(tongTra.TienCKNPP),
+      TienVATTra: tien(tongTra.TienVAT), TongThanhToanTra: tien(tongTra.TongThanhToan),
       DoanhThuThuan: doanhThuThuan, TienVAT: tien(tongPhieu.TienVAT),
       TongThanhToan: tien(tongPhieu.TongThanhToan),
       GiaVon: tongGiaVon, LaiGop: laiGop,
@@ -870,8 +932,11 @@ async function baoCaoKinhDoanh(pool, ky) {
     loaiCPKD,
     chiNgoaiBaoCao: { SoTien: tien(chiNgoai.SoTien), SoPhieu: chiNgoai.SoPhieu },
     coBangGiaVon: coGiaVon,
-    ghiChu: 'Doanh thu thuần = tiền hàng sau chiết khấu NPP, CHƯA gồm thuế GTGT (thuế GTGT là khoản thu hộ, không phải doanh thu). '
-      + 'Giá vốn lấy từ bảng "Giá vốn hàng hóa" — mã nào chưa khai sẽ tính 0 và được liệt kê để bổ sung. '
+    coBangNhapLai: coNhapLai,
+    ghiChu: 'Doanh thu thuần = tiền hàng sau chiết khấu NPP, CHƯA gồm thuế GTGT (thuế GTGT là khoản thu hộ, không phải doanh thu), '
+      + 'TRỪ hàng khách trả lại trong kỳ (phiếu nhập lại, theo ngày nhập) — cùng cách tính với Dashboard kinh doanh. '
+      + 'Doanh thu từng mã hàng = tiền hàng dòng × (1 − CK NPP của CHÍNH phiếu đó) — số thực thu theo phiếu bán hàng, không phân bổ tỷ lệ chung; tổng các dòng có thể lệch vài đồng so với dòng tổng do làm tròn. '
+      + 'Giá vốn = (số cái bán − số cái trả lại) × giá vốn, lấy từ bảng "Giá vốn hàng hóa" — mã nào chưa khai sẽ tính 0 và được liệt kê để bổ sung. '
       + 'Chi phí kinh doanh CHỈ gồm chi phí NGOÀI giá vốn (bán hàng, quản lý…); tiền mua vải/phụ kiện/gia công đã nằm trong giá vốn nên không tính lại ở đây.'
   };
 }
@@ -1004,7 +1069,7 @@ router.get('/tonhanghoa/chitiet', ...CN('tonhanghoa'), async (req, res) => {
   const rows = [];
   nhap.forEach(r => { if (so(r.PhatSinh)) rows.push({
     Ngay: r.Ngay,
-    Loai: r.LoaiNhap === 'SanXuat' ? 'Nhập kho (từ sản xuất)' : 'Nhập kho (từ NCC)',
+    Loai: r.LoaiNhap === 'SanXuat' ? 'Nhập kho (từ sản xuất)' : (r.LoaiNhap === 'TonDauKy' ? 'Nhập kho (tồn đầu kỳ / khác)' : 'Nhập kho (từ NCC)'),   // v9.66
     SoPhieu: r.SoPhieu, CtLoai: ctLoai('PNKH'), CtID: r.PhieuNKID,
     DoiTuong: r.DoiTuong || '', Nhap: lam2(r.PhatSinh), Xuat: 0 }); });
   /* v7.38: dong NHAP LAI. `PhatSinh` da duoc quy ve DON VI CHINH ngay trong cau SQL (xem
@@ -1266,20 +1331,40 @@ router.get('/giavon', ...CN('giavon'), async (req, res) => {
   if (!(await coBang(pool, 'GiaVonHangHoa'))) {
     return res.status(400).json({ success: false, message: 'Chưa chạy migration_v672.sql — bảng GiaVonHangHoa chưa tồn tại.' });
   }
+  /* v9.64 (Nguyen 16/11): "Lai 1 cai" phai lay GIA THUC THU theo phieu ban hang — sau CK shop (ThanhTien dong)
+     VA sau CK NPP cua chinh phieu (ty le TienTruocVAT/TongTienHang), chua VAT — chu khong phai gia niem yet
+     TheKhoHangHoa.GiaBan. Binh quan tren MOI phieu ban chua huy (khong theo ky — tab nay khong co ky).
+     Ma chua ban lan nao: LaiGop1 tinh tam theo gia niem yet, co TheoNiemYet=true de man hinh ghi ro. */
+  const coBan = await coBang(pool, 'PhieuBanHang');
   const rows = (await pool.request().query(`
     SELECT h.MaHangID, h.MaHang, h.TenHang, h.LoaiHang, h.GiaBan, h.DonViCoBan, d.MaDH,
            gv.GiaVon, gv.NguonGia, gv.MaDHNguon, gv.NgayCapNhat, gv.GhiChu
+           ${coBan ? ', b.SLBan, b.TienSauCK, b.LanBanCuoi' : ''}
     FROM TheKhoHangHoa h
     LEFT JOIN GiaVonHangHoa gv ON gv.MaHangID = h.MaHangID
     LEFT JOIN DonHangSanXuat d ON d.DonHangID = h.DonHangID
-    ORDER BY h.MaHang`)).recordset.map(r => ({
-      MaHangID: r.MaHangID, MaHang: r.MaHang, TenHang: r.TenHang, LoaiHang: r.LoaiHang,
-      GiaBan: tien(r.GiaBan), DonVi: r.DonViCoBan, MaDH: r.MaDH || null,
-      GiaVon: r.GiaVon == null ? null : tien(r.GiaVon),
-      NguonGia: r.NguonGia || '', MaDHNguon: r.MaDHNguon || '', NgayCapNhat: r.NgayCapNhat || null,
-      GhiChu: r.GhiChu || '',
-      LaiGop1: (r.GiaVon != null && so(r.GiaBan) > 0) ? tien(so(r.GiaBan) - so(r.GiaVon)) : null
-    }));
+    ${coBan ? `LEFT JOIN (
+      SELECT ct.MaHangID, SUM(ct.SoLuongCai) AS SLBan, MAX(p.NgayBan) AS LanBanCuoi,
+             SUM(ct.ThanhTien * ISNULL(CAST(p.TienTruocVAT AS FLOAT) / NULLIF(CAST(p.TongTienHang AS FLOAT), 0), 1)) AS TienSauCK
+      FROM PhieuBanHangChiTiet ct JOIN PhieuBanHang p ON p.PhieuBHID = ct.PhieuBHID
+      WHERE p.TrangThai <> N'Đã hủy'
+      GROUP BY ct.MaHangID) b ON b.MaHangID = h.MaHangID` : ''}
+    ORDER BY h.MaHang`)).recordset.map(r => {
+      const slBan = so(r.SLBan);
+      const giaBanTT = slBan > 0 ? tien(so(r.TienSauCK) / slBan) : null;   // gia thuc thu binh quan 1 cai (sau CK shop + CK NPP, chua VAT)
+      const giaDungTinhLai = giaBanTT != null ? giaBanTT : so(r.GiaBan);
+      return {
+        MaHangID: r.MaHangID, MaHang: r.MaHang, TenHang: r.TenHang, LoaiHang: r.LoaiHang,
+        GiaBan: tien(r.GiaBan), DonVi: r.DonViCoBan, MaDH: r.MaDH || null,
+        GiaVon: r.GiaVon == null ? null : tien(r.GiaVon),
+        NguonGia: r.NguonGia || '', MaDHNguon: r.MaDHNguon || '', NgayCapNhat: r.NgayCapNhat || null,
+        GhiChu: r.GhiChu || '',
+        GiaBanTT: giaBanTT, SLBan: slBan, LanBanCuoi: r.LanBanCuoi || null,                       // v9.64
+        TheoNiemYet: giaBanTT == null,
+        LaiGop1: (r.GiaVon != null && giaDungTinhLai > 0) ? tien(giaDungTinhLai - so(r.GiaVon)) : null,
+        TyLeLai1: (r.GiaVon != null && giaDungTinhLai > 0) ? lam2((giaDungTinhLai - so(r.GiaVon)) / giaDungTinhLai * 100) : null
+      };
+    });
   res.json({ success: true, data: rows });
 });
 
@@ -1506,6 +1591,7 @@ router.get('/export', requireAuth, requirePermission('BAOCAO', 'view'), async (r
         { K: '  Tổng phiếu bán hàng', V: c.PhaiThu_BanHang },
         { K: '  Điều chỉnh', V: c.PhaiThu_DieuChinh },
         { K: '  Đã thu', V: -c.PhaiThu_DaThu },
+        { K: '  Hàng khách trả lại', V: -(c.PhaiThu_TraLai || 0) },   // v9.86
         { K: '', V: null },
         { K: 'PHẢI TRẢ NHÀ CUNG CẤP', V: c.PhaiTra },
         { K: '  Nhập vải', V: c.PhaiTra_Vai },
@@ -1522,22 +1608,29 @@ router.get('/export', requireAuth, requirePermission('BAOCAO', 'view'), async (r
       ], [
         { K: 'Tổng tiền hàng (sau CK shop)', V: t.TongTienHang },
         { K: 'Chiết khấu NPP', V: -t.TienCKNPP },
-        { K: 'DOANH THU THUẦN (chưa gồm thuế GTGT)', V: t.DoanhThuThuan },
-        { K: 'Giá vốn hàng bán', V: -t.GiaVon },
+        { K: 'Doanh thu bán hàng (chưa gồm thuế GTGT)', V: t.DoanhThuBan },
+        { K: `Hàng bán bị trả lại (${t.SoPhieuTra || 0} phiếu nhập lại, chưa VAT)`, V: -t.HangTraLai },   // v9.63
+        { K: 'DOANH THU THUẦN (chưa gồm thuế GTGT, đã trừ hàng trả lại)', V: t.DoanhThuThuan },
+        { K: 'Giá vốn hàng bán (đã trừ hàng trả lại)', V: -t.GiaVon },
         { K: 'LÃI GỘP', V: t.LaiGop },
         { K: 'Chi phí kinh doanh', V: -t.ChiPhiKD },
         { K: 'LỢI NHUẬN', V: t.LoiNhuan },
         { K: '', V: null },
         { K: 'Thuế GTGT đầu ra (thu hộ, không tính doanh thu)', V: t.TienVAT },
-        { K: 'Tổng thanh toán trên phiếu', V: t.TongThanhToan },
+        { K: 'Tổng thanh toán trên phiếu bán hàng', V: t.TongThanhToan },
+        { K: 'Tổng trừ công nợ trên phiếu nhập lại', V: t.TongThanhToanTra },
         { K: 'Số phiếu bán hàng', V: t.SoPhieu },
-        { K: 'Tổng SL bán (cái)', V: t.TongSLCai }
+        { K: 'Tổng SL bán (cái)', V: t.TongSLCai },
+        { K: 'Số phiếu nhập lại', V: t.SoPhieuTra },
+        { K: 'Tổng SL trả lại (cái)', V: t.TongSLCaiTra }
       ]);
       themSheet(wb, 'Theo mã hàng', [
         { header: 'Mã hàng', key: 'MaHang', width: 18 },
         { header: 'Tên hàng', key: 'TenHang', width: 34 },
-        { header: 'SL bán (cái)', key: 'SLCai', width: 12 },
-        { header: 'Doanh thu', key: 'DoanhThu', width: 16 },
+        { header: 'SL bán (cái)', key: 'SLCaiBan', width: 12 },
+        { header: 'SL trả lại (cái)', key: 'SLCaiTra', width: 13 },
+        { header: 'SL thuần (cái)', key: 'SLCai', width: 12 },
+        { header: 'Doanh thu thuần', key: 'DoanhThu', width: 16 },
         { header: 'Giá vốn 1 cái', key: 'GiaVon1', width: 14 },
         { header: 'Giá vốn', key: 'GiaVon', width: 16 },
         { header: 'Lãi gộp', key: 'LaiGop', width: 16 },

@@ -57,6 +57,95 @@ window.ModuleKhoHang = (function () {
     return Math.round(laDonViGop(donVi, mh) ? n * he : n);
   }
 
+  /* ================================================================================================
+     v9.50 — QUÉT MÃ VẠCH BẰNG CAMERA MÁY TÍNH BẢNG ĐỂ THÊM HÀNG VÀO PHIẾU BÁN HÀNG THEO SỐ RI
+     (Nguyen 13/11/2026: "Lập phiếu bán hàng thêm chức năng quét mã vạch qua camera máy tính bảng để
+      thêm hàng theo số lượng ri. Đối chiếu tên khách và mã hàng ở khách đặt hàng nếu có thì chuyển
+      trạng thái bên khách đặt hàng đã xuất hàng luôn.")
+     ------------------------------------------------------------------------------------------------
+     · Tem in MÃ VẠCH THEO MÃ HÀNG (TheKhoHangHoa.MaBarcode, nhập tay — xem utils/traCuuHangCongKhai.js),
+       KHÔNG theo màu. Mỗi lần quét = +1 Ri = +LoaiRi đơn vị trên dòng (cột "Quy đổi" của form vốn đã
+       hiện Ri = SL ÷ LoaiRi, nên đây là cùng một hệ số, không bày thêm hệ số thứ hai).
+     · Màu: mã vạch không nói màu ⇒ tự chọn khi KHÔNG THỂ nhầm (mã chỉ còn 1 màu, hoặc đơn khách khớp
+       chỉ đặt 1 màu); còn lại để trống, người lập chọn trên dòng — dòng không màu thì form vốn đã chặn lưu.
+     · Khớp đơn khách đặt: cùng KHÁCH (tên chuẩn hoá chuanTenKhach — cùng luật với modal Chọn đơn — hoặc
+       khách danh mục liên kết theo ID) + cùng MÃ HÀNG (+ cùng màu khi dòng đã có màu). Đơn khớp được gắn
+       vào `donIDs` của dòng ⇒ lúc lưu, backend (ghiChiTietPhieu, v7.22) chuyển đơn sang "Đã xuất hàng"
+       y như dòng lấy từ nút "Chọn đơn". KHÔNG có đường ghi mới ở máy chủ.
+     · Lưới an toàn: SL quét NHỎ HƠN SL khách đặt ⇒ hỏi trước khi lưu (đơn vẫn đóng với SL đặt giữ
+       nguyên, phiếu chỉ trừ tồn theo số trên phiếu).
+     Các hàm dưới đây là HÀM THUẦN (không đụng DOM) để bộ tự kiểm chạy thẳng — cắt theo hai dấu mốc.
+     ================================================================================================ */
+  /* === v9.50 QUET MA VACH — BAT DAU === */
+  /* Chuẩn hoá để SO KHỚP mã camera đọc với MaBarcode/MaHang: bỏ dấu, hoa hết, bỏ mọi ký tự không phải
+     chữ/số — bản sao của chuanHoa() ở backend/utils/traCuuHangCongKhai.js (sửa một bên phải sửa bên kia).
+     Dấu tổ hợp viết bằng RegExp('\\u0300-\\u036f'), không gõ ký tự tổ hợp vào mã nguồn. */
+  const DAU_TO_HOP_QUET = new RegExp('[\\u0300-\\u036f]', 'g');
+  function chuanMaQuet(s) {
+    return String(s == null ? '' : s).normalize('NFD').replace(DAU_TO_HOP_QUET, '')
+      .replace(/đ/g, 'd').replace(/Đ/g, 'D').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+  /* Tìm mã hàng theo chuỗi camera đọc được. Thứ tự: MÃ VẠCH (MaBarcode) → MÃ HÀNG (MaHang, phòng tem in
+     thẳng mã hàng) → mã vạch bỏ số 0 đầu (tem UPC-A 12 số, máy đọc ra EAN-13 có số 0 đứng trước).
+     Trả { kieu: 'mot' | 'nhieu' | 'khong', ds, theo, ma }. 'nhieu' = MaBarcode nhập tay bị trùng giữa
+     nhiều mã hàng ⇒ KHÔNG chọn bừa (cùng luật "cấm đoán" với traCuuHangCongKhai). */
+  function timHangTheoMaQuet(items, text) {
+    const c = chuanMaQuet(text);
+    const khong = { kieu: 'khong', ds: [], theo: '', ma: c };
+    if (!c) return khong;
+    const thu = (lay, khoa, theo) => {
+      const ds = (items || []).filter(it => lay(it) === khoa);
+      return ds.length ? { kieu: ds.length === 1 ? 'mot' : 'nhieu', ds, theo, ma: c } : null;
+    };
+    const c0 = c.replace(/^0+/, '');
+    return thu(it => chuanMaQuet(it.MaBarcode), c, 'ma-vach')
+      || thu(it => chuanMaQuet(it.MaHang), c, 'ma-hang')
+      || (c0 && c0 !== c ? thu(it => chuanMaQuet(it.MaBarcode), c0, 'ma-vach') : null)
+      || khong;
+  }
+  /* 1 Ri = bao nhiêu đơn vị trên dòng phiếu. Form ghi SL theo ĐVT CHÍNH của mã (Cái/Bộ…) và cột
+     "Quy đổi" hiện Ri = SL ÷ LoaiRi ⇒ +1 Ri = +LoaiRi. Mã chưa khai hệ số (LoaiRi ≤ 1): mỗi lần quét
+     = +1 đơn vị, kèm cờ `khongCoRi` để màn hình nói thẳng thay vì im lặng đếm sai. */
+  function heSoRiQuet(it) {
+    const he = Number(it && it.LoaiRi) || 1;
+    return he > 1 ? { he, khongCoRi: false } : { he: 1, khongCoRi: true };
+  }
+  /* Đơn khách đặt KHỚP một dòng quét. `dsDon` = kết quả GET /api/banhang/donchoxuat (đơn đang chờ,
+     chưa gắn phiếu). dk = { tenKhach, khachHangId, maHangId, mauSacId }.
+     · Đơn Đi tuyến (ShopID) KHÔNG tự khớp: phiếu của đơn đó phải ghi cho NPP + gắn shop/nhân viên
+       (v7.26) — chỉ nút "Chọn đơn" làm đúng việc đó.
+     · Lọc lại trạng thái + PhieuBHID ở đây dù backend đã lọc: hàm thuần phải tự đứng được. */
+  function donKhopDongQuet(dsDon, dk) {
+    const ten = chuanTenKhach(dk && dk.tenKhach);
+    const id = dk && dk.khachHangId != null && dk.khachHangId !== '' ? String(dk.khachHangId) : '';
+    return (dsDon || []).filter(d => {
+      if (!d || String(d.MaHangID) !== String(dk.maHangId)) return false;
+      if (d.ShopID || d.PhieuBHID) return false;
+      if (['Chờ xác nhận', 'Chờ xử lý'].indexOf(d.TrangThai) === -1) return false;
+      const khopTen = !!ten && (chuanTenKhach(d.TenKhach) === ten || chuanTenKhach(d.TenKhachDanhMuc) === ten);
+      const khopId = !!id && d.KhachHangIDLienKet != null && String(d.KhachHangIDLienKet) === id;
+      if (!khopTen && !khopId) return false;
+      if (dk.mauSacId) return String(d.MauSacID) === String(dk.mauSacId);
+      return true;
+    });
+  }
+  /* Màu TỰ CHỌN cho tem vừa quét (mã vạch chỉ theo MÃ HÀNG, các màu dùng chung một mã vạch — Nguyen
+     xác nhận 13/11): CHỈ khi mã có đúng MỘT màu. Mã nhiều màu LUÔN hiện nút màu để người quét bấm —
+     không đoán theo đơn khách (khách đặt Đen nhưng tem trong tay có thể là Trắng), và cũng KHÔNG đoán
+     theo "màu duy nhất còn khả dụng": khả dụng = tồn − đang giữ, mà "đang giữ" gồm chính đơn của khách
+     này ⇒ khách đặt Đen đúng bằng tồn thì Đen khả dụng 0, máy sẽ tự chọn Trắng cho tem Đen trong tay —
+     sai im lặng (rà chéo lần 2 bắt). `dsMau` = các dòng chiTiet (vw_TonTheoMau) của mã. */
+  function mauChoDongQuet(dsMau) {
+    const ds = dsMau || [];
+    return ds.length === 1 ? String(ds[0].MauSacID) : '';
+  }
+  /* Màu KHÁCH ĐẶT (đơn khớp chỉ đặt đúng 1 màu) — chỉ để ĐÁNH DẤU ★ trên nút màu, không tự chọn. */
+  function mauKhachDat(dsDonKhop) {
+    const mauDon = [...new Set((dsDonKhop || []).map(d => (d && d.MauSacID != null ? String(d.MauSacID) : '')).filter(Boolean))];
+    return mauDon.length === 1 ? mauDon[0] : '';
+  }
+  /* === v9.50 QUET MA VACH — KET THUC === */
+
   /* v8.97 — Nguyen: "thẻ kho hàng hóa, cột Nguồn hàng nếu là nhà SX điền thêm lệnh SX và có thể click
      vào xem được lệnh đó".
      Danh sách lệnh do backend gộp sẵn (r.LenhSX[]: thẻ tạo tay có chọn lệnh + mọi phiếu nhập kho loại
@@ -146,6 +235,9 @@ window.ModuleKhoHang = (function () {
     // v7.59: theo dõi hàng GỬI MẪU / CHO KHÁCH MƯỢN. Phiếu bán hàng vẫn là luồng duy nhất để giao và
     // ghi công nợ; tab này chỉ ĐỌC ra "còn ở khách bao nhiêu, bao lâu rồi".
     { key: 'hangmau', label: 'Hàng mẫu ở khách' },
+    // v9.75: HÀNG KÝ GỬI — xuất ký gửi (không công nợ, không trừ tồn), báo bán kỳ ⇒ phiếu bán hàng thật, trả về.
+    // Code ở module.kygui.js; quyền KHOHANG/kygui (migration_v901).
+    { key: 'kygui', label: 'Hàng ký gửi' },
       // v5.17 (muc 1.2): 1 tab duy nhat gom ca "Tạo báo giá" (muc 1.2.1) va "Danh sách báo giá"
       // (muc 1.2.2) - dung 1 chuc nang ChucNang('KHOHANG','baogiaaloha') duy nhat cho ca 2, giong
       // dung cach nguoi dung mo ta chung la 2 "chuc nang con" cua CUNG 1 chuc nang cha "Báo giá Aloha".
@@ -188,6 +280,14 @@ window.ModuleKhoHang = (function () {
         return;
       }
       return window.ModuleNhapKho.render(container, user, activeTab);
+    }
+    if (activeTab === 'kygui') {   // v9.75
+      if (!window.ModuleKyGui) {
+        document.getElementById('khBody').innerHTML =
+          '<div class="empty-hint">Chưa nạp module.kygui.js — copy file này lên rồi Ctrl+F5.</div>';
+        return;
+      }
+      return window.ModuleKyGui.render(container, user, activeTab);
     }
     if (activeTab === 'nhaplai') {
       if (!window.ModuleNhapLai) {
@@ -405,7 +505,9 @@ window.ModuleKhoHang = (function () {
     const dmList = [...new Set(tongHop.map(r => r.TenTheKho).filter(Boolean))].sort();
     body.innerHTML = `
       <div class="toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <input type="text" id="khSearch" placeholder="Tìm mã hàng / tên hàng / lệnh SX / số phiếu nhập...">
+        <input type="text" id="khSearch" placeholder="Tìm mã hàng / tên hàng / mã vạch / lệnh SX / số phiếu nhập...">
+        ${/* v9.51: quét tem bằng camera để TÌM mã hàng trong danh sách (điền chuỗi đọc được vào ô tìm). */''}
+        <button type="button" class="btn small secondary" id="khQuetTim" title="Quét mã vạch trên tem bằng camera để tìm mã hàng">📷</button>
         <select id="khLoai"><option value="">-- Loại hàng --</option>${loaiList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <select id="khDanhMuc"><option value="">-- Danh mục --</option>${dmList.map(x => `<option>${escapeHtml(x)}</option>`).join('')}</select>
         <a class="btn small secondary" href="/api/khohang/items/export">⬇️ Xuất Excel</a>
@@ -436,7 +538,7 @@ window.ModuleKhoHang = (function () {
         ${perm.canEdit ? '<button type="button" class="btn small" id="btnLuuCK">💾 Lưu tỷ lệ</button>' : ''}
         <span class="empty-hint" style="padding:0;">Giá shop = Giá bán − CK shop. <b>Giá NPP = giá shop − CK NPP</b> (chiết khấu chồng, không tính lại trên giá bán).</span>
       </div>
-      <table><thead><tr>${perm.canEdit ? `<th style="width:28px;"><input type="checkbox" id="khChonTatCa" title="Chọn tất cả dòng đang hiển thị"></th>` : ''}<th>Ảnh</th><th>Mã hàng</th><th>Tên hàng</th><th>Nguồn hàng</th><th>Loại hàng</th><th>Giá bán</th><th>Giá sau CK shop<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.shop)}%)</div></th><th>Giá sau CK NPP<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.npp)}% trên giá shop)</div></th><th>Danh mục</th><th>Tổng nhập<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tổng xuất<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tồn quy ra Cái</th><th>Tồn (Ri)</th><th>Khả dụng<div style="font-weight:400;font-size:11px;">(theo Ri, trừ đơn đang chờ)</div></th><th style="width:130px">Thao tác</th></tr></thead>
+      <table><thead><tr>${perm.canEdit ? `<th style="width:28px;"><input type="checkbox" id="khChonTatCa" title="Chọn tất cả dòng đang hiển thị"></th>` : ''}<th>Ảnh</th><th>Mã hàng</th><th>Tên hàng</th><th style="width:150px;">Mã vạch<div style="font-weight:400;font-size:11px;">(tem — dùng để quét)</div></th><th>Nguồn hàng</th><th>Loại hàng</th><th>Giá bán</th><th>Giá sau CK shop<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.shop)}%)</div></th><th>Giá sau CK NPP<div style="font-weight:400;font-size:11px;">(${fmtNumber(tyLeCK.npp)}% trên giá shop)</div></th><th>Danh mục</th><th>Tổng nhập<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tổng xuất<div style="font-weight:400;font-size:11px;">(theo Ri)</div></th><th>Tồn quy ra Cái</th><th>Tồn (Ri)</th><th>Khả dụng<div style="font-weight:400;font-size:11px;">(theo Ri, trừ đơn đang chờ)</div></th><th style="width:130px">Thao tác</th></tr></thead>
       <tbody>${tongHop.map(r => {
         const hetHang = Number(r.TongTon) <= 0;
         // v5.41.5: CẢ 2 cột đều hiện tồn quy đổi. ĐVT (Cái) = số cái; ĐVT (Ri) = số ri kèm hệ số "Ri{hệ số}".
@@ -458,7 +560,7 @@ window.ModuleKhoHang = (function () {
         // v8.97: ô tìm kiếm khớp MỌI lệnh đã nhập mã này (trước chỉ MaDH của thẻ tạo tay — hầu hết trống)
         // và MỌI số phiếu nhập kho — gõ "NK2600" là ra các mã của phiếu đó.
         const chuoiLenh = dsLenhSXCuaDong(r).map(l => l.MaDH).concat(dsPhieuNhapCuaDong(r).map(p => p.SoPhieu)).join(' ');
-        return `<tr data-loai="${escapeHtml(r.TenNhom || '')}" data-dm="${escapeHtml(r.TenTheKho || '')}" data-search="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + chuoiLenh).toLowerCase())}" ${hetHang ? 'style="background:#fdecea;"' : ''}>
+        return `<tr data-loai="${escapeHtml(r.TenNhom || '')}" data-dm="${escapeHtml(r.TenTheKho || '')}" data-search="${escapeHtml(((r.MaHang || '') + ' ' + (r.TenHang || '') + ' ' + (r.MaBarcode || '') + ' ' + chuoiLenh).toLowerCase())}" ${hetHang ? 'style="background:#fdecea;"' : ''}>
         ${/* v8.24: checkbox chuyển danh mục hàng loạt — chỉ hiện khi có quyền Sửa (khớp điều kiện nút
              Chuyển danh mục và điều kiện quyền của backend PUT /items/bulk-danhmuc). */''}
         ${perm.canEdit ? `<td><input type="checkbox" class="kh-chon" data-id="${r.MaHangID}"></td>` : ''}
@@ -476,6 +578,12 @@ window.ModuleKhoHang = (function () {
             : ''
         }</td>
         <td>${escapeHtml(r.TenHang)}</td>
+        ${/* v9.51: MÃ VẠCH sửa ngay tại dòng (✎ → ô nhập + 📷 quét tem + 💾). Chỉ ghi đúng cột MaBarcode qua
+             PUT /items/:id/mavach, không đi qua PUT /items/:id (xem ghi chú ở backend). */''}
+        <td class="kh-mavach" data-id="${r.MaHangID}" data-mahang="${escapeHtml(r.MaHang)}" data-mavach="${escapeHtml(r.MaBarcode || '')}">
+          <span class="kh-mavach-text" style="font-family:monospace;">${r.MaBarcode ? escapeHtml(r.MaBarcode) : '<span style="color:#bbb;">— chưa có —</span>'}</span>
+          ${perm.canEdit ? `<button type="button" class="btn small secondary act-mavach" title="Sửa / quét mã vạch của tem" style="padding:1px 6px;margin-left:4px;">✎</button>` : ''}
+        </td>
         ${/* v8.97: nhãn + danh sách lệnh SX bấm được (xem oNguonHangHtml). */''}
         <td>${oNguonHangHtml(r)}</td>
         <td>${escapeHtml(r.TenNhom || '')}</td>
@@ -504,7 +612,7 @@ window.ModuleKhoHang = (function () {
           ${perm.canDelete ? `<button type="button" class="btn small danger act-del" data-id="${r.MaHangID}" data-mahang="${escapeHtml(r.MaHang)}">Xóa</button>` : ''}
         </td>
       </tr>`;
-      }).join('') || `<tr><td colspan="${perm.canEdit ? 16 : 15}" class="empty-hint">Chưa có thẻ kho nào</td></tr>`}</tbody></table>`;
+      }).join('') || `<tr><td colspan="${perm.canEdit ? 17 : 16}" class="empty-hint">Chưa có thẻ kho nào</td></tr>`}</tbody></table>`;
 
     // Luu y: truyen null (KHONG phai chiTiet) khi tao moi - chiTiet la mang mau CUA TAT CA ma hang,
     // truyen nham vao day se lam form "Tao the kho moi" hien sot mau cua nhung ma hang khac (bug cu).
@@ -610,6 +718,70 @@ window.ModuleKhoHang = (function () {
         renderItems(perm);
       } catch (err) { btn.disabled = false; toast(err.message, 'error'); }
     }));
+    /* ============================================================================================
+       v9.51 — MÃ VẠCH NGAY TẠI DÒNG: bấm ✎ → ô nhập thay chỗ chữ, kèm 📷 (quét tem bằng camera, một
+       lần là điền) · 💾 lưu · ✕ bỏ. Lưu qua PUT /items/:id/mavach (chỉ một cột). Không vẽ lại cả bảng
+       sau khi lưu — chỉ đổi chữ + data-mavach + data-search của dòng đó (bảng vài trăm dòng, đang lọc).
+       Trùng mã vạch với mã khác → máy chủ trả 409, ô nhập giữ nguyên để sửa.
+       ============================================================================================ */
+    function moSuaMaVach(td) {
+      if (td.querySelector('.kh-mavach-input')) return;   // đang mở rồi
+      const cu = td.dataset.mavach || '';
+      const goc = td.innerHTML;
+      td.innerHTML = `<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+          <input type="text" class="kh-mavach-input" value="${escapeHtml(cu)}" maxlength="50" placeholder="mã vạch trên tem" style="width:120px;font-family:monospace;">
+          <button type="button" class="btn small secondary kh-mavach-quet" title="Quét tem bằng camera">📷</button>
+          <button type="button" class="btn small kh-mavach-luu" title="Lưu">💾</button>
+          <button type="button" class="btn small secondary kh-mavach-huy" title="Bỏ">✕</button>
+        </div>`;
+      const inp = td.querySelector('.kh-mavach-input');
+      const dong = () => { td.innerHTML = goc; noiNutMaVach(td); };
+      td.querySelector('.kh-mavach-huy').addEventListener('click', dong);
+      td.querySelector('.kh-mavach-quet').addEventListener('click', () => {
+        openQrScanner((text) => { inp.value = String(text || '').trim(); inp.focus(); }, {
+          maVach: true, tieuDe: 'Quét mã vạch trên tem — ' + td.dataset.mahang,
+          huongDan: 'Đưa <b>mã vạch trên tem</b> của mã <b>' + escapeHtml(td.dataset.mahang) + '</b> vào khung ngang. Đọc được là tự điền vào ô, bấm 💾 để lưu.'
+        });
+      });
+      const luu = async () => {
+        const moi = inp.value.trim();
+        const nutLuu = td.querySelector('.kh-mavach-luu');
+        nutLuu.disabled = true;
+        try {
+          const r = await apiPut('/api/khohang/items/' + td.dataset.id + '/mavach', { maBarcode: moi });
+          const daLuu = (r.data && r.data.MaBarcode) || '';
+          td.dataset.mavach = daLuu;
+          const tr = td.closest('tr');
+          if (tr) tr.dataset.search = ((tr.dataset.search || '').replace(' ' + cu.toLowerCase() + ' ', ' ') + ' ' + daLuu.toLowerCase()).trim();
+          const it = tongHop.find(x => String(x.MaHangID) === td.dataset.id);
+          if (it) it.MaBarcode = daLuu || null;
+          td.innerHTML = `<span class="kh-mavach-text" style="font-family:monospace;">${daLuu ? escapeHtml(daLuu) : '<span style="color:#bbb;">— chưa có —</span>'}</span>`
+            + ` <button type="button" class="btn small secondary act-mavach" title="Sửa / quét mã vạch của tem" style="padding:1px 6px;margin-left:4px;">✎</button>`;
+          noiNutMaVach(td);
+          toast(`${td.dataset.mahang}: ${daLuu ? 'mã vạch = ' + daLuu : 'đã xóa mã vạch'}.`, 'success');
+        } catch (err) { nutLuu.disabled = false; toast(err.message, 'error'); inp.focus(); }
+      };
+      td.querySelector('.kh-mavach-luu').addEventListener('click', luu);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); luu(); } else if (e.key === 'Escape') { e.preventDefault(); dong(); } });
+      inp.focus(); inp.select();
+    }
+    function noiNutMaVach(td) {
+      const b = td.querySelector('.act-mavach');
+      if (b) b.addEventListener('click', () => moSuaMaVach(td));
+    }
+    body.querySelectorAll('td.kh-mavach').forEach(noiNutMaVach);
+    /* v9.51: quét tem để TÌM — điền chuỗi đọc được vào ô tìm (data-search của dòng có cả mã vạch). */
+    const btnQuetTim = body.querySelector('#khQuetTim');
+    if (btnQuetTim) btnQuetTim.addEventListener('click', () => {
+      openQrScanner((text) => {
+        const o = body.querySelector('#khSearch');
+        if (!o) return;
+        o.value = String(text || '').trim();
+        applyKhFilter();
+        const conHien = [...body.querySelectorAll('table tbody tr')].filter(tr => tr.dataset.search !== undefined && tr.style.display !== 'none').length;
+        toast(conHien ? `Tìm "${o.value}": ${conHien} mã hàng.` : `Không có mã hàng nào mang mã vạch "${o.value}" — bấm ✎ ở cột Mã vạch để gán cho mã hàng.`, conHien ? 'success' : 'error');
+      }, { maVach: true, tieuDe: 'Quét mã vạch để tìm mã hàng', huongDan: 'Đưa mã vạch trên tem vào khung ngang — đọc được là lọc danh sách theo mã đó.' });
+    });
     body.querySelectorAll('.act-edit').forEach(btn => btn.addEventListener('click', () => {
       const row = tongHop.find(r => String(r.MaHangID) === btn.dataset.id);
       /* v6.89: BỎ các dòng chỉ tồn tại trên PHIẾU NHẬP KHO (ID = null, chưa có trong thẻ kho).
@@ -3766,7 +3938,7 @@ window.ModuleKhoHang = (function () {
     /* v6.23: 2 nút này gọi API bên trong hàm async — PHẢI .catch, kẻo lỗi (vd 403 vì chưa cấp quyền
        chức năng "Thẻ kho / Tồn kho") làm "bấm nút không có gì xảy ra" (bài học cũ của dự án). */
     const b1 = body.querySelector('#btnPhieuMoi');
-    if (b1) b1.addEventListener('click', () => openPhieuBanHangForm(perm, []).catch(err => toast(err.message, 'error')));
+    if (b1) b1.addEventListener('click', () => moPhieuBanHangNhieuTab(perm, []).catch(err => toast(err.message, 'error')));   // v9.91
     const b2 = body.querySelector('#btnTuDon');
     if (b2) b2.addEventListener('click', () => openChonDonModal(perm).catch(err => toast(err.message, 'error')));
     /* v6.46: tải bằng fetch + Blob (không dùng <a download>) — backend có thể trả JSON lỗi (hết quyền,
@@ -3825,7 +3997,7 @@ window.ModuleKhoHang = (function () {
         /* v9.08: chặn NGAY tại đây, không để người dùng điền xong cả form rồi mới ăn 400 lúc Lưu.
            Lý do do backend tính (GET /phieu/:id trả LyDoKhongSua) nên hai đầu không thể lệch. */
         if (d.header && d.header.LyDoKhongSua) return toast(d.header.LyDoKhongSua, 'error', 10000);
-        await openPhieuBanHangForm(perm, [], d);
+        await moPhieuBanHangNhieuTab(perm, [], d);   // v9.91: mở trong khung tab, sửa xong vẫn ⊕ thêm phiếu mới được
       } catch (err) { toast(err.message, 'error'); }
     }));
     body.querySelectorAll('.act-huy').forEach(b => b.addEventListener('click', async () => {
@@ -4297,13 +4469,101 @@ window.ModuleKhoHang = (function () {
         toast('Các đơn đang tích thuộc NHIỀU nhà phân phối khác nhau — một phiếu bán hàng chỉ ghi cho một khách. Hãy tách thành nhiều phiếu.', 'error');
         return;
       }
-      openPhieuBanHangForm(perm, chon);
+      moPhieuBanHangNhieuTab(perm, chon);   // v9.91
     });
   }
 
   /* ---------- Form lên phiếu bán hàng (mới hoặc từ đơn đặt) ---------- */
   /* `phieuSua` = { header, chiTiet } khi SỬA phiếu đã có (v6.25.5); bỏ trống = lập phiếu mới. */
-  async function openPhieuBanHangForm(perm, donChon, phieuSua) {
+  /* ================================================================================================
+     🔴 v9.91 — NHIỀU HOÁ ĐƠN CÙNG LÚC (Nguyen 23/11: "Thêm đc tab khác khi đang làm phiếu")
+
+     Giống thanh "Hoá đơn 1 ✕ ⊕" của KiotViet: đang nhập dở một phiếu, bấm ⊕ mở phiếu thứ hai, nhảy
+     qua nhảy lại, lưu từng cái một. Dùng cho khách đứng chờ mà có người khác chen ngang.
+
+     CÁCH LÀM — giữ nguyên DOM của từng tab, chỉ ẩn/hiện:
+       · MỘT modal, trong đó có thanh tab + nhiều <div class="bh-pane">, mỗi pane là MỘT lần gọi
+         openPhieuBanHangForm() đầy đủ.
+       · Đổi tab = đổi display, KHÔNG vẽ lại. Nhờ vậy mọi state (mảng dòng hàng, ô đang gõ, vị trí
+         con trỏ, đơn khách đã gắn) nằm nguyên trong closure của lần gọi đó — không phải nghĩ ra
+         cách lưu/khôi phục trạng thái, và không có đường nào làm lẫn số giữa hai phiếu.
+       · id trong các pane trùng nhau là CHẤP NHẬN ĐƯỢC vì mọi tra cứu đều `pane.querySelector(...)`
+         (đã grep cả file: không chỗ nào dùng document.getElementById trong form bán hàng).
+
+     🔴 KHÔNG đụng gì tới lúc LƯU: mỗi tab gọi đúng API cũ với payload cũ. Nhiều tab chỉ là chuyện
+     màn hình — không có khái niệm "lưu hàng loạt", không gom phiếu, không giữ nháp sau khi đóng.
+     ================================================================================================ */
+  async function moPhieuBanHangNhieuTab(perm, donChon, phieuSua) {
+    const modal = openModal(`
+      <div class="bh-tabbar" id="bhTabBar"></div>
+      <div id="bhPanes"></div>`, { rong: true });
+    /* v10.04: nới cửa sổ cho RIÊNG phiếu bán hàng (xem khối .modal-backdrop.bh-rong trong style.css).
+       openModal trả về chính BACKDROP nên gắn class ở đây là sửa được cả đệm lẫn bề rộng modal. */
+    modal.classList.add('bh-rong');
+    const oTab = modal.querySelector('#bhTabBar');
+    const oPanes = modal.querySelector('#bhPanes');
+    const tabs = [];   // { id, nhan, pane, nut }
+    let dem = 0;
+
+    function veThanhTab() {
+      oTab.innerHTML = tabs.map(t => `<button type="button" class="bh-tab${t.hien ? ' dang-xem' : ''}" data-tab="${t.id}">
+          <span>${escapeHtml(t.nhan)}</span><span class="bh-tab-x" data-dong="${t.id}" title="Đóng hoá đơn này">✕</span>
+        </button>`).join('')
+        + `<button type="button" class="bh-tab-them" id="bhTabThem" title="Mở thêm một hoá đơn nữa (đang nhập dở vẫn giữ nguyên)">＋</button>`;
+      oTab.querySelectorAll('.bh-tab').forEach(b => b.addEventListener('click', (e) => {
+        if (e.target.classList.contains('bh-tab-x')) return;   // bấm ✕ thì để handler kia lo
+        chon(b.dataset.tab);
+      }));
+      oTab.querySelectorAll('.bh-tab-x').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); dong(b.dataset.dong); }));
+      oTab.querySelector('#bhTabThem').addEventListener('click', () => { themTab().catch(err => toast(err.message, 'error')); });
+    }
+    function chon(id) {
+      tabs.forEach(t => { t.hien = String(t.id) === String(id); t.pane.style.display = t.hien ? '' : 'none'; });
+      veThanhTab();
+    }
+    function dong(id) {
+      const t = tabs.find(x => String(x.id) === String(id));
+      if (!t) return;
+      /* Có dòng hàng mà đóng = mất công nhập — phải hỏi. Đếm .bh-row trong CHÍNH pane đó. */
+      if (t.pane.querySelectorAll('.bh-row').length && !confirm(`Đóng "${t.nhan}"? Các dòng hàng đang nhập dở sẽ mất.`)) return;
+      t.pane.remove();
+      tabs.splice(tabs.indexOf(t), 1);
+      if (!tabs.length) { closeModal(); return; }   // đóng tab cuối = đóng cả cửa sổ
+      chon(tabs[tabs.length - 1].id);
+    }
+    async function themTab(phieuSuaRieng, donChonRieng) {
+      const id = ++dem;
+      const pane = document.createElement('div');
+      pane.className = 'bh-pane';
+      oPanes.appendChild(pane);
+      const t = {
+        id,
+        nhan: phieuSuaRieng ? ('Sửa ' + (phieuSuaRieng.header.SoPhieu || '')) : ('Hoá đơn ' + id),
+        pane, hien: true
+      };
+      tabs.push(t);
+      chon(id);
+      try {
+        await openPhieuBanHangForm(perm, donChonRieng || [], phieuSuaRieng || null, {
+          veVao: (html) => { pane.innerHTML = html; return pane; },
+          dongTab: () => {
+            /* Gọi từ nút Hủy hoặc sau khi lưu xong. Không hỏi lại (lưu rồi thì còn gì mà mất). */
+            t.pane.remove();
+            tabs.splice(tabs.indexOf(t), 1);
+            if (!tabs.length) closeModal(); else chon(tabs[tabs.length - 1].id);
+          }
+        });
+      } catch (err) {
+        // Dựng form hỏng (mất mạng giữa chừng...) thì gỡ tab rỗng đi, đừng để lại cái vỏ trắng.
+        t.pane.remove(); tabs.splice(tabs.indexOf(t), 1);
+        if (!tabs.length) closeModal(); else chon(tabs[tabs.length - 1].id);
+        throw err;
+      }
+    }
+    await themTab(phieuSua, donChon);
+  }
+
+  async function openPhieuBanHangForm(perm, donChon, phieuSua, khung) {
     // Số phiếu xem trước + tỷ lệ mặc định
     try {
       const r = (await apiGet('/api/banhang/next-sophieu')).data;
@@ -4374,11 +4634,13 @@ window.ModuleKhoHang = (function () {
         gopDon.set(k, {
           idx: ++idx, maHangId: d.MaHangID, mauSacId: d.MauSacID, maHang: d.MaHang, tenHang: d.TenHang,
           tenMau: d.TenMau, soLuong: 0, donVi: 'Cái', loaiRi: d.LoaiRi, donViCoBan: d.DonViCoBan, donViQuyDoi: d.DonViQuyDoi,
-          giaBanLe: d.GiaBan, ckShop: ckMacDinh(d.MaHangID), donIDs: [], moTaDon: []
+          giaBanLe: d.GiaBan, ckShop: ckMacDinh(d.MaHangID), donIDs: [], moTaDon: [],
+          slDatCai: 0   // v9.50: tổng SL khách đặt (ĐVT chính) — mốc cho lưới "giao thiếu" khi quét mã vạch
         });
       }
       const g = gopDon.get(k);
       g.soLuong += cai;
+      g.slDatCai += cai;
       g.donIDs.push(d.DonID);
       g.moTaDon.push(`#${d.DonID} ${fmtNumber(d.SoLuongDat)} ${d.DonVi}`);
     });
@@ -4422,11 +4684,41 @@ window.ModuleKhoHang = (function () {
     // v7.17: các đơn khách người dùng chọn HỦY LUÔN khi xóa dòng khỏi phiếu (gửi kèm lúc lưu).
     const donHuyList = [];
 
-    const modal = openModal(`
+    const noiDungForm = `
       <h3>${phieuSua ? 'Sửa phiếu bán hàng ' + escapeHtml(phieuSua.header.SoPhieu)
         : 'Lập phiếu bán hàng ' + (soPhieuXem ? '<span style="font-size:13px;color:#5f6368;">(số phiếu dự kiến: ' + escapeHtml(soPhieuXem) + ')</span>' : '')}</h3>
       ${phieuSua ? '<div class="empty-hint" style="text-align:left;">Lưu xong hệ thống sẽ <b>hoàn tồn theo phiếu cũ rồi trừ lại theo số mới</b>, các đơn khách đặt gắn phiếu cũng được gắn lại — số phiếu giữ nguyên.</div>' : ''}
       <form id="fBH">
+        ${/* 🔴 v9.89 (Nguyen 23/11, theo giao diện KiotViet): BỐ CỤC 2 CỘT — bảng dòng hàng chiếm
+             hết bên TRÁI, thông tin khách + tổng tiền + nút Lưu dồn sang CỘT PHẢI.
+
+             Thay đổi THẬT SỰ duy nhất về cấu trúc: chân phiếu (TỔNG CỘNG → CK NPP → TỔNG TIỀN HÀNG
+             → THUẾ GTGT → TỔNG SAU THUẾ → bằng chữ) rời khỏi <tbody> của bảng dòng hàng để sang cột
+             phải, vì <tr> không đặt ngoài <table> được. Đã kiểm trước khi làm:
+               · chanPhieuHtml() CHỈ được veDong() dùng — bản in (inPhieuBanHangDayDu, printPhieuBanHang)
+                 dựng HTML riêng, KHÔNG gọi hàm này ⇒ mẫu in Word không đụng tới.
+               · grep backend/utils/kiem_*.js: KHÔNG bộ kiểm nào bám vào .bh-chan / chanPhieuHtml /
+                 #bhTongHang / #bhDong. Bộ kiểm quét mã vạch chỉ ràng "#bhThem đứng ngay trước #bhQuet"
+                 và dòng nối sự kiện #bhQuet — cả hai vẫn nằm nguyên trong bảng.
+             MỌI id/class/name/payload giữ nguyên, tinhTong() không sửa một dòng. */''}
+        ${/* v9.91: thêm class "co-dinh" — LUÔN 2 cột, cột phải KHÔNG BAO GIỜ xuống dưới, mỗi cột cuộn
+             riêng (Nguyen 23/11). Màn hẹp thì cuộn NGANG chứ không xếp chồng — đó là hệ quả cố ý của
+             yêu cầu "cố định bất kể độ phân giải nào". Phiếu nhập kho KHÔNG có class này, vẫn tự
+             xuống 1 cột khi hẹp như v9.89. */''}
+        <div class="phieu-2cot co-dinh">
+        <div class="p2-trai">
+          <div class="form-row" style="margin:0;"><label>Dòng hàng</label>
+            <div id="bhDong"></div>
+          </div>
+          ${/* 🔴 v9.92 (Nguyen 23/11: "Ghi chú cho 1 hàng cuối cùng cố định ở bên cột chọn hàng hóa"):
+               ô Ghi chú nằm ở ĐÁY cột trái và GHIM lại (position:sticky, lớp .p2-ghichu) — cuộn bảng
+               hàng dài đến đâu nó vẫn thấy. Ghi chú thường là lời dặn giao hàng, gõ lúc nào cũng được
+               nên phải luôn trong tầm tay.
+               Đây là ô name="ghiChu" DUY NHẤT của form — ô cũ bên cột phải đã gỡ. */''}
+          <div class="form-row p2-ghichu"><label>Ghi chú</label>
+            <input name="ghiChu" autocomplete="off" placeholder="VD: giao thứ 5, gọi trước khi đến..." value="${escapeHtml(phieuSua ? (phieuSua.header.GhiChu || '') : '')}"></div>
+        </div>
+        <aside class="p2-phai">
         <div class="form-grid">
           <div class="form-row"><label>Ngày bán *</label><input type="date" name="ngayBan" required value="${phieuSua ? String(phieuSua.header.NgayBan).slice(0, 10) : homNayISO()}"></div>
           <div class="form-row"><label>Khách hàng *</label>
@@ -4440,50 +4732,98 @@ window.ModuleKhoHang = (function () {
             ${/* v6.69: KHÓA ô tên (readonly) — trước đây gõ sửa được sau khi đã chọn ở dropdown, lệch
                  một khoảng trắng hay một chữ hoa là công nợ tách khách đó thành hai dòng. Ô cùng vai
                  trò ở "Lên đơn đặt hàng" vốn đã readonly, đây là chỗ duy nhất còn hở.
-                 Cần tên khác danh mục thì thêm khách mới ở Danh mục rồi chọn lại. */''}
-            <div class="empty-hint" style="margin-top:2px;">Công nợ nhóm theo <b>TÊN KHÁCH</b> — chọn từ danh mục để tên luôn khớp.</div>
+                 Cần tên khác danh mục thì thêm khách mới ở Danh mục rồi chọn lại.
+                 v9.92: dòng chú thích "Công nợ nhóm theo TÊN KHÁCH" ĐÃ GỠ theo yêu cầu Nguyen 23/11
+                 ("bỏ hết dòng chú thích") — luật vẫn y nguyên, chỉ thôi nhắc trên màn. */''}
           </div>
-          <div class="form-row"><label>SĐT</label><input name="sdt" id="bhSDT" value="${escapeHtml(phieuSua ? (phieuSua.header.SDT || '') : (khachNPP ? (khachNPP.sdt || '') : ''))}"></div>
-          <div class="form-row"><label>Địa chỉ</label><input name="diaChi" id="bhDiaChi" value="${escapeHtml(phieuSua ? (phieuSua.header.DiaChi || '') : (khachNPP ? (khachNPP.diaChi || '') : ''))}"></div>
-          ${dmsShop.length ? `<div class="form-row"><label>Shop bán lẻ (nếu bán cho shop)</label>
-            <select name="shopId"><option value="">— không phải shop / bán cho NPP —</option>${dmsShop.map(s2 => `<option value="${s2.ShopID}" ${(phieuSua ? String(phieuSua.header.ShopID) === String(s2.ShopID) : (shopGiao && String(shopGiao.id) === String(s2.ShopID))) ? 'selected' : ''}>${escapeHtml(s2.MaShop + ' · ' + s2.TenShop)}</option>`).join('')}</select>
-            ${shopGiao ? `<div class="empty-hint" style="margin-top:2px;text-align:left;">Đơn lấy tại shop <b>${escapeHtml(shopGiao.ma + ' · ' + shopGiao.ten)}</b>${shopGiao.diaChi ? ' — ' + escapeHtml(shopGiao.diaChi) : ''}. Hóa đơn/công nợ ghi cho <b>${escapeHtml(khachNPP ? khachNPP.ten : 'chính shop')}</b>.</div>` : ''}</div>` : ''}
-          ${dmsNV.length ? `<div class="form-row"><label>Nhân viên kinh doanh (tính doanh số)</label>
-            <select name="nhanVienId"><option value="">— chưa gán —</option>${dmsNV.map(n => `<option value="${n.NhanVienID}" ${(phieuSua ? String(phieuSua.header.NhanVienID) === String(n.NhanVienID) : (nvkdTuDon && String(nvkdTuDon.id) === String(n.NhanVienID))) ? 'selected' : ''}>${escapeHtml(n.HoTen)}${n.MaNhanVien ? ' · ' + escapeHtml(n.MaNhanVien) : ''}</option>`).join('')}</select>
-            <div class="empty-hint" style="margin-top:2px;">Đơn lấy từ <b>Đi tuyến</b> tự điền sẵn — chỉ chọn tay khi bán trực tiếp tại xưởng.</div></div>` : ''}
-          ${/* v6.75: GHI CHÚ chuyển lên NGAY SAU địa chỉ (trước đây nằm tận dưới bảng dòng hàng).
-               Ghi chú thường là thông tin giao hàng ("giao thứ 5", "gọi trước khi đến") — thuộc về
-               phần thông tin khách, để tít dưới cuối form thì lúc nhập hay quên, lúc đọc lại phải
-               cuộn qua cả bảng hàng mới thấy. Cho chiếm trọn 1 hàng để gõ được câu dài. */''}
+          ${/* 🔴 v9.92 (Nguyen 23/11: "Sđt và địa chỉ khi chọn khách mới hiện ra, ko nhập"):
+               hai ô này nay CHỈ ĐỌC và CHỈ HIỆN khi đã chọn khách — số liệu lấy thẳng từ danh mục.
+               Vẫn là input (readonly) chứ không phải chữ thường, để FormData vẫn gửi sdt/diaChi
+               đúng như trước; đổi sang thẻ span là payload mất hai trường, phiếu in trống địa chỉ.
+               Sửa SĐT/địa chỉ thì sửa ở Danh mục khách hàng — một nguồn, không lệch giữa các phiếu. */''}
+          <div class="form-row" id="bhKhachTT" style="display:none;">
+            <label>SĐT · Địa chỉ <span style="font-weight:400;color:#5f6368;">(theo danh mục)</span></label>
+            <input name="sdt" id="bhSDT" readonly value="${escapeHtml(phieuSua ? (phieuSua.header.SDT || '') : (khachNPP ? (khachNPP.sdt || '') : ''))}">
+            <input name="diaChi" id="bhDiaChi" readonly style="margin-top:4px;" value="${escapeHtml(phieuSua ? (phieuSua.header.DiaChi || '') : (khachNPP ? (khachNPP.diaChi || '') : ''))}">
+          </div>
+          ${/* 🔴 v9.91 (Nguyen 23/11: "Tạm thời ẩn trường shop bán lẻ và nhân viên kinh doanh đi").
+               ẨN KHỎI MẮT, KHÔNG BỎ KHỎI PHIẾU: đổi hai thẻ select thành input type=hidden, giữ
+               nguyên name + giá trị đang có.
+               VÌ SAO KHÔNG XÓA HẲN: payload v7.24 đọc kiểu "có trường thì gửi, không có thì gửi
+               undefined" — trường biến mất thì máy chủ hiểu là "giữ nguyên". Nghe thì an toàn, nhưng
+               hai giá trị ĐƯỢC ĐIỀN SẴN cho phiếu MỚI (shop của đơn lấy tại shop, NVKD từ Đi tuyến)
+               sẽ mất trắng — doanh số NVKD hụt mà không ai thấy. Giữ hidden thì cả phiếu mới lẫn
+               phiếu sửa đều đi đúng như trước, chỉ là người dùng không còn thấy ô.
+               Bỏ ẩn: đổi lại thành thẻ select như trước v9.91 (git log file này).
+               (Khối này nằm TRONG template literal nên tuyệt đối không có dấu backtick — bài học
+               v7.98 / v8.73: backtick trong comment kiểu này cắt đứt template, sập cả phân hệ.) */''}
+          ${dmsShop.length ? `<input type="hidden" name="shopId" value="${escapeHtml(String(phieuSua ? (phieuSua.header.ShopID || '') : (shopGiao ? shopGiao.id : '')))}">` : ''}
+          ${dmsNV.length ? `<input type="hidden" name="nhanVienId" value="${escapeHtml(String(phieuSua ? (phieuSua.header.NhanVienID || '') : (nvkdTuDon ? nvkdTuDon.id : '')))}">` : ''}
+          ${shopGiao ? `<div class="form-row" style="grid-column:1/-1;"><div class="empty-hint" style="text-align:left;">Đơn lấy tại shop <b>${escapeHtml(shopGiao.ma + ' · ' + shopGiao.ten)}</b>${shopGiao.diaChi ? ' — ' + escapeHtml(shopGiao.diaChi) : ''}. Hóa đơn/công nợ ghi cho <b>${escapeHtml(khachNPP ? khachNPP.ten : 'chính shop')}</b>.</div></div>` : ''}
           ${/* v7.59: GỬI MẪU / CHO KHÁCH MƯỢN.
                Chỉ là CỜ ĐÁNH DẤU — phiếu vẫn trừ tồn và vẫn vào công nợ y hệt phiếu bán bình thường,
                không một phép tính tiền nào đổi. Nhờ cờ này mà trả lời được "mẫu này đã gửi cho khách
                đó chưa, còn bao nhiêu chưa trả". Khách trả mẫu thì làm PHIẾU NHẬP LẠI (hoàn tồn + TRỪ
-               công nợ), KHÔNG phải phiếu nhập kho — phiếu nhập kho không chạm tới công nợ khách. */''}
+               công nợ), KHÔNG phải phiếu nhập kho — phiếu nhập kho không chạm tới công nợ khách.
+               v9.92: dòng chú thích dài dưới ô tích ĐÃ GỠ (Nguyen: "bỏ hết dòng chú thích"). Nghiệp
+               vụ không đổi một ly; nội dung đó vẫn nằm ở TRIEN_KHAI và trong chính ghi chú này. */''}
           <div class="form-row" style="grid-column:1/-1;">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
               <input type="checkbox" name="laHangMau" id="bhLaHangMau" style="width:auto;margin:0;"
                 ${phieuSua && Number(phieuSua.header.LaHangMau) === 1 ? 'checked' : ''}>
               <span>Gửi mẫu / cho khách mượn</span>
             </label>
-            <div class="empty-hint" style="margin-top:2px;text-align:left;">Tiền và tồn kho <b>không đổi</b> — phiếu vẫn ghi công nợ như bán bình thường. Đánh dấu để theo dõi ở tab <b>Hàng mẫu ở khách</b> và để hệ thống nhắc khi lập phiếu sau. Khách trả mẫu: làm <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ), không phải Phiếu nhập kho.</div>
           </div>
+          ${/* Khối NHẮC "khách này đang giữ mẫu" KHÔNG phải chú thích tĩnh — nó là cảnh báo theo dữ
+               liệu thật, giữ lại. */''}
           <div class="form-row" id="bhNhacMauBox" style="grid-column:1/-1;display:none;"></div>
-          <div class="form-row" style="grid-column:1/-1;"><label>Ghi chú</label>
-            <input name="ghiChu" value="${escapeHtml(phieuSua ? (phieuSua.header.GhiChu || '') : '')}"></div>
+          ${/* v9.92: ô GHI CHÚ đã chuyển sang CỘT TRÁI, ghim dưới đáy bảng hàng (Nguyen 23/11:
+               "Ghi chú cho 1 hàng cuối cùng cố định ở bên cột chọn hàng hóa"). Xem .p2-trai ở trên.
+               ⚠️ ĐỪNG để lại một ô name="ghiChu" thứ hai ở đây — FormData lấy ô ĐẦU TIÊN, người dùng
+               gõ vào ô kia sẽ mất trắng (đúng lỗi v6.75 đã vấp). */''}
           ${/* v6.24: ô %CK NPP và %VAT đã CHUYỂN XUỐNG chân bảng dòng hàng (đúng khuôn mẫu Word) —
                đừng để 2 nơi cùng id, form sẽ lấy nhầm ô. CK NPP mặc định 0 (khách shop); khách NPP
                bấm nút "Áp 17%" ngay tại chân bảng. */''}
         </div>
-        <div class="form-row"><label>Dòng hàng</label>
-          <div id="bhDong"></div>
+        ${/* v9.89: chân phiếu dời từ trong <tbody> ra đây. GIỮ NGUYÊN từng id một — tinhTong() chỉ
+             ghi textContent vào các id này nên không phải sửa gì; thứ tự dòng cũng giữ y như mẫu
+             Word cũ (TỔNG CỘNG → CK NPP → TỔNG TIỀN HÀNG → THUẾ GTGT → TỔNG SAU THUẾ → bằng chữ). */''}
+        <div class="p2-tien"><span>Tổng số lượng</span><span id="bhTongSL"></span></div>
+        <div class="p2-tien"><span>TỔNG CỘNG</span><span id="bhTongHang"></span></div>
+        <div class="p2-tien"><span>CK NPP
+            <input type="number" name="ckNPP" id="bhCKNPP" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramCKNPP : 0}" style="width:60px;">%
+            <button type="button" class="btn small secondary" id="bhApNPP" style="padding:2px 6px;">Áp ${fmtNumber(bhTyLe.npp)}%</button>
+          </span><span id="bhTienCK"></span></div>
+        <div class="p2-tien"><span><b>TỔNG TIỀN HÀNG</b></span><span id="bhTruocVAT"></span></div>
+        <div class="p2-tien"><span>THUẾ GTGT
+            <input type="number" name="vat" id="bhVAT" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramVAT : bhTyLe.vat}" style="width:60px;">%
+          </span><span id="bhTienVAT"></span></div>
+        <div class="p2-tien p2-chot"><span>TỔNG TIỀN SAU THUẾ</span><span id="bhTongTT"></span></div>
+        <div id="bhBangChu" style="font-style:italic;color:#5f6368;font-size:12px;padding-top:4px;"></div>
+        ${/* v6.75: ô Ghi chú CŨ ở dưới bảng đã GỠ — đã chuyển lên sau Địa chỉ. Để hai ô cùng
+             name="ghiChu" thì FormData lấy ô ĐẦU TIÊN, người dùng gõ vào ô dưới sẽ mất trắng. */''}
+        <button type="submit" class="btn p2-luu">${phieuSua ? 'Lưu thay đổi & tính lại tồn kho' : 'Lưu phiếu & trừ tồn kho'}</button>
+        </aside>
         </div>
-        ${/* v6.75: ô Ghi chú CŨ ở đây đã GỠ — đã chuyển lên sau Địa chỉ. Để hai ô cùng name="ghiChu"
-             thì FormData lấy ô ĐẦU TIÊN, người dùng gõ vào ô dưới sẽ mất trắng khi lưu. */''}
-        <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Hủy</button>
-          <button type="submit" class="btn">${phieuSua ? 'Lưu thay đổi & tính lại tồn kho' : 'Lưu phiếu & trừ tồn kho'}</button></div>
-      </form>`);
-    modal.querySelector('#btnCancel').addEventListener('click', closeModal);
+        <div class="modal-actions"><button type="button" class="btn secondary" id="btnCancel">Hủy</button></div>
+      </form>`;
+    /* 🔴 v9.91 (Nguyen 23/11: "Thêm đc tab khác khi đang làm phiếu"): form này nay vẽ được ở HAI nơi —
+         · `khung` rỗng  → mở modal riêng y như trước (đường cũ, không ai phải đổi).
+         · có `khung`    → vẽ vào MỘT PANE của khung nhiều tab (moPhieuBanHangNhieuTab bên dưới).
+       Mẹo giữ diff nhỏ: vẫn đặt tên biến là `modal`, chỉ đổi thứ nó trỏ tới. Đã grep cả file: MỌI chỗ
+       dùng `modal.` đều là querySelector/querySelectorAll — không chỗ nào cần nó phải là backdrop.
+       Nhờ vậy ~900 dòng phía dưới KHÔNG phải sửa một ký tự, và id trùng nhau giữa các pane cũng vô
+       hại vì mọi tra cứu đều bị giới hạn trong pane của chính nó. */
+    /* { rong: true } — 2 cột cố định cần ~820px, modal cỡ thường bóp mất cột phải. */
+    const modal = khung ? khung.veVao(noiDungForm) : openModal(noiDungForm, { rong: true });
+    /* v10.04: đường MỘT PHIẾU (không qua khung nhiều tab) cũng phải rộng như nhau — nếu chỉ gắn ở
+       moPhieuBanHangNhieuTab thì mở phiếu lẻ lại về 1240px, hai đường cùng một form mà khác bề ngang.
+       Ở nhánh này biến modal CHÍNH LÀ backdrop (openModal trả về backdrop); nhánh có khung thì
+       backdrop đã được moPhieuBanHangNhieuTab gắn class rồi, nên không cần tra DOM. */
+    if (!khung) modal.classList.add('bh-rong');
+    /* Hủy: ở chế độ nhiều tab là ĐÓNG TAB NÀY (các tab khác còn nguyên), không phải đóng cả cửa sổ. */
+    const dongChoNay = () => { if (khung) khung.dongTab(); else closeModal(); };
+    modal.querySelector('#btnCancel').addEventListener('click', dongChoNay);
 
     /* v6.23.2: KẺ BẢNG khi nhập (trước là các ô xếp hàng ngang, nhìn không biết ô nào là gì). */
     function dongHtml(r, i) {
@@ -4498,7 +4838,7 @@ window.ModuleKhoHang = (function () {
              trên phiếu và GIỮ liên kết đơn. Trước đây phải xóa dòng rồi thêm lại thủ công: mất liên
              kết đơn, đơn treo ở màu cũ, mà vào sửa đơn thì bị chặn "đã có phiếu bán hàng" = bế tắc.
              MÃ HÀNG vẫn để chữ: đổi mã hàng là đơn khác hẳn, phải hủy phiếu/lập đơn mới. */''}
-        <td>${`<select class="bh-mau" style="width:100%;"><option value="">-- màu --</option></select>`}${tuDon ? `<div style="font-size:11px;color:#137333;">khách đặt: ${escapeHtml(r.tenMau || '')}</div>` : ''}</td>
+        <td class="bh-o-mau">${`<select class="bh-mau" style="width:100%;"><option value="">-- màu --</option></select>`}${tuDon ? `<div style="font-size:11px;color:#137333;">khách đặt: ${escapeHtml(r.tenMau || '')}</div>` : ''}</td>
         <td style="white-space:nowrap;"><input type="number" class="bh-sl" step="1" min="0" style="width:66px;" value="${r.soLuong != null ? r.soLuong : ''}">
           <span class="bh-dvt" style="font-size:11px;color:#5f6368;">${escapeHtml(dvGoc(r.donViCoBan, r.donViQuyDoi))}</span></td>
         <td class="bh-ri" style="text-align:right;font-size:12px;color:#5f6368;"></td>
@@ -4512,30 +4852,34 @@ window.ModuleKhoHang = (function () {
           <button type="button" class="btn small danger bh-xoa" style="padding:2px 6px;">✕</button></td>
       </tr>`;
     }
-    /* v6.24: chân phiếu (Tổng cộng → CK NPP → Tổng tiền TT → VAT → Tổng sau VAT) nằm NGAY TRONG
-       bảng nhập, đúng khuôn mẫu Word — nhìn một mạch từ dòng hàng xuống tổng tiền. */
-    /* v8.06: data-tong trên cả khối chân phiếu — không thì cột STT tự động đánh số nhầm vào các
-       dòng CK NPP/Thuế GTGT/Tổng tiền này y như đã vỡ ở màn Báo cáo kinh doanh. */
-    function chanPhieuHtml() {
-      return `<tr class="bh-chan" data-tong><td colspan="7" style="text-align:right;font-weight:bold;">TỔNG CỘNG</td>
-          <td id="bhTongSL" style="text-align:right;"></td><td id="bhTongHang" style="text-align:right;font-weight:bold;"></td><td></td></tr>
-        <tr class="bh-chan" data-tong><td colspan="6" style="text-align:right;">CK NPP</td>
-          <td><input type="number" name="ckNPP" id="bhCKNPP" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramCKNPP : 0}" style="width:64px;"></td>
-          <td style="text-align:center;"><button type="button" class="btn small secondary" id="bhApNPP" style="padding:2px 6px;">Áp ${fmtNumber(bhTyLe.npp)}%</button></td>
-          <td id="bhTienCK" style="text-align:right;"></td><td></td></tr>
-        <tr class="bh-chan" data-tong><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN HÀNG</td>
-          <td id="bhTruocVAT" style="text-align:right;font-weight:bold;"></td><td></td></tr>
-        <tr class="bh-chan" data-tong><td colspan="6" style="text-align:right;">THUẾ GTGT</td>
-          <td><input type="number" name="vat" id="bhVAT" step="0.01" min="0" max="100" value="${phieuSua ? phieuSua.header.PhanTramVAT : bhTyLe.vat}" style="width:64px;"></td>
-          <td style="text-align:center;">%</td><td id="bhTienVAT" style="text-align:right;"></td><td></td></tr>
-        <tr class="bh-chan" data-tong style="background:#e8f0fe;"><td colspan="8" style="text-align:right;font-weight:bold;">TỔNG TIỀN SAU THUẾ GTGT</td>
-          <td id="bhTongTT" style="text-align:right;font-weight:bold;font-size:15px;"></td><td></td></tr>
-        <tr class="bh-chan" data-tong><td colspan="10" id="bhBangChu" style="font-style:italic;color:#5f6368;"></td></tr>`;
-    }
+    /* v6.24: chân phiếu (Tổng cộng → CK NPP → Tổng tiền TT → VAT → Tổng sau VAT) từng nằm NGAY
+       TRONG bảng nhập, đúng khuôn mẫu Word — nhìn một mạch từ dòng hàng xuống tổng tiền.
+       🔴 v9.89: đã DỜI RA CỘT PHẢI (xem khối ghi chú đầu openModal). Lý do kỹ thuật: <tr> không đặt
+       ngoài <table> được. Hàm chanPhieuHtml() vì vậy BỎ HẲN — không để lại hàm chết, kẻo lần sau
+       có người gọi lại và sinh ra HAI chỗ cùng id. Bản in không liên quan (dựng HTML riêng).
+       v8.06 cũ: data-tong từng dùng để cột STT tự đánh số không nhầm vào các dòng tổng — ra khỏi
+       bảng rồi thì không còn chuyện đó nữa. */
     function veDong() {
+      /* v9.56 (Nguyen 14/11: "cột mã hàng để thể hiện dài ô theo chữ cái của mã hàng — hiện đang ngắn quá"):
+         mọi cột khác ghim px, nên trên màn hẹp (máy tính bảng) cột Mã hàng là cột DUY NHẤT bị bóp — ô chọn
+         chỉ còn vài ký tự. Nay cột rộng tối thiểu theo MÃ DÀI NHẤT trong danh mục (≈9,5px/ký tự + chỗ
+         cho mũi tên), bảng cuộn ngang thay vì bóp. */
+      const maDaiNhat = items.reduce((m, it) => Math.max(m, String(it.MaHang || '').length), 0);
+      const rongMaHang = Math.min(420, Math.max(150, Math.round(maDaiNhat * 9.5) + 48));
+      /* 🔴 v10.05 (Nguyen 24/11: *"Cột mầu ko hiện ra. Cho rộng theo tên hoặc xuống dòng"*):
+         `width:` trên <th> chỉ là GỢI Ý MỀM. Khi tổng bề ngang các cột vượt chỗ trống, trình duyệt bóp
+         đúng ô nào CO ĐƯỢC NHẤT — ô Màu chứa <select style="width:100%"> nên co về gần 0 (đúng ảnh gửi:
+         chỉ còn chữ "N"). Các cột số không bị vì bên trong là <input> có bề ngang px cứng.
+         ⇒ Đổi sang `min-width` = SÀN CỨNG: thiếu chỗ thì bảng CUỘN NGANG (#bhDong đã có overflow-x)
+         chứ không bóp cột nào về 0. Rộng theo TÊN MÀU DÀI NHẤT trong danh mục màu của phiếu, kẹp
+         130…260px — cùng cách làm với cột Mã hàng (v9.56), và ô Màu cho XUỐNG DÒNG (xem style.css
+         .bh-o-mau) nên tên dài vẫn đọc được mà không cần nới cột thêm nữa. */
+      const mauDaiNhat = (chiTietMau || []).reduce((m, c) => Math.max(m, String(c.TenMau || '').length), 0);
+      const rongMau = Math.min(260, Math.max(130, Math.round(mauDaiNhat * 8.5) + 42));
+      modal.querySelector('#bhDong').style.overflowX = 'auto';
       modal.querySelector('#bhDong').innerHTML = `<table style="width:100%;">
           <thead><tr style="text-align:center;">
-            <th style="width:34px;">STT</th><th>Mã hàng</th><th style="width:130px;">Màu</th>
+            <th style="width:34px;">STT</th><th style="min-width:${rongMaHang}px;">Mã hàng</th><th style="min-width:${rongMau}px;">Màu</th>
             ${/* v6.27: mỗi dòng một mã hàng nên ĐVT khác nhau — hiện ĐVT ngay cạnh ô số lượng. */''}
             <th style="width:104px;">Số lượng</th><th style="width:80px;">Quy đổi</th>
             <th style="width:115px;">Giá bán lẻ<div style="font-weight:400;font-size:10px;">(đ/ĐVT chính)</div></th>
@@ -4546,18 +4890,24 @@ window.ModuleKhoHang = (function () {
             ${/* v6.25.3: nút thêm dòng nằm NGAY DƯỚI dòng cuối (trong bảng), không phải dưới chân phiếu
                  — thêm xong là gõ tiếp được ngay, không phải cuộn tìm nút. */''}
             <tr class="bh-them-row"><td colspan="10" style="padding:4px;">
-              <button type="button" class="btn small secondary" id="bhThem">+ Thêm dòng hàng</button></td></tr>
-            ${chanPhieuHtml()}</tbody></table>`;
+              <button type="button" class="btn small secondary" id="bhThem">+ Thêm dòng hàng</button>
+              ${/* v9.50: quét mã vạch trên tem bằng camera máy tính bảng — mỗi lần quét +1 Ri. */''}
+              <button type="button" class="btn small secondary" id="bhQuet" title="Quét mã vạch trên tem bằng camera — mỗi lần quét cộng 1 Ri vào dòng của mã đó">📷 Quét mã vạch (+1 Ri/lần)</button></td></tr>
+            </tbody></table>`;
       modal.querySelectorAll('.bh-row').forEach(noiDayDong);
-      // Nút thêm dòng + chân phiếu nằm TRONG bảng -> phải nối dây lại mỗi lần vẽ lại bảng.
+      // Nút thêm dòng nằm TRONG bảng -> phải nối dây lại mỗi lần vẽ lại bảng.
       modal.querySelector('#bhThem').addEventListener('click', () => themDongMoi());
-      modal.querySelector('#bhCKNPP').addEventListener('input', tinhTong);
-      modal.querySelector('#bhVAT').addEventListener('input', tinhTong);
-      modal.querySelector('#bhApNPP').addEventListener('click', () => {
-        modal.querySelector('#bhCKNPP').value = bhTyLe.npp; tinhTong();
-      });
+      modal.querySelector('#bhQuet').addEventListener('click', () => { quetMaVachThemHang().catch(err => toast(err.message, 'error')); });
       tinhTong();
     }
+    /* 🔴 v9.89: ba ô này giờ ở CỘT PHẢI (ngoài bảng) nên vẽ ĐÚNG MỘT LẦN cùng modal ⇒ nối dây MỘT
+       LẦN ở đây, KHÔNG để trong veDong(). Để nguyên trong veDong() thì mỗi lần vẽ lại bảng là chồng
+       thêm một handler lên cùng phần tử — gõ 1 ký tự chạy tinhTong() nhiều lần, càng lúc càng chậm. */
+    modal.querySelector('#bhCKNPP').addEventListener('input', tinhTong);
+    modal.querySelector('#bhVAT').addEventListener('input', tinhTong);
+    modal.querySelector('#bhApNPP').addEventListener('click', () => {
+      modal.querySelector('#bhCKNPP').value = bhTyLe.npp; tinhTong();
+    });
     /* v6.24: THÊM DÒNG = chèn 1 <tr> vào bảng đang có (không vẽ lại cả bảng) -> giữ nguyên số đang gõ,
        không mất vị trí con trỏ, và chân phiếu vẫn nằm dưới cùng. */
     /* `sauIdx` = chèn NGAY DƯỚI dòng có idx đó (nút "+" trên từng dòng); bỏ trống = thêm vào cuối. */
@@ -4605,7 +4955,14 @@ window.ModuleKhoHang = (function () {
             if (r.mauSacId && !ds.some(c => String(c.MauSacID) === String(r.mauSacId))) r.mauSacId = '';
           };
           nap();
-          selMau.addEventListener('change', e => { r.mauSacId = e.target.value; tinhTong(); });
+          selMau.addEventListener('change', e => {
+            r.mauSacId = e.target.value;
+            /* v9.50: dòng do QUÉT MÃ VẠCH tạo ra — đơn khách gắn vào là đơn TỰ KHỚP theo (khách, mã, màu),
+               không phải người dùng chọn. Đổi màu thì khớp lại từ đầu theo màu mới (gỡ đơn màu cũ, gắn
+               đơn màu mới nếu có) rồi vẽ lại dòng — nhãn "khớp N đơn" phải nói đúng màu đang chọn. */
+            if (r.quet && !r.donChonTay) { ganDonChoDongQuet(r); veLaiDong(r); return; }
+            tinhTong();
+          });
           /* v7.16: dòng từ đơn khách CÓ ô màu nhưng KHÔNG có ô mã hàng -> phải kiểm tra null.
              Không kiểm là `selMH.addEventListener` nổ giữa hàm, các ô SL/giá/CK phía dưới KHÔNG được
              nối sự kiện nữa = "gõ số mà không thấy tổng đổi" (kiểu lỗi im lặng cũ của dự án). */
@@ -4643,14 +5000,17 @@ window.ModuleKhoHang = (function () {
              vẫn còn"). Nay hỏi rõ: hủy luôn đơn, hay để đơn chờ giao lần sau. */
           if (r.donIDs && r.donIDs.length) {
             const ds = r.donIDs.map(x => '#' + x).join(', ');
-            const huy = confirm(`Dòng này lấy từ ${r.donIDs.length} đơn khách đặt (${ds}).\n\n`
+            const huy = confirm(`Dòng này ${r.quet && !r.donChonTay ? 'tự khớp (khi quét mã vạch)' : 'lấy từ'} ${r.donIDs.length} đơn khách đặt (${ds}).\n\n`
               + `• OK  = HỦY LUÔN các đơn đó (nhả tồn, đơn chuyển "Đã hủy").\n`
               + `• Cancel = chỉ bỏ khỏi phiếu, đơn quay về "Chờ xử lý" và VẪN GIỮ hàng để giao lần sau.`);
             if (huy) r.donIDs.forEach(id => { if (donHuyList.indexOf(id) === -1) donHuyList.push(id); });
           }
           dong = dong.filter(x => x.idx !== r.idx);
           el.remove();
-          if (!dong.length) modal.querySelector('.bh-chan').insertAdjacentHTML('beforebegin',
+          /* 🔴 v9.89: trước đây chèn dòng "Chưa có dòng nào" NGAY TRƯỚC .bh-chan. Chân phiếu đã dời
+             ra cột phải nên .bh-chan không còn tồn tại trong bảng — neo vào .bh-them-row (hàng chứa
+             nút "+ Thêm dòng hàng"), là hàng cuối cùng còn lại của bảng. */
+          if (!dong.length) modal.querySelector('.bh-them-row').insertAdjacentHTML('beforebegin',
             '<tr class="bh-trong"><td colspan="10" class="empty-hint">Chưa có dòng nào — bấm "+ Thêm dòng hàng".</td></tr>');
           danhSoLaiSTT(); tinhTong();
         });
@@ -4698,7 +5058,20 @@ window.ModuleKhoHang = (function () {
       modal.querySelector('#bhKhach').value = k.TenKhachHang;
       modal.querySelector('#bhSDT').value = k.SDT || '';
       modal.querySelector('#bhDiaChi').value = k.DiaChi || '';
+      hienKhachTT();   // v9.92
     }
+    /* v9.92: khối SĐT · Địa chỉ chỉ HIỆN khi đã có khách (và khách đó có ít nhất một trong hai).
+       Chưa chọn khách mà bày hai ô rỗng chỉ-đọc thì nhìn như hỏng. Gọi lúc dựng form (cho phiếu SỬA
+       và phiếu lấy từ đơn — hai trường hợp đã có sẵn khách) và mỗi lần đổi khách. */
+    function hienKhachTT() {
+      const o = modal.querySelector('#bhKhachTT');
+      if (!o) return;
+      const coGi = String(modal.querySelector('#bhSDT').value || '').trim()
+                || String(modal.querySelector('#bhDiaChi').value || '').trim()
+                || String(modal.querySelector('#bhKhachId').value || '').trim();
+      o.style.display = coGi ? '' : 'none';
+    }
+    hienKhachTT();
     /* ============================================================================================
        v7.59 — NHẮC "KHÁCH NÀY ĐANG GIỮ MẪU" NGAY TRÊN FORM.
        Đây là câu trả lời trực tiếp cho "làm thế nào để biết mẫu đó đã gửi cho khách đó rồi".
@@ -4706,12 +5079,15 @@ window.ModuleKhoHang = (function () {
        lệch với ô "còn trả được" bên đó.
        ⚠️ Lỗi ở đây KHÔNG được chặn việc lập phiếu: nếu route hỏng/403 thì chỉ im lặng bỏ khối nhắc.
        Một API PHỤ ném lỗi giữa handler async là đúng kiểu bug "bấm nút không có gì xảy ra". */
+    /* 🔴 v9.96 (Nguyen 23/11: "phần thông báo hàng mẫu đang ở khách làm POPUP NỔI LÊN khi chọn khách
+       đó, không hiện ở phần khách hàng như hiện tại"): nội dung y nguyên, chỗ hiện thì đổi.
+       · Hộp inline #bhNhacMauBox GIỮ LẠI nhưng chỉ còn MỘT DÒNG tóm tắt bấm được ("⚠️ Khách này đang
+         giữ N mẫu — bấm xem") — để sau khi đóng popup vẫn còn dấu vết, không mất hẳn thông tin.
+       · Popup chỉ bật khi ĐỔI KHÁCH (hoặc mở form đã có sẵn khách), KHÔNG bật lại mỗi lần vẽ lại
+         dòng hàng — nhảy popup liên tục lúc đang nhập là không ai chịu được. */
     let dsNhacMau = [];
     const hopNhacMau = modal.querySelector('#bhNhacMauBox');
-    function veNhacMau() {
-      if (!hopNhacMau) return;
-      if (!dsNhacMau.length) { hopNhacMau.style.display = 'none'; hopNhacMau.innerHTML = ''; return; }
-      // Mã đang có trên chính phiếu này -> tô đậm hơn: rất có thể đang bán trùng mã đã cho mượn.
+    function noiDungNhacMau() {
       const maTrenPhieu = new Set();
       modal.querySelectorAll('.bh-row .bh-mahang').forEach(s2 => { if (s2.value) maTrenPhieu.add(String(s2.value)); });
       modal.querySelectorAll('.bh-row').forEach(el => {
@@ -4719,12 +5095,10 @@ window.ModuleKhoHang = (function () {
         if (r && r.maHangId) maTrenPhieu.add(String(r.maHangId));
       });
       const dv = (r) => escapeHtml(r.DonViCoBan || 'Cái');
-      hopNhacMau.innerHTML = `<div style="border:1px solid #f0c36d;background:#fffbe6;border-radius:6px;padding:8px 10px;">
-        <b>⚠️ Khách này đang giữ hàng mẫu chưa trả</b>
-        <div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">
+      return `<div style="display:flex;flex-direction:column;gap:3px;">
           ${dsNhacMau.map(r => {
             const trung = maTrenPhieu.has(String(r.MaHangID));
-            return `<div style="font-size:13px;${trung ? 'font-weight:bold;color:#a8071a;' : ''}">
+            return `<div style="font-size:13.5px;${trung ? 'font-weight:bold;color:#a8071a;' : ''}">
               ${trung ? '● ' : '· '}<b>${escapeHtml(r.MaHang)}</b>${r.TenMau ? ' · ' + escapeHtml(r.TenMau) : ''}
               — còn <b>${fmtNumber(r.ConOKhachCai)}</b> ${dv(r)}, gửi ${r.SoNgayMuon != null ? '<b>' + fmtNumber(r.SoNgayMuon) + '</b> ngày trước' : ''}
               <span style="color:#5f6368;">(phiếu ${escapeHtml(r.SoPhieu.join(', '))})</span>
@@ -4732,11 +5106,26 @@ window.ModuleKhoHang = (function () {
             </div>`;
           }).join('')}
         </div>
-        <div class="empty-hint" style="margin-top:4px;text-align:left;">Khách trả mẫu thì lập <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ). Số ở đây và ô "còn trả được" bên Phiếu nhập lại là cùng một phép tính.</div>
-      </div>`;
-      hopNhacMau.style.display = '';
+        <div class="empty-hint" style="margin-top:6px;text-align:left;">Khách trả mẫu thì lập <b>Phiếu nhập lại</b> (hoàn tồn + trừ công nợ). Số ở đây và ô "còn trả được" bên Phiếu nhập lại là cùng một phép tính.</div>`;
     }
-    async function taiNhacMau() {
+    function moPopupNhacMau() {
+      if (!dsNhacMau.length) return;
+      const ten = String((modal.querySelector('#bhKhach') || {}).value || '').trim();
+      const m2 = openModal(`<h3 style="color:#a8071a;">⚠️ Khách này đang giữ hàng mẫu chưa trả</h3>
+        <div class="empty-hint" style="text-align:left;">Khách: <b>${escapeHtml(ten)}</b> — ${dsNhacMau.length} mã chưa trả.</div>
+        ${noiDungNhacMau()}
+        <div class="modal-actions"><button type="button" class="btn" id="nhacMauDong">Đã rõ, tiếp tục lập phiếu</button></div>`);
+      m2.querySelector('#nhacMauDong').addEventListener('click', closeModal);
+    }
+    function veNhacMau() {
+      if (!hopNhacMau) return;
+      if (!dsNhacMau.length) { hopNhacMau.style.display = 'none'; hopNhacMau.innerHTML = ''; return; }
+      hopNhacMau.innerHTML = `<a href="#" id="bhXemNhacMau" style="color:#a8071a;font-weight:600;">⚠️ Khách này đang giữ ${dsNhacMau.length} hàng mẫu chưa trả — bấm xem</a>`;
+      hopNhacMau.style.display = '';
+      const a = hopNhacMau.querySelector('#bhXemNhacMau');
+      if (a) a.addEventListener('click', (e) => { e.preventDefault(); moPopupNhacMau(); });
+    }
+    async function taiNhacMau(baoPopup) {
       const ten = String((modal.querySelector('#bhKhach') || {}).value || '').trim();
       if (!ten) { dsNhacMau = []; veNhacMau(); return; }
       try {
@@ -4747,25 +5136,338 @@ window.ModuleKhoHang = (function () {
         console.warn('[hàng mẫu] không lấy được danh sách mẫu đang ở khách:', err.message);
       }
       veNhacMau();
+      if (baoPopup) moPopupNhacMau();   // v9.96: chỉ bật popup khi VỪA CHỌN khách, không bật lúc vẽ lại
     }
     selKhach.addEventListener('change', () => {
       apKhach(dsKhach.find(x => String(x.KhachHangID) === selKhach.value));
-      taiNhacMau();
+      taiNhacMau(true);                 // v9.96: đổi khách ⇒ popup nổi lên ngay
+      /* v9.50: đổi khách ⇒ các dòng QUÉT phải khớp lại đơn theo khách MỚI — giữ đơn của khách cũ trên
+         phiếu khách mới là đóng nhầm đơn của người khác lúc lưu. */
+      khopLaiDongQuetTheoKhach();
     });
     if (selKhach.value) apKhach(dsKhach.find(x => String(x.KhachHangID) === selKhach.value));
-    taiNhacMau();
+    /* Mở form mà đã có sẵn khách (sửa phiếu / lấy từ đơn) cũng phải báo — đó cũng là lúc "chọn khách". */
+    taiNhacMau(!!selKhach.value);
     // Đổi mã hàng ở bảng dòng -> vẽ lại phần tô đậm (không gọi lại API, dữ liệu theo khách không đổi).
     const hopDong = modal.querySelector('#bhDong');
     if (hopDong) hopDong.addEventListener('change', veNhacMau);
+    /* 🔴 v9.92 (Nguyen 23/11: "khách mới lưu danh mục đầy đủ trường như thêm ở danh mục — gọi luôn
+       form nhập ở danh mục khách hàng"): bấm "+ Khách mới" nay mở ĐÚNG form của Danh mục › Khách
+       hàng (đủ Tên viết hóa đơn, MST, địa chỉ/email hóa đơn, % CK ký gửi, Nhóm khách hàng...), thay
+       cho hộp "thêm nhanh" 4 ô cũ. Thêm trường vào danh mục là phiếu bán hàng có ngay.
+
+       Vẫn giữ themKhachNhanh() làm ĐƯỜNG LÙI: PWA có thể còn giữ bản module.danhmuc.js cũ trong
+       cache (chưa có moFormKhachHang) — lúc đó nút vẫn phải bấm được chứ không "bấm không có gì
+       xảy ra". themKhachNhanh() còn được "Lên đơn đặt hàng" dùng nên không xóa. */
     modal.querySelector('#bhThemKhach').addEventListener('click', async () => {
-      const k = await themKhachNhanh(modal.querySelector('#bhKhach').value);
-      if (!k) return;
-      dsKhach.push(k);
-      selKhach.insertAdjacentHTML('beforeend', `<option value="${k.KhachHangID}">${escapeHtml(k.TenKhachHang)}</option>`);
-      selKhach.value = String(k.KhachHangID);
-      apKhach(k);
+      const nhanKhachMoi = (k) => {
+        if (!k) return;
+        dsKhach.push(k);
+        selKhach.insertAdjacentHTML('beforeend', `<option value="${k.KhachHangID}">${escapeHtml(k.TenKhachHang)}</option>`);
+        selKhach.value = String(k.KhachHangID);
+        apKhach(k);
+        khopLaiDongQuetTheoKhach();   // v9.50: khách vừa tạo chưa có đơn nào — gỡ đơn tự khớp của khách cũ
+      };
+      const dm = window.ModuleDanhMuc;
+      if (dm && typeof dm.moFormKhachHang === 'function') {
+        await dm.moFormKhachHang(modal.querySelector('#bhKhach').value, nhanKhachMoi);
+        return;
+      }
+      nhanKhachMoi(await themKhachNhanh(modal.querySelector('#bhKhach').value));
     });
     veDong();
+
+    /* ============================================================================================
+       v9.50 — QUÉT MÃ VẠCH (xem ghi chú ở các hàm thuần timHangTheoMaQuet/donKhopDongQuet/
+       mauChoDongQuet đầu module). Phần này là phần nối với form: tạo/cộng dòng, gắn đơn, vẽ lại.
+       ============================================================================================ */
+    /* Đơn đang chờ xuất của MỌI khách, nạp một lần mỗi lượt mở camera (lọc khách ở phía này bằng
+       chuanTenKhach + ID liên kết — GET ?khach= so chuỗi tuyệt đối ở SQL, trượt với tên viết lệch và
+       đơn web, đúng lỗi v6.74.1/v8.07 đã gặp). Lỗi API ⇒ [] + console.warn: KHÔNG được chặn việc quét. */
+    let dsDonCho = [];
+    async function taiDonChoXuat() {
+      try { dsDonCho = (await apiGet('/api/banhang/donchoxuat')).data || []; }
+      catch (err) { dsDonCho = []; console.warn('[quét mã vạch] không tải được đơn khách đang chờ:', err.message); }
+    }
+    const khachTrenPhieu = () => ({
+      tenKhach: String((modal.querySelector('#bhKhach') || {}).value || ''),
+      khachHangId: String((modal.querySelector('#bhKhachId') || {}).value || '')
+    });
+    /* Trạng thái MỘT LƯỢT mở camera (đặt lại mỗi lần bấm nút — xem quetMaVachThemHang):
+       mauDangQuet      : MaHangID -> MauSacID đang đếm cho mã đó. Chọn MỘT lần bằng nút màu ngay dưới
+                          camera, các tem sau cùng mã cộng thẳng vào màu đó; sang màu khác = bấm nút màu
+                          khác TRƯỚC khi quét tem màu mới.
+       dongQuetTheoKhoa : "MaHangID|MauSacID" -> idx dòng mà lượt này đã cộng vào.
+       choChonMau       : tem (hoặc N tem cùng mã) đã quét nhưng mã có nhiều màu, chưa bấm màu — giữ lại,
+                          bấm màu là cộng cả N tem. Quét sang mã khác thì bỏ.
+       lanCuoi          : lần cộng gần nhất — nút "↶ Trừ lại" khi bấm nhầm màu / quét nhầm tem. */
+    const mauDangQuet = new Map();
+    const dongQuetTheoKhoa = new Map();
+    let choChonMau = null;
+    let lanCuoi = null;
+    function itemCua(r) { return items.find(x => String(x.MaHangID) === String(r.maHangId)) || {}; }
+    function tenMauCua(r) {
+      const c = chiTietMau.find(x => String(x.MaHangID) === String(r.maHangId) && String(x.MauSacID) === String(r.mauSacId));
+      return c ? c.TenMau : '';
+    }
+    /* Gắn đơn khách khớp vào dòng quét: donIDs + nhãn + tổng SL đặt (theo ĐVT chính) để lúc lưu so với
+       SL quét. Không khớp gì ⇒ dòng là dòng bán thẳng bình thường (backend tự sinh đơn phản chiếu). */
+    function ganDonChoDongQuet(r) {
+      /* Đơn ĐÃ nằm ở dòng khác của phiếu (vd dòng Chọn-đơn đổi màu bằng dropdown vẫn giữ donIDs) thì không
+         gắn lại — hai dòng cùng DonID là backend ném "đã được lên phiếu bán hàng khác" (sai nghĩa). */
+      const daGan = new Set();
+      dong.forEach(x => { if (x !== r) (x.donIDs || []).forEach(id => daGan.add(Number(id))); });
+      const ds = donKhopDongQuet(dsDonCho, { ...khachTrenPhieu(), maHangId: r.maHangId, mauSacId: r.mauSacId })
+        .filter(d => !daGan.has(Number(d.DonID)));
+      r.donIDs = ds.map(d => d.DonID);
+      r.slDatCai = ds.length ? ds.reduce((s, d) => s + slSangCai(d.SoLuongDat, d.DonVi, d.LoaiRi, d), 0) : null;
+      r.tenMau = ds.length ? [...new Set(ds.map(d => d.TenMau).filter(Boolean))].join(', ') : tenMauCua(r);
+      r.slDonGoc = !ds.length ? '' : (ds.length === 1
+        ? `khớp đơn #${ds[0].DonID} ${fmtNumber(ds[0].SoLuongDat)} ${ds[0].DonVi || ''}`
+        : `khớp ${ds.length} đơn: ${ds.map(d => `#${d.DonID} ${fmtNumber(d.SoLuongDat)} ${d.DonVi || ''}`).join(' + ')}`);
+      return ds;
+    }
+    /* Vẽ lại MỘT dòng tại chỗ (dòng có đơn gắn vào hiện mã hàng dạng chữ + nhãn đơn, không còn ô chọn). */
+    function veLaiDong(r) {
+      const cu = modal.querySelector(`.bh-row[data-idx="${r.idx}"]`);
+      if (!cu) return;
+      cu.insertAdjacentHTML('afterend', dongHtml(r, 0));
+      const moi = cu.nextElementSibling;
+      cu.remove();
+      noiDayDong(moi);
+      danhSoLaiSTT();
+      tinhTong();
+    }
+    function khopLaiDongQuetTheoKhach() {
+      dong.filter(r => r.quet && !r.donChonTay).forEach(r => { ganDonChoDongQuet(r); veLaiDong(r); });
+    }
+    function tomTatDongQuetHtml() {
+      const ds = dong.filter(r => r.quet && r.maHangId);
+      if (!ds.length) return 'Chưa có dòng nào từ quét.';
+      return 'Đang có trên phiếu (từ quét): ' + ds.map(r => {
+        const { he } = heSoRiQuet(itemCua(r));
+        const sl = Number(r.soLuong) || 0;
+        return `<b>${escapeHtml(r.maHang || '')}</b> ${r.mauSacId ? escapeHtml(tenMauCua(r)) : '<span style="color:#c0392b;">chưa chọn màu</span>'} ${Math.floor(sl / he)} Ri${sl % he ? ' dư ' + fmtNumber(sl % he) : ''}${r.donIDs && r.donIDs.length ? ' ✓đơn' : ''}`;
+      }).join(' · ');
+    }
+    function quetMaVachThemHang() {
+      /* Mở camera NGAY TRONG cú bấm (không await trước): iOS/Chrome chỉ cho tạo AudioContext (bíp) và dễ
+         cấp quyền camera khi còn trong cử chỉ người dùng. Đơn khách nạp SONG SONG; lỡ quét xong trước khi
+         nạp xong thì khớp lại mọi dòng quét ngay khi dữ liệu về. */
+      dsDonCho = [];
+      const taiXong = taiDonChoXuat().then(() => { if (dong.some(r => r.quet)) khopLaiDongQuetTheoKhach(); });
+      /* Mỗi LƯỢT mở camera đếm từ đầu: màu đã chọn và dòng đã cộng của lượt trước không mang sang —
+         gặp lại mã + màu đã có trên phiếu thì hỏi một lần (xem congRiVaoDong). */
+      mauDangQuet.clear(); dongQuetTheoKhoa.clear(); choChonMau = null; lanCuoi = null;
+      let soLanQuet = 0;
+      let ctxQuet = null;   // ctx của openQrScanner — giữ lại để nút màu / nút hoàn lại (bấm sau) vẫn báo được
+      const baoCao = (html, loai) => { if (ctxQuet) ctxQuet.baoCao(html, loai); };
+      const keu = (ok) => { if (ctxQuet) ctxQuet.keu(ok); };
+      const tomTat = () => {
+        if (!ctxQuet) return;
+        ctxQuet.datTomTat((choChonMau ? `<b style="color:#c0392b;">⚠ Đang giữ ${choChonMau.soTem} tem ${escapeHtml(choChonMau.it.MaHang)} chưa bấm màu — CHƯA cộng vào phiếu.</b><br>` : '')
+          + `Đã quét ${soLanQuet} lần. ` + tomTatDongQuetHtml());
+      };
+      /* Lỗi ném ra trong callback camera bị html5-qrcode NUỐT (vào .catch của vòng quét rồi gọi callback
+         lỗi), lỗi trong handler nút bấm thì trình duyệt nuốt — người quét chỉ thấy "không có gì xảy ra".
+         Mọi đường vào đều bọc bằng anToan() để lỗi hiện thành dòng đỏ dưới camera. */
+      const anToan = (fn) => {
+        try { fn(); }
+        catch (err) { console.error('[quét mã vạch]', err); keu(false); baoCao('✕ Lỗi khi xử lý: ' + escapeHtml(err && err.message ? err.message : String(err)), 'loi'); }
+      };
+      openQrScanner((text, ctx) => {
+        ctxQuet = ctx || null;
+        anToan(() => xuLyMaQuet(text));
+      }, {
+        continuous: true, quetLai: true, maVach: true, amThanh: true,
+        /* Đóng camera khi còn tem chưa bấm màu = mất tem im lặng ⇒ hỏi trước. */
+        truocKhiDong: () => !choChonMau || confirm(`Đang giữ ${choChonMau.soTem} tem ${choChonMau.it.MaHang} CHƯA bấm màu — đóng camera là bỏ số tem này.\n\nOK = đóng (bỏ tem) · Cancel = quay lại bấm màu.`),
+        tieuDe: 'Quét mã vạch — mỗi lần quét +1 Ri',
+        huongDan: 'Đưa <b>mã vạch trên tem</b> vào khung ngang. Mỗi lần quét = <b>+1 Ri</b> (theo hệ số Ri của mã hàng). '
+          + 'Các màu dùng chung một mã vạch: mã có nhiều màu thì lần đầu quét <b>bấm màu của tem</b> ngay dưới camera (chưa bấm là tem chưa được cộng) — các tem sau cùng mã cộng thẳng vào màu đó; sang màu khác thì <b>bấm màu khác TRƯỚC khi quét</b>. Bấm nhầm / quét nhầm: <b>↶ Hoàn lại</b>. '
+          + 'Quét nhiều ri cùng mã: <b>đưa camera ra khỏi tem</b> (≈1–2 giây) rồi quét tem tiếp theo — tem còn trong khung thì không bị đếm trùng. '
+          + 'Đơn khách đặt cùng khách + cùng mã + cùng màu được tự khớp và sẽ chuyển "Đã xuất hàng" khi lưu phiếu.'
+      });
+      return taiXong;
+
+      function dsMauCua(maHangId) { return chiTietMau.filter(c => String(c.MaHangID) === String(maHangId)); }
+
+      function xuLyMaQuet(text) {
+        const kq = timHangTheoMaQuet(items, text);
+        if (kq.kieu === 'khong') {
+          keu(false);
+          baoCao(`✕ Không có mã hàng nào mang mã vạch/mã hàng "<b>${escapeHtml(text)}</b>" — xem lại tem, hoặc khai Mã barcode cho mã hàng ở Thẻ kho.`, 'loi');
+          return;
+        }
+        if (kq.kieu === 'nhieu') {
+          keu(false);
+          baoCao(`✕ Mã "<b>${escapeHtml(text)}</b>" đang gắn cho ${kq.ds.length} mã hàng (${kq.ds.map(x => escapeHtml(x.MaHang)).join(', ')}) — không tự chọn. Thêm dòng bằng tay, rồi sửa lại Mã barcode ở Thẻ kho cho khỏi trùng.`, 'loi');
+          return;
+        }
+        const it = kq.ds[0];
+        const id = String(it.MaHangID);
+        const dsMau = dsMauCua(id);
+        /* Đang giữ tem của MÃ KHÁC chưa bấm màu mà đã quét sang mã này ⇒ bỏ tem đó, nhưng phải NÓI ở ngay
+           câu báo của lần quét này (báo riêng một câu rồi câu ✓ kế tiếp đè lên trong cùng tick thì người
+           quét không bao giờ thấy — rà chéo lần 2 bắt). */
+        let tienTo = '';
+        if (choChonMau && choChonMau.id !== id) {
+          tienTo = `⚠ Bỏ ${choChonMau.soTem} tem <b>${escapeHtml(choChonMau.it.MaHang)}</b> chưa bấm màu. `;
+          choChonMau = null;
+        }
+        /* Màu của tem: (1) màu đã bấm cho mã này trong lượt quét; (2) mã chỉ có đúng 1 màu (không thể
+           nhầm); (3) còn lại GIỮ TEM LẠI, hiện nút màu — không đoán theo đơn khách hay theo khả dụng. */
+        const mau = mauDangQuet.get(id) || mauChoDongQuet(dsMau);
+        if (!mau && dsMau.length >= 2) {
+          if (choChonMau) choChonMau.soTem++;   // tới đây choChonMau chỉ có thể là null hoặc cùng mã
+          else choChonMau = { it, id, soTem: 1 };
+          keu(true);
+          const donKhop = donKhopDongQuet(dsDonCho, { ...khachTrenPhieu(), maHangId: it.MaHangID, mauSacId: '' });
+          veNutMau(it, '', mauKhachDat(donKhop));
+          baoCao(tienTo + `<b>${escapeHtml(it.MaHang)}</b> có ${dsMau.length} màu — <b>bấm màu của tem</b> ở dưới${choChonMau.soTem > 1 ? ` (đang giữ ${choChonMau.soTem} tem, bấm màu là cộng cả ${choChonMau.soTem} Ri)` : ''}.`, tienTo ? 'loi' : 'info');
+          tomTat();
+          return;
+        }
+        congRiVaoDong(it, mau, 1, tienTo);
+      }
+
+      /* Nút màu ngay dưới camera cho mã vừa quét. mauHien = màu đang đếm (tô đậm); mauGoiY = màu khách
+         đặt (★). Bấm nút: đang giữ tem chờ màu ⇒ cộng cả số tem đó; không thì chỉ đổi màu cho các lần
+         quét sau. Kèm nút "↶ Hoàn lại" cho lần quét gần nhất. */
+      function veNutMau(it, mauHien, mauGoiY) {
+        if (!ctxQuet) return;
+        const ds = dsMauCua(it.MaHangID);
+        const nut = ds.map(c => {
+          const idM = String(c.MauSacID);
+          const khaDung = (Number(c.TonCai) || 0) - (Number(c.DangGiu) || 0);
+          const dang = idM === String(mauHien || '');
+          return `<button type="button" class="btn small${dang ? '' : ' secondary'}" data-mau="${idM}" style="margin:2px 4px 2px 0;${dang ? 'font-weight:700;' : ''}">${escapeHtml(c.TenMau)}${idM === String(mauGoiY || '') ? ' ★' : ''} <span style="font-size:10px;opacity:.75;">(${fmtNumber(khaDung)})</span></button>`;
+        }).join('');
+        const o = ctxQuet.datKhuChon(`<div style="margin:4px 0;">`
+          + (ds.length ? `<span style="font-size:12px;color:#5f6368;">Màu cho <b>${escapeHtml(it.MaHang)}</b> (số trong ngoặc = khả dụng${mauGoiY ? ', ★ = màu khách đặt' : ''}):</span><br>${nut}` : '')
+          + (lanCuoi ? `<button type="button" class="btn small secondary" data-tru="1" style="margin:2px 0 2px 8px;">↶ Hoàn lại lần quét vừa rồi (${lanCuoi.soRi} Ri)</button>` : '')
+          + '</div>');
+        if (!o) return;
+        o.querySelectorAll('button[data-mau]').forEach(b => b.addEventListener('click', () => anToan(() => {
+          const m = b.dataset.mau;
+          mauDangQuet.set(String(it.MaHangID), m);
+          if (choChonMau && choChonMau.id === String(it.MaHangID)) {
+            /* Gỡ tem đang giữ TRƯỚC khi cộng (tomTat() trong congRiVaoDong đọc choChonMau), nhưng cộng
+               lỗi thì trả lại — không để lỗi làm mất tem. */
+            const giu = choChonMau;
+            choChonMau = null;
+            try { congRiVaoDong(it, m, giu.soTem, ''); }
+            catch (err) { choChonMau = giu; throw err; }
+          } else {
+            veNutMau(it, m, mauGoiY);
+            const c = ds.find(x => String(x.MauSacID) === m);
+            baoCao(`Từ giờ tem <b>${escapeHtml(it.MaHang)}</b> cộng vào màu <b>${escapeHtml(c ? c.TenMau : m)}</b> — quét tiếp.`, 'info');
+          }
+        })));
+        const bTru = o.querySelector('button[data-tru]');
+        if (bTru) bTru.addEventListener('click', () => anToan(hoanLaiLanCuoi));
+      }
+
+      /* Hoàn lại TOÀN BỘ lần quét gần nhất: SL dòng về đúng số TRƯỚC lần quét đó (kể cả khi lần đó đã
+         "đếm lại từ đầu" làm dòng về 0 rồi mới cộng — hoàn là về số cũ, không phải về 0). */
+      function hoanLaiLanCuoi() {
+        if (!lanCuoi) return;
+        const { r, soRi, slTruoc } = lanCuoi;
+        lanCuoi = null;
+        const { he } = heSoRiQuet(itemCua(r));
+        r.soLuong = slTruoc;
+        const el = modal.querySelector(`.bh-row[data-idx="${r.idx}"]`);
+        if (el) { const oSL = el.querySelector('.bh-sl'); if (oSL) oSL.value = r.soLuong; }
+        tinhTong();
+        soLanQuet = Math.max(0, soLanQuet - soRi);
+        const stt = dong.indexOf(r) + 1;
+        baoCao(`↶ Đã hoàn lại ${soRi} Ri ở dòng ${stt} (${escapeHtml(r.maHang || '')}${r.mauSacId ? ' · ' + escapeHtml(tenMauCua(r)) : ''}) — dòng về ${Math.floor(r.soLuong / he)} Ri${r.soLuong ? '' : ' (0: xóa dòng trên phiếu nếu không cần)'}.`, 'info');
+        /* Đang giữ tem chưa bấm màu thì nút màu phải vẫn là của MÃ ĐANG GIỮ, kẻo không còn nút để bấm. */
+        if (choChonMau) veNutMau(choChonMau.it, '', '');
+        else veNutMau(itemCua(r), mauDangQuet.get(String(r.maHangId)) || '', '');
+        tomTat();
+      }
+
+      /* Cộng `soRi` Ri của mã `it`, màu `mau` ('' = mã chưa có màu nào trong thẻ kho) vào dòng (mã, màu).
+         `tienTo` = câu cảnh báo ghép vào đầu dòng báo (vd vừa bỏ tem của mã khác). */
+      function congRiVaoDong(it, mau, soRi, tienTo) {
+        const { he, khongCoRi } = heSoRiQuet(it);
+        const dv = dvGoc(it.DonViCoBan, it.DonViQuyDoi);
+        const id = String(it.MaHangID);
+        const khoa = id + '|' + (mau || '');
+        let r = null;
+        let nhanMauMoi = false;   // dòng nhập tay chưa màu vừa nhận màu ⇒ vẽ lại dòng để ô màu hiện đúng
+        let slTruoc = 0;          // SL dòng TRƯỚC lần quét này — để "hoàn lại" về đúng số cũ
+        const idxCu = dongQuetTheoKhoa.get(khoa);
+        if (idxCu != null) r = dong.find(x => String(x.idx) === String(idxCu)) || null;
+        if (r) slTruoc = Number(r.soLuong) || 0;
+        if (!r) {
+          /* Dòng CÓ SẴN cùng mã + cùng màu (lấy từ đơn, nhập tay, hoặc lượt quét trước) mà lượt này chưa
+             đụng tới: hỏi MỘT LẦN — đếm lại từ đầu theo quét (đang kiểm hàng thật để giao) hay cộng thêm
+             vào số đang có. Hỏi xong dòng đó thành dòng quét, các lần sau cộng thẳng. Dòng nhập tay cùng
+             mã CHƯA chọn màu thì nhận luôn màu vừa bấm (người dùng thêm dòng trước rồi mới quét). */
+          const cungMa = dong.filter(x => String(x.maHangId) === id);
+          const coSan = cungMa.find(x => String(x.mauSacId || '') === String(mau || ''))
+            || (mau ? cungMa.find(x => !x.mauSacId) : null) || null;
+          if (coSan) {
+            if (!coSan.mauSacId && mau) { coSan.mauSacId = mau; nhanMauMoi = true; }   // ô màu trên dòng phải vẽ lại mới hiện
+            const stt = dong.indexOf(coSan) + 1;
+            const slCu = Number(coSan.soLuong) || 0;
+            const demLai = slCu > 0 && confirm(`Phiếu đã có dòng ${stt}: ${it.MaHang}${coSan.mauSacId ? ' · ' + tenMauCua(coSan) : ''} = ${fmtNumber(slCu)} ${dv} (${Math.floor(slCu / he)} Ri).\n\n`
+              + `• OK = ĐẾM LẠI từ đầu theo quét (dòng về ${soRi} Ri, quét tiếp sẽ cộng dần).\n`
+              + `• Cancel = CỘNG THÊM ${soRi} Ri vào số đang có.`);
+            const daLaDongQuet = !!coSan.quet;   // dòng do lượt quét TRƯỚC tạo: đơn trên đó là đơn tự khớp, giữ nguyên cách khớp
+            slTruoc = slCu;                      // hoàn lại = về số này, kể cả khi "đếm lại" đưa dòng về 0 ngay dưới đây
+            if (demLai) coSan.soLuong = 0;
+            coSan.quet = true;
+            r = coSan;
+            // Dòng nhập tay chưa chọn mã lần nào có thể còn thiếu tên/hệ số — điền từ chính mã vừa quét.
+            r.maHang = it.MaHang; r.tenHang = it.TenHang; r.loaiRi = it.LoaiRi;
+            r.donViCoBan = it.DonViCoBan || ''; r.donViQuyDoi = it.DonViQuyDoi || '';
+            /* Dòng CHƯA TỪNG quét mà đã có đơn gắn sẵn ⇒ đơn do người dùng TỰ TÍCH ở "Chọn đơn" (hoặc của
+               phiếu đang sửa) — giữ nguyên, đánh dấu donChonTay để các lượt khớp lại tự động (đổi màu/đổi
+               khách) KHÔNG ghi đè lựa chọn của người dùng. Dòng nhập tay không có đơn thì thử khớp. */
+            if (!daLaDongQuet) { if (r.donIDs && r.donIDs.length) r.donChonTay = true; else ganDonChoDongQuet(r); }
+          }
+        }
+        if (!r) {
+          r = {
+            idx: ++idx, maHangId: it.MaHangID, mauSacId: mau || '', maHang: it.MaHang, tenHang: it.TenHang,
+            soLuong: 0, donVi: 'Cái', loaiRi: it.LoaiRi, donViCoBan: it.DonViCoBan || '', donViQuyDoi: it.DonViQuyDoi || '',
+            giaBanLe: it.GiaBan, ckShop: ckMacDinh(it.MaHangID), donIDs: [], quet: true
+          };
+          dong.push(r);
+          ganDonChoDongQuet(r);
+          const trong = modal.querySelector('.bh-trong');
+          if (trong) trong.remove();
+          modal.querySelector('.bh-them-row').insertAdjacentHTML('beforebegin', dongHtml(r, 0));
+          noiDayDong(modal.querySelector(`.bh-row[data-idx="${r.idx}"]`));
+          danhSoLaiSTT();
+        }
+        dongQuetTheoKhoa.set(khoa, r.idx);
+        if (mau) mauDangQuet.set(id, mau);
+        const cai = he * soRi;
+        r.soLuong = (Number(r.soLuong) || 0) + cai;
+        lanCuoi = { r, cai, soRi, slTruoc };
+        const el = modal.querySelector(`.bh-row[data-idx="${r.idx}"]`);
+        if (el) { const oSL = el.querySelector('.bh-sl'); if (oSL) oSL.value = r.soLuong; }
+        /* Dòng nhập tay vừa được GẮN đơn (hoặc vừa nhận màu) thì hình dạng dòng đổi — vẽ lại.
+           Dòng có đơn: KHÔNG có ô .bh-mahang; dòng thường: có. Khớp nhau rồi thì chỉ cần tính lại tổng. */
+        const coDon = !!(r.donIDs && r.donIDs.length);
+        const dangVeKieuDon = !!el && !el.querySelector('.bh-mahang');
+        if (el && (nhanMauMoi || coDon !== dangVeKieuDon)) veLaiDong(r); else tinhTong();
+        soLanQuet += soRi;
+        keu(true);
+        const stt = dong.indexOf(r) + 1;
+        baoCao((tienTo || '') + `✓ <b>${escapeHtml(it.MaHang)}</b> · ${r.mauSacId ? escapeHtml(tenMauCua(r)) : '<span style="color:#c0392b;">mã chưa có màu nào trong thẻ kho — thêm màu ở Thẻ kho rồi chọn trên dòng ' + stt + '</span>'}`
+          + ` — dòng ${stt}: <b>${Math.floor(r.soLuong / he)} Ri</b> = ${fmtNumber(r.soLuong)} ${escapeHtml(dv)}`
+          + (khongCoRi ? ` <span style="color:#c0392b;">(mã chưa khai hệ số Ri: mỗi lần quét = +1 ${escapeHtml(dv)})</span>` : '')
+          + (r.donIDs && r.donIDs.length ? ` · khớp ${r.donIDs.length} đơn khách đặt (${r.donIDs.map(x => '#' + x).join(', ')}) → lưu phiếu là chuyển "Đã xuất hàng"` : ''), tienTo ? 'loi' : 'ok');
+        /* Giữ dấu ★ (màu khách đặt) trên nút màu cả sau khi đã cộng — người quét đối chiếu được ngay. */
+        veNutMau(it, mau || '', mauKhachDat(donKhopDongQuet(dsDonCho, { ...khachTrenPhieu(), maHangId: it.MaHangID, mauSacId: '' })));
+        tomTat();
+      }
+    }
 
     /* v8.70.2: ĐỔI NGÀY BÁN -> nạp lại bảng khuyến mãi của ngày đó rồi điền lại %CK cho những dòng
        người dùng CHƯA gõ tay. Lập phiếu lùi ngày (hoặc đẩy sang ngày mai) phải ra đúng giá của ngày
@@ -4839,6 +5541,22 @@ window.ModuleKhoHang = (function () {
       // Bắt buộc chọn màu: thẻ kho quản theo màu, không có màu thì không biết trừ tồn ở đâu.
       const thieuMau = dongGui.filter(d => !d.mauSacId);
       if (thieuMau.length) { toast(`${thieuMau.length} dòng chưa chọn MÀU — phải chọn màu để trừ đúng tồn kho.`, 'error'); return; }
+      /* v9.50: dòng QUÉT có đơn khách TỰ KHỚP mà SL trên phiếu NHỎ HƠN SL khách đặt ⇒ hỏi trước khi lưu.
+         Backend chuyển đơn sang "Đã xuất hàng" với SL ĐẶT giữ nguyên (một dòng có thể gộp nhiều đơn,
+         không chia lại — xem ghiChiTietPhieu v7.16); phiếu chỉ trừ tồn theo số trên phiếu. Giao thiếu
+         mà đơn đã đóng thì phần còn lại không còn ai nhớ giao. */
+      const giaoThieu = [];
+      modal.querySelectorAll('.bh-row').forEach((el, i) => {
+        const r = dong.find(x => String(x.idx) === el.dataset.idx);
+        if (!r || !r.quet || !(r.donIDs && r.donIDs.length) || r.slDatCai == null) return;
+        const cai = slSangCai(r.soLuong, r.donVi, r.loaiRi, { DonViCoBan: r.donViCoBan, DonViQuyDoi: r.donViQuyDoi });
+        if (cai < r.slDatCai) {
+          giaoThieu.push(`dòng ${i + 1} ${r.maHang || ''}${r.mauSacId ? ' · ' + tenMauCua(r) : ''}: phiếu ${fmtNumber(cai)} — khách đặt ${fmtNumber(r.slDatCai)} ${dvGoc(r.donViCoBan, r.donViQuyDoi)} (đơn ${r.donIDs.map(x => '#' + x).join(', ')})`);
+        }
+      });
+      if (giaoThieu.length && !confirm(`Số lượng trên phiếu NHỎ HƠN số khách đặt:\n• ${giaoThieu.join('\n• ')}\n\n`
+        + `Lưu thì các đơn đó vẫn chuyển "Đã xuất hàng" (số đặt giữ nguyên, phiếu trừ tồn theo số trên phiếu).\n`
+        + `OK = vẫn lưu · Cancel = sửa lại số lượng.`)) return;
       const btn = e.target.querySelector('button[type="submit"]');
       const nhanCu = btn.textContent;
       btn.disabled = true; btn.textContent = 'Đang lưu...';
@@ -4855,7 +5573,7 @@ window.ModuleKhoHang = (function () {
         const r = phieuSua
           ? await apiPut('/api/banhang/phieu/' + phieuSua.header.PhieuBHID, payload)
           : await apiPost('/api/banhang/phieu', payload);
-        closeModal();
+        dongChoNay();   // v9.91: nhiều tab ⇒ chỉ đóng TAB vừa lưu, tab khác đang nhập dở giữ nguyên
         toast(`Đã lưu phiếu ${r.data.soPhieu} — tồn kho và công nợ đã tính lại (${fmtTien(r.data.tongThanhToan)} đ).`, 'success');
         /* v7.17: NÓI RÕ số phận các đơn khách bị bỏ ra khỏi phiếu — không để người dùng tự phát hiện
            là đơn vẫn còn treo và vẫn đang giữ tồn. */
